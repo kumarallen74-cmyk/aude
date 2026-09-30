@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { routePath } from './route-path.js';
+import { routePath, underPrefix } from './route-path.js';
 import { limitParam } from './paging.js';
 import fastifyStatic from '@fastify/static';
 import { contentSecurityPolicy } from './csp.js';
@@ -170,7 +170,7 @@ export async function buildApi(): Promise<FastifyInstance> {
    * preHandler below fills it in once the tenant is known.
    */
   app.addHook('onRequest', (req, _reply, done) => {
-    if (!routePath(req).startsWith('/v1/')) return done();
+    if (!underPrefix(req, '/v1/')) return done();
     runInRequestScope(done);
   });
 
@@ -179,7 +179,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   // here they only count against the IP when the key does not authenticate.
   const hits = new Map<string, { n: number; resetAt: number }>();
   // Only the operator API (/v1) takes API keys: elsewhere the header buys nothing.
-  const withApiKey = (req: FastifyRequest) => routePath(req).startsWith('/v1/') && /^Bearer\s+psk_/i.test(String(req.headers.authorization ?? ''));
+  const withApiKey = (req: FastifyRequest) => underPrefix(req, '/v1/') && /^Bearer\s+psk_/i.test(String(req.headers.authorization ?? ''));
   startUsageFlush();
   app.addHook('onClose', async () => { stopUsageFlush(); await flushUsage(); });
   app.addHook('onRequest', async (req, reply) => {
@@ -205,9 +205,9 @@ export async function buildApi(): Promise<FastifyInstance> {
    * which is the only arrangement that survives contact with a growing codebase.
    */
   app.addHook('preHandler', async (req, reply) => {
-    // Decided on the matched route, never the raw URL (see routePath).
+    // Under the prefix by the matched route OR the raw target (see underPrefix).
     const route = routePath(req);
-    if (!route.startsWith('/v1/')) return;
+    if (!underPrefix(req, '/v1/')) return;
     // The one unauthenticated /v1 route: you cannot present a session you do not have yet.
     if (route === '/v1/auth/login' && req.method === 'POST') return;
     try {

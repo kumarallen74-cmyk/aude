@@ -33,3 +33,18 @@ test('an unmatched request has no route path', async () => {
   assert.equal(seen, '');
   await app.close();
 });
+
+test('underPrefix: an unmatched path under a guarded prefix still meets the guard (401, not 404)', async () => {
+  const { underPrefix } = await import('./route-path.js');
+  const app = Fastify();
+  app.addHook('preHandler', async (req, reply) => {
+    if (underPrefix(req, '/ocpi/')) return reply.status(401).send({ error: 'auth' });
+  });
+  app.get('/ocpi/versions', async () => ({ ok: true }));
+  await app.ready();
+  for (const url of ['/ocpi/versions', '/%6fcpi/versions', '/ocpi/2.2.1/no-such-module']) {
+    assert.equal((await app.inject({ method: 'GET', url })).statusCode, 401, url);
+  }
+  assert.equal((await app.inject({ method: 'GET', url: '/elsewhere' })).statusCode, 404);
+  await app.close();
+});

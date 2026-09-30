@@ -15,3 +15,13 @@ import type { FastifyRequest } from 'fastify';
 export function routePath(req: FastifyRequest): string {
   return req.routeOptions?.url ?? '';
 }
+
+/**
+ * Is this request under `prefix` by EITHER reading: the route it matched, or the
+ * raw target? The matched route closes the encoded-path bypass; the raw target
+ * keeps an unmatched path under a guarded prefix answering 401 rather than 404,
+ * so unauthenticated callers learn nothing about which routes exist.
+ */
+export function underPrefix(req: FastifyRequest, prefix: string): boolean {
+  return routePath(req).startsWith(prefix) || req.url.startsWith(prefix);
+}

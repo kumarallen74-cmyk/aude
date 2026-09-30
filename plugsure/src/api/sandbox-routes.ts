@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { routePath } from './route-path.js';
+import { underPrefix } from './route-path.js';
 import { many, afterResponse } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { assertCan } from '../services/authz.js';
@@ -36,7 +36,7 @@ export async function registerSandboxRoutes(app: FastifyInstance): Promise<void>
 
   // A sandbox never talks to real roaming partners.
   app.addHook('preHandler', async (req, reply) => {
-    if (!req.principal?.orgId || req.method === 'GET' || !routePath(req).startsWith('/v1/roaming')) return;
+    if (!req.principal?.orgId || req.method === 'GET' || !underPrefix(req, '/v1/roaming')) return;
     if (await sandboxInfo(req.principal.orgId)) return bad(reply, 403, 'Roaming is not available in a sandbox.');
   });
 

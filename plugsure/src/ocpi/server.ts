@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { routePath } from '../api/route-path.js';
+import { routePath, underPrefix } from '../api/route-path.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -51,8 +51,8 @@ class OcpiError extends Error {
 export async function registerOcpiApi(app: FastifyInstance): Promise<void> {
   // ── authentication, headers and the message log
   app.addHook('preHandler', async (req, reply) => {
-    // Decided on the matched route, never the raw URL (see routePath).
-    if (!routePath(req).startsWith('/ocpi/')) return;
+    // Under the prefix by the matched route OR the raw target (see underPrefix).
+    if (!underPrefix(req, '/ocpi/')) return;
     req.ocpiStarted = Date.now();
     const partner = await partnerByTokenHash(tokensFromAuthHeader(req.headers.authorization).map(tokenHash));
     if (!partner) {
@@ -78,7 +78,7 @@ export async function registerOcpiApi(app: FastifyInstance): Promise<void> {
   // Echo only well-formed values: a header value from the caller is never trusted verbatim.
   const idLike = (v: unknown) => (typeof v === 'string' && /^[A-Za-z0-9._:-]{1,100}$/.test(v) ? v : randomUUID());
   app.addHook('onSend', async (req, reply, payload) => {
-    if (!routePath(req).startsWith('/ocpi/')) return payload;
+    if (!underPrefix(req, '/ocpi/')) return payload;
     reply.header('x-request-id', idLike(req.headers['x-request-id']));
     reply.header('x-correlation-id', idLike(req.headers['x-correlation-id']));
     if (req.ocpiParty) {
@@ -95,7 +95,7 @@ export async function registerOcpiApi(app: FastifyInstance): Promise<void> {
   });
 
   app.addHook('onResponse', async (req, reply) => {
-    if (!routePath(req).startsWith('/ocpi/') || !req.ocpiPartner) return;
+    if (!underPrefix(req, '/ocpi/') || !req.ocpiPartner) return;
     await logMessage({
       orgId: req.ocpiPartner.org_id, partnerId: req.ocpiPartner.id, direction: 'in', method: req.method, url: req.url,
       httpStatus: reply.statusCode, ocpiStatus: null, ms: Date.now() - (req.ocpiStarted ?? Date.now()), error: reply.statusCode >= 400 ? `HTTP ${reply.statusCode}` : null,
