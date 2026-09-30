@@ -606,3 +606,89 @@ describe('driver prepaid allowance (app top-ups)', () => {
     assert.equal(driverAllowanceWh(seedTariff, 10_000, ctx), 0);
   });
 });
+
+describe('re-verification 4: tiers, windows and time are rated on the session, not the block', () => {
+  const ctx = { connectorMaxPowerW: 50_000, pbjtRateBps: 0, timezone: 'Asia/Jakarta' };
+  const energyOf = (r: ReturnType<typeof rateSession>) => {
+    const e = r.lines.filter((l) => l.kind === 'energy');
+    return { kwh: e.reduce((a, l) => a + l.quantity, 0), idr: e.reduce((a, l) => a + l.amountIdr, 0), lines: e };
+  };
+  const stepped: Tariff = {
+    id: 't', name: 'stepped', currency: 'IDR', plnScheme: 'none',
+    components: [
+      { kind: 'energy', rate: 2_000, touBlock: 'ANY', fromKwh: 0, toKwh: 50 },
+      { kind: 'energy', rate: 1_500, touBlock: 'ANY', fromKwh: 50 },
+    ],
+  };
+
+  test('energy tiers band on the cumulative session kWh across a ToU boundary', () => {
+    // 14:00-20:00 WIB: 30 kWh off-peak, then 30 kWh in the 17:00 peak block.
+    const crossing = rateSession(stepped, {
+      ...ctx,
+      startedAt: new Date('2026-08-03T07:00:00Z'),
+      endedAt: new Date('2026-08-03T13:00:00Z'),
+      energyWh: 60_000,
+    });
+    const e = energyOf(crossing);
+    assert.equal(e.kwh, 60);
+    // 50 kWh at 2,000 + 10 kWh at 1,500 — the tier-2 kWh are the LAST ten, in WBP.
+    assert.equal(e.idr, 115_000, 'Rp 120,000 means tier 2 was never reached');
+    const wbpTier2 = e.lines.find((l) => l.touBlock === 'WBP' && l.unitRate === 1_500)!;
+    assert.equal(wbpTier2.quantity, 10);
+    assert.ok(!e.lines.some((l) => l.touBlock === 'LWBP' && l.unitRate === 1_500));
+
+    // The same delivery entirely off-peak prices identically.
+    const offPeak = rateSession(stepped, {
+      ...ctx,
+      startedAt: new Date('2026-08-03T01:00:00Z'), // 08:00 WIB
+      endedAt: new Date('2026-08-03T07:00:00Z'),   // 14:00 WIB
+      energyWh: 60_000,
+    });
+    assert.equal(energyOf(offPeak).idr, 115_000);
+  });
+
+  test('day/night windowed energy components price each kWh once across the window edge', () => {
+    const t: Tariff = {
+      id: 't', name: 'day-night', currency: 'IDR', plnScheme: 'none',
+      components: [
+        { kind: 'energy', rate: 2_000, touBlock: 'ANY', timeFrom: '06:00', timeTo: '22:00' },
+        { kind: 'energy', rate: 1_000, touBlock: 'ANY', timeFrom: '22:00', timeTo: '06:00' },
+      ],
+    };
+    // 20:00-24:00 WIB: two hours of day rate, two of night rate.
+    const r = rateSession(t, {
+      ...ctx,
+      startedAt: new Date('2026-08-03T13:00:00Z'),
+      endedAt: new Date('2026-08-03T17:00:00Z'),
+      energyWh: 20_000,
+    });
+    const e = energyOf(r);
+    assert.equal(e.kwh, 20, 'the invoice must match the meter');
+    assert.equal(e.idr, 10 * 2_000 + 10 * 1_000);
+    assert.equal(e.lines.length, 2);
+    assert.ok(!r.flags.some((f) => f.code === 'DOUBLE_PRICED_ENERGY' || f.code === 'UNPRICED_ENERGY'));
+  });
+
+  test('charging time excludes idle minutes, so overstay is not billed twice', () => {
+    const t: Tariff = {
+      id: 't', name: 'time+idle', currency: 'IDR', plnScheme: 'none',
+      components: [
+        { kind: 'energy', rate: 2_000, touBlock: 'ANY' },
+        { kind: 'time', rate: 100, touBlock: 'ANY', toMinutes: 600 },
+        { kind: 'idle', rate: 1_000, touBlock: 'ANY', fromMinutes: 0, toMinutes: 60 },
+      ],
+    };
+    const base = {
+      ...ctx,
+      startedAt: new Date('2026-08-03T02:00:00Z'),
+      endedAt: new Date('2026-08-03T04:00:00Z'), // 120 min plugged in
+      energyWh: 20_000,
+    };
+    const r = rateSession(t, { ...base, idleMinutes: 30 });
+    assert.equal(r.lines.find((l) => l.kind === 'time')!.quantity, 90);
+    assert.equal(r.lines.find((l) => l.kind === 'idle')!.quantity, 30);
+    // Idle beyond the plug-in duration (clock noise) never makes charging time negative.
+    const all = rateSession(t, { ...base, idleMinutes: 500 });
+    assert.equal(all.lines.filter((l) => l.kind === 'time').length, 0);
+  });
+});

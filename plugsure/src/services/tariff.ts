@@ -358,6 +358,20 @@ export interface SessionSplit {
   perComponent: Map<number, number>;
   /** True when the session was longer than the bound and had to be approximated. */
   truncated: boolean;
+  /**
+   * The same energy in CHRONOLOGICAL runs: consecutive time in one ToU block
+   * under one set of applicable component windows. Tiers band on the session's
+   * cumulative kWh, so rating has to know which kWh came first — the per-block
+   * and per-component totals above cannot say that. Segment Wh sum to energyWh.
+   */
+  segments: SplitSegment[];
+}
+
+export interface SplitSegment {
+  block: 'WBP' | 'LWBP';
+  /** Indices (into the components passed to splitSession) whose day/time window admits this run. */
+  applies: number[];
+  wh: number;
 }
 
 /**
@@ -392,15 +406,25 @@ export function splitSession(
 
   let wbpMs = 0;
   const componentMs = new Array<number>(components.length).fill(0);
+  const runs: Array<{ block: 'WBP' | 'LWBP'; applies: number[]; key: string; ms: number }> = [];
 
   for (let i = 0; i < slices; i++) {
     const at = new Date(startedAt.getTime() + i * stepMs);
     const sliceMs = Math.min(stepMs, endedAt.getTime() - at.getTime());
     if (sliceMs <= 0) break;
-    if (touBlockAt(at, tz) === 'WBP') wbpMs += sliceMs;
+    const block = touBlockAt(at, tz);
+    if (block === 'WBP') wbpMs += sliceMs;
+    const applies: number[] = [];
     for (let ci = 0; ci < components.length; ci++) {
-      if (componentAppliesAt(components[ci]!, at, tz)) componentMs[ci]! += sliceMs;
+      if (componentAppliesAt(components[ci]!, at, tz)) {
+        componentMs[ci]! += sliceMs;
+        applies.push(ci);
+      }
     }
+    const key = `${block}|${applies.join(',')}`;
+    const last = runs[runs.length - 1];
+    if (last && last.key === key) last.ms += sliceMs;
+    else runs.push({ block, applies, key, ms: sliceMs });
   }
 
   tou.WBP = Math.round((energyWh * wbpMs) / totalMs);
@@ -409,7 +433,19 @@ export function splitSession(
     perComponent.set(ci, Math.round((energyWh * componentMs[ci]!) / totalMs));
   }
 
-  return { tou, perComponent, truncated };
+  // Cumulative rounding, so the segments add up to the delivery to the watt-hour.
+  const segments: SplitSegment[] = [];
+  const walkedMs = runs.reduce((a, r) => a + r.ms, 0) || 1;
+  let cumMs = 0;
+  let cumWh = 0;
+  for (const r of runs) {
+    cumMs += r.ms;
+    const upTo = Math.round((energyWh * cumMs) / walkedMs);
+    segments.push({ block: r.block, applies: r.applies, wh: upTo - cumWh });
+    cumWh = upTo;
+  }
+
+  return { tou, perComponent, truncated, segments };
 }
 
 /** Back-compatible helper retained for the existing tests. */
@@ -492,41 +528,49 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
      * block-specific component beats the `ANY` catch-all — that is what "peak
      * price" means — and within the chosen set, tiers band by kWh with each
      * tier's upper bound defaulting to the next tier's lower bound.
+     *
+     * Two more ways the same kWh escaped that model, both proved by running
+     * rateSession:
+     *
+     * 3. Tiers banded on EACH BLOCK'S kWh, not the session's. Tiers of 0–50 kWh
+     *    at Rp 2,000 and 50+ at Rp 1,500 on a 60 kWh session split 30/30 across
+     *    the 17:00 peak boundary never reached the second tier (Rp 120,000); the
+     *    same session off-peak only billed Rp 115,000. A tier is a property of
+     *    how much the SESSION has taken, so the bands are now walked on the
+     *    cumulative kWh in chronological order and each band's kWh is split
+     *    across the blocks it fell in.
+     *
+     * 4. A component's own time window was intersected with the whole session,
+     *    never with the block being priced, so a day (06–22) and a night (22–06)
+     *    component on a 20:00–24:00 session each billed their window's kWh in
+     *    BOTH ToU blocks: 40 kWh invoiced for 20 delivered. The walk is now over
+     *    chronological segments that carry which windows admit them, so a kWh is
+     *    priced only by a component whose window covers the moment it flowed.
      */
     let pricedKwh = 0;
+    const anyExists = energyIdx.some(({ c }) => c.touBlock === 'ANY');
+    const flagged = new Set<string>();
+    const flagOnce = (f: RegulatoryFlag) => {
+      const k = `${f.code}|${f.message}`;
+      if (flagged.has(k)) return;
+      flagged.add(k);
+      flags.push(f);
+    };
 
-    /** kWh in each ToU block. `ANY` when the split placed nothing in either. */
-    const blockKwh: Array<[TouBlock, number]> = [];
-    for (const b of ['WBP', 'LWBP'] as const) {
-      const kwh = (split.tou[b] ?? 0) / 1000;
-      if (kwh > 0) blockKwh.push([b, kwh]);
-    }
-    if (blockKwh.length === 0) blockKwh.push(['ANY', totalKwh]);
-
-    for (const [block, poolForBlock] of blockKwh) {
-      // A component priced for THIS block wins over the catch-all; only if none
-      // exists does `ANY` apply. Both applying is what double-billed.
-      const specific = energyIdx.filter(({ c }) => c.touBlock === block);
-      const applicable = specific.length ? specific : energyIdx.filter(({ c }) => c.touBlock === 'ANY');
-      if (applicable.length === 0) continue;
-
-      if (specific.length && energyIdx.some(({ c }) => c.touBlock === 'ANY')) {
-        flags.push({
-          code: 'TOU_COMPONENT_SHADOWED',
-          severity: 'info',
-          message: `${block} energy priced by its own component; the ANY component does not also apply to it.`,
-        });
-      }
-
-      // Tier bounds, within this block's applicable set only.
+    interface Band { e: { c: TariffComponent; i: number }; from: number; to: number; rate: number }
+    /** Tier bands of one applicable set, computed once per distinct set. */
+    const bandCache = new Map<string, Band[]>();
+    const bandsFor = (applicable: Array<{ c: TariffComponent; i: number }>): Band[] => {
+      const key = applicable.map((e) => e.i).join(',');
+      const hit = bandCache.get(key);
+      if (hit) return hit;
       const sorted = [...applicable].sort((a, b) => (a.c.fromKwh ?? 0) - (b.c.fromKwh ?? 0));
-      sorted.forEach((e, idx) => {
+      const bands = sorted.map((e, idx) => {
         const next = sorted[idx + 1];
         const implicitTo = next ? (next.c.fromKwh ?? Infinity) : Infinity;
         const declaredTo = e.c.toKwh ?? Infinity;
-        const to = Math.min(declaredTo, implicitTo);
         if (declaredTo > implicitTo && e.c.toKwh != null) {
-          flags.push({
+          flagOnce({
             code: 'OVERLAPPING_ENERGY_TIERS',
             severity: 'warning',
             message:
@@ -534,22 +578,64 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
               `starts at ${implicitTo} kWh. Billed to ${implicitTo} kWh so no energy is charged twice.`,
           });
         }
+        return {
+          e,
+          from: e.c.fromKwh ?? 0,
+          to: Math.min(declaredTo, implicitTo),
+          rate: e.c.rate > 0 ? e.c.rate : (regulated ?? 0),
+        };
+      });
+      bandCache.set(key, bands);
+      return bands;
+    };
 
-        const rate = e.c.rate > 0 ? e.c.rate : (regulated ?? 0);
-        // The component's own day/time window can only ever narrow the pool.
-        const windowKwh = (split.perComponent.get(e.i) ?? ctx.energyWh) / 1000;
-        const pool = Math.min(poolForBlock, windowKwh);
-        const from = e.c.fromKwh ?? 0;
-        const billable = Math.max(0, Math.min(pool, to) - from);
-        if (billable <= 0) return;
+    // One line per (block, tier), in the order the energy was first priced.
+    const energyLines = new Map<string, { block: TouBlock; band: string; kwh: number; rate: number }>();
 
+    /**
+     * Session Wh delivered before the segment being priced. Walked in whole Wh,
+     * not summed kWh fractions, so a band edge cannot slip by a float epsilon.
+     */
+    let cumWh = 0;
+    for (const seg of split.segments) {
+      if (seg.wh <= 0) continue;
+      const segFrom = cumWh;
+      const segTo = cumWh + seg.wh;
+      cumWh = segTo;
+
+      // Only components whose day/time window admits this segment may price it.
+      const open = energyIdx.filter(({ i }) => seg.applies.includes(i));
+      // A component priced for THIS block wins over the catch-all; only if none
+      // exists does `ANY` apply. Both applying is what double-billed.
+      const specific = open.filter(({ c }) => c.touBlock === seg.block);
+      const applicable = specific.length ? specific : open.filter(({ c }) => c.touBlock === 'ANY');
+      if (applicable.length === 0) continue;
+
+      if (specific.length && anyExists) {
+        flagOnce({
+          code: 'TOU_COMPONENT_SHADOWED',
+          severity: 'info',
+          message: `${seg.block} energy priced by its own component; the ANY component does not also apply to it.`,
+        });
+      }
+
+      for (const b of bandsFor(applicable)) {
+        // The part of this segment's cumulative kWh range that falls in the band.
+        const billable = Math.max(0, Math.min(segTo, b.to * 1000) - Math.max(segFrom, b.from * 1000)) / 1000;
+        if (billable <= 0) continue;
         pricedKwh += billable;
         const band =
-          from === 0 && to === Infinity
+          b.from === 0 && b.to === Infinity
             ? ''
-            : ` ${round3(from)}\u2013${to === Infinity ? '\u221e' : round3(to)} kWh`;
-        lines.push(energyLine(`Energy (${block})${band}`, billable, rate, block));
-      });
+            : ` ${round3(b.from)}\u2013${b.to === Infinity ? '\u221e' : round3(b.to)} kWh`;
+        const key = `${seg.block}|${b.e.i}|${b.from}|${b.to}`;
+        const acc = energyLines.get(key);
+        if (acc) acc.kwh += billable;
+        else energyLines.set(key, { block: seg.block, band, kwh: billable, rate: b.rate });
+      }
+    }
+    for (const l of energyLines.values()) {
+      lines.push(energyLine(`Energy (${l.block})${l.band}`, l.kwh, l.rate, l.block));
     }
 
     // Every delivered kWh must be priced by something. A WBP-only tariff on an
@@ -600,9 +686,15 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
   }
 
   // --- time --------------------------------------------------------------
+  //
+  // CHARGING time, not plug-in time. Billing the whole duration charged the idle
+  // minutes here AND again on the idle line below, so overstay was paid twice
+  // whenever a tariff had both. Idle minutes are the tail after the last
+  // material increase (sessions.ts computeIdleMinutes), so they come off the top.
+  const chargingMin = Math.max(0, durationMin - (ctx.idleMinutes ?? 0));
   for (const c of components.filter((x) => x.kind === 'time')) {
     const upper = c.toMinutes ?? Infinity;
-    const billable = Math.max(0, Math.min(durationMin, upper) - (c.fromMinutes ?? 0));
+    const billable = Math.max(0, Math.min(chargingMin, upper) - (c.fromMinutes ?? 0));
     if (billable <= 0) continue;
     lines.push({
       kind: 'time',
