@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { limitParam } from './paging.js';
 import { assertCan, assertCanAny, can } from '../services/authz.js';
 import { writeAudit } from '../services/audit.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { one, outsideRequestScope } from '../db/pool.js';
 import { kindDef, type Kind } from '../integrations/catalogue.js';
 import * as store from '../integrations/store.js';
@@ -141,7 +141,7 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     };
     // The sandbox e-wallet link approval (stands in for GoPay / OVO / DANA's own screen).
     pub.get('/pay/sandbox/link/:ref', async (req, reply) => {
-      if (config.env === 'production') return reply.status(404).send({ error: 'not found' });
+      if (!isRelaxedEnv()) return reply.status(404).send({ error: 'not found' });
       const { ref } = req.params as { ref: string };
       const l = sandboxProvider().sandboxLinkInfo(ref);
       if (!l) return reply.status(404).send({ error: 'unknown sandbox link' });
@@ -157,7 +157,7 @@ ${l.status !== 'pending' ? `<p>This link is already <b>${esc(l.status)}</b>.</p>
       return reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(html);
     });
     pub.post('/pay/sandbox/link/:ref/:outcome', async (req, reply) => {
-      if (config.env === 'production') return reply.status(404).send({ error: 'not found' });
+      if (!isRelaxedEnv()) return reply.status(404).send({ error: 'not found' });
       const { ref, outcome } = req.params as { ref: string; outcome: string };
       if (outcome !== 'approve' && outcome !== 'deny') return reply.status(404).send({ error: 'not found' });
       const done = sandboxProvider().sandboxLink(ref, outcome === 'approve');
@@ -167,7 +167,7 @@ ${l.status !== 'pending' ? `<p>This link is already <b>${esc(l.status)}</b>.</p>
     });
 
     pub.get('/pay/sandbox/:ref', async (req, reply) => {
-      if (config.env === 'production') return reply.status(404).send({ error: 'not found' });
+      if (!isRelaxedEnv()) return reply.status(404).send({ error: 'not found' });
       const { ref } = req.params as { ref: string };
       const c = await sandboxCheckout(ref);
       if (!c) return reply.status(404).send({ error: 'unknown sandbox payment' });
@@ -177,7 +177,7 @@ ${l.status !== 'pending' ? `<p>This link is already <b>${esc(l.status)}</b>.</p>
         .type('text/html; charset=utf-8').send(sandboxPage(ref, c, ret));
     });
     pub.post('/pay/sandbox/:ref/:outcome', async (req, reply) => {
-      if (config.env === 'production') return reply.status(404).send({ error: 'not found' });
+      if (!isRelaxedEnv()) return reply.status(404).send({ error: 'not found' });
       const { ref, outcome } = req.params as { ref: string; outcome: string };
       if (outcome !== 'pay' && outcome !== 'cancel') return reply.status(404).send({ error: 'not found' });
       if (!(await sandboxCheckout(ref))) return reply.status(404).send({ error: 'unknown sandbox payment' });

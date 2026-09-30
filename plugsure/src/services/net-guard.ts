@@ -2,7 +2,7 @@ import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { isIP } from 'node:net';
 import https from 'node:https';
 import type { IncomingMessage } from 'node:http';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 
 /**
  * SSRF guard for server-side requests to operator-supplied URLs (webhooks,
@@ -15,7 +15,7 @@ import { config } from '../config.js';
  * receivers working.
  */
 
-export const enforcing = () => config.env === 'production';
+export const enforcing = () => !isRelaxedEnv();
 
 export function isPrivateAddress(ip: string): boolean {
   const v = isIP(ip);

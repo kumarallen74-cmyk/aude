@@ -1,6 +1,6 @@
 import { connect, constants, type ClientHttp2Session } from 'node:http2';
 import { createPrivateKey, sign, type KeyObject } from 'node:crypto';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 
 /**
  * Apple Push Notification service (APNs) — the provider API over HTTP/2 with
@@ -29,7 +29,7 @@ const HOSTS: Record<ApnsEnv, string> = {
 export function apnsOrigin(env: ApnsEnv): string {
   const override = env === 'production' ? process.env.APNS_URL_PRODUCTION : process.env.APNS_URL_DEVELOPMENT;
   if (override) {
-    if (!override.startsWith('https://') && config.env === 'production') throw new Error('APNS_URL_* must be https:// in production');
+    if (!override.startsWith('https://') && !isRelaxedEnv()) throw new Error('APNS_URL_* must be https:// in production');
     return override.replace(/\/+$/, '');
   }
   return HOSTS[env];

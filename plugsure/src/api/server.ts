@@ -5,7 +5,7 @@ import { contentSecurityPolicy } from './csp.js';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { one, many, query, enterOrgScope, runInRequestScope, afterResponse, outsideRequestScope, type OrgScopeHandle } from '../db/pool.js';
 import * as assets from '../services/assets.js';
@@ -126,7 +126,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.addHook('onRoute', (r) => {
     for (const m of [r.method].flat()) registeredRoutes.push({ method: String(m).toUpperCase(), url: r.url });
   });
-  if (config.api.trustedProxies.length === 0 && config.env === 'production') {
+  if (config.api.trustedProxies.length === 0 && !isRelaxedEnv()) {
     logger.warn(
       'API_TRUSTED_PROXIES is empty: X-Forwarded-For is ignored and rate limiting keys on the ' +
         'socket peer. Correct behind a direct-facing listener; set it if you terminate TLS at an ingress.',

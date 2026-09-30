@@ -403,3 +403,19 @@ export const config = {
 };
 
 export type Config = typeof config;
+
+/**
+ * May this environment relax a security control?
+ *
+ * Only an explicit `development` or `test` may. Every relaxation used to be
+ * written as `env === 'production'` (strict) or `env !== 'production'` (lenient),
+ * so NODE_ENV=staging, prod or a typo silently ran with development behaviour:
+ * the driver sign-in code returned to the caller, the SSRF guard off, the
+ * sandbox payment pages live, a superuser database role accepted. The rule is
+ * now inverted: anything that is not explicitly development or test is treated
+ * as production.
+ */
+export function isRelaxedEnv(env: string = config.env): boolean {
+  return env === 'development' || env === 'test';
+}
+

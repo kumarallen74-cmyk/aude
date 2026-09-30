@@ -2,7 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { one, outsideRequestScope, query, tx } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { seal, unseal } from '../services/secrets.js';
 import { resolve } from '../integrations/store.js';
@@ -75,7 +75,7 @@ export async function pkiMode(): Promise<'none' | 'mock' | 'http'> {
 export async function pkiProblem(): Promise<string | null> {
   const c = await pncConfig();
   if (c.mode === 'none') {
-    return config.env === 'production' && config.pnc.pki === 'mock'
+    return !isRelaxedEnv() && config.pnc.pki === 'mock'
       ? 'The test PKI is refused in production. Connect your PKI gateway under Govern → Integrations → Plug & Charge PKI.'
       : 'No V2G PKI is connected (Govern → Integrations → Plug & Charge PKI). Plug & Charge certificate requests are answered Failed.';
   }

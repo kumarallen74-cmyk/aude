@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { guardedLookup, isInternalHost } from '../services/net-guard.js';
 import { authHeaderFor, type Party } from './mapping.js';
 import { logMessage } from './store.js';
@@ -29,7 +29,7 @@ export function partnerUrlProblem(raw: string): string | null {
   let u: URL;
   try { u = new URL(raw); } catch { return 'not a valid URL'; }
   if (u.username || u.password) return 'the URL must not contain credentials';
-  if (config.env === 'production') {
+  if (!isRelaxedEnv()) {
     if (u.protocol !== 'https:') return 'partner URLs must use https';
     if (isInternalHost(u.hostname)) return 'partner URLs must be publicly reachable';
   } else if (u.protocol !== 'https:' && u.protocol !== 'http:') {

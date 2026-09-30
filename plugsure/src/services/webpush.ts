@@ -2,7 +2,7 @@ import { createECDH, createHmac, createCipheriv, createDecipheriv, createPrivate
 import http from 'node:http';
 import https from 'node:https';
 import { one, query } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { seal, unseal } from './secrets.js';
 import { guardedLookup } from './net-guard.js';
 
@@ -136,7 +136,7 @@ export function decryptPayload(body: Buffer, uaPrivate: Buffer, auth: string): B
 export function endpointProblem(endpoint: string): string | null {
   let u: URL;
   try { u = new URL(endpoint); } catch { return 'not a URL'; }
-  if (config.env !== 'production') return u.protocol === 'https:' || u.protocol === 'http:' ? null : 'must be http(s)';
+  if (isRelaxedEnv()) return u.protocol === 'https:' || u.protocol === 'http:' ? null : 'must be http(s)';
   if (u.protocol !== 'https:') return 'push endpoints must be https';
   const host = u.hostname.toLowerCase();
   if (!config.driverApp.pushHosts.some((h) => host === h || host.endsWith(`.${h}`))) return `${host} is not a known push service`;

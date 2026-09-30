@@ -4,6 +4,7 @@ import { startApi } from '../api/server.js';
 import { bus } from '../services/events.js';
 import { query } from '../db/pool.js';
 import { assertAuditKeyConfigured } from '../services/audit.js';
+import { assertSecretsKeyConfigured } from '../services/secrets.js';
 import { assertAuthConfigured } from '../services/auth.js';
 import { assertRlsPosture } from '../db/pool.js';
 import { startBridgeClient } from '../ocpp/bridge.js';
@@ -21,6 +22,7 @@ import { persistAlert } from '../services/alerts.js';
  */
 async function main() {
   assertAuditKeyConfigured();
+  assertSecretsKeyConfigured();
   assertAuthConfigured();
   // RLS is only a second line of defence if the connection role cannot bypass it.
   await assertRlsPosture();

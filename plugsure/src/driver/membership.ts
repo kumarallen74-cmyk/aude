@@ -1,6 +1,6 @@
 import { appNameFor } from '../services/brand.js';
 import { one, many, query, tx } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { paymentsFor, PaymentsUnavailable, logPaymentCreated, startPayment, MethodUnavailable } from '../services/payments/registry.js';
 import { CHANNEL_LABEL } from '../services/payments/provider.js';
@@ -355,7 +355,7 @@ export async function passPaymentFailed(chargeId: string, status: string): Promi
 export async function confirmPassPayment(p: DriverPrincipal, id: string) {
   const c = await ownCharge(p, id);
   if (!c) return { ok: false, error: 'Transaksi tidak ditemukan.' };
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   if (c.provider && c.provider !== 'mock') return { ok: false, error: 'Menunggu konfirmasi pembayaran dari penyedia QRIS.' };
   await markPassPaid(c.id);
   return { ok: true };

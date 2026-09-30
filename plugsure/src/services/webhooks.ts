@@ -3,7 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { bus, type PlugSureEvents } from './events.js';
 import { seal, unseal, newSigningSecret } from './secrets.js';
 import { guardedLookup, isInternalHost } from './net-guard.js';
@@ -46,7 +46,7 @@ const BACKOFF_S = [30, 120, 600, 1800, 3600, 10800, 21600];
 const DISABLE_AFTER = 50;
 const TIMEOUT_MS = 10_000;
 
-const production = () => config.env === 'production';
+const production = () => !isRelaxedEnv();
 
 // ─────────────────────────────────────────── URL / address safety
 

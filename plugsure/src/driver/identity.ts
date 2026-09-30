@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { one, query } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { hashPassword, verifyPassword } from '../services/users.js';
 import { normaliseUid } from '../services/tokens.js';
@@ -158,7 +158,7 @@ export async function sendOtp(phoneRaw: string, appName?: string): Promise<{ ok:
     [phone, sha256(code), OTP_TTL_MS],
   );
   logger.info({ phone: maskPhone(phone), channel: sent.channel }, 'driver OTP issued');
-  if (sent.devCode && config.env !== 'production') return { ok: true, devCode: sent.devCode };
+  if (sent.devCode && isRelaxedEnv()) return { ok: true, devCode: sent.devCode };
   return { ok: true };
 }
 

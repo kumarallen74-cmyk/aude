@@ -2,6 +2,7 @@ import { logger, installProcessGuards } from '../logger.js';
 import { startGateway } from '../ocpp/server.js';
 import { pool, assertRlsPosture } from '../db/pool.js';
 import { assertAuditKeyConfigured } from '../services/audit.js';
+import { assertSecretsKeyConfigured } from '../services/secrets.js';
 import { config } from '../config.js';
 import { registerCoreListeners, startWorkers } from '../services/workers.js';
 import { startEventRelay } from '../ocpp/bridge.js';
@@ -11,6 +12,7 @@ async function main() {
   // The gateway audits every remote command it relays, so it needs the same key
   // the API does. Failing here beats failing at the first operator action.
   assertAuditKeyConfigured();
+  assertSecretsKeyConfigured();
   await assertRlsPosture();
 
   // Events are raised here (the sockets live here), so their listeners must live

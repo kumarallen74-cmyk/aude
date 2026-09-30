@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { isEmail } from './alert-format.js';
 
 /**
@@ -58,7 +58,7 @@ export const WHATSAPP_DEFAULTS = {
   templateLang: 'id',
 };
 
-const production = () => config.env === 'production';
+const production = () => !isRelaxedEnv();
 const localHost = (h: string) => /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\])$/i.test(h);
 
 /** Returns an error message, or null when the settings are usable. */

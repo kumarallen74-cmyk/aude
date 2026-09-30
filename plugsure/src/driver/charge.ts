@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import QRCode from 'qrcode';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import * as registry from '../ocpp/registry.js';
 import { remoteStartTransaction, remoteStopTransaction } from '../ocpp/commands.js';
 import { loadTariffForConnector } from '../services/tariff-store.js';
@@ -474,7 +474,7 @@ export async function checkoutFleet(principal: DriverPrincipal, connectorUuid: s
 export async function confirmPayment(principal: DriverPrincipal, chargeId: string): Promise<{ ok: boolean; error?: string }> {
   const dc = await ownedCharge(principal, chargeId);
   if (!dc) return { ok: false, error: 'Transaksi tidak ditemukan.' };
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   if (!dc.payment_intent_id) return { ok: false, error: 'Bukan transaksi prabayar.' };
   const pi = await one<{ provider: string }>(`SELECT provider FROM payment_intent WHERE id = $1`, [dc.payment_intent_id]);
   if (pi?.provider !== 'mock') return { ok: false, error: 'Menunggu konfirmasi pembayaran dari penyedia QRIS.' };
@@ -605,7 +605,7 @@ export async function unpaidStatus(principal: DriverPrincipal, chargeId: string)
 export async function confirmUnpaidPayment(principal: DriverPrincipal, chargeId: string): Promise<{ ok: boolean; error?: string }> {
   const h = await unpaidOf(principal, chargeId);
   if (!h) return { ok: false, error: 'Transaksi tidak ditemukan.' };
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   const s = await one<{ id: string; provider: string }>(
     `SELECT id, provider FROM payment_intent WHERE settles_intent_id = $1 AND mode = 'settlement' AND state = 'pending' ORDER BY created_at DESC LIMIT 1`, [h.pi.id]);
   if (!s) return { ok: false, error: 'Belum ada pembayaran untuk tagihan ini.' };

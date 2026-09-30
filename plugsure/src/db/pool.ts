@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 
 // Keep IDR integers as numbers, and NUMERIC as strings we parse deliberately.
@@ -287,6 +287,6 @@ export async function assertRlsPosture(): Promise<void> {
     `row-level security policy is ignored and tenant isolation rests entirely on the query layer. ` +
     `Connect as plugsure_app (migration 006 gives it LOGIN and the grants it needs) — ` +
     `see deploy/README.md.`;
-  if (config.env === 'production') throw new Error(message);
+  if (!isRelaxedEnv()) throw new Error(message);
   logger.warn(message);
 }
