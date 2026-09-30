@@ -86,8 +86,18 @@ export const config = {
     // Defaults ON only in development. Elsewhere an unknown identity must be adopted by
     // an operator: auto-adoption enrols any stranger into the first site ever created.
     autoAdopt: bool(process.env.OCPP_AUTO_ADOPT, (process.env.NODE_ENV ?? 'development') === 'development'),
-    /** Default site used for auto-adoption in dev. */
-    autoAdoptSiteSlug: process.env.OCPP_AUTO_ADOPT_SITE ?? 'demo-site',
+    /**
+     * The site auto-adopted chargers join: a site id, or a site name. Unset, only a
+     * development or test gateway falls back to the oldest site; anywhere else an
+     * unknown charger is parked, because "the oldest site" can be any tenant's.
+     */
+    autoAdoptSite: (process.env.OCPP_AUTO_ADOPT_SITE ?? '').trim(),
+    /**
+     * Outside development and test the gateway refuses to start with a security
+     * profile below 2 or with auto-adoption on, unless this is set: an explicit
+     * acknowledgement for a supervised bench, never a default.
+     */
+    allowInsecure: bool(process.env.ALLOW_INSECURE_OCPP, false),
     callTimeoutMs: num(process.env.OCPP_CALL_TIMEOUT_MS, 30_000),
     heartbeatIntervalS: num(process.env.OCPP_HEARTBEAT_S, 300),
     /** Grace window during which both old and new AuthorizationKey are accepted. */

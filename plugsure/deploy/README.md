@@ -300,7 +300,8 @@ openssl rand -hex 32   # -> SECRETS_KEY
 | `OCPP_HEARTBEAT_S` | `300` | drives the Caddy read timeout — keep the proxy above 3× this |
 | `OCPP_CALL_TIMEOUT_MS` | `30000` | raise to `60000` for units on poor cellular links |
 | `OCPP_KEY_ROTATION_GRACE_MS` | `86400000` | 24 h window in which old + new AuthorizationKey both work |
-| `OCPP_AUTO_ADOPT_SITE` | *(unset)* | only meaningful when `OCPP_AUTO_ADOPT=true` |
+| `OCPP_AUTO_ADOPT_SITE` | *(unset)* | only meaningful when `OCPP_AUTO_ADOPT=true`: the site (id or name) auto-adopted chargers join. Unset, only a development/test gateway falls back to the oldest site; otherwise unknown chargers are parked. |
+| `ALLOW_INSECURE_OCPP` | `false` | Outside `NODE_ENV=development`/`test` the gateway **refuses to start** with `OCPP_MIN_SECURITY_PROFILE` below 2 or `OCPP_AUTO_ADOPT=true`. Set this only to acknowledge a supervised bench; the gateway then logs an error at boot. |
 | `API_PORT` | `9200` | |
 | `API_HOST` | `127.0.0.1` | **loopback only** by default (§9). Path A binds the container port to `127.0.0.1` on the host instead. |
 | **`API_TRUSTED_PROXIES`** | *(your ingress IP)* | Comma-separated IPs/CIDRs whose `X-Forwarded-For` is believed. **Leave unset unless you terminate TLS at a proxy.** This used to be a hardcoded "trust everyone", which let any caller forge a fresh client IP per request and so never hit the rate limit — brute force against a bearer token was free — and poisoned the client IP recorded in the audit log. With Caddy on the same host, set `API_TRUSTED_PROXIES=127.0.0.1`. |

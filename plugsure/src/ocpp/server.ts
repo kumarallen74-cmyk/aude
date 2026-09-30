@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { readFileSync } from 'node:fs';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { query } from '../db/pool.js';
 import { bus } from '../services/events.js';
@@ -144,6 +144,27 @@ export async function startGateway(): Promise<GatewayHandle> {
         'if a reverse proxy in front of you terminates TLS and sets X-Forwarded-Proto (the shipped ' +
         'deploy/Caddyfile does). See deploy/README.md.',
     );
+  }
+
+  /**
+   * An open gateway must be a deliberate choice, not the quick start.
+   *
+   * .env.example ships OCPP_MIN_SECURITY_PROFILE=0 and OCPP_AUTO_ADOPT=true for
+   * the bench, Docker Compose loads it with NODE_ENV=production, and nothing
+   * refused the combination: any stranger could enrol a charger and produce
+   * billable sessions, and at profile 0 take over a live charger's socket.
+   */
+  const insecure = insecureGatewayProblems();
+  if (insecure.length && !isRelaxedEnv()) {
+    if (!config.gateway.allowInsecure) {
+      await new Promise<void>((res) => http.close(() => res()));
+      throw new Error(
+        `Refusing to start in NODE_ENV=${config.env}: ${insecure.join('; ')}. Production needs ` +
+          'OCPP_MIN_SECURITY_PROFILE=2 (or 3) and OCPP_AUTO_ADOPT=false (see deploy/README.md). For a ' +
+          'supervised bench only, set ALLOW_INSECURE_OCPP=true to acknowledge it.',
+      );
+    }
+    logger.error({ problems: insecure }, 'ALLOW_INSECURE_OCPP=true: this gateway accepts chargers without proper authentication');
   }
 
   // ---- liveness: server-side ping, and a sweeper for silent chargers ----
@@ -431,6 +452,14 @@ export function negotiate(
 }
 
 const fromTrustedProxy = makeProxyMatcher(config.gateway.trustedProxies);
+
+/** What makes this gateway's configuration unsafe to expose, in words for the operator. */
+export function insecureGatewayProblems(g: { minSecurityProfile: number; autoAdopt: boolean } = config.gateway): string[] {
+  const out: string[] = [];
+  if (g.minSecurityProfile < 2) out.push(`OCPP_MIN_SECURITY_PROFILE=${g.minSecurityProfile} accepts chargers without TLS${g.minSecurityProfile === 0 ? ' or any credential' : ''}`);
+  if (g.autoAdopt) out.push('OCPP_AUTO_ADOPT=true enrols any unknown charger that connects');
+  return out;
+}
 
 /** True when the original client connection was TLS. */
 function isTls(req: IncomingMessage): boolean {
