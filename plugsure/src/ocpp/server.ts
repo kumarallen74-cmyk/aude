@@ -17,6 +17,7 @@ import { handle201Call } from './adapter201.js';
 import { checkClientCert } from './client-cert.js';
 import { chargerCa } from '../services/charger-ca.js';
 import { ensureQuirkProfile, seedQuirks, recordFinding } from './quirks.js';
+import { makeProxyMatcher } from './trusted-proxy.js';
 import { provisionChargePoint } from './provisioning.js';
 import { handleInternalRequest } from './bridge.js';
 import { socketPair, type MemorySocket } from '../sandbox/memory-socket.js';
@@ -297,6 +298,7 @@ async function handleUpgrade(
       headers: req.headers,
       socket: req.socket as never,
       trustProxyProto: config.gateway.trustProxyProto,
+      fromTrustedProxy: fromTrustedProxy(req.socket.remoteAddress),
       headerName: config.gateway.clientCertHeader,
     };
     let cc = checkClientCert(certCtx, cp.client_cert_fingerprint);
@@ -428,10 +430,15 @@ export function negotiate(
   return null;
 }
 
+const fromTrustedProxy = makeProxyMatcher(config.gateway.trustedProxies);
+
 /** True when the original client connection was TLS. */
 function isTls(req: IncomingMessage): boolean {
   if ((req.socket as any).encrypted) return true;
   if (!config.gateway.trustProxyProto) return false;
+  // Only a configured proxy's word counts: anyone reaching the port directly could
+  // otherwise claim TLS it does not have, and send its Basic key in the clear.
+  if (!fromTrustedProxy(req.socket.remoteAddress)) return false;
   const proto = headerString(req.headers['x-forwarded-proto']);
   return proto?.split(',')[0]?.trim().toLowerCase() === 'https';
 }

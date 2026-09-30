@@ -133,6 +133,9 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      # Forwarding and client-certificate headers are believed only from these peers.
+      # A Caddy on the host reaches the container through the Docker bridge (172.16/12).
+      OCPP_TRUSTED_PROXIES: ${OCPP_TRUSTED_PROXIES:-127.0.0.1,::1,172.16.0.0/12}
       # NOT the superuser. assertRlsPosture() refuses to start in production as a
       # role that bypasses row-level security, so pointing the app services at
       # POSTGRES_USER meant the container path could never come up at all.

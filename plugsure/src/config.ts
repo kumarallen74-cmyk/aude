@@ -51,6 +51,19 @@ export const config = {
      * certificate is read from the socket and this header is not used.
      */
     clientCertHeader: (process.env.OCPP_CLIENT_CERT_HEADER ?? 'x-client-cert-fingerprint').toLowerCase(),
+    /**
+     * Peers whose X-Forwarded-Proto and client-certificate header are believed:
+     * addresses or CIDRs, comma-separated. Those headers used to be taken from
+     * ANY peer once OCPP_TRUST_PROXY_PROTO was on, and the gateway listens on
+     * every interface, so a client reaching :9220 directly could claim TLS and
+     * present a Profile 3 charger's (non-secret) certificate fingerprint. Default:
+     * the loopback proxy (Caddy on the same host). Docker Compose adds the
+     * bridge networks, which is where a host Caddy's connections come from.
+     */
+    trustedProxies: (process.env.OCPP_TRUSTED_PROXIES ?? '127.0.0.1,::1')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
     /** Seconds without a heartbeat or frame before a charger is marked offline. */
     offlineAfterS: num(process.env.OCPP_OFFLINE_AFTER_S, 900),
     /**
