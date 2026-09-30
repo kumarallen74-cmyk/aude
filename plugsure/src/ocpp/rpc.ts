@@ -164,6 +164,16 @@ const REPLAY_CACHE_TTL_MS = 5 * 60_000;
 /** Frames waiting in one connection's inbox before it is closed as a flood. */
 const MAX_INBOX = 5_000;
 
+/** A CALLRESULT (3) or CALLERROR (4): an answer to one of our calls, never queued behind a request. */
+const REPLY_FRAME = /^\s*\[\s*[34]\s*,/;
+
+/**
+ * How long one inbound request may hold up the charger's later requests. Handlers normally finish
+ * in milliseconds; this only stops a wedged one (a stuck database call) from freezing the charger's
+ * connection for good. The late handler still completes; the queue simply stops waiting for it.
+ */
+const HANDLER_WATCHDOG_MS = 60_000;
+
 export class OcppRpcConnection {
   /** The single in-flight outbound call, or null. Never split across fields. */
   private pending: Pending | null = null;
@@ -194,23 +204,33 @@ export class OcppRpcConnection {
       version?: OcppVersion;
     },
   ) {
-    // Per-charger message budget. Received frames go through an inbox, processed IN ORDER at the
-    // budget's rate: a burst (a charger back from an outage uploading its queue) goes straight
-    // through; a flood is paced instead of reaching the database at full speed. While frames wait,
-    // the socket is not read (TCP slows the charger down). Nothing is refused or dropped, except
-    // that a connection with an absurd backlog is closed: no real charger has thousands waiting.
+    // Per-charger message budget. Received CALLs go through an inbox and are handled ONE AT A TIME,
+    // in arrival order, at the budget's rate: OCPP requires a charger's requests to be handled in
+    // order, and a StartTransaction, its MeterValues and its StopTransaction replayed from an
+    // offline queue must not race each other. (Frames used to be started back to back and left to
+    // run concurrently: a duplicated StartTransaction could open a session and have its twin close
+    // it as "superseded", and the duplicate-reply cache, filled only when a handler finishes, never
+    // caught a duplicate arriving right behind the original.)
+    //
+    // A burst (a charger back from an outage uploading its queue) goes straight through; a flood is
+    // paced instead of reaching the database at full speed. While a large backlog waits, the socket
+    // is not read (TCP slows the charger down). Nothing is refused or dropped, except that a
+    // connection with an absurd backlog is closed: no real charger has thousands waiting.
+    //
+    // CALLRESULT / CALLERROR frames are answers to OUR calls. They bypass the inbox and are handled
+    // at once, so an answer can never queue behind the request whose handler is waiting for it.
     const budget = new MessageBudget(config.gateway.maxMessagesPerSecond, config.gateway.messageBurst);
     const inbox: string[] = [];
     let draining = false;
     let warnedAt = 0;
     const canPause = typeof (ws as any).pause === 'function';
+    const pauseAt = Math.max(2, config.gateway.messageBurst);
     const drain = async () => {
       if (draining) return;
       draining = true;
       try {
         while (inbox.length && !this.closed) {
           const wait = budget.take();
-          void this.onMessage(inbox.shift()!);
           if (wait > 0) {
             if (Date.now() - warnedAt > 60_000) {
               warnedAt = Date.now();
@@ -218,7 +238,10 @@ export class OcppRpcConnection {
                 'charger is sending messages faster than its budget; they are processed more slowly (nothing dropped)');
             }
             await new Promise((r) => setTimeout(r, wait));
+            if (this.closed) break;
           }
+          await this.handleInOrder(inbox.shift()!);
+          if (canPause && (ws as any).isPaused && inbox.length < pauseAt / 2 && ws.readyState === ws.OPEN) ws.resume();
         }
       } finally {
         draining = false;
@@ -227,14 +250,19 @@ export class OcppRpcConnection {
     };
     ws.on('message', (data) => {
       if (this.closed) return;
-      inbox.push(data.toString());
+      const text = data.toString();
+      if (REPLY_FRAME.test(text)) {
+        void this.onMessage(text);
+        return;
+      }
+      inbox.push(text);
       if (inbox.length > MAX_INBOX) {
         logger.error({ cp: this.id, waiting: inbox.length }, 'charger flooded the gateway; connection closed');
         inbox.length = 0;
         ws.close(1008, 'too many messages');
         return;
       }
-      if (inbox.length > 1 && canPause && !(ws as any).isPaused) ws.pause();
+      if (inbox.length > pauseAt && canPause && !(ws as any).isPaused) ws.pause();
       void drain();
     });
     ws.on('close', () => this.destroy(new Error('connection closed')));
@@ -299,6 +327,18 @@ export class OcppRpcConnection {
   }
 
   // ---------------------------------------------------------------- inbound
+
+  /** Handle one queued frame, waiting for it to finish (bounded by the watchdog) before the next. */
+  private async handleInOrder(text: string) {
+    let timer: NodeJS.Timeout | undefined;
+    const watchdog = new Promise<'late'>((r) => { timer = setTimeout(() => r('late'), HANDLER_WATCHDOG_MS); });
+    try {
+      const done = await Promise.race([this.onMessage(text).then(() => 'done' as const, () => 'done' as const), watchdog]);
+      if (done === 'late') logger.error({ cp: this.id, sample: text.slice(0, 120) }, 'inbound handler still running after the watchdog; moving on to the next message');
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   private async onMessage(text: string) {
     let frame: unknown;
