@@ -277,3 +277,94 @@ Paths are relative to the package root.
 **7. Hardening.** The remaining Medium items: RLS fail-closed and the tables missing it, pool timeouts, retention and backups, and log redaction.
 
 After steps 1–3 and a re-run of the full suite, the "supervised pilot" verdict would be reasonable. The vendor's hardware acceptance test and edge/load test are still needed as well.
+
+---
+
+## 7. Pilot-blocker fixes (30 September 2026)
+
+All 12 items in §3.1 are fixed on branch `claude/plufsure-csms-review-k1eebw`.
+- The delivered v1.3.0 is imported unmodified in commit `d84c62f`.
+- Each fix is its own commit on top of it, under `plugsure/`.
+
+| §3.1 | Fix | Commit |
+|---|---|---|
+| 1 | A charger's requests are handled one at a time, in order. Replies bypass the queue. Session start is atomic per connector (advisory lock), so a duplicate start gets the original session. | `d488d83`, `1705a28` |
+| 2 | A missing 2.0.1 start register is recorded as unknown (migration 043), and the first register observed becomes the start. `IMPLAUSIBLE_ENERGY` parks a gross excess (> 20 kWh beyond nameplate × duration) and warns on a small one. | `1705a28`, `39a8131` |
+| 3 | The process refuses to start without a usable `SECRETS_KEY` outside development/test. | `0c111c1` |
+| 4 | User create, role change, status change and password reset only grant or take over authority the caller holds. | `2a17741` |
+| 5 | Raw charger commands need their own permissions: firmware:write with an https, non-internal URL; smartcharging:write, never the station ceiling; the config key rules; charge_point:config for DataTransfer. | `2a17741` |
+| 6 | Authentication is decided on the matched route or the raw target, for `/v1`, `/d/v1` and `/ocpi`. | `e055347`, `0669f04` |
+| 7 | Forwarding and client-certificate headers are believed only from `OCPP_TRUSTED_PROXIES`. Self-terminated TLS requires a CA-verified certificate. | `0c8db7b` |
+| 8 | Outside development/test the gateway refuses to start with security profile < 2 or auto-adopt on, unless `ALLOW_INSECURE_OCPP=true`. `OCPP_AUTO_ADOPT_SITE` is honoured. | `3416c94` |
+| 9 | The Caddy sign-in block is its own `handle` ahead of `handle @api`, verified with Caddy 2.8.4. Login failures are counted atomically. | `b29cbf2` |
+| 10 | Tiers are banded across the whole session. Windowed components price each segment once. The time component excludes idle minutes. Idle minutes are unit- and phase-correct. | `c863bf0`, `1705a28` |
+| 11 | Money-moving and messaging workers run one at a time platform-wide (advisory lock per worker). | `c2785a8` |
+| 12 | Only an explicit `development` or `test` relaxes a security control. | `0c111c1` |
+
+### Verification after the fixes
+
+Node 22, PostgreSQL 16, with the API and gateway as separate processes connected as `plugsure_app`.
+
+- **Typecheck and production build:** clean.
+- **Unit and database tests:** 602/602. That is the 571 original tests plus 31 new ones, which cover:
+  - frame ordering;
+  - secrets and environment handling;
+  - encoded paths;
+  - client-cert and trusted-proxy rules;
+  - session integrity;
+  - tariff tiers and windows;
+  - the login burst;
+  - worker locks.
+  The new tests that exercise a fixed defect were checked to fail on the original code.
+- **End-to-end, every suite in the package plus the new `e2e:pilot-fixes`:** all green.
+
+| Suites | Result |
+|---|---|
+| pilot-fixes | 16/16 |
+| isolation | 45/45 |
+| ocpi-auth | 9/9 |
+| console | 96/96 |
+| field | 132/132 |
+| driver | 50/50 |
+| driver-plus | 46/46 |
+| queue | 19/19 |
+| reservation-fees | 12/12 |
+| fleet-billing | 53/53 |
+| pricing | 24/24 |
+| pnc | 37/37 |
+| onboarding | 19/19 |
+| integrations | 22/22 |
+| payment-methods | 21/21 |
+| card-holds | 38/38 |
+| linked-wallets | 19/19 |
+| postpay | 40/40 |
+| ocpi | 74/74 |
+| ocpi-emsp | 60/60 |
+| ocpi-profiles | 36/36 |
+| sdk | 23/23 |
+| v2x | 21/21 |
+| ocmf | 20/20 |
+| sandbox-2x | 17/17 |
+| brand | 28/28 |
+| apns | 20/20 |
+| live-activity | 17/17 |
+| api-sandbox | 38/38 |
+
+Some suites need their documented prerequisites, and were run with them:
+- console needs `PUBLIC_BASE_URL`;
+- onboarding needs `OCPP_TRUST_PROXY_PROTO=true`;
+- integrations needs a platform-admin account;
+- apns and live-activity need `APNS_URL_*` pointed at their stand-ins.
+
+### Operator-visible changes
+
+- A production (or staging) process now **refuses to start** in three cases:
+  - without a real `SECRETS_KEY`;
+  - with `OCPP_MIN_SECURITY_PROFILE` < 2;
+  - with `OCPP_AUTO_ADOPT=true`.
+  Set these before upgrading. `ALLOW_INSECURE_OCPP=true` is only for a supervised bench.
+- On the systemd path, set `OCPP_TRUSTED_PROXIES` if Caddy does not connect from 127.0.0.1. Compose already includes the Docker bridge range.
+- Keys that held only `charge_point:command` (the `api_client` role) can no longer push firmware, set charging profiles or send DataTransfer.
+- Migration 043 is additive.
+
+§3.2 (before public paid charging) and §3.3/§3.4 remain open.
