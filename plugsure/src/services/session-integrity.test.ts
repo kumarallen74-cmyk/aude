@@ -114,7 +114,10 @@ describe('energy plausibility (pure)', () => {
     assert.equal(implausibleEnergyFlag(28_500, 3600, 22_000), null);
     const f = implausibleEnergyFlag(28_501, 3600, 22_000);
     assert.equal(f?.code, 'IMPLAUSIBLE_ENERGY');
-    assert.equal(f?.severity, 'violation');
+    assert.equal(f?.severity, 'warning', 'a small excess (a clock step, a nameplate that understates) is shown, not parked');
+    assert.equal(implausibleEnergyFlag(48_500, 3600, 22_000)?.severity, 'warning', '20 kWh over: still a warning');
+    assert.equal(implausibleEnergyFlag(48_501, 3600, 22_000)?.severity, 'violation', 'beyond 20 kWh over: parked');
+    assert.equal(implausibleEnergyFlag(8_450_000, 2400, 22_000)?.severity, 'violation', 'a lifetime register: parked');
     assert.equal(implausibleEnergyFlag(8_450_000, 3600, 0), null, 'unknown nameplate: never guessed');
     assert.equal(implausibleEnergyFlag(8_450_000, 0, 22_000), null, 'no duration: never guessed');
   });

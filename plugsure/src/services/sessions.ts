@@ -1069,22 +1069,30 @@ function startInferredFlag(startWh: number, at: string): SessionFlag {
  *
  * Nameplate power × duration, with 25 % headroom for a nameplate that
  * understates the hardware and 1 kWh for clock granularity and registers that
- * tick in whole kWh. Above that the number is wrong — a lifetime register taken
- * as a start of zero (8,450 kWh in a 40-minute session), a kWh/Wh mix-up, a
- * meter fault — and billing it is not a judgement call. Only asserted when both
- * the nameplate and the duration are known; neither is ever guessed.
+ * tick in whole kWh. Above that the number is suspect and the session says so
+ * (a warning on the receipt and in the explorer). It is PARKED (a violation)
+ * only when the excess is gross, over IMPLAUSIBLE_PARK_EXCESS_WH: a lifetime
+ * register taken as a start of zero (8,450 kWh in a 40-minute session) or a
+ * kWh/Wh mix-up is thousands of kWh out, while a charger clock that stepped
+ * mid-session (an NTP correction) can shorten the reported duration by a few
+ * minutes, and parking every such session would make the review queue noise.
+ * Only asserted when both the nameplate and the duration are known; neither is
+ * ever guessed.
  */
+export const IMPLAUSIBLE_PARK_EXCESS_WH = 20_000;
+
 export function implausibleEnergyFlag(energyWh: number, durationS: number, maxPowerW: number | null | undefined): SessionFlag | null {
   const w = Number(maxPowerW);
   if (!Number.isFinite(w) || w <= 0 || !(durationS > 0)) return null;
   const limitWh = w * (durationS / 3600) * 1.25 + 1000;
   if (!(energyWh > limitWh)) return null;
+  const gross = energyWh - limitWh > IMPLAUSIBLE_PARK_EXCESS_WH;
   return {
     code: 'IMPLAUSIBLE_ENERGY',
-    severity: 'violation',
+    severity: gross ? 'violation' : 'warning',
     message:
       `${energyWh} Wh in ${Math.round(durationS / 60)} min exceeds what a ${w} W connector can ` +
-      `deliver (${Math.round(limitWh)} Wh with headroom). Parked for review.`,
+      `deliver (${Math.round(limitWh)} Wh with headroom).${gross ? ' Parked for review.' : ' Check the meter and the charger clock.'}`,
   };
 }
 
