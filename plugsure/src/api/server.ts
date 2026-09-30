@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { routePath } from './route-path.js';
 import { limitParam } from './paging.js';
 import fastifyStatic from '@fastify/static';
 import { contentSecurityPolicy } from './csp.js';
@@ -167,7 +168,7 @@ export async function buildApi(): Promise<FastifyInstance> {
    * preHandler below fills it in once the tenant is known.
    */
   app.addHook('onRequest', (req, _reply, done) => {
-    if (!req.url.startsWith('/v1/')) return done();
+    if (!routePath(req).startsWith('/v1/')) return done();
     runInRequestScope(done);
   });
 
@@ -176,7 +177,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   // here they only count against the IP when the key does not authenticate.
   const hits = new Map<string, { n: number; resetAt: number }>();
   // Only the operator API (/v1) takes API keys: elsewhere the header buys nothing.
-  const withApiKey = (req: FastifyRequest) => req.url.startsWith('/v1/') && /^Bearer\s+psk_/i.test(String(req.headers.authorization ?? ''));
+  const withApiKey = (req: FastifyRequest) => routePath(req).startsWith('/v1/') && /^Bearer\s+psk_/i.test(String(req.headers.authorization ?? ''));
   startUsageFlush();
   app.addHook('onClose', async () => { stopUsageFlush(); await flushUsage(); });
   app.addHook('onRequest', async (req, reply) => {
@@ -202,9 +203,11 @@ export async function buildApi(): Promise<FastifyInstance> {
    * which is the only arrangement that survives contact with a growing codebase.
    */
   app.addHook('preHandler', async (req, reply) => {
-    if (req.url === '/healthz' || !req.url.startsWith('/v1/')) return;
+    // Decided on the matched route, never the raw URL (see routePath).
+    const route = routePath(req);
+    if (!route.startsWith('/v1/')) return;
     // The one unauthenticated /v1 route: you cannot present a session you do not have yet.
-    if (req.url === '/v1/auth/login' && req.method === 'POST') return;
+    if (route === '/v1/auth/login' && req.method === 'POST') return;
     try {
       const auth = await authenticate(req.headers as Record<string, unknown>);
       req.principal = auth.principal;
@@ -235,7 +238,7 @@ export async function buildApi(): Promise<FastifyInstance> {
        * one-time password worked indefinitely against the API itself.
        */
       if (auth.mustChangePassword) {
-        const path = req.url.split('?')[0];
+        const path = routePath(req);
         const allowed =
           (req.method === 'GET' && (path === '/v1/auth/me' || path === '/v1/meta')) ||
           (req.method === 'POST' && (path === '/v1/auth/change-password' || path === '/v1/auth/logout'));
@@ -279,7 +282,8 @@ export async function buildApi(): Promise<FastifyInstance> {
    * that long. It does its own filtering (see eventVisibleTo).
    */
   app.addHook('preHandler', async (req) => {
-    if (!req.url.startsWith('/v1/') || req.url.startsWith('/v1/stream') || req.url.startsWith('/v1/events/')) return;
+    const route = routePath(req);
+    if (!route.startsWith('/v1/') || route.startsWith('/v1/stream') || route.startsWith('/v1/events/')) return;
     if (!req.principal?.orgId) return;
     req.orgScope = await enterOrgScope(req.principal.orgId);
   });

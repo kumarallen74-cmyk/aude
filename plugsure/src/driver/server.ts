@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { routePath } from '../api/route-path.js';
 import fastifyStatic from '@fastify/static';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -183,8 +184,9 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   // A device token is required for everything except issuing one and public browse.
   const PUBLIC = new Set(['/d/health', '/d/tls-ask', '/d/v1/device', '/d/v1/stations', '/d/v1/resolve', '/d/v1/meta']);
   app.addHook('preHandler', async (req, reply) => {
-    if (!req.url.startsWith('/d/v1/') && req.url !== '/d/health') return;
-    const path = req.url.split('?')[0]!;
+    // Decided on the matched route, never the raw URL (see routePath).
+    const path = routePath(req);
+    if (!path.startsWith('/d/v1/') && path !== '/d/health') return;
     // Public: station browse, connector detail, resolve, device issue, health.
     if (
       PUBLIC.has(path) ||
@@ -211,7 +213,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   });
   app.addHook('preHandler', async (req, reply) => {
     const org = brandOrg(req);
-    if (!org || !req.url.startsWith('/d/v1/') || reply.sent) return;
+    if (!org || !routePath(req).startsWith('/d/v1/') || reply.sent) return;
     const b = (req.body ?? {}) as Record<string, unknown>;
     const params = (req.params ?? {}) as Record<string, unknown>;
     const connectorId = typeof b.connectorId === 'string' ? b.connectorId : null;
