@@ -16,7 +16,7 @@ import {
   catalogEntry,
   validateConfigValue,
 } from '../ocpp/config-catalog.js';
-import { type Permission, CONSOLE_ROLES, assertCan, assertCanAny, can, heldPermissions, visibleSiteIds } from '../services/authz.js';
+import { type Permission, CONSOLE_ROLES, SYSTEM_ROLES, assertCan, assertCanAny, assertGrantable, can, heldPermissions, visibleSiteIds } from '../services/authz.js';
 import { revokeSession, SESSION_COOKIE, sessionFromCookie } from '../services/auth.js';
 import { writeAudit } from '../services/audit.js';
 import * as users from '../services/users.js';
@@ -869,6 +869,35 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     return id;
   }
 
+  /**
+   * User management may only hand out, or take over, authority the caller holds.
+   *
+   * `user:write` was enough to create a Super Administrator, promote anyone to
+   * one, or reset the password of any user in the organisation, including one
+   * holding platform:admin, and read back the one-time password. An API key
+   * issued with nothing but `user:write` was therefore a full takeover. API key
+   * issuance already applied assertGrantable; user management now does too:
+   * the role being given must be within the caller's permissions, and so must
+   * everything the target user already holds (for a role change, a status
+   * change or a password reset).
+   */
+  // `fleet:portal` is held by no console role; it exposes one fleet account's
+  // invoices, sessions and cards, so granting it takes what it exposes.
+  const PORTAL_EQUIVALENT: Permission[] = ['invoice:read', 'session:read', 'token:read', 'token:write'];
+  const grantableForm = (perms: string[]) => perms.flatMap((p) => (p === 'fleet:portal' ? PORTAL_EQUIVALENT : [p]));
+  const assertMayGrantRole = (req: FastifyRequest, role: string) => {
+    assertGrantable(req.principal, grantableForm(SYSTEM_ROLES[role] ?? []));
+  };
+  const assertMayManageUser = async (req: FastifyRequest, userId: string) => {
+    const r = await one<{ perms: string[] | null }>(
+      `SELECT array_agg(DISTINCT p) AS perms
+         FROM user_role ur JOIN role r ON r.id = ur.role_id, unnest(r.permissions) AS p
+        WHERE ur.user_id = $1`,
+      [userId],
+    );
+    assertGrantable(req.principal, grantableForm(r?.perms ?? []));
+  };
+
   app.post('/v1/users', async (req, reply) => {
     assertCan(req.principal, { permission: 'user:write' });
     const b = (req.body ?? {}) as any;
@@ -879,6 +908,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (!users.validRole(String(b.role))) return clientError(reply, 400, 'choose a role');
     const siteIds = await checkSiteIds(req, b.siteIds);
     const role = CONSOLE_ROLES.find((r) => r.name === b.role)!;
+    assertMayGrantRole(req, role.name);
     if (role.siteScoped && siteIds.length === 0) return clientError(reply, 400, 'a Site Host must be assigned at least one site');
     const ownerId = role.ownerScoped ? await checkOwnerId(req, b.ownerId) : null;
     if (role.ownerScoped && !ownerId) return clientError(reply, 400, 'choose the site owner this user belongs to');
@@ -907,6 +937,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (self && (b.role !== undefined || b.status !== undefined)) {
       return clientError(reply, 400, 'you cannot change your own role or status — ask another administrator');
     }
+    if (b.role !== undefined || b.status !== undefined) await assertMayManageUser(req, id);
     if (b.name !== undefined || b.phone !== undefined) {
       await query(
         `UPDATE app_user SET name = COALESCE($2, name),
@@ -918,6 +949,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
       if (!users.validRole(String(b.role))) return clientError(reply, 400, 'choose a role');
       const siteIds = await checkSiteIds(req, b.siteIds);
       const role = CONSOLE_ROLES.find((r) => r.name === b.role)!;
+      assertMayGrantRole(req, role.name);
       if (role.siteScoped && siteIds.length === 0) return clientError(reply, 400, 'a Site Host must be assigned at least one site');
       const ownerId = role.ownerScoped ? await checkOwnerId(req, b.ownerId) : null;
       if (role.ownerScoped && !ownerId) return clientError(reply, 400, 'choose the site owner this user belongs to');
@@ -939,6 +971,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (!UUID_RE.test(id)) throw new NotFoundError('user not found');
     const u = await one<{ org_id: string }>(`SELECT org_id FROM app_user WHERE id = $1`, [id]);
     if (!u || u.org_id !== req.principal.orgId) throw new NotFoundError('user not found');
+    await assertMayManageUser(req, id);
     const temporaryPassword = await users.resetPassword(id);
     await audit(req, 'user.password_reset', 'user', id);
     return { ok: true, temporaryPassword };

@@ -28,6 +28,7 @@
     "e2e:card-holds": "tsx tools/e2e/card-holds-e2e.mts",
     "e2e:linked-wallets": "tsx tools/e2e/linked-wallets-e2e.mts",
     "e2e:postpay": "tsx tools/e2e/postpay-e2e.mts",
+    "e2e:pilot-fixes": "tsx tools/e2e/pilot-fixes-e2e.mts",
     "openapi": "tsx tools/openapi/generate.mts",
     "sdk": "tsx tools/sdk/generate.mts",
     "e2e:field": "tsx tools/e2e/field-e2e.mts",

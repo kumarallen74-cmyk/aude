@@ -27,7 +27,9 @@ import { loadTariffForConnector, createTariff, assignTariff, listTariffs } from 
 import { conservativeAllowanceWh, energyAllowanceWh, rateSession, validateTariff } from '../services/tariff.js';
 import { estimateQrisMdrIdr, QRIS_MAX_TRANSACTION_IDR } from '../services/payments/provider.js';
 import { paymentsFor, PaymentsUnavailable, logPaymentCreated, sandboxProvider } from '../services/payments/registry.js';
-import { type Principal, assertCan, assertCanAny, assertGrantable, visibleSiteIds, can, ForbiddenError } from '../services/authz.js';
+import { type Permission, type Principal, assertCan, assertCanAny, assertGrantable, visibleSiteIds, can, ForbiddenError } from '../services/authz.js';
+import { refuseHttpsUrl } from '../services/net-guard.js';
+import { validateConfigValue } from '../ocpp/config-catalog.js';
 import { recordRemoteStartRequest } from '../services/operator-limits.js';
 import { registerConsoleRoutes } from './console-routes.js';
 import { listFleetDetailed, validateTopology, applyTopology, type EvseSpec } from '../services/chargepoints.js';
@@ -485,6 +487,55 @@ export async function buildApi(): Promise<FastifyInstance> {
     const owner = found;
     const body = (req.body ?? {}) as any;
     const actor = actorOf(req);
+
+    /**
+     * The generic dispatcher must not be a way around the dedicated routes.
+     *
+     * `charge_point:command` (held by api_client keys, technicians and field
+     * technicians) reached every command here with no further check: a firmware
+     * image from any URL (the firmware routes need firmware:write, a stored
+     * image and its checksum), charging profiles without smartcharging:write
+     * (including clearing the station ceiling the site power budget relies on),
+     * AuthorizationKey / SecurityProfile (which the config route refuses) and
+     * arbitrary vendor DataTransfer payloads. Each now needs what its own route
+     * needs.
+     */
+    const needs = (permission: Permission) => assertCan(req.principal, { permission, ...scope });
+    switch (command) {
+      case 'update-firmware': {
+        needs('firmware:write');
+        let url: URL;
+        try { url = new URL(String(body.location ?? '')); } catch { throw new BadRequestError('location must be an https URL'); }
+        const refused = refuseHttpsUrl(url);
+        if (refused) throw new BadRequestError(`firmware URL refused: ${refused}`);
+        break;
+      }
+      case 'set-charging-profile':
+      case 'clear-charging-profile': {
+        needs('smartcharging:write');
+        const purpose = String(body.purpose ?? body.chargingProfilePurpose ?? '');
+        if (/^(ChargePointMaxProfile|ChargingStationMaxProfile)$/.test(purpose)) {
+          throw new BadRequestError('the station ceiling is managed by the site power budget (Power), not by a raw command');
+        }
+        if (command === 'clear-charging-profile' && body.id == null && !purpose) {
+          throw new BadRequestError('scope the clear to a profile id or a TxDefaultProfile / TxProfile purpose');
+        }
+        break;
+      }
+      case 'change-configuration': {
+        const key = String(body.key ?? '').trim();
+        if (!/^[A-Za-z0-9_.-]{1,50}$/.test(key)) throw new BadRequestError('invalid configuration key');
+        if (key === 'SecurityProfile' || key === 'AuthorizationKey') {
+          throw new BadRequestError(`${key} is changed from the Security tab, which enforces the safe order of operations`);
+        }
+        const problem = validateConfigValue(key, String(body.value ?? ''));
+        if (problem) throw new BadRequestError(problem);
+        break;
+      }
+      case 'data-transfer':
+        needs('charge_point:config');
+        break;
+    }
 
     switch (command) {
       case 'remote-start': {
