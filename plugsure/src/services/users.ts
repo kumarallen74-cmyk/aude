@@ -124,7 +124,25 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
     await checkPassword(pw, null);
     return generic;
   }
-  if (u.locked_until && new Date(u.locked_until) > new Date()) {
+  /**
+   * The attempt is COUNTED before the password is checked, in one statement.
+   *
+   * The counter used to be read, incremented in JavaScript after the (slow,
+   * deliberately) password check, and written back as an absolute value: a
+   * burst of parallel guesses all read the same count and together recorded
+   * one failure, so the lockout never engaged. Now each attempt atomically
+   * takes a slot; the attempt that reaches the limit sets the lock, and every
+   * later one finds the account locked and is refused whatever the password.
+   */
+  const claimed = await one<{ locked_now: boolean }>(
+    `UPDATE app_user
+        SET failed_logins = CASE WHEN failed_logins + 1 >= $2 THEN 0 ELSE failed_logins + 1 END,
+            locked_until = CASE WHEN failed_logins + 1 >= $2 THEN now() + ($3 || ' minutes')::interval ELSE locked_until END
+      WHERE id = $1 AND (locked_until IS NULL OR locked_until <= now())
+      RETURNING (locked_until IS NOT NULL AND locked_until > now()) AS locked_now`,
+    [u.id, config.console.loginMaxFailures, config.console.loginLockMinutes],
+  );
+  if (!claimed) {
     // The same password work as any other attempt: an instant answer would reveal the lock
     // (and so the account) by timing alone. The password is not accepted, even if right.
     await checkPassword(pw, u.password_hash);
@@ -132,16 +150,7 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
   }
   const good = await checkPassword(pw, u.password_hash);
   if (!good || u.status !== 'active') {
-    const failures = u.failed_logins + 1;
-    const lock = failures >= config.console.loginMaxFailures;
-    await query(
-      `UPDATE app_user
-          SET failed_logins = $2,
-              locked_until = CASE WHEN $3 THEN now() + ($4 || ' minutes')::interval ELSE locked_until END
-        WHERE id = $1`,
-      [u.id, lock ? 0 : failures, lock, config.console.loginLockMinutes],
-    );
-    if (lock) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
+    if (claimed.locked_now) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
     return generic;
   }
 

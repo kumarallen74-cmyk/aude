@@ -49,6 +49,7 @@ if (DB_OK) {
     await query(`INSERT INTO app_user (org_id, email, name, status, password_hash) VALUES ($1, 'll-known@plugsure.test', 'Known', 'active', $2)`, [orgId, h]);
     await query(`INSERT INTO app_user (org_id, email, name, status, password_hash, locked_until) VALUES ($1, 'll-locked@plugsure.test', 'Locked', 'active', $2, now() + interval '15 minutes')`, [orgId, h]);
     await query(`INSERT INTO app_user (org_id, email, name) VALUES ($1, 'll-invited@plugsure.test', 'Invited')`, [orgId]);
+    await query(`INSERT INTO app_user (org_id, email, name, status, password_hash) VALUES ($1, 'll-burst@plugsure.test', 'Burst', 'active', $2)`, [orgId, h]);
     const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'LL Hub', 1000) RETURNING id`, [orgId]))!.id;
     const cp = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity, ocpp_version, status) VALUES ($1, $2, 'ocpp1.6', 'online') RETURNING id`, [site, IDENT]))!.id;
     imageId = (await one<{ id: string }>(
@@ -78,6 +79,15 @@ dbDescribe('operator sign-in never reveals whether an address has an account', (
   });
   test('the right password on an unlocked account still signs in', async () => {
     assert.equal((await login('ll-known@plugsure.test', PW)).ok, true);
+  });
+  test('a burst of parallel guesses cannot outrun the lockout, and the lock then refuses the right password', async () => {
+    // The counter was read, bumped in JavaScript after the password check and written
+    // back as a value: 30 parallel guesses all read 0 and together recorded ONE failure.
+    const guesses = await Promise.all(Array.from({ length: 30 }, (_, i) => login('ll-burst@plugsure.test', `wrong-${i}`)));
+    assert.ok(guesses.every((g) => !g.ok));
+    const u = await one<{ locked: boolean }>(`SELECT locked_until > now() AS locked FROM app_user WHERE email = 'll-burst@plugsure.test'`);
+    assert.equal(u?.locked, true, 'the burst locked the account');
+    assert.equal((await login('ll-burst@plugsure.test', PW)).ok, false, 'locked: even the right password is refused');
   });
 });
 
