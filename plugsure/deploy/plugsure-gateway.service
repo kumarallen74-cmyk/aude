@@ -1,0 +1,114 @@
+# PlugSure OCPP gateway — systemd unit for the no-Docker deployment path.
+#
+# Install:
+#   install -o root -g root -m 0644 deploy/plugsure-gateway.service \
+#       /etc/systemd/system/plugsure-gateway.service
+#   systemctl daemon-reload
+#   systemctl enable --now plugsure-gateway
+#
+# Expects (see deploy/README.md):
+#   /opt/plugsure                 deploy root: dist/, node_modules/, db/migrations/, package.json
+#   /etc/plugsure/plugsure.env    environment file, root:plugsure 0640
+#   user/group plugsure           system account, no login shell
+#
+# Logs go to journald:  journalctl -u plugsure-gateway -f
+
+[Unit]
+Description=PlugSure OCPP 1.6/2.0.1 WebSocket gateway
+Documentation=file:/opt/plugsure/deploy/README.md
+# network-online, not just network: binding and outbound DB connections need a
+# routable address, and on EC2 that is not true at network.target.
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Ordering only. The database may be a container or an RDS instance rather than a
+# local postgresql.service, so this must not be a hard Requires= — that would
+# refuse to start the gateway on a host with no local Postgres at all.
+After=plugsure-api.service
+# The schema is migrated by plugsure-api.service's ExecStartPre (single writer,
+# so two units can never race the migrator). Ordering after it means the gateway
+# starts against a current schema. It does NOT require the API to be running.
+
+# Crash-loop guard: if it fails 5 times in 5 minutes something is wrong that
+# restarting will not fix (bad DATABASE_URL, port in use). Stop and page.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=plugsure
+Group=plugsure
+WorkingDirectory=/opt/plugsure
+
+EnvironmentFile=/etc/plugsure/plugsure.env
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--enable-source-maps
+# Time-of-use tariff windows (WBP 17:00-22:00) are evaluated in local time.
+Environment=TZ=Asia/Jakarta
+
+ExecStart=/usr/bin/node /opt/plugsure/dist/apps/gateway.js
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=5
+
+# --- shutdown -----------------------------------------------------------------
+# The gateway's SIGTERM handler terminates every charger socket, closes the
+# WebSocket server and drains the pg pool (see startGateway().close()). Give it
+# room: with a few thousand sockets this is not instantaneous, and a SIGKILL
+# mid-drain leaves transactions unclosed in the database.
+KillSignal=SIGTERM
+# 'mixed': SIGTERM to the main process only (so node runs its handler), SIGKILL
+# to the whole cgroup if it overruns.
+KillMode=mixed
+TimeoutStopSec=90
+SendSIGKILL=yes
+
+# --- logging ------------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plugsure-gateway
+# The app already emits structured JSON via pino; do not let journald re-level it.
+
+# --- limits -------------------------------------------------------------------
+# One file descriptor per charger socket, plus pg pool and epoll overhead.
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# --- hardening ----------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+# ProtectSystem=strict makes the whole filesystem read-only. The gateway writes
+# nothing outside /tmp (which PrivateTmp gives it privately). The '-' prefix means
+# "if this path exists"; keep it so the unit still starts before the directory is
+# created on a fresh host.
+ReadWritePaths=-/var/lib/plugsure
+# Listens on TCP and talks to Postgres over TCP or a unix socket.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Binds 9220 (>1024), so it needs no capabilities at all.
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# MUST stay off: V8's JIT maps pages writable-then-executable, and
+# MemoryDenyWriteExecute=yes makes node abort on startup.
+MemoryDenyWriteExecute=no
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

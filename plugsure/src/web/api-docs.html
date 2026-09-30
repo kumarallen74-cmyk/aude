@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugSure API reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#f5f7f9; --panel:#ffffff; --panel-2:#eef2f5; --ink:#0f1c24; --body:#33444f; --muted:#5b6b76; --line:#dbe2e8;
+  --brand:#1b4d8c; --accent:#0a7c68; --accent-soft:#e1f2ee; --code-bg:#f0f3f6;
+  --get:#1d6fb8; --post:#0a7c68; --put:#9a6200; --patch:#7a4bb7; --delete:#b2362b;
+  --f:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c1419; --panel:#121d24; --panel-2:#17252e; --ink:#e7eef2; --body:#bccad2; --muted:#8fa2ad; --line:#223540;
+    --brand:#6ea8e8; --accent:#3fd0b0; --accent-soft:#11302a; --code-bg:#0f1a20;
+    --get:#6aa9ec; --post:#3fd0b0; --put:#e0a93b; --patch:#b38ef0; --delete:#ff7f73; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c1419; --panel:#121d24; --panel-2:#17252e; --ink:#e7eef2; --body:#bccad2; --muted:#8fa2ad; --line:#223540;
+  --brand:#6ea8e8; --accent:#3fd0b0; --accent-soft:#11302a; --code-bg:#0f1a20;
+  --get:#6aa9ec; --post:#3fd0b0; --put:#e0a93b; --patch:#b38ef0; --delete:#ff7f73; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--body);font:15px/1.55 var(--f)}
+a{color:var(--brand)}
+code,pre,.mono{font-family:var(--mono);font-size:13px}
+code{background:var(--code-bg);padding:1px 5px;border-radius:5px;color:var(--ink)}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow:auto;margin:8px 0;color:var(--ink)}
+.layout{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:100vh}
+nav{position:sticky;top:0;height:100vh;overflow:auto;background:var(--panel);border-right:1px solid var(--line);padding:18px 14px 30px}
+.brand{display:flex;align-items:center;gap:10px;margin:0 4px 14px}
+.brand svg{width:32px;height:32px;flex:none}
+.brand b{display:block;color:var(--ink);font-size:16px}
+.brand span{font-size:12px;color:var(--muted)}
+#q{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);font:inherit;margin-bottom:10px}
+nav h4{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 6px 6px}
+nav a{display:flex;gap:8px;align-items:baseline;padding:5px 8px;border-radius:7px;text-decoration:none;color:var(--body);font-size:13.5px}
+nav a:hover{background:var(--panel-2)}
+nav a .m{font:600 10.5px var(--mono);width:44px;flex:none}
+nav a.tag{font-weight:600;color:var(--ink)}
+main{padding:28px clamp(16px,4vw,48px) 80px;min-width:0;max-width:1100px}
+header.top{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:6px}
+header.top h1{font-size:28px;margin:0;color:var(--ink);letter-spacing:-.01em}
+.ver{font:500 12px var(--mono);background:var(--accent-soft);color:var(--accent);padding:3px 8px;border-radius:99px}
+.toolbar{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 12px;font:500 13px var(--f);cursor:pointer;text-decoration:none}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.intro{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:6px 22px 14px;margin:16px 0 22px}
+.intro h2{font-size:17px;color:var(--ink);margin:18px 0 6px}
+.keybar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:24px}
+.keybar input{flex:1;min-width:220px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:13px var(--mono)}
+.keybar small{color:var(--muted);flex-basis:100%}
+section.tag{margin-top:34px}
+section.tag>h2{font-size:21px;color:var(--ink);margin:0 0 4px;scroll-margin-top:16px}
+section.tag>p{margin:0 0 12px;color:var(--muted)}
+.op{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:10px 0;scroll-margin-top:12px}
+.op>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:12px;padding:11px 14px;flex-wrap:wrap}
+.op>summary::-webkit-details-marker{display:none}
+.method{font:600 12px var(--mono);color:#fff;border-radius:6px;padding:3px 0;width:62px;text-align:center;flex:none}
+.m-get{background:var(--get)} .m-post{background:var(--post)} .m-put{background:var(--put)} .m-patch{background:var(--patch)} .m-delete{background:var(--delete)}
+.path{font:500 14px var(--mono);color:var(--ink);word-break:break-all}
+.sum{color:var(--muted);font-size:14px;margin-left:auto}
+.opbody{border-top:1px solid var(--line);padding:6px 18px 16px}
+.opbody h5{font-size:12px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:16px 0 6px}
+.perms span{display:inline-block;font:500 12px var(--mono);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;margin:0 6px 4px 0}
+table.params{width:100%;border-collapse:collapse;font-size:13.5px}
+table.params td{border-top:1px solid var(--line);padding:7px 8px;vertical-align:top}
+table.params td:first-child{font-family:var(--mono);color:var(--ink);white-space:nowrap;width:1%}
+.req{color:var(--delete);font-size:11px;margin-left:4px}
+.type{font:12px var(--mono);color:var(--accent)}
+.tree{font-size:13.5px}
+.tree ul{list-style:none;margin:0;padding-left:16px;border-left:1px dashed var(--line)}
+.tree>ul{padding-left:0;border:0}
+.tree li{padding:3px 0}
+.tree .k{font-family:var(--mono);color:var(--ink)}
+.tree .d{color:var(--muted)}
+.resp{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:6px 12px}
+.code{font:600 13px var(--mono);margin-right:8px}
+.c2{color:var(--post)} .c4{color:var(--put)} .c5{color:var(--delete)}
+.try{background:var(--panel-2);border-radius:10px;padding:10px 12px;margin-top:14px}
+.try label{display:block;font-size:12px;color:var(--muted);margin:6px 0 2px}
+.try input,.try textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink);font:13px var(--mono)}
+.try textarea{min-height:110px}
+.out{white-space:pre-wrap;max-height:360px}
+.hidden{display:none!important}
+@media (max-width:860px){
+  .layout{grid-template-columns:1fr}
+  nav{position:static;height:auto;max-height:none;border-right:0;border-bottom:1px solid var(--line)}
+  #navlist{max-height:40vh;overflow:auto}
+  .sum{margin-left:0;flex-basis:100%}
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav aria-label="API sections">
+    <div class="brand">
+      <svg viewBox="0 0 120 120" aria-hidden="true"><rect width="120" height="120" rx="28" fill="#1b4d8c"/><rect x="40" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><rect x="70" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><path d="M32 68 56 92 92 46" stroke="#2fd6a7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      <div><b>PlugSure API</b><span>CSMS operator API</span></div>
+    </div>
+    <input id="q" type="search" placeholder="Search operations…" aria-label="Search operations">
+    <div id="navlist"></div>
+  </nav>
+  <main>
+    <header class="top">
+      <h1>API reference</h1><span class="ver" id="ver">…</span>
+      <div class="toolbar">
+        <a class="btn" href="/openapi.json" download="plugsure-openapi.json">Download OpenAPI 3.1</a>
+        <button class="btn" id="expand" type="button">Expand all</button>
+      </div>
+    </header>
+    <div class="intro" id="intro"></div>
+    <div class="keybar">
+      <strong style="color:var(--ink)">Try it</strong>
+      <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="psk_… (use a sandbox key)" aria-label="API key">
+      <button class="btn" id="forget" type="button">Forget</button>
+      <small>Requests go to this server with your key as a bearer token. The key stays in this tab only. Use a <b>sandbox</b> key: calls change real data.</small>
+    </div>
+    <div id="ops"><p>Loading the API description…</p></div>
+  </main>
+</div>
+<script>
+"use strict";
+const $=(s,r=document)=>r.querySelector(s);
+const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/** A small markdown subset: paragraphs, headings, lists, `code`, **bold**, links. */
+function md(src){
+  const inline=(t)=>esc(t).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" rel="noopener">$1</a>');
+  const out=[]; let list=null;
+  for(const block of String(src||'').split(/\n{2,}/)){
+    const lines=block.split('\n');
+    if(/^## /.test(lines[0])){ out.push(`<h2>${inline(lines[0].slice(3))}</h2>`); lines.shift(); if(!lines.length) continue; }
+    if(lines.every(l=>/^\s*- /.test(l))){ out.push('<ul>'+lines.map(l=>`<li>${inline(l.replace(/^\s*- /,''))}</li>`).join('')+'</ul>'); continue; }
+    const items=[]; const para=[];
+    for(const l of lines){ if(/^\s*- /.test(l)) items.push(l.replace(/^\s*- /,'')); else if(items.length) items[items.length-1]+=' '+l.trim(); else para.push(l); }
+    if(para.length) out.push(`<p>${inline(para.join(' '))}</p>`);
+    if(items.length) out.push('<ul>'+items.map(i=>`<li>${inline(i)}</li>`).join('')+'</ul>');
+  }
+  void list; return out.join('');
+}
+let SPEC=null;
+const refName=(r)=>r.split('/').pop();
+function deref(s){ let n=0; while(s&&s.$ref&&n++<10){ s=SPEC.components.schemas[refName(s.$ref)]; } return s||{}; }
+function typeOf(s){
+  if(s.$ref) return refName(s.$ref);
+  if(s.anyOf||s.oneOf) return (s.anyOf||s.oneOf).map(typeOf).join(' | ');
+  const t=Array.isArray(s.type)?s.type.join(' | '):(s.type||'any');
+  if(t==='array'&&s.items) return typeOf(s.items)+'[]';
+  return t+(s.format?` (${s.format})`:'')+(s.enum?`: ${s.enum.join(' | ')}`:'')+(s.const!==undefined?` = ${s.const}`:'');
+}
+/** A schema as a nested list of fields. */
+function tree(s,depth=0,seen=new Set()){
+  if(!s) return '';
+  const name=s.$ref?refName(s.$ref):null;
+  if(name){ if(seen.has(name)||depth>5) return `<span class="d">see ${esc(name)}</span>`; seen=new Set(seen); seen.add(name); }
+  s=deref(s);
+  const alts=s.anyOf||s.oneOf;
+  if(alts) return '<ul>'+alts.map((a,i)=>`<li><span class="d">option ${i+1}:</span> <span class="type">${esc(typeOf(a))}</span>${tree(a,depth+1,seen)}</li>`).join('')+'</ul>';
+  if(s.type==='array'||(Array.isArray(s.type)&&s.type.includes('array'))) return s.items?tree(s.items,depth,seen):'';
+  if(!s.properties) return '';
+  const req=new Set(s.required||[]);
+  return '<ul>'+Object.entries(s.properties).map(([k,v])=>{
+    const d=deref(v);
+    return `<li><span class="k">${esc(k)}</span>${req.has(k)?'<span class="req">required</span>':''} <span class="type">${esc(typeOf(v))}</span>${d.description?` <span class="d">— ${esc(d.description)}</span>`:''}${tree(v,depth+1,seen)}</li>`;
+  }).join('')+'</ul>';
+}
+function example(s,depth=0){
+  s=deref(s); if(depth>4) return null;
+  if(s.example!==undefined) return s.example; if(s.examples) return s.examples[0];
+  if(s.const!==undefined) return s.const; if(s.enum) return s.enum[0]; if(s.default!==undefined) return s.default;
+  const t=Array.isArray(s.type)?s.type.find(x=>x!=='null'):s.type;
+  if(s.anyOf||s.oneOf) return example((s.anyOf||s.oneOf)[0],depth+1);
+  if(t==='object'||s.properties){ const o={}; for(const [k,v] of Object.entries(s.properties||{})) o[k]=example(v,depth+1); return o; }
+  if(t==='array') return s.items?[example(s.items,depth+1)]:[];
+  if(t==='integer'||t==='number') return 0; if(t==='boolean') return true;
+  if(s.format==='date-time') return '2026-09-27T03:00:00Z'; if(s.format==='uuid') return '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+  return 'string';
+}
+const METHODS=['get','post','put','patch','delete'];
+function render(){
+  $('#ver').textContent='v'+SPEC.info.version;
+  $('#intro').innerHTML=md(SPEC.info.description);
+  const byTag=new Map(SPEC.tags.map(t=>[t.name,{tag:t,ops:[]}]));
+  for(const [p,item] of Object.entries(SPEC.paths)) for(const m of METHODS) if(item[m]) byTag.get(item[m].tags[0])?.ops.push({p,m,op:item[m]});
+  let nav='', body='';
+  for(const {tag,ops} of byTag.values()){
+    if(!ops.length) continue;
+    const tid='tag-'+tag.name.replace(/\W+/g,'-').toLowerCase();
+    nav+=`<h4>${esc(tag.name)}</h4>`+ops.map(o=>`<a href="#${o.op.operationId}" data-s="${esc((o.op.summary+' '+o.p).toLowerCase())}"><span class="m" style="color:var(--${o.m})">${o.m.toUpperCase()}</span><span>${esc(o.op.summary)}</span></a>`).join('');
+    body+=`<section class="tag" data-tag><h2 id="${tid}">${esc(tag.name)}</h2>${tag.description?`<p>${esc(tag.description)}</p>`:''}`+ops.map(opHtml).join('')+'</section>';
+  }
+  $('#navlist').innerHTML=nav; $('#ops').innerHTML=body;
+  document.querySelectorAll('details.op').forEach(d=>d.addEventListener('toggle',()=>{ if(d.open&&!d.dataset.wired) wireTry(d); }));
+  if(location.hash){ const d=document.getElementById(location.hash.slice(1)); if(d&&d.tagName==='DETAILS'){ d.open=true; d.scrollIntoView(); } }
+}
+function opHtml({p,m,op}){
+  const params=op.parameters||[];
+  const body=op.requestBody&&Object.entries(op.requestBody.content)[0];
+  const perms=op['x-permissions']||[];
+  const desc=(op.description||'').replace(/\n\n\*\*Permissions checked:\*\*[^\n]*$/,'');
+  return `<details class="op" id="${esc(op.operationId)}" data-s="${esc((op.summary+' '+p).toLowerCase())}">
+    <summary><span class="method m-${m}">${m.toUpperCase()}</span><span class="path">${esc(p)}</span><span class="sum">${esc(op.summary)}</span></summary>
+    <div class="opbody">
+      ${desc?md(desc):''}
+      ${perms.length?`<h5>Permissions checked</h5><div class="perms">${perms.map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:''}
+      ${params.length?`<h5>Parameters</h5><table class="params">${params.map(x=>`<tr><td>${esc(x.name)}${x.required?'<span class="req">required</span>':''}</td><td><span class="type">${esc(x.in)} · ${esc(typeOf(x.schema||{}))}</span>${x.description?`<div>${esc(x.description)}</div>`:''}</td></tr>`).join('')}</table>`:''}
+      ${body?`<h5>Request body <span class="type">${esc(body[0])}</span></h5><div class="tree">${tree(body[1].schema)||`<span class="type">${esc(typeOf(body[1].schema||{}))}</span>`}</div>${body[1].example!==undefined?`<pre>${esc(JSON.stringify(body[1].example,null,2))}</pre>`:''}`:''}
+      <h5>Responses</h5>
+      ${Object.entries(op.responses).map(([code,r])=>{ const rr=r.$ref?SPEC.components.responses[refName(r.$ref)]:r; const c=rr.content&&Object.entries(rr.content)[0];
+        return `<div class="resp"><span class="code c${code[0]}">${esc(code)}</span>${esc(rr.description)}${c&&!r.$ref?`<div class="tree">${tree(c[1].schema)||`<span class="type">${esc(c[0])} · ${esc(typeOf(c[1].schema||{}))}</span>`}</div>`:''}</div>`; }).join('')}
+      <div class="try"><h5 style="margin-top:4px">Try it</h5><div class="tryform"></div>
+        <button class="btn primary send" type="button">Send request</button> <span class="d status"></span>
+        <pre class="out hidden"></pre><h5>curl</h5><pre class="curl"></pre></div>
+    </div></details>`;
+}
+function wireTry(d){
+  d.dataset.wired='1';
+  const [p,m]=[d.querySelector('.path').textContent,d.querySelector('.method').textContent.toLowerCase()];
+  const op=SPEC.paths[p][m]; const params=op.parameters||[];
+  const body=op.requestBody&&Object.entries(op.requestBody.content)[0];
+  const form=d.querySelector('.tryform');
+  form.innerHTML=params.map(x=>`<label>${esc(x.name)} (${esc(x.in)})</label><input data-p="${esc(x.name)}" data-in="${esc(x.in)}" placeholder="${esc(x.schema&&x.schema.default!==undefined?x.schema.default:'')}">`).join('')+
+    (body&&body[0]==='application/json'?`<label>JSON body</label><textarea class="jb">${esc(JSON.stringify(body[1].example!==undefined?body[1].example:example(body[1].schema),null,2))}</textarea>`:'');
+  const build=()=>{
+    let url=p; const qs=new URLSearchParams();
+    form.querySelectorAll('[data-p]').forEach(i=>{ if(!i.value) return; if(i.dataset.in==='path') url=url.replace('{'+i.dataset.p+'}',encodeURIComponent(i.value)); else qs.set(i.dataset.p,i.value); });
+    return url+(qs.toString()?'?'+qs:'');
+  };
+  const jb=form.querySelector('.jb');
+  const curl=()=>{ d.querySelector('.curl').textContent=`curl -X ${m.toUpperCase()} "${location.origin}${build()}" \\\n  -H "Authorization: Bearer $PLUGSURE_API_KEY"`+(jb?` \\\n  -H "Content-Type: application/json" \\\n  -d '${jb.value.replace(/\s*\n\s*/g,' ')}'`:''); };
+  form.addEventListener('input',curl); curl();
+  d.querySelector('.send').onclick=async()=>{
+    const out=d.querySelector('.out'), st=d.querySelector('.status'); out.classList.remove('hidden');
+    const key=$('#key').value.trim(); if(!key){ st.textContent='Enter an API key above first.'; return; }
+    if(/\{[^}]+\}/.test(build())){ st.textContent='Fill in the path parameters.'; return; }
+    st.textContent='Sending…';
+    try{
+      const res=await fetch(build(),{method:m.toUpperCase(),headers:{Authorization:'Bearer '+key,...(jb?{'Content-Type':'application/json'}:{})},body:jb?jb.value:undefined});
+      const text=await res.text(); let shown=text; try{ shown=JSON.stringify(JSON.parse(text),null,2); }catch(e){}
+      st.textContent=`HTTP ${res.status}`; out.textContent=shown.slice(0,20000);
+    }catch(e){ st.textContent='Request failed: '+e.message; }
+  };
+}
+$('#q').addEventListener('input',(e)=>{
+  const q=e.target.value.trim().toLowerCase();
+  document.querySelectorAll('#navlist a').forEach(a=>a.classList.toggle('hidden',!!q&&!a.dataset.s.includes(q)));
+  document.querySelectorAll('details.op').forEach(d=>d.classList.toggle('hidden',!!q&&!d.dataset.s.includes(q)));
+  document.querySelectorAll('section[data-tag]').forEach(s=>s.classList.toggle('hidden',!s.querySelector('details.op:not(.hidden)')));
+});
+$('#expand').onclick=()=>{ const all=[...document.querySelectorAll('details.op')]; const open=!all.every(d=>d.open); all.forEach(d=>d.open=open); $('#expand').textContent=open?'Collapse all':'Expand all'; };
+try{ $('#key').value=sessionStorage.getItem('ps_api_key')||''; }catch(e){}
+$('#key').addEventListener('change',()=>{ try{ sessionStorage.setItem('ps_api_key',$('#key').value.trim()); }catch(e){} });
+$('#forget').onclick=()=>{ $('#key').value=''; try{ sessionStorage.removeItem('ps_api_key'); }catch(e){} };
+window.addEventListener('hashchange',()=>{ const d=document.getElementById(location.hash.slice(1)); if(d&&d.tagName==='DETAILS'){ d.open=true; } });
+fetch('/openapi.json').then(r=>r.json()).then(s=>{ SPEC=s; render(); }).catch(e=>{ $('#ops').innerHTML=`<p>Could not load /openapi.json: ${esc(e.message)}</p>`; });
+</script>
+</body>
+</html>

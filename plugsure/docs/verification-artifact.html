@@ -1,0 +1,421 @@
+<title>PlugSure Audit Trail</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#f4f3ee; --panel:#fbfaf7; --ink:#161a2c; --body:#2c3145; --muted:#666c81;
+  --line:#ddd9cd; --line-soft:#e8e4da;
+  --indigo:#2b3a86; --indigo-soft:#e5e6f2;
+  --brass:#9a7420; --brass-soft:#f2ead6;
+  --danger:#95291f; --danger-soft:#f6e3df; --danger-line:#e0b8b1;
+  --good:#2b6046; --good-soft:#e0ece5;
+  --code-bg:#eceade;
+  --f-display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --measure:70ch;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#111320; --panel:#171a2a; --ink:#eceaf5; --body:#c8c9d8; --muted:#8f93a8;
+    --line:#2c3049; --line-soft:#242840;
+    --indigo:#8f9de8; --indigo-soft:#1e2444;
+    --brass:#d9b25c; --brass-soft:#332a17;
+    --danger:#e8938a; --danger-soft:#3a1f1c; --danger-line:#5c2f28;
+    --good:#7bc4a0; --good-soft:#16301f;
+    --code-bg:#1c2033;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#111320; --panel:#171a2a; --ink:#eceaf5; --body:#c8c9d8; --muted:#8f93a8;
+  --line:#2c3049; --line-soft:#242840;
+  --indigo:#8f9de8; --indigo-soft:#1e2444;
+  --brass:#d9b25c; --brass-soft:#332a17;
+  --danger:#e8938a; --danger-soft:#3a1f1c; --danger-line:#5c2f28;
+  --good:#7bc4a0; --good-soft:#16301f;
+  --code-bg:#1c2033;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--body);
+     font-family:var(--f-body);font-size:17px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.doc{padding:36px 22px 100px;max-width:1040px;margin:0 auto}
+@media (min-width:760px){.doc{padding:60px 48px 130px}}
+.prose{max-width:var(--measure)}
+
+/* masthead */
+.eyebrow{font-family:var(--f-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+         color:var(--brass);margin:0 0 14px}
+h1{font-family:var(--f-display);font-weight:700;color:var(--ink);
+   font-size:clamp(32px,5vw,50px);line-height:1.03;letter-spacing:-.035em;margin:0 0 16px;text-wrap:balance}
+.meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin:20px 0 0;padding-top:18px;border-top:1px solid var(--line);
+      font-family:var(--f-mono);font-size:11.5px;letter-spacing:.04em;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:500}
+
+/* verdict */
+.verdict{border:1px solid var(--danger-line);border-left:4px solid var(--danger);
+         background:var(--danger-soft);border-radius:0 4px 4px 0;padding:24px 26px;margin:32px 0 12px}
+.verdict .tag{font-family:var(--f-mono);font-size:11px;font-weight:600;letter-spacing:.16em;
+              text-transform:uppercase;color:var(--danger);display:block;margin-bottom:10px}
+.verdict h2{margin:0 0 10px;font-family:var(--f-display);font-weight:700;color:var(--ink);
+            font-size:clamp(24px,3.4vw,32px);letter-spacing:-.028em;line-height:1.1}
+.verdict p{margin:0 0 12px;color:var(--body);max-width:66ch}
+.verdict p:last-child{margin-bottom:0}
+.verdict ol{margin:0 0 12px;padding-left:1.2em;max-width:66ch}
+.verdict li{margin-bottom:9px}
+.verdict li::marker{color:var(--danger);font-family:var(--f-mono);font-size:.85em}
+
+/* counts */
+.counts{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
+        grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border-radius:3px;overflow:hidden;margin:0 0 34px}
+.count{background:var(--panel);padding:16px 18px}
+.count .k{font-family:var(--f-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+          color:var(--muted);margin-bottom:7px}
+.count .v{font-family:var(--f-display);font-weight:700;font-size:30px;letter-spacing:-.03em;
+          line-height:1;font-variant-numeric:tabular-nums}
+.count .d{font-size:12.5px;color:var(--muted);margin-top:6px;line-height:1.35}
+.v-bad{color:var(--danger)} .v-warn{color:var(--brass)} .v-ok{color:var(--good)} .v-ink{color:var(--ink)}
+
+/* headings */
+h2{font-family:var(--f-display);font-weight:600;color:var(--ink);
+   font-size:clamp(21px,2.7vw,28px);line-height:1.15;letter-spacing:-.022em;margin:58px 0 6px;text-wrap:balance}
+h2 .n{font-family:var(--f-mono);font-size:.55em;font-weight:500;color:var(--brass);
+      letter-spacing:.06em;margin-right:.7em;vertical-align:.15em}
+h3{font-family:var(--f-display);font-weight:600;color:var(--ink);font-size:17px;margin:34px 0 8px;
+   letter-spacing:-.008em}
+.sub{color:var(--muted);font-size:15.5px;margin:0 0 22px;max-width:var(--measure)}
+p{margin:0 0 16px;max-width:var(--measure)}
+a{color:var(--indigo)}
+strong{color:var(--ink);font-weight:600}
+code{font-family:var(--f-mono);font-size:.85em;background:var(--code-bg);padding:1.5px 5px;
+     border-radius:3px;color:var(--ink)}
+ul,ol{max-width:var(--measure);margin:0 0 16px;padding-left:1.15em}
+li{margin-bottom:7px}
+li::marker{color:var(--brass)}
+hr{border:0;border-top:1px solid var(--line);margin:50px 0}
+
+/* tables */
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:3px;background:var(--panel);margin:0 0 24px}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th{font-family:var(--f-mono);font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+   color:var(--muted);text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);
+   white-space:nowrap;background:var(--panel)}
+td{padding:12px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+td.id{font-family:var(--f-mono);font-size:12px;color:var(--muted);white-space:nowrap}
+.loc{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);display:block;margin-top:5px;
+     word-break:break-word}
+.ev{display:block;margin-top:7px;padding-top:7px;border-top:1px dotted var(--line);
+    font-size:13px;color:var(--muted)}
+.ev b{color:var(--danger);font-weight:600}
+
+/* chips */
+.chip{display:inline-block;font-family:var(--f-mono);font-size:10px;font-weight:600;letter-spacing:.07em;
+      padding:2px 8px;border-radius:99px;white-space:nowrap}
+.c-block{background:var(--danger-soft);color:var(--danger)}
+.c-high{background:var(--brass-soft);color:var(--brass)}
+.c-ok{background:var(--good-soft);color:var(--good)}
+.c-mute{background:var(--line-soft);color:var(--muted)}
+
+/* callouts */
+.note{border-left:3px solid var(--indigo);background:var(--indigo-soft);padding:16px 20px;margin:24px 0;
+      max-width:var(--measure);border-radius:0 3px 3px 0}
+.note .lbl{font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+           color:var(--indigo);display:block;margin-bottom:6px;font-weight:600}
+.note p:last-child{margin-bottom:0}
+.good{border-left:3px solid var(--good);background:var(--good-soft);padding:16px 20px;margin:24px 0;
+      max-width:var(--measure);border-radius:0 3px 3px 0}
+.good .lbl{font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+           color:var(--good);display:block;margin-bottom:6px;font-weight:600}
+.good p:last-child{margin-bottom:0}
+
+/* tier list — a genuine sequence, so numbered */
+.tier{list-style:none;padding:0;margin:0 0 8px;max-width:var(--measure)}
+.tier li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:16px;padding:15px 0;
+         border-top:1px solid var(--line-soft);margin:0}
+.tier li:first-child{border-top:1px solid var(--line)}
+.tier .num{font-family:var(--f-mono);font-size:12px;font-weight:600;color:var(--brass);padding-top:3px}
+.tier .ttl{font-family:var(--f-display);font-weight:600;font-size:15.5px;color:var(--ink);margin-bottom:4px}
+.tier .bd{font-size:14.5px;color:var(--body)}
+.tier .eff{font-family:var(--f-mono);font-size:11px;color:var(--muted);margin-top:5px;display:block}
+
+.foot{margin-top:66px;padding-top:20px;border-top:2px solid var(--ink);
+      font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;color:var(--muted);
+      display:flex;flex-wrap:wrap;gap:8px 30px}
+:focus-visible{outline:2px solid var(--indigo);outline-offset:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="doc">
+
+<p class="eyebrow">Verification &amp; validation &middot; three independent passes</p>
+<h1>Is PlugSure ready to hand to Autel?</h1>
+<div class="meta">
+  <span><b>23 August 2026</b></span>
+  <span>10 auditors &middot; 3 passes &middot; <b>100 findings</b></span>
+  <span>125 unit tests &middot; <code>tsc</code> clean</span>
+  <span>Never met real hardware</span>
+</div>
+
+<div class="verdict">
+  <span class="tag">Verdict</span>
+  <h2>Not yet &mdash; but the remaining gap is small, named, and mostly configuration.</h2>
+  <p>Three blind audit passes found 100 defects. All criticals and highs are closed and verified
+  against a live stack. What is left is deliberate: a bench-safe default that must be changed before
+  the OCPP port is exposed, a mock payment provider, and no refund rail.</p>
+  <p><strong>The most important finding in this report is not any individual bug.</strong> It is that
+  every remediation pass so far has introduced at least one defect larger than something it fixed.</p>
+</div>
+
+<div class="counts">
+  <div class="count"><div class="k">Pass 1 &mdash; 4 auditors</div><div class="v v-ink">33</div>
+    <div class="d">Closed &mdash; and introduced 3 new defects</div></div>
+  <div class="count"><div class="k">Pass 2 &mdash; 3 blind</div><div class="v v-ink">34</div>
+    <div class="d">Closed &mdash; and introduced 1 new CRITICAL</div></div>
+  <div class="count"><div class="k">Pass 3 &mdash; 3 blind</div><div class="v v-ink">33</div>
+    <div class="d">Closed, verified live</div></div>
+  <div class="count"><div class="k">Still open</div><div class="v v-warn">4</div>
+    <div class="d">All deliberate, all documented</div></div>
+</div>
+
+<h2><span class="n">01</span>The pattern that matters</h2>
+<p class="sub">Read this before the findings.</p>
+
+<p>The most recent regression is the clearest illustration. A change was made to switch Postgres
+row-level security <em>on</em> &mdash; unambiguously a security improvement. It used
+<code>AsyncLocalStorage.enterWith</code> to bind the tenant to a request. Node pools and reuses
+<code>HTTPParser</code> objects process-wide, so the store rode a recycled parser out of the HTTP
+server and into the OCPP gateway's WebSocket upgrade in the same process.</p>
+
+<p>The consequence: after any browser request to the operator console, every charger frame resolved
+to the API request's already-released database client. <strong>Every BootNotification failed, the
+frame log stopped recording, and the process died.</strong> Two auditors reproduced it independently,
+deterministically, 6 times out of 6.</p>
+
+<div class="note">
+  <span class="lbl">What this means for planning</span>
+  <p>A codebase with this much regulatory and protocol surface does not converge by inspection. It
+  converges by adversarial reproduction, and the reproductions have to be re-run after every change.
+  Budget for a fourth pass. The cost of finding the next one here is much lower than the cost of
+  finding it on a customer's invoice.</p>
+</div>
+
+<h2><span class="n">02</span>Money that was being invented or given away</h2>
+<p class="sub">The third pass was the billing engine's hardest audit, and it did not go well.</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Defect</th><th>What it did</th><th>Now</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Phantom energy on young meters</strong>
+    <span class="loc">services/sessions.ts &mdash; detectRollover</span></td>
+  <td>A backwards register was accepted as a &ldquo;wrap&rdquo; whenever the implied delivery was
+    under 500&nbsp;kWh. For <em>any</em> start below 65,536&nbsp;Wh that is always true, so
+    <strong>100% of backwards readings in that band were billed as real energy</strong>. That is every
+    newly commissioned charger, every board swap, every Wh/kWh unit mismatch.
+    <span class="ev">A unit at 45,000&nbsp;Wh reporting 0 billed <b>Rp&nbsp;140,645</b> of electricity
+    a UTTP-certified meter never registered.</span></td>
+  <td><span class="chip c-ok">FIXED</span><br>A wrap must look like one: start near the top of its
+    width, stop restarted near zero. Verified live &mdash; that session is now parked with no CDR.</td>
+</tr>
+<tr>
+  <td><strong>The same kWh billed twice</strong>
+    <span class="loc">services/tariff.ts &mdash; tier banding</span></td>
+  <td>Tier bounds were derived per ToU block, so an <code>ANY</code> component and a <code>WBP</code>
+    component never truncated each other. Created through our own API, passed by our own validator.
+    <span class="ev">A 40&nbsp;kWh session invoiced <b>80&nbsp;kWh</b> at 2&times; the regulated
+    ceiling &mdash; <b>Rp&nbsp;115,035</b> overcharged, no flag, no review.</span></td>
+  <td><span class="chip c-ok">FIXED</span><br>A kWh belongs to one block and one component within it.
+    <code>DOUBLE_PRICED_ENERGY</code> now sits alongside <code>UNPRICED_ENERGY</code>.</td>
+</tr>
+<tr>
+  <td><strong>A QRIS payment with no payer</strong>
+    <span class="loc">api/server.ts &mdash; checkout/qris</span></td>
+  <td>Checkout recorded an amount and a connector. The allowance went to whoever started the next
+    transaction there.
+    <span class="ev">A driver who paid <b>Rp&nbsp;500,000</b> lost all of it to anyone who plugged in
+    first &mdash; and <code>grep -rn refund src/services</code> returns nothing.</span></td>
+  <td><span class="chip c-ok">FIXED</span><br>The intent names the token that may claim it; a walk-up
+    gets a single-use token minted at checkout. Verified live.</td>
+</tr>
+<tr>
+  <td><strong>An unbounded idle fee</strong>
+    <span class="loc">services/tariff.ts &mdash; occupancy</span></td>
+  <td>The service-fee ceiling checked only components literally named <code>session</code>.
+    <span class="ev"><b>Rp&nbsp;6,692,360</b> for a 60&nbsp;kWh delivery &mdash; 32.4&times; the legal
+    maximum, issued automatically on the shipped seed tariff.</span></td>
+  <td><span class="chip c-ok">FIXED</span><br>Bounded at save time, capped on the invoice. The same
+    session now bills <b>Rp&nbsp;300,204</b>.</td>
+</tr>
+<tr>
+  <td><strong>An opt-out from the energy ceiling</strong>
+    <span class="loc">services/tariff.ts &mdash; validateTariff</span></td>
+  <td><code>plnScheme: 'none'</code> switched the regulated per-kWh ceiling off entirely.
+    <span class="ev">Rp&nbsp;10,000/kWh saved and billed with no flag &mdash; <b>4.05&times;</b> the
+    ceiling.</span></td>
+  <td><span class="chip c-ok">FIXED</span><br>The scheme is a property of the supply, not a field a
+    tariff opts out of. An unstated scheme resolves to layanan khusus.</td>
+</tr>
+<tr>
+  <td><strong>Sessions that could never be billed</strong>
+    <span class="loc">api/server.ts &mdash; rerate</span></td>
+  <td>A rating violation parked the session; re-rating hit the same violation and re-parked;
+    <code>force: true</code> had no caller anywhere in the codebase; the route answered HTTP&nbsp;200
+    <code>{"ok": false}</code>, which a console reads as success.
+    <span class="ev">Every session on a misconfigured connector accumulated the same permanent loss,
+    silently.</span></td>
+  <td><span class="chip c-ok">FIXED</span><br>A forced re-rate exists and is separately audited; the
+    response says what is wrong instead of a bare <code>false</code>.</td>
+</tr>
+</tbody>
+</table></div>
+
+<h2><span class="n">03</span>Things that would have wasted the vendor visit</h2>
+
+<ul class="tier">
+  <li><span class="num">01</span><div>
+    <div class="ttl">The gateway died on any database error at connect or disconnect</div>
+    <div class="bd">An uncaught promise rejection under Node&nbsp;22's default
+    <code>--unhandled-rejections=throw</code>. One transient error closed <em>every other charger's
+    socket on the box</em>, and <code>StartLimitBurst=5</code> means systemd stops restarting after
+    the fifth.</div>
+    <span class="eff">Fixed &mdash; and the process guards install <em>after</em> startup, so a
+    genuine startup failure still exits rather than lingering as a zombie.</span>
+  </div></li>
+  <li><span class="num">02</span><div>
+    <div class="ttl">No <code>DATABASE_URL</code> a production process would start with</div>
+    <div class="bd">As a superuser, the RLS posture check refuses to start. As <code>plugsure_app</code>,
+    the gateway's boot-time <code>CREATE SEQUENCE IF NOT EXISTS</code> failed with <em>permission
+    denied</em> &mdash; Postgres checks the ACL before <code>IF NOT EXISTS</code> short-circuits, so it
+    failed on every start for a sequence that already existed. And the role was created
+    <code>NOLOGIN</code> with no password, so the error's own advice could not be followed.</div>
+    <span class="eff">Fixed &mdash; the stack now starts under <code>NODE_ENV=production</code> logging
+    &ldquo;row-level security is in force&rdquo;, which it had never done before.</span>
+  </div></li>
+  <li><span class="num">03</span><div>
+    <div class="ttl">The documented production config refused every charger</div>
+    <div class="bd"><code>OCPP_TRUST_PROXY_PROTO</code> is required for security profile&nbsp;2 behind
+    Caddy and appeared in no documentation, <code>.env.example</code>, compose file or systemd unit.
+    The gateway logged a cheerful &ldquo;listening&rdquo; and answered 403 to everything.</div>
+    <span class="eff">Documented &mdash; and the gateway now refuses to start in that combination
+    rather than rejecting chargers silently.</span>
+  </div></li>
+  <li><span class="num">04</span><div>
+    <div class="ttl">The commissioning runbook could not be followed</div>
+    <div class="bd">Two of its four steps named endpoints that did not exist, and the endpoint that
+    actually moves a unit out of <code>pending_adoption</code> was never mentioned anywhere.</div>
+    <span class="eff">Fixed &mdash; <code>POST /v1/charge-points</code> now exists, and all five
+    documented steps were executed against a live stack.</span>
+  </div></li>
+  <li><span class="num">05</span><div>
+    <div class="ttl">A charger could adopt itself</div>
+    <div class="bd">The station-level StatusNotification path wrote <code>charge_point.status</code>
+    unguarded, so a unit could walk out of <code>pending_adoption</code> via a fault and back, then
+    start producing billable sessions no operator had approved.</div>
+    <span class="eff">Fixed &mdash; administrative state survives every connectivity and fault event.</span>
+  </div></li>
+  <li><span class="num">06</span><div>
+    <div class="ttl">A permanent 0&nbsp;A ceiling on every idle charger</div>
+    <div class="bd"><code>ChargePointMaxProfile</code> is persistent by design, so this is not a
+    momentary instruction &mdash; it is a charger stranded at zero amps until the CSMS returns. A unit
+    reporting <code>Preparing</code> deadlocked: held at 0&nbsp;A it cannot energise, so it never
+    reports Charging, so it is never allocated power.</div>
+    <span class="eff">Fixed &mdash; floored at the station's idle share; zero only under explicit
+    curtailment, and logged loudly when it happens.</span>
+  </div></li>
+  <li><span class="num">07</span><div>
+    <div class="ttl">Ordinary API calls destroyed the audit chain's tamper-evidence</div>
+    <div class="bd">The MAC was computed over a body the database never stored &mdash; an
+    <code>undefined</code> property hashes as <code>null</code> but is dropped by JSONB. One
+    <code>POST /v1/api-keys</code> with the optional name omitted marked a tenant's entire seven-year
+    log &ldquo;broken&rdquo;.</div>
+    <span class="eff">Worse than useless: it trains an operator to ignore the one alarm that matters.
+    Fixed and verified live.</span>
+  </div></li>
+  <li><span class="num">08</span><div>
+    <div class="ttl"><code>npm ci</code> was broken</div>
+    <div class="bd">A <code>@types/ws</code> version that does not exist, blocking both documented
+    deploy paths. Flagged as a known blocker for two audits without being fixed.</div>
+    <span class="eff">Fixed. It installs.</span>
+  </div></li>
+</ul>
+
+<h2><span class="n">04</span>Verified live, on a clean database</h2>
+<p class="sub">Running as a non-superuser with row-level security genuinely in force.</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Scenario</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>45&nbsp;kWh meter reporting 0 at stop</td><td>billed Rp&nbsp;140,645 of phantom energy</td><td>parked, no CDR</td></tr>
+<tr><td>60&nbsp;kWh delivered, 11&nbsp;h plugged in</td><td>Rp&nbsp;6,692,360</td><td>Rp&nbsp;300,204</td></tr>
+<tr><td><code>StopTransaction</code> with no <code>meterStop</code></td><td>session stuck active forever, never billed</td><td>billed 6,000&nbsp;Wh from the running total</td></tr>
+<tr><td>Charger faults, 0&nbsp;Wh delivered</td><td>Rp&nbsp;29,138 of fixed fees</td><td>Rp&nbsp;0</td></tr>
+<tr><td>Genuine register wrap</td><td>&mdash;</td><td>1,700&nbsp;Wh billed across the wrap</td></tr>
+<tr><td>QRIS payment, attacker plugs in first</td><td>attacker takes Rp&nbsp;500,000</td><td>attacker gets a plain postpaid session</td></tr>
+<tr><td>Console request, then BootNotification</td><td>process dies</td><td>6/6 clean</td></tr>
+<tr><td>The documented commissioning sequence</td><td>two steps 404</td><td>5/5 steps succeed</td></tr>
+</tbody>
+</table></div>
+
+<h2><span class="n">05</span>Retested and confirmed closed</h2>
+<p class="sub">Auditors were told not to trust a comment claiming something was fixed. In passes 2 and 3,
+several such comments were false.</p>
+
+<div class="good">
+  <span class="lbl">Held up under attack</span>
+  <p>Privilege escalation via key issuance &mdash; <code>platform:admin</code>, unknown permission
+  strings, nested arrays, prototype pollution and cross-org scoping all refused. Cross-tenant access
+  on every route tried: frames, NDJSON export, site power, budget writes, <code>Reset</code>,
+  session-by-id, QRIS checkout, foreign-site adoption &mdash; all 403 or inert. The SSE stream now fails
+  closed. API keys whose base64url secret contains <code>_</code> authenticate (this had silently
+  killed roughly half of all issued credentials). The reply cache keys on action and payload, and
+  never caches errors. The keyed audit chain detects mutation, truncation, reordering and forgery;
+  head rollback and deletion are refused by database triggers. Offline replay ordered, shuffled and
+  duplicated all bill exactly the delivered energy. 26 hostile frames answered spec-correctly with the
+  socket never dropped. Forged <code>X-Forwarded-For</code> no longer changes <code>req.ip</code>. The
+  Indonesian tax arithmetic &mdash; DPP nilai lain = 11/12 &times; price, PPN = 12% &times; DPP, PBJT
+  before PPN &mdash; is correct, and the DPP stored is the one that goes on the faktur.</p>
+</div>
+
+<h2><span class="n">06</span>What must happen before an Autel unit connects</h2>
+
+<ol>
+  <li>Set <code>OCPP_MIN_SECURITY_PROFILE=2</code>, <code>OCPP_AUTO_ADOPT=false</code> and
+    <code>OCPP_TRUST_PROXY_PROTO=true</code>. <strong>At the default profile&nbsp;0 there is no
+    per-charger authentication at all</strong> &mdash; an unauthenticated peer can open a session as any
+    tenant's charger and inject telemetry, and the API credential you hand the vendor does not
+    constrain that in any way.</li>
+  <li>Deploy under <code>plugsure_app</code>, not the database owner, so RLS is a real second line
+    rather than a decorative one.</li>
+  <li>Set <code>AUDIT_HMAC_KEY</code> and <code>SECRETS_KEY</code> &mdash; and keep them. Rotating the
+    audit key stops every previously written entry from verifying.</li>
+  <li>Run the commissioning sequence in the deployment runbook, and watch
+    <code>GET /v1/connection-attempts</code> while the installer power-cycles the unit. Every attempt
+    is recorded with its outcome, TLS state, offered subprotocols and whether credentials were
+    presented &mdash; that log is what turns &ldquo;it doesn't connect&rdquo; into a one-line answer.</li>
+  <li><strong>Run a fourth audit pass.</strong> Three passes have each found real defects in the
+    previous remediation.</li>
+</ol>
+
+<h2><span class="n">07</span>Deliberately still open</h2>
+<ul>
+  <li><strong>Never tested against real hardware.</strong> Every result here is against the simulator.</li>
+  <li><strong>The payment provider is a mock.</strong> QRIS settlement and reconciliation against a real
+    acquirer do not exist. Every prepaid session is now reconciled and the delta alerted, but there is
+    no refund rail &mdash; an over-collection parks the session for a human.</li>
+  <li><strong>OCPP 2.0.1 is modelled, not implemented.</strong> Only <code>ocpp1.6</code> is advertised,
+    deliberately: advertising a version you cannot speak is worse than not offering it.</li>
+  <li><strong>PBJT's base and its position relative to PPN</strong> both need a tax advisor's sign-off.
+    Both are configuration, both default to the reading we believe is correct, and both are flagged in
+    the code.</li>
+</ul>
+
+<div class="foot">
+  <span>PlugSure &mdash; verification &amp; validation</span>
+  <span>23 August 2026</span>
+  <span>3 passes &middot; 10 auditors &middot; 100 findings</span>
+</div>
+
+</div>

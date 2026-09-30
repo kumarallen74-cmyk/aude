@@ -1,0 +1,20 @@
+{
+  "name": "PlugSure — Isi Daya Mobil Listrik",
+  "short_name": "PlugSure",
+  "description": "Isi daya mobil listrik Anda di SPKLU mana pun. Pindai, bayar QRIS, selesai.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1417",
+  "theme_color": "#0a1417",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='120' fill='%231b4d8c'/%3E%3Crect x='170' y='94' width='42' height='120' rx='21' fill='%232fd6a7'/%3E%3Crect x='298' y='94' width='42' height='120' rx='21' fill='%232fd6a7'/%3E%3Cpath d='M136 290 238 392 392 196' stroke='%232fd6a7' stroke-width='51' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

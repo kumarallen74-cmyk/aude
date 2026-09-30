@@ -1,0 +1,100 @@
+# PlugSure API + operator console — systemd unit for the no-Docker deployment path.
+#
+# Install:
+#   install -o root -g root -m 0644 deploy/plugsure-api.service \
+#       /etc/systemd/system/plugsure-api.service
+#   systemctl daemon-reload
+#   systemctl enable --now plugsure-api
+#
+# The console requires sign-in (v1.3). Publish it only through Caddy on its own
+# hostname with an IP allow-list (deploy/Caddyfile); keep API_HOST=127.0.0.1.
+#
+# Logs go to journald:  journalctl -u plugsure-api -f
+
+[Unit]
+Description=PlugSure API and operator console
+Documentation=file:/opt/plugsure/deploy/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=plugsure
+Group=plugsure
+WorkingDirectory=/opt/plugsure
+
+EnvironmentFile=/etc/plugsure/plugsure.env
+# v1.3: uploaded firmware images and retrieved diagnostic logs (inside ReadWritePaths).
+Environment=STORAGE_DIR=/var/lib/plugsure/storage
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--enable-source-maps
+Environment=TZ=Asia/Jakarta
+
+# --- migrations on boot -------------------------------------------------------
+# This unit is the SINGLE owner of schema migration on the systemd path;
+# plugsure-gateway.service is ordered After= this one so the two can never run
+# the migrator concurrently. dist/db/migrate.js is idempotent (it records applied
+# files in schema_migration) and exits non-zero on failure, which — because this
+# is an ExecStartPre without a '-' prefix — aborts the start instead of bringing
+# up an API against a half-migrated schema.
+# Migrations need the database OWNER (DDL, creating plugsure_app); the API itself
+# runs as the restricted plugsure_app role from DATABASE_URL. So the migrator gets its
+# own connection string, MIGRATION_DATABASE_URL, from /etc/plugsure/plugsure.env.
+ExecStartPre=/usr/bin/env DATABASE_URL=${MIGRATION_DATABASE_URL} /usr/bin/node /opt/plugsure/dist/db/migrate.js
+ExecStart=/usr/bin/node /opt/plugsure/dist/apps/api.js
+
+Restart=always
+RestartSec=5
+
+# --- shutdown -----------------------------------------------------------------
+# NOTE: src/apps/api.ts installs no SIGTERM handler, so node's default terminate
+# applies and in-flight HTTP requests are cut rather than drained. 30s is ample
+# for the current behaviour; raise it if a graceful Fastify close is added.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=30
+SendSIGKILL=yes
+
+# --- logging ------------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plugsure-api
+
+# --- limits -------------------------------------------------------------------
+LimitNOFILE=16384
+LimitNPROC=4096
+
+# --- hardening ----------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+ReadWritePaths=-/var/lib/plugsure
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Must stay off — V8's JIT needs W+X pages.
+MemoryDenyWriteExecute=no
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

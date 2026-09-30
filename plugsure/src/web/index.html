@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  Content-Security-Policy — defence in depth behind the escaping in js/core.js esc().
+
+  The console is now split into same-origin modules (js/*.js) and one stylesheet,
+  so script-src no longer needs 'unsafe-inline' for the console itself; it is
+  kept only because the API sends one shared header for the console and the
+  printable receipt. The real header comes from Fastify (src/api/server.ts);
+  this meta copy protects the page if it is ever served some other way.
+
+  img-src allows the OpenStreetMap tile server for the site location picker,
+  and data: for server-generated QR codes. Nothing else is remote.
+-->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob: https://tile.openstreetmap.org;
+  media-src 'self' blob:;
+  font-src 'self';
+  connect-src 'self';
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<!-- Phone browser toolbar / status bar: matches the top bar (--panel). app.js
+     pins both to the chosen theme when the user picks light or dark. -->
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" data-theme-color="light">
+<meta name="theme-color" content="#151b23" media="(prefers-color-scheme: dark)" data-theme-color="dark">
+<title>PlugSure CSMS — Operator Console</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div id="app" aria-live="polite"></div>
+<noscript>The PlugSure operator console requires JavaScript.</noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

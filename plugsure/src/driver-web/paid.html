@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a1417">
+<title>PlugSure · Pembayaran</title>
+<!--
+  Where the acquirer sends the driver back after an e-wallet or card payment
+  (Midtrans finish / callback URL, Xendit success / failure redirect, the sandbox
+  checkout page). It only brings the driver back into the app: the payment
+  itself is confirmed by the acquirer's signed notification, never by this page.
+-->
+<style>
+:root{--bg:#0a1417;--card:#122126;--ink:#e9f3f1;--mute:#93aaa6;--arus:#2fd6a7;--line:#23363b}
+:root[data-theme="light"]{--bg:#eef3f2;--card:#fff;--ink:#12211f;--mute:#5c716d;--arus:#0e9f78;--line:#d6e1de}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);
+     font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px;box-sizing:border-box}
+main{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px 22px;max-width:360px;width:100%;box-sizing:border-box;text-align:center}
+h1{font-size:19px;margin:12px 0 6px}p{margin:0;color:var(--mute)}
+.spin{width:30px;height:30px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--arus);margin:0 auto;animation:r 1s linear infinite}
+@keyframes r{to{transform:rotate(360deg)}}
+a{display:block;margin-top:18px;padding:13px;border-radius:13px;background:var(--arus);color:#062019;font-weight:700;text-decoration:none}
+</style>
+</head>
+<body>
+<main>
+  <div class="spin" id="spin"></div>
+  <h1 id="h">Kembali ke PlugSure…</h1>
+  <p id="p">Kami menunggu konfirmasi pembayaran dari penyedia.</p>
+  <a href="/app/#paid" id="go">Buka PlugSure</a>
+</main>
+<script>
+(function(){
+  try{ var t=localStorage.getItem('ps_theme'); if(t) document.documentElement.setAttribute('data-theme',t); }catch(e){}
+  var q=new URLSearchParams(location.search);
+  // Midtrans: transaction_status; Xendit / sandbox: status. Anything that is not a failure resumes the payment screen.
+  var st=String(q.get('status')||q.get('transaction_status')||'').toLowerCase();
+  // Linking an e-wallet: the app itself checks the outcome with the acquirer.
+  var failed=q.get('for')!=='link'&&/cancel|deny|fail|expire/.test(st);
+  if(failed){
+    try{ localStorage.removeItem('ps_pending'); }catch(e){}
+    document.getElementById('spin').style.display='none';
+    document.getElementById('h').textContent='Pembayaran dibatalkan';
+    document.getElementById('p').textContent='Tidak ada dana yang ditarik. Anda bisa memilih metode lain dan mencoba lagi.';
+    var a=document.getElementById('go'); a.textContent='Kembali ke PlugSure'; a.href='/app/';
+    return;
+  }
+  setTimeout(function(){ location.replace('/app/#paid'); },700);
+})();
+</script>
+</body>
+</html>

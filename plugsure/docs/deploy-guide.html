@@ -1,0 +1,488 @@
+<title>PlugSure Deployment Runbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@600;700;900&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+:root{
+  --ground:#e9ecef; --panel:#f8fafb; --raised:#ffffff;
+  --ink:#101720; --body:#333d4a; --muted:#69747f; --faint:#8b949f;
+  --line:#ccd3da; --line-soft:#dfe4e9;
+  --live:#0a6698;    --live-soft:#dcecf6; --live-line:#a7cde5;
+  --caution:#8f550c; --caution-soft:#f8eeda; --caution-line:#e0c793;
+  --stop:#93261e;    --stop-soft:#f8e2df; --stop-line:#dfb0a9;
+  --ok:#186449;      --ok-soft:#dcece5;
+  --code:#eaeef2; --code-ink:#141d27;
+  --f-dis:"Chivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Public Sans",-apple-system,"Segoe UI",Arial,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --measure:70ch;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0d1117; --panel:#141b23; --raised:#1a222c;
+    --ink:#e8edf3; --body:#bfc8d3; --muted:#848f9d; --faint:#69737f;
+    --line:#293341; --line-soft:#1f2733;
+    --live:#5cb0e0;    --live-soft:#102636; --live-line:#265070;
+    --caution:#d9a441; --caution-soft:#31240d; --caution-line:#5c4519;
+    --stop:#e59087;    --stop-soft:#341a17; --stop-line:#572b26;
+    --ok:#63bd97;      --ok-soft:#10281f;
+    --code:#111820; --code-ink:#d7dee6;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0d1117; --panel:#141b23; --raised:#1a222c;
+  --ink:#e8edf3; --body:#bfc8d3; --muted:#848f9d; --faint:#69737f;
+  --line:#293341; --line-soft:#1f2733;
+  --live:#5cb0e0;    --live-soft:#102636; --live-line:#265070;
+  --caution:#d9a441; --caution-soft:#31240d; --caution-line:#5c4519;
+  --stop:#e59087;    --stop-soft:#341a17; --stop-line:#572b26;
+  --ok:#63bd97;      --ok-soft:#10281f;
+  --code:#111820; --code-ink:#d7dee6;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--body);
+     font-family:var(--f-body);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:34px 20px 110px}
+@media(min-width:820px){.wrap{padding:54px 44px 140px}}
+.prose{max-width:var(--measure)}
+
+/* masthead */
+.mast{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:30px}
+.kicker{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.18em;
+        text-transform:uppercase;color:var(--live);margin:0 0 12px}
+h1{font-family:var(--f-dis);font-weight:900;color:var(--ink);margin:0 0 12px;
+   font-size:clamp(30px,5vw,46px);line-height:1.02;letter-spacing:-.025em;text-wrap:balance}
+.standfirst{font-size:17.5px;color:var(--body);max-width:64ch;margin:0}
+.facts{display:flex;flex-wrap:wrap;gap:6px 24px;margin-top:20px;
+       font-family:var(--f-mono);font-size:11.5px;color:var(--muted);letter-spacing:.03em}
+.facts b{color:var(--ink);font-weight:500}
+
+/* headings */
+h2{font-family:var(--f-dis);font-weight:700;color:var(--ink);margin:56px 0 8px;
+   font-size:clamp(20px,2.6vw,26px);line-height:1.15;letter-spacing:-.018em;text-wrap:balance}
+h3{font-family:var(--f-dis);font-weight:600;color:var(--ink);font-size:16.5px;
+   margin:30px 0 8px;letter-spacing:-.005em}
+.lede{color:var(--muted);font-size:15px;margin:0 0 20px;max-width:var(--measure)}
+p{margin:0 0 15px;max-width:var(--measure)}
+strong{color:var(--ink);font-weight:600}
+a{color:var(--live)}
+ul,ol{max-width:var(--measure);margin:0 0 15px;padding-left:1.2em}
+li{margin-bottom:6px}
+li::marker{color:var(--live)}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--code);color:var(--ink);
+     padding:1.5px 5px;border-radius:3px;word-break:break-word}
+
+/* steps — deployment IS a sequence, so the numbers carry real information */
+.step{display:grid;grid-template-columns:44px minmax(0,1fr);gap:18px;
+      padding:26px 0;border-top:1px solid var(--line)}
+.step:first-of-type{border-top:2px solid var(--ink)}
+.step .n{font-family:var(--f-mono);font-size:15px;font-weight:700;color:var(--live);
+         padding-top:2px;font-variant-numeric:tabular-nums}
+.step h3{margin-top:0}
+.step > div > :last-child{margin-bottom:0}
+@media(max-width:600px){.step{grid-template-columns:30px minmax(0,1fr);gap:12px}}
+
+/* terminal blocks */
+.term{background:var(--code);border:1px solid var(--line);border-radius:4px;
+      margin:0 0 15px;overflow:hidden}
+.term .bar{font-family:var(--f-mono);font-size:10px;font-weight:500;letter-spacing:.14em;
+           text-transform:uppercase;color:var(--muted);padding:8px 14px;
+           border-bottom:1px solid var(--line);background:var(--panel)}
+.term pre{margin:0;padding:14px;overflow-x:auto;font-family:var(--f-mono);
+          font-size:13px;line-height:1.62;color:var(--ink)}
+.term .c{color:var(--muted)}
+.term .p{color:var(--live);font-weight:500}
+
+/* what correct output looks like — the thing most runbooks omit */
+.expect{border:1px solid var(--ok);border-left-width:3px;background:var(--ok-soft);
+        border-radius:0 4px 4px 0;padding:12px 16px;margin:0 0 15px;max-width:var(--measure)}
+.expect .lbl{font-family:var(--f-mono);font-size:10px;font-weight:700;letter-spacing:.14em;
+             text-transform:uppercase;color:var(--ok);display:block;margin-bottom:6px}
+.expect pre{margin:0;font-family:var(--f-mono);font-size:12.5px;line-height:1.55;
+            color:var(--ink);overflow-x:auto;white-space:pre-wrap}
+.expect p{margin:0;font-size:14.5px}
+
+/* callouts */
+.must{border:1px solid var(--stop-line);border-left-width:4px;border-left-color:var(--stop);
+      background:var(--stop-soft);border-radius:0 4px 4px 0;padding:16px 18px;margin:0 0 20px;max-width:var(--measure)}
+.must .lbl{font-family:var(--f-mono);font-size:10px;font-weight:700;letter-spacing:.15em;
+           text-transform:uppercase;color:var(--stop);display:block;margin-bottom:7px}
+.must p:last-child{margin-bottom:0}
+.warn{border-left:3px solid var(--caution);background:var(--caution-soft);
+      padding:14px 18px;margin:0 0 20px;max-width:var(--measure);border-radius:0 4px 4px 0}
+.warn .lbl{font-family:var(--f-mono);font-size:10px;font-weight:700;letter-spacing:.15em;
+           text-transform:uppercase;color:var(--caution);display:block;margin-bottom:6px}
+.warn p:last-child{margin-bottom:0}
+.note{border-left:3px solid var(--live);background:var(--live-soft);
+      padding:14px 18px;margin:0 0 20px;max-width:var(--measure);border-radius:0 4px 4px 0}
+.note .lbl{font-family:var(--f-mono);font-size:10px;font-weight:700;letter-spacing:.15em;
+           text-transform:uppercase;color:var(--live);display:block;margin-bottom:6px}
+.note p:last-child{margin-bottom:0}
+
+/* tables */
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:4px;background:var(--panel);margin:0 0 22px}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th{font-family:var(--f-mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+   color:var(--muted);text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 13px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+td.k{font-family:var(--f-mono);font-size:12.5px;color:var(--ink);white-space:nowrap}
+td.st{font-family:var(--f-mono);font-size:13px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+
+.chip{display:inline-block;font-family:var(--f-mono);font-size:10px;font-weight:700;
+      letter-spacing:.08em;padding:2px 8px;border-radius:3px;white-space:nowrap}
+.c-ok{background:var(--ok-soft);color:var(--ok)}
+.c-no{background:var(--stop-soft);color:var(--stop)}
+.c-warn{background:var(--caution-soft);color:var(--caution)}
+
+hr{border:0;border-top:1px solid var(--line);margin:44px 0}
+.foot{margin-top:60px;padding-top:18px;border-top:2px solid var(--ink);
+      font-family:var(--f-mono);font-size:11px;letter-spacing:.05em;color:var(--muted);
+      display:flex;flex-wrap:wrap;gap:6px 26px}
+:focus-visible{outline:2px solid var(--live);outline-offset:3px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<div class="mast">
+  <p class="kicker">Deployment runbook &middot; one VM &middot; Docker Compose + Caddy</p>
+  <h1>Getting PlugSure onto a server an Autel unit can reach</h1>
+  <p class="standfirst">Nine steps from a bare Ubuntu VM to a charge point holding a live
+  WebSocket. Every step says what correct output looks like, so you can tell whether it
+  worked before moving on.</p>
+  <div class="facts">
+    <span>Audience: <b>comfortable with Linux</b></span>
+    <span>Time: <b>2&ndash;3 hours</b>, most of it DNS propagation</span>
+    <span>Deeper reference: <b>deploy/README.md</b> in the repo</span>
+  </div>
+</div>
+
+<div class="must">
+  <span class="lbl">Three settings that are not optional</span>
+  <p><strong><code>OCPP_MIN_SECURITY_PROFILE=2</code></strong> &mdash; at the code default of
+  <code>0</code> there is <em>no per-charger authentication at all</em>. Anyone who can reach the
+  OCPP port can open a session as any charge point and write into your billing data. The API key
+  you give Autel does not constrain that, because it is a different port and a different
+  mechanism.</p>
+  <p><strong><code>OCPP_TRUST_PROXY_PROTO=true</code></strong> &mdash; TLS terminates at Caddy, and
+  without this the gateway cannot tell that it did. It would refuse every charger with
+  <code>403</code>. The gateway now refuses to <em>start</em> in that combination, so you will find
+  out immediately rather than during the vendor visit.</p>
+  <p><strong>Run as <code>plugsure_app</code>, never the database owner.</strong> A superuser
+  bypasses every row-level security policy. The process refuses to start that way under
+  <code>NODE_ENV=production</code>.</p>
+</div>
+
+<h2>What you need before step 1</h2>
+
+<div class="tbl"><table>
+<thead><tr><th>Thing</th><th>Detail</th><th>Why it matters</th></tr></thead>
+<tbody>
+<tr><td class="k">VM</td><td>Ubuntu 24.04 LTS, 2 vCPU / 4&nbsp;GB, 20&nbsp;GB disk. AWS <code>ap-southeast-3</code> (Jakarta) if you are on AWS.</td><td>Postgres and both processes on one box is fine for one charger. The OCPP frame log is chatty &mdash; plan for disk growth.</td></tr>
+<tr><td class="k">Static IP</td><td>Elastic IP or equivalent</td><td>The charger's Central System URL is flashed into the hardware. If the address moves, that is a site visit per unit.</td></tr>
+<tr><td class="k">Domain</td><td>A name you control, e.g. <code>ocpp.plugsure.id</code></td><td>Let's Encrypt needs a real hostname. A charger will not accept a self-signed certificate.</td></tr>
+<tr><td class="k">Ports open</td><td><code>443</code> and <code>80</code> from anywhere; <code>22</code> from your office only</td><td>443 for chargers, 80 for the ACME challenge, 22 for you. <strong>Not</strong> 9200 and <strong>not</strong> 5432.</td></tr>
+</tbody>
+</table></div>
+
+<div class="warn">
+  <span class="lbl">Agree the hostname with Autel first</span>
+  <p>The Central System URL goes into every unit's firmware config. Changing it later means
+  physically visiting each charger. Decide the hostname before anyone touches a charge point.</p>
+</div>
+
+<hr>
+
+<h2>The nine steps</h2>
+<p class="lede">Run these in order. Each one depends on the previous one having worked.</p>
+
+<div class="step">
+  <div class="n">01</div>
+  <div>
+    <h3>Install what the VM needs</h3>
+    <div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo apt-get update
+<span class="p">$</span> sudo apt-get install -y ca-certificates curl postgresql-client-16 \
+    docker.io docker-compose-v2 debian-keyring debian-archive-keyring apt-transport-https
+
+<span class="c"># Caddy, from its own repository</span>
+<span class="p">$</span> curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+    | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+<span class="p">$</span> curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+    | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+<span class="p">$</span> sudo apt-get update &amp;&amp; sudo apt-get install -y caddy</pre></div>
+    <div class="expect"><span class="lbl">Check</span>
+      <pre>$ docker compose version   →  Docker Compose version v2.x
+$ caddy version            →  v2.x</pre></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">02</div>
+  <div>
+    <h3>Point DNS at the VM, and prove it</h3>
+    <p>One <code>A</code> record, TTL 300:</p>
+    <div class="term"><div class="bar">dns zone</div><pre>ocpp.plugsure.id.     A     &lt;YOUR_ELASTIC_IP&gt;     300</pre></div>
+    <div class="term"><div class="bar">verify before touching acme</div><pre><span class="p">$</span> dig +short ocpp.plugsure.id
+<span class="p">$</span> curl -sI http://ocpp.plugsure.id/ | head -1</pre></div>
+    <div class="expect"><span class="lbl">Expected</span>
+      <p><code>dig</code> prints your Elastic IP and nothing else. If it prints an old address or
+      nothing, wait &mdash; do not continue.</p></div>
+    <div class="warn"><span class="lbl">Let's Encrypt rate limits</span>
+      <p>Five failed validations per hostname per hour. Discovering a firewall problem against the
+      production CA locks you out for an hour. Confirm DNS resolves and port 80 reaches the VM
+      first.</p></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">03</div>
+  <div>
+    <h3>Get the code onto the VM</h3>
+    <div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo mkdir -p /opt/plugsure &amp;&amp; sudo chown $USER /opt/plugsure
+<span class="c"># unzip the delivered archive, or clone your repo</span>
+<span class="p">$</span> cd /opt/plugsure &amp;&amp; unzip ~/plugsure-v3.zip &amp;&amp; cd plugsure
+<span class="p">$</span> npm ci --dry-run</pre></div>
+    <div class="expect"><span class="lbl">Expected</span>
+      <pre>added 38 packages, removed 1 package, and changed 7 packages</pre>
+      <p style="margin-top:8px">If this says <code>ETARGET</code>, stop &mdash; you have an older
+      copy of the tree. The lockfile drift that caused it is fixed in this build.</p></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">04</div>
+  <div>
+    <h3>Write the environment file</h3>
+    <p>Generate the two secrets first. <strong>Keep them.</strong> Rotating
+    <code>AUDIT_HMAC_KEY</code> later stops every previously written audit entry from verifying.</p>
+    <div class="term"><div class="bar">generate</div><pre><span class="p">$</span> openssl rand -hex 32   <span class="c"># → AUDIT_HMAC_KEY</span>
+<span class="p">$</span> openssl rand -hex 32   <span class="c"># → SECRETS_KEY</span>
+<span class="p">$</span> openssl rand -hex 24   <span class="c"># → POSTGRES_PASSWORD</span>
+<span class="p">$</span> openssl rand -hex 24   <span class="c"># → POSTGRES_APP_PASSWORD</span></pre></div>
+    <div class="term"><div class="bar">/opt/plugsure/plugsure/.env</div><pre>NODE_ENV=production
+TZ=Asia/Jakarta
+
+<span class="c"># Database. The apps connect as the SECOND one, not the first.</span>
+POSTGRES_PASSWORD=&lt;owner&gt;
+POSTGRES_APP_PASSWORD=&lt;runtime role&gt;
+
+<span class="c"># No defaults. Compose refuses to start without these.</span>
+AUDIT_HMAC_KEY=&lt;32 bytes hex&gt;
+SECRETS_KEY=&lt;32 bytes hex&gt;
+
+<span class="c"># The three non-negotiables from the top of this page.</span>
+OCPP_MIN_SECURITY_PROFILE=2
+OCPP_TRUST_PROXY_PROTO=true
+OCPP_AUTO_ADOPT=false
+
+<span class="c"># Caddy is on the same host and is the only thing in front of us.</span>
+API_TRUSTED_PROXIES=127.0.0.1
+
+<span class="c"># Bind both app ports to loopback. Caddy reaches them; the internet does not.</span>
+OCPP_BIND=127.0.0.1
+API_BIND=127.0.0.1</pre></div>
+    <div class="term"><div class="bar">lock it down</div><pre><span class="p">$</span> chmod 600 .env</pre></div>
+    <div class="note"><span class="lbl">Why two database passwords</span>
+      <p>Migrations issue DDL and run as the owner. The gateway and API run as
+      <code>plugsure_app</code>, which cannot create tables and cannot bypass row-level security.
+      The migration step provisions that role from <code>POSTGRES_APP_PASSWORD</code> &mdash; you do
+      not create it by hand.</p></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">05</div>
+  <div>
+    <h3>Configure Caddy and get the certificate</h3>
+    <div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+<span class="p">$</span> sudo sed -i 's/ocpp\.example\.id/ocpp.plugsure.id/g; s/ops@example\.id/ops@plugsure.id/' \
+    /etc/caddy/Caddyfile
+<span class="p">$</span> sudo caddy validate --config /etc/caddy/Caddyfile
+<span class="p">$</span> sudo systemctl reload caddy
+<span class="p">$</span> sudo journalctl -u caddy -f</pre></div>
+    <div class="expect"><span class="lbl">Watch for</span>
+      <pre>certificate obtained successfully</pre></div>
+    <p>The shipped Caddyfile already does the two things that matter: it proxies
+    <code>/ocpp/*</code> to <code>127.0.0.1:9220</code> without touching the
+    <code>Sec-WebSocket-Protocol</code> header, and it <em>assigns</em>
+    <code>X-Forwarded-Proto</code> rather than appending to whatever the client sent &mdash; so a
+    charger cannot claim TLS it does not have.</p>
+    <div class="warn"><span class="lbl">Rehearse against the staging CA</span>
+      <p>Uncomment the <code>acme_ca</code> line in the Caddyfile's global block, reload, confirm
+      issuance works end to end, then comment it out <em>and delete the staging certificate</em> or
+      Caddy keeps serving it:</p>
+      <div class="term" style="margin:10px 0 0"><pre><span class="p">$</span> sudo rm -rf /var/lib/caddy/.local/share/caddy/certificates
+<span class="p">$</span> sudo systemctl restart caddy</pre></div>
+    </div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">06</div>
+  <div>
+    <h3>Bring the stack up</h3>
+    <div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> docker compose build
+<span class="p">$</span> docker compose up -d
+<span class="p">$</span> docker compose ps</pre></div>
+    <div class="expect"><span class="lbl">Expected</span>
+      <pre>migrate    Exited (0)
+postgres   healthy
+gateway    healthy
+api        healthy</pre></div>
+    <p>Boot order is enforced by the compose file, not by luck:
+    <code>postgres</code> healthy &rarr; <code>migrate</code> exits 0 &rarr;
+    <code>gateway</code> and <code>api</code>. The apps cannot start against an unmigrated
+    database.</p>
+    <p><strong>Now confirm the two things that silently go wrong.</strong></p>
+    <div class="term"><div class="bar">the check that matters most</div><pre><span class="p">$</span> docker compose logs api | grep 'row-level security'</pre></div>
+    <div class="expect"><span class="lbl">Must say</span>
+      <pre>row-level security is in force for application queries</pre>
+      <p style="margin-top:8px">Anything else means the apps are running as a superuser and tenant
+      isolation has one line of defence instead of two.</p></div>
+    <div class="term"><div class="bar">and the gateway</div><pre><span class="p">$</span> docker compose logs gateway | grep -E 'listening|profile'</pre></div>
+    <div class="expect"><span class="lbl">Must show</span>
+      <pre>"minSecurityProfile": 2, "tls": "expected at proxy"</pre>
+      <p style="margin-top:8px">If the gateway exited instead, read the error &mdash; it will tell you
+      exactly which of TLS or <code>OCPP_TRUST_PROXY_PROTO</code> is missing. That refusal is
+      deliberate: the alternative is a gateway that looks healthy and rejects 100% of chargers.</p></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">07</div>
+  <div>
+    <h3>Seed, and capture your API key</h3>
+    <div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> docker compose run --rm migrate node dist/db/seed.js</pre></div>
+    <div class="expect"><span class="lbl">Expected &mdash; save this line</span>
+      <pre>API key (shown once):  psk_a1b2c3d4e5f6_&lt;secret&gt;</pre>
+      <p style="margin-top:8px">It is shown once and cannot be retrieved. Put it in your password
+      manager now.</p></div>
+    <div class="note"><span class="lbl">About that key</span>
+      <p>It carries <code>org_owner</code> permissions. Any key it issues can only ever carry a
+      subset of its own permissions &mdash; so a key you hand out cannot escalate. Issue a separate,
+      narrower key for anyone else rather than sharing this one.</p></div>
+    <p>Reach the console over an SSH tunnel &mdash; it is an operator surface, not a public one:</p>
+    <div class="term"><div class="bar">from your laptop</div><pre><span class="p">$</span> ssh -N -L 9200:127.0.0.1:9200 ubuntu@&lt;vm-ip&gt;
+<span class="c"># then open http://127.0.0.1:9200/</span></pre></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">08</div>
+  <div>
+    <h3>Commission the charge point &mdash; four calls, in this order</h3>
+    <p>A production gateway refuses unknown identities and demands credentials. Both have to exist
+    <em>before</em> the charger dials in. The order matters: setting the security profile before the
+    key exists is refused, and that refusal is the point.</p>
+    <div class="term"><div class="bar">from your laptop, through the tunnel</div><pre><span class="p">$</span> export K=psk_...            <span class="c"># the key from step 7</span>
+<span class="p">$</span> export API=http://127.0.0.1:9200
+<span class="p">$</span> export ID=AUTEL-DC60-JKT-001 <span class="c"># exactly as Autel will configure it</span>
+
+<span class="c"># 1. register the identity — creates it in pending_adoption</span>
+<span class="p">$</span> curl -sS -X POST $API/v1/charge-points \
+    -H "Authorization: Bearer $K" -H 'Content-Type: application/json' \
+    -d "{\"ocppIdentity\":\"$ID\",\"siteId\":\"&lt;site-uuid&gt;\"}"
+
+<span class="c"># 2. issue the AuthorizationKey — SHOWN ONCE</span>
+<span class="p">$</span> curl -sS -X POST $API/v1/charge-points/$ID/authorization-key \
+    -H "Authorization: Bearer $K"
+
+<span class="c"># 3. set the security profile (note: PUT, not POST)</span>
+<span class="p">$</span> curl -sS -X PUT $API/v1/charge-points/$ID/security-profile \
+    -H "Authorization: Bearer $K" -H 'Content-Type: application/json' \
+    -d '{"profile":2}'
+
+<span class="c"># 4. activate — this is what lets it transact</span>
+<span class="p">$</span> curl -sS -X POST $API/v1/charge-points/$ID/activate \
+    -H "Authorization: Bearer $K"</pre></div>
+    <div class="expect"><span class="lbl">Expected</span>
+      <pre>1 → {"ok":true,"status":"pending_adoption","next":[...]}
+2 → {"key":"df3e8bfe…","warning":"This key is shown once…"}
+3 → {"ok":true,"profile":2}
+4 → {"ok":true}</pre></div>
+    <p>Get the <code>siteId</code> from <code>GET /v1/charge-points</code>, or create a site in the
+    console first. Step 1's response lists the remaining steps back to you, so you do not have to
+    keep this page open.</p>
+    <div class="warn"><span class="lbl">Set the key on the charger before raising the profile</span>
+      <p>Configure the <code>AuthorizationKey</code> on the unit first, <em>then</em> step 3. The
+      other order leaves a unit that cannot connect and an installer standing next to it.</p></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">09</div>
+  <div>
+    <h3>Prove it works before the real hardware arrives</h3>
+    <p>The repository ships a virtual charge point. Point it at your live gateway and run a full
+    session, so integration day is not the first time anything has connected.</p>
+    <div class="term"><div class="bar">on the VM, or anywhere with node 22</div><pre><span class="p">$</span> export PLUGSURE_KEY=psk_...
+<span class="p">$</span> npx tsx tools/simulator/autel-sim.ts \
+    --url wss://ocpp.plugsure.id/ocpp \
+    --id $ID --auth-key &lt;the AuthorizationKey&gt; \
+    --scenario happy</pre></div>
+    <div class="expect"><span class="lbl">Expected</span>
+      <pre>--- happy: PASS ---</pre>
+      <p style="margin-top:8px">The scenario verifies against the API that the CSMS billed exactly
+      the energy the simulator delivered. Without <code>PLUGSURE_KEY</code> those checks now fail
+      rather than quietly skipping.</p></div>
+    <p>Worth running the harder ones too, since they cost nothing:
+    <code>--scenario offline-replay</code> (store-and-forward after a WAN drop),
+    <code>--scenario reconnect-storm</code>, <code>--scenario meter-rollover</code>.</p>
+  </div>
+</div>
+
+<hr>
+
+<h2>When a charger will not connect</h2>
+<p class="lede">Every attempt is logged before the upgrade completes &mdash; source IP, path, offered
+subprotocols, TLS state, whether credentials were sent, and the outcome. That log is the single most
+useful thing on integration day.</p>
+
+<div class="term"><div class="bar">read the attempt log</div><pre><span class="p">$</span> curl -sS "$API/v1/connection-attempts?limit=20" -H "Authorization: Bearer $K" | jq</pre></div>
+
+<div class="tbl"><table>
+<thead><tr><th>Status</th><th>What it means</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td class="st" style="color:var(--ok)">101</td><td>Connected</td><td>&mdash;</td></tr>
+<tr><td class="st" style="color:var(--caution)">400</td><td>No supported subprotocol offered</td><td>Set the unit to OCPP 1.6J. We advertise <code>ocpp1.6</code> only, deliberately.</td></tr>
+<tr><td class="st" style="color:var(--stop)">401</td><td>Missing or wrong Basic credentials</td><td>Username must be the identity, byte-for-byte; password is the <code>AuthorizationKey</code>.</td></tr>
+<tr><td class="st" style="color:var(--stop)">403</td><td>Plaintext at security profile 2</td><td>The unit is using <code>ws://</code>. It must use <code>wss://</code>. If <em>every</em> unit gets this, check <code>OCPP_TRUST_PROXY_PROTO</code>.</td></tr>
+<tr><td class="st" style="color:var(--caution)">404</td><td>Identity not registered</td><td>Run step 8.1. The identity is case-sensitive and character-exact.</td></tr>
+<tr><td class="st" style="color:var(--live)">Pending</td><td>Connected and authenticated, but not activated</td><td>Not an error. Run step 8.4.</td></tr>
+</tbody>
+</table></div>
+
+<hr>
+
+<h2>What this build has and has not been tested against</h2>
+
+<div class="tbl"><table>
+<thead><tr><th>Element</th><th>State</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>Compiled <code>dist/</code> under <code>NODE_ENV=production</code></td><td><span class="chip c-ok">VERIFIED</span></td><td>Gateway and API run as separate processes as <code>plugsure_app</code>, both logging RLS in force.</td></tr>
+<tr><td>Security profile 2 acceptance</td><td><span class="chip c-ok">VERIFIED</span></td><td>Correct key + forwarded proto &rarr; 101 and <code>BootNotification: Accepted</code>. No creds &rarr; 401, no TLS &rarr; 403, wrong key &rarr; 401, unknown identity &rarr; 404.</td></tr>
+<tr><td>The four commissioning calls</td><td><span class="chip c-ok">VERIFIED</span></td><td>All four executed against a live production-mode stack.</td></tr>
+<tr><td>Migrations + runtime role provisioning</td><td><span class="chip c-ok">VERIFIED</span></td><td>Six migrations apply; <code>plugsure_app</code> created with LOGIN and confirmed non-superuser, no BYPASSRLS.</td></tr>
+<tr><td><code>npm ci</code> and <code>npm run build</code></td><td><span class="chip c-ok">VERIFIED</span></td><td>Both clean. 125 unit tests pass, <code>tsc --noEmit</code> clean.</td></tr>
+<tr><td><code>docker compose</code> config and refusals</td><td><span class="chip c-ok">VERIFIED</span></td><td>Parses; refuses to start naming the missing secret.</td></tr>
+<tr><td><code>docker compose build</code></td><td><span class="chip c-warn">NOT TESTED</span></td><td>The build environment could not reach Docker Hub to pull <code>node:22-slim</code>. The same compiled output was run directly instead. Expect this to be the first thing to try on the VM.</td></tr>
+<tr><td>Real Autel hardware</td><td><span class="chip c-no">NEVER</span></td><td>Everything above is against the simulator.</td></tr>
+</tbody>
+</table></div>
+
+<div class="note">
+  <span class="lbl">One more thing before the vendor visit</span>
+  <p>Three independent audit passes have each found real defects in the previous remediation. A
+  fourth pass before hardware day is cheap next to a wasted site visit &mdash; or a wrong invoice.</p>
+</div>
+
+<div class="foot">
+  <span>PlugSure &mdash; deployment runbook</span>
+  <span>Docker Compose + Caddy on one VM</span>
+  <span>Full reference: deploy/README.md</span>
+</div>
+
+</div>

@@ -1,0 +1,54 @@
+# Keep the build context small and keep secrets/artefacts out of the image.
+# Only package.json, package-lock.json, tsconfig*.json, src/ and db/migrations/
+# are actually needed by the Dockerfile.
+
+# Dependencies and build output — rebuilt inside the image.
+node_modules
+**/node_modules
+dist
+*.tsbuildinfo
+
+# VCS and CI
+.git
+.gitignore
+.github
+
+# Secrets and local env. NEVER bake these into a layer.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# Audit harnesses, research notes, docs and screenshots — not runtime code.
+audit
+research
+docs
+README.md
+deploy/README.md
+
+# Dev-only tooling (charger simulator) — excluded from the production image.
+tools
+
+# Tests are excluded from the build by tsconfig.build.json anyway.
+**/*.test.ts
+
+# Logs and scratch
+*.log
+logs
+npm-debug.log*
+tmp
+.tmp
+coverage
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+
+# Compose and deploy assets are read by the host, not by the image build.
+docker-compose.yml
+docker-compose.*.yml
+deploy

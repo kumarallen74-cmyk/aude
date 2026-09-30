@@ -1,0 +1,1222 @@
+<title>PlugSure Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* ── tokens ────────────────────────────────────────────────────────────── */
+:root{
+  --paper:#f4f3ee;
+  --panel:#fbfaf7;
+  --ink:#161a2c;
+  --body:#2c3145;
+  --muted:#666c81;
+  --line:#ddd9cd;
+  --line-soft:#e8e4da;
+  --indigo:#2b3a86;
+  --indigo-soft:#e5e6f2;
+  --brass:#9a7420;
+  --brass-soft:#f2ead6;
+  --danger:#95291f;
+  --danger-soft:#f6e3df;
+  --good:#2b6046;
+  --good-soft:#e0ece5;
+  --code-bg:#eceade;
+
+  --f-display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+
+  --measure:70ch;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#111320;
+    --panel:#171a2a;
+    --ink:#eceaf5;
+    --body:#c8c9d8;
+    --muted:#8f93a8;
+    --line:#2c3049;
+    --line-soft:#242840;
+    --indigo:#8f9de8;
+    --indigo-soft:#1e2444;
+    --brass:#d9b25c;
+    --brass-soft:#332a17;
+    --danger:#e8938a;
+    --danger-soft:#3a1f1c;
+    --good:#7bc4a0;
+    --good-soft:#16301f;
+    --code-bg:#1c2033;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#111320;
+  --panel:#171a2a;
+  --ink:#eceaf5;
+  --body:#c8c9d8;
+  --muted:#8f93a8;
+  --line:#2c3049;
+  --line-soft:#242840;
+  --indigo:#8f9de8;
+  --indigo-soft:#1e2444;
+  --brass:#d9b25c;
+  --brass-soft:#332a17;
+  --danger:#e8938a;
+  --danger-soft:#3a1f1c;
+  --good:#7bc4a0;
+  --good-soft:#16301f;
+  --code-bg:#1c2033;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--paper);color:var(--body);
+  font-family:var(--f-body);font-size:17px;line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── shell ─────────────────────────────────────────────────────────────── */
+.shell{display:grid;grid-template-columns:minmax(0,1fr);gap:0}
+@media (min-width:1080px){
+  .shell{grid-template-columns:246px minmax(0,1fr);align-items:start}
+}
+
+/* rail */
+.rail{
+  border-bottom:1px solid var(--line);background:var(--panel);
+  padding:22px 26px;
+}
+@media (min-width:1080px){
+  .rail{
+    position:sticky;top:0;height:100vh;overflow-y:auto;
+    border-bottom:0;border-right:1px solid var(--line);padding:34px 22px 34px 34px;
+  }
+}
+.mark{font-family:var(--f-display);font-weight:700;font-size:19px;letter-spacing:-.025em;color:var(--ink)}
+.mark em{font-style:normal;color:var(--indigo)}
+.rail .stamp{
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin-top:5px;
+}
+.toc{margin:22px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:1px}
+@media (max-width:1079px){.toc{flex-direction:row;flex-wrap:wrap;gap:2px 14px}}
+.toc a{
+  display:block;text-decoration:none;color:var(--muted);
+  font-family:var(--f-display);font-size:13px;font-weight:500;
+  padding:4px 0;border-left:2px solid transparent;padding-left:0;
+}
+@media (min-width:1080px){.toc a{padding-left:11px;margin-left:-11px}}
+.toc a:hover{color:var(--indigo)}
+.toc a.on{color:var(--ink);border-left-color:var(--brass)}
+.toc .grp{
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted);opacity:.7;margin:16px 0 4px;
+}
+@media (max-width:1079px){.toc .grp{display:none}}
+
+/* content */
+.doc{padding:38px 26px 90px;min-width:0}
+@media (min-width:760px){.doc{padding:56px 48px 120px}}
+@media (min-width:1080px){.doc{padding:64px 60px 140px}}
+.wrap{max-width:940px}
+.prose{max-width:var(--measure)}
+
+/* ── masthead ──────────────────────────────────────────────────────────── */
+.mast{border-bottom:2px solid var(--ink);padding-bottom:26px;margin-bottom:34px}
+.eyebrow{
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--brass);margin:0 0 14px;
+}
+h1{
+  font-family:var(--f-display);font-weight:700;color:var(--ink);
+  font-size:clamp(34px,5.4vw,54px);line-height:1.02;letter-spacing:-.035em;
+  margin:0 0 16px;text-wrap:balance;
+}
+.standfirst{font-size:20px;line-height:1.5;color:var(--body);margin:0;max-width:60ch}
+.meta{
+  display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:22px;
+  font-family:var(--f-mono);font-size:11.5px;letter-spacing:.04em;color:var(--muted);
+}
+.meta b{color:var(--ink);font-weight:500}
+
+/* ── headings ──────────────────────────────────────────────────────────── */
+section{scroll-margin-top:24px}
+h2{
+  font-family:var(--f-display);font-weight:600;color:var(--ink);
+  font-size:clamp(22px,2.8vw,29px);line-height:1.15;letter-spacing:-.022em;
+  margin:64px 0 6px;text-wrap:balance;
+}
+h2 .n{
+  font-family:var(--f-mono);font-size:.55em;font-weight:500;color:var(--brass);
+  letter-spacing:.06em;margin-right:.7em;vertical-align:.15em;
+}
+h3{
+  font-family:var(--f-display);font-weight:600;color:var(--ink);
+  font-size:17.5px;letter-spacing:-.008em;margin:36px 0 8px;
+}
+h4{
+  font-family:var(--f-mono);font-size:11px;font-weight:600;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--muted);margin:28px 0 8px;
+}
+.sub{color:var(--muted);font-size:15.5px;margin:0 0 22px;max-width:var(--measure)}
+p{margin:0 0 16px;max-width:var(--measure)}
+a{color:var(--indigo)}
+strong{color:var(--ink);font-weight:600}
+em.term{font-style:italic;color:var(--ink)}
+code{font-family:var(--f-mono);font-size:.855em;background:var(--code-bg);
+     padding:1.5px 5px;border-radius:3px;color:var(--ink);white-space:nowrap}
+hr{border:0;border-top:1px solid var(--line);margin:52px 0}
+
+ul,ol{max-width:var(--measure);margin:0 0 16px;padding-left:1.15em}
+li{margin-bottom:7px}
+li::marker{color:var(--brass)}
+
+/* ── tables ────────────────────────────────────────────────────────────── */
+.tbl{
+  overflow-x:auto;border:1px solid var(--line);border-radius:3px;
+  background:var(--panel);margin:0 0 24px;
+}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.45}
+th{
+  font-family:var(--f-mono);font-size:10.5px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);text-align:left;
+  padding:11px 15px;border-bottom:1px solid var(--line);white-space:nowrap;
+  background:var(--panel);
+}
+td{padding:11px 15px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td .mono,th .mono{font-family:var(--f-mono);font-size:12.5px}
+td strong{font-weight:600}
+
+/* ── devices ───────────────────────────────────────────────────────────── */
+.rule{
+  border-left:3px solid var(--indigo);background:var(--indigo-soft);
+  padding:16px 20px;margin:24px 0;max-width:var(--measure);border-radius:0 3px 3px 0;
+}
+.rule .lbl{
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--indigo);display:block;margin-bottom:6px;font-weight:600;
+}
+.rule p:last-child{margin-bottom:0}
+
+.flag{
+  border-left:3px solid var(--brass);background:var(--brass-soft);
+  padding:16px 20px;margin:24px 0;max-width:var(--measure);border-radius:0 3px 3px 0;
+}
+.flag .lbl{
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--brass);display:block;margin-bottom:6px;font-weight:600;
+}
+.flag p:last-child{margin-bottom:0}
+
+.chip{
+  display:inline-block;font-family:var(--f-mono);font-size:10.5px;font-weight:600;
+  letter-spacing:.06em;padding:2px 8px;border-radius:99px;white-space:nowrap;
+}
+.c-hi{background:var(--danger-soft);color:var(--danger)}
+.c-md{background:var(--brass-soft);color:var(--brass)}
+.c-lo{background:var(--indigo-soft);color:var(--indigo)}
+.c-ok{background:var(--good-soft);color:var(--good)}
+.c-mute{background:var(--line-soft);color:var(--muted)}
+
+/* stat strip */
+.stats{
+  display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
+  grid-template-columns:repeat(auto-fit,minmax(168px,1fr));margin:0 0 28px;border-radius:3px;overflow:hidden;
+}
+.stat{background:var(--panel);padding:16px 18px}
+.stat .k{
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:7px;
+}
+.stat .v{
+  font-family:var(--f-display);font-weight:700;font-size:27px;letter-spacing:-.03em;
+  color:var(--ink);line-height:1;font-variant-numeric:tabular-nums;
+}
+.stat .d{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.35}
+
+/* diagram */
+.dia{
+  overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  padding:20px 22px;margin:0 0 24px;
+}
+.dia pre{
+  margin:0;font-family:var(--f-mono);font-size:12.5px;line-height:1.55;color:var(--body);
+  white-space:pre;
+}
+
+/* the money formula */
+.formula{
+  background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--brass);
+  border-radius:0 3px 3px 0;padding:18px 22px;margin:24px 0;max-width:var(--measure);
+  font-family:var(--f-mono);font-size:13px;line-height:1.85;color:var(--ink);
+  overflow-x:auto;
+}
+.formula .c{color:var(--muted)}
+
+/* phase list — numbering is honest here: it IS a sequence */
+.phases{list-style:none;padding:0;margin:0;max-width:var(--measure)}
+.phases li{
+  display:grid;grid-template-columns:52px minmax(0,1fr);gap:18px;
+  padding:18px 0;border-top:1px solid var(--line-soft);margin:0;
+}
+.phases li:first-child{border-top:1px solid var(--line)}
+.phases .ph{
+  font-family:var(--f-mono);font-size:11px;font-weight:600;letter-spacing:.08em;
+  color:var(--brass);padding-top:3px;
+}
+.phases .ttl{
+  font-family:var(--f-display);font-weight:600;font-size:16px;color:var(--ink);
+  margin-bottom:5px;letter-spacing:-.008em;
+}
+.phases .bd{font-size:15px;color:var(--body)}
+
+/* sources */
+.src{font-size:13.5px;line-height:1.7;color:var(--muted);max-width:78ch}
+.src h4{margin-top:22px}
+.src a{color:var(--muted);text-decoration-color:var(--line)}
+.src a:hover{color:var(--indigo)}
+
+/* footer */
+.foot{
+  margin-top:70px;padding-top:22px;border-top:2px solid var(--ink);
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:8px 30px;
+}
+
+:focus-visible{outline:2px solid var(--indigo);outline-offset:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="shell">
+
+<!-- ─────────────────────────────────────────────────────────── rail ── -->
+<aside class="rail">
+  <div class="mark">Plug<em>Sure</em></div>
+  <div class="stamp">v0.1 · 23 Aug 2026</div>
+  <nav>
+  <ul class="toc">
+    <li class="grp">Position</li>
+    <li><a href="#thesis">The thesis</a></li>
+    <li><a href="#market">Market &amp; competition</a></li>
+    <li><a href="#scope">Product scope</a></li>
+    <li class="grp">System</li>
+    <li><a href="#stack">Stack</a></li>
+    <li><a href="#arch">Architecture</a></li>
+    <li><a href="#model">Canonical model</a></li>
+    <li><a href="#ocpp">OCPP layer</a></li>
+    <li><a href="#autel">Autel specifics</a></li>
+    <li class="grp">Indonesia</li>
+    <li><a href="#tariff">Tariff &amp; tax</a></li>
+    <li><a href="#load">Load management</a></li>
+    <li><a href="#pay">Payments</a></li>
+    <li><a href="#comply">Compliance</a></li>
+    <li><a href="#trust">Access &amp; data</a></li>
+    <li class="grp">Delivery</li>
+    <li><a href="#roadmap">Build sequence</a></li>
+    <li><a href="#open">Open questions</a></li>
+    <li><a href="#nfr">Targets</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ul>
+  </nav>
+</aside>
+
+<!-- ─────────────────────────────────────────────────────────── doc ── -->
+<main class="doc">
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Technical architecture &amp; product specification</p>
+  <h1>An EV charging platform built for Indonesian law</h1>
+  <p class="standfirst">The generic CSMS is commoditised. What no international vendor has —
+    and no local player has yet productised — is the Indonesian compliance and commercial layer.
+    That is the whole product thesis.</p>
+  <div class="meta">
+    <span><b>Brand</b> PlugSure · plugsure.com</span>
+    <span><b>Hardware</b> Autel MaxiCharger</span>
+    <span><b>Protocol</b> OCPP 1.6J → 2.0.1</span>
+    <span><b>Status</b> spec + running scaffold</span>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════ thesis ══ -->
+<section id="thesis">
+<h2><span class="n">01</span>The thesis</h2>
+<p class="sub">Why an Indonesia-specific CSMS beats a better generic one.</p>
+
+<p>PlugSure is a multi-tenant Charging Station Management System for Indonesian charge point
+operators, fleet depots and white-label partners operating under a licence holder's umbrella.
+AMPECO, Monta and Driivz already do real-time monitoring, load management, RBAC and OCPP well.
+Competing on those features is competing on a commodity.</p>
+
+<p>Eight capabilities are difficult for a foreign vendor to build and unattractive for them to
+maintain. Together they are the moat.</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th>Capability</th><th>Why no international vendor has it</th></tr></thead>
+<tbody>
+<tr><td><strong>PLN multiplier tariffs</strong><div class="mono">Q × 707 · N × 1,650</div></td>
+    <td>PLN tariffs are formula-driven, not a rate table. A hardcoded rate breaks on the next Direksi decision, and the base itself moves with quarterly adjustment.</td></tr>
+<tr><td><strong>Per-municipality PBJT</strong></td>
+    <td>Indonesia has no single national electricity consumption tax rate. A CPO in Jakarta, Bandung, Surabaya and Bali faces four rates, set by <em class="term">perda</em>, capped at 10%.</td></tr>
+<tr><td><strong>Tera / tera ulang lifecycle</strong></td>
+    <td>Kemendag classified EVSE as UTTP and launched mandatory verification on <strong>25 May 2026</strong>. This compliance burden is three months old. No incumbent tool addresses it.</td></tr>
+<tr><td><strong>SPKLU ID as a real identifier</strong><div class="mono">01.POSO.20.3275.010</div></td>
+    <td>The ID encodes the legal operating scheme and the municipality code. It is the natural join key between tenancy, tax geography and regulatory reporting.</td></tr>
+<tr><td><strong>SLO certificate tracking</strong></td>
+    <td>Mandatory before commercial operation. A third certificate regime with a third expiry per site.</td></tr>
+<tr><td><strong>Coretax e-Faktur</strong></td>
+    <td>Indonesia-only tax infrastructure with a hard sequencing constraint: no invoice may be issued before the NSFP returns.</td></tr>
+<tr><td><strong>kVA-headroom load management</strong></td>
+    <td>The ROI case here is capacity-cost avoidance, not energy arbitrage. It is tied to the <span class="mono">40 × kVA</span> rekening minimum and the 200 kVA TR/TM cliff.</td></tr>
+<tr><td><strong>TKDN certification</strong></td>
+    <td>Permenperin 35/2025 brought software into TKDN scope — in 2025. At TKDN + BMP ≥ 40%, foreign platforms are <em>legally excluded</em> from PLN, SOE and government procurement.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="rule">
+<span class="lbl">The strategic prize</span>
+<p>PLN is a BUMN and procures through LKPP e-Katalog under P3DN rules. An Indonesian-incorporated
+company writing software in Indonesia with Indonesian engineers scores highly on a labour-weighted
+TKDN formula. Certification would make PlugSure the only compliant option in a large class of
+procurements. <strong>Register in SIINas immediately</strong> — it is free and it gates everything.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ market ══ -->
+<section id="market">
+<h2><span class="n">02</span>Market &amp; competition</h2>
+<p class="sub">The gap between the government target and the actual run-rate is the opportunity.</p>
+
+<div class="stats">
+  <div class="stat"><div class="k">SPKLU units, Jun 2026</div><div class="v">5,016</div><div class="d">across 3,132 locations</div></div>
+  <div class="stat"><div class="k">2030 ESDM target</div><div class="v">62,918</div><div class="d">≈13× growth needed</div></div>
+  <div class="stat"><div class="k">2025 additions</div><div class="v">4,655</div><div class="d">against ~14,500/yr required</div></div>
+  <div class="stat"><div class="k">BEV sales growth</div><div class="v">+88.6%</div><div class="d">Jan–Jul 2026, YoY</div></div>
+</div>
+
+<p>Private CPOs will build most of that gap — and they are precisely PlugSure's customer base.
+Indonesia is also structurally a <strong>public-charging-first market</strong>, unlike Europe or
+China: typical residential connections are 1,300–2,200 VA against the ~7,700 VA a 7 kW charger
+needs, so home charging cannot absorb demand.</p>
+
+<h3>The price anchor</h3>
+<p>PLN takes <strong>2% of charging revenue</strong> for the app and payment layer in its
+partnership schemes. That 2% buys app presence and payment — not load management, not smart
+charging, not fleet billing, not compliance tooling. The gap between what the 2% delivers and what
+a CPO actually needs is PlugSure's pricing headroom.</p>
+
+<h3>The actual competitive set</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Competitor</th><th>Position</th><th>Weakness</th></tr></thead>
+<tbody>
+<tr><td><strong>PLN Mobile / Charge.IN</strong></td><td>The primary competitor. Bundled at 2%.</td>
+    <td>Built for PLN's own network and partnership model, not as a multi-tenant platform for independent CPOs. Thin on load management, fleet billing and compliance.</td></tr>
+<tr><td><strong>In-house builds</strong><div class="mono">Voltron · Starvo · Shell · Casion</div></td><td>Captive systems behind each operator's own app.</td>
+    <td>Each is either a competitor or — more usefully — a customer who has discovered that maintaining a CPMS is not their core business.</td></tr>
+<tr><td><strong>International CPMS</strong><div class="mono">AMPECO · Monta · Driivz</div></td><td>Technically mature.</td>
+    <td>No TKDN, no tera lifecycle, no per-municipality PBJT, no Q/N tariff modelling, no SPKLU ID handling, no Coretax, no local support.</td></tr>
+<tr><td><strong>Bundled OEM cloud</strong></td><td>Shipped with Chinese charger hardware.</td>
+    <td>Weak on local compliance and hostile to multi-vendor fleets.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="flag">
+<span class="lbl">Research finding</span>
+<p>Extensive searching in English and Bahasa Indonesia surfaced <strong>no established Indonesian
+CPMS vendor operating as an independent platform business</strong>. That absence is itself the
+commercial signal.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ scope ══ -->
+<section id="scope">
+<h2><span class="n">03</span>Product scope</h2>
+<p class="sub">Ten personas, twenty-six modules, three releases.</p>
+
+<h3>Who uses it</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Persona</th><th>Surface</th><th>Core job</th></tr></thead>
+<tbody>
+<tr><td>CPO operations engineer</td><td>Operator console</td><td>Diagnose a fault without a site visit; read the raw OCPP frame log</td></tr>
+<tr><td>CPO commercial manager</td><td>Operator console</td><td>Set tariffs within regulatory ceilings; manage site-host revenue shares</td></tr>
+<tr><td>Site host</td><td>Limited portal</td><td>See their own sites and revenue share — and nobody else's</td></tr>
+<tr><td>Fleet manager</td><td>Fleet console</td><td>Assign vehicles to tokens; allocate cost by centre; consolidated monthly invoice</td></tr>
+<tr><td>Finance / tax</td><td>Finance module</td><td>Reconcile sessions → payments → settlement; issue e-Faktur; track PPh 23 bukti potong</td></tr>
+<tr><td>Compliance officer</td><td>Compliance vault</td><td>Track SPKLU IDs, SLO and tera expiries; export for inspection</td></tr>
+<tr><td>Field technician</td><td>Mobile console</td><td>Commission a charger; run the provisioning diff; log a site visit</td></tr>
+<tr><td>Driver — registered</td><td>Mobile web / app</td><td>Find, start, pay, receipt</td></tr>
+<tr><td>Driver — walk-up</td><td>Mobile web only</td><td>Scan QR → pick amount → pay QRIS → charge. <strong>No install.</strong></td></tr>
+<tr><td>Platform admin</td><td>Admin console</td><td>Onboard tenants; curate the vendor quirk registry</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Release phasing</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>v1 — months 0–6</th><th>v2 — months 6–12</th><th>v3 — months 12+</th></tr></thead>
+<tbody><tr>
+<td>Tenancy, RBAC, audit log<br>Site &amp; asset hierarchy<br>OCPP 1.6J gateway<br>Real-time monitoring &amp; diagnostics<br>Token &amp; local auth list<br>Indonesian tariff engine<br>Session rating &amp; CDRs<br>QRIS pre-purchase + B2B VA<br>Smart charging &amp; load management<br>Operator console<br>Driver mobile web (guest)<br>Open API + webhooks<br>Alerting incl. WhatsApp</td>
+<td>e-Faktur via PJAP<br>Driver accounts<br>E-wallet tokenisation<br>Card pre-auth<br>Firmware OTA<br>Fleet / depot module<br>Revenue share &amp; payouts<br>Reporting warehouse<br>White-label theming<br><strong>OCPP 2.0.1 adapter</strong><br>PLN Single Gateway<br>TKDN + OCPP certification</td>
+<td>Native driver app<br>OCPI 2.3.0 CPO role<br>Battery swap (SPBKLU)<br>DER control / V2X<br>BESS &amp; solar integration</td>
+</tr></tbody>
+</table>
+</div>
+</section>
+
+<hr>
+
+<!-- ══════════════════════════════════════════════════════ stack ══ -->
+<section id="stack">
+<h2><span class="n">04</span>Stack</h2>
+<p class="sub">TypeScript across the board. The reasoning matters more than the choice.</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th>Layer</th><th>Choice</th><th>Rationale</th></tr></thead>
+<tbody>
+<tr><td>OCPP gateway</td><td class="mono">Node 22 + ws + Ajv</td><td>OCPP-J is JSON over WebSocket. Thousands of long-lived, low-throughput connections is an I/O-bound workload, not CPU-bound.</td></tr>
+<tr><td>API</td><td class="mono">Fastify + Zod</td><td>Schema-first fits the OpenAPI requirement.</td></tr>
+<tr><td>Database</td><td class="mono">PostgreSQL 16 + TimescaleDB</td><td>One database for OLTP and time series. Compression on the frame log is the difference between 90 days of retention and two weeks.</td></tr>
+<tr><td>Cache / queue</td><td class="mono">Redis + BullMQ</td><td>Connection registry, pub/sub fan-out, distributed locks, async workers.</td></tr>
+<tr><td>Console</td><td class="mono">React 19 + Vite</td><td>Server-sent events for live charger state.</td></tr>
+<tr><td>Driver web</td><td class="mono">Next.js</td><td>SSR. Low-end Android and first paint matter more than interactivity.</td></tr>
+<tr><td>Auth</td><td>Phone + OTP; OIDC for enterprise</td><td>Phone-first is the Indonesian norm. Email-primary login costs conversion.</td></tr>
+<tr><td>Hosting</td><td class="mono">AWS ap-southeast-3</td><td>Jakarta. Latency, sales-cycle friction, pass-through obligations, and possible TKDN benefit.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>Not Go or Java.</strong> Both are defensible for the OCPP layer alone, but splitting the
+stack across two languages costs a small team more than it saves at this workload. Revisit only if a
+single gateway node must hold above 20,000 concurrent chargers.</p>
+
+<div class="flag">
+<span class="lbl">Licence hazard</span>
+<p><strong>Do not embed SteVe.</strong> It is GPL-3.0 and would infect a proprietary SaaS. Study it;
+never link it. <a href="https://github.com/citrineos/citrineos-core">CitrineOS</a> (Apache-2.0,
+LF Energy, OCA-certified for 2.0.1) is the architectural reference and a legitimate fork base.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ arch ══ -->
+<section id="arch">
+<h2><span class="n">05</span>Architecture</h2>
+<p class="sub">A modular monolith, plus one service that must be deployed separately.</p>
+
+<div class="dia">
+<pre>┌───────────────────────────────────────────────────────────────┐
+│ ocpp-gateway          deployed separately · sticky by CP id   │
+│  · WS/WSS termination, subprotocol negotiation                │
+│  · OCPP-J framing, ONE-IN-FLIGHT-CALL enforcement             │
+│  · Ajv schema validation, both directions                     │
+│  · 1.6J adapter → canonical    (2.0.1 adapter in v2)          │
+│  · raw frame log → Timescale                                  │
+│  · connection registry in Redis                               │
+└───────────────┬───────────────────────────────────────────────┘
+                │ canonical events (Redis Streams)  ▲ commands
+┌───────────────▼───────────────────────────────────────────────┐
+│ plugsure-core         Fastify modular monolith                │
+│  identity · tenancy · assets · tokens · sessions · rating     │
+│  tariffs · payments · compliance · smartcharging · alerts     │
+│  webhooks · reporting · admin                                 │
+└───────────────┬───────────────────────────────────────────────┘
+                │
+┌───────────────▼───────────────────────────────────────────────┐
+│ workers (BullMQ)   cdr · settlement · efaktur · expiry-sweep  │
+│                    firmware-rollout · reconciliation          │
+└───────────────────────────────────────────────────────────────┘</pre>
+</div>
+
+<div class="rule">
+<span class="lbl">Why the gateway is split out</span>
+<p>Not because its domain differs — because its <em>lifecycle</em> does. A deploy of the billing code
+must never drop 4,000 charger WebSockets. It also scales on connection count while the API scales on
+request rate. Everything else stays one deployable: a six-person team shipping in six months does not
+have the operational budget for twelve services. Module boundaries are what matter; deployment
+boundaries can follow.</p>
+</div>
+
+<h3>Connection ownership</h3>
+<p>Each charge point holds one long-lived socket to one gateway node. Nodes register
+<code>cp:{id} → node:{id}</code> in Redis with a heartbeat-refreshed TTL; commands publish to
+<code>cmd:{nodeId}</code> and the owning node correlates the reply. <strong>Design assumption: any
+gateway node may die at any moment and the only cost is a reconnect.</strong></p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ model ══ -->
+<section id="model">
+<h2><span class="n">06</span>Canonical model</h2>
+<p class="sub">The single highest-leverage decision in the platform.</p>
+
+<div class="rule">
+<span class="lbl">The decision</span>
+<p>The canonical model is <strong>OCPP 2.0.1-shaped, and the 1.6 adapter maps <em>up</em> into it</strong>.
+Rating, smart charging, the console, webhooks and any future OCPI adapter see one shape and contain no
+version branches. Adding 2.0.1 then costs an adapter, not a rewrite.</p>
+</div>
+
+<div class="dia">
+<pre>Organisation (tenant)
+ └─ Site                       grid connection · kVA · tax geography · SPKLU ID · SLO
+     └─ ChargePoint            the OCPP endpoint · vendor/model/firmware · security profile
+         └─ EVSE (evseId ≥ 1)  the independently-startable charging unit
+             └─ Connector      physical plug · connector type · the METROLOGICAL meter</pre>
+</div>
+
+<div class="tbl">
+<table>
+<thead><tr><th>Concept</th><th>OCPP 1.6</th><th>OCPP 2.0.1</th><th>Canonical</th></tr></thead>
+<tbody>
+<tr><td>Station</td><td class="mono">ChargeBoxId</td><td class="mono">ChargingStation</td><td class="mono">charge_point</td></tr>
+<tr><td>Unit</td><td class="mono">connectorId = N</td><td class="mono">evseId = N</td><td class="mono">evse.evse_id = N</td></tr>
+<tr><td>Plug</td><td>(same as connector)</td><td class="mono">connectorId</td><td class="mono">connector_id = 1</td></tr>
+<tr><td>Station itself</td><td class="mono">connectorId = 0</td><td class="mono">evseId = 0</td><td class="mono">evse_id = 0</td></tr>
+<tr><td>Transaction id</td><td>CSMS-assigned <strong>integer</strong></td><td>station-assigned <strong>string</strong></td><td><strong>string, always</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Transaction unification</h3>
+<p>The 1.6 adapter synthesises the 2.0.1 event shape, so the billing engine only ever sees one:</p>
+<div class="tbl">
+<table>
+<thead><tr><th>OCPP 1.6 message</th><th>Canonical event</th></tr></thead>
+<tbody>
+<tr><td class="mono">StartTransaction</td><td class="mono">TransactionEvent(Started)</td></tr>
+<tr><td class="mono">MeterValues (with transactionId)</td><td class="mono">TransactionEvent(Updated, MeterValuePeriodic)</td></tr>
+<tr><td class="mono">StatusNotification during a tx</td><td class="mono">TransactionEvent(Updated, ChargingStateChanged)</td></tr>
+<tr><td class="mono">StopTransaction</td><td class="mono">TransactionEvent(Ended)</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ ocpp ══ -->
+<section id="ocpp">
+<h2><span class="n">07</span>OCPP layer</h2>
+<p class="sub">The traps, and the discipline that avoids them.</p>
+
+<h3>Transport</h3>
+<ul>
+<li>Negotiate from <code>Sec-WebSocket-Protocol</code>, preferring <code>ocpp2.1 &gt; ocpp2.0.1 &gt; ocpp1.6</code>. <strong>Echo exactly one.</strong></li>
+<li>Accept version-in-path as a fallback for chargers with broken negotiation, but header negotiation is authoritative.</li>
+<li><strong>The charge point ID is the last path segment and PlugSure does not get to choose it.</strong> Autel's installer app defaults to the unit's serial number when the identity field is left blank — and installers routinely leave it blank.</li>
+<li><strong>One outstanding CALL per direction.</strong> Queue outbound calls; never pipeline. This is the single most common OCPP implementation error.</li>
+<li><code>Heartbeat.conf</code> must return <code>currentTime</code>. Chargers set their clock from it; skipping it silently corrupts every downstream billing timestamp.</li>
+</ul>
+
+<h3>Security profiles</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Profile</th><th>Transport</th><th>Charger auth</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td class="mono">0</td><td>ws://</td><td>none</td><td>Bench only. Never in production.</td></tr>
+<tr><td class="mono">1</td><td>ws://</td><td>HTTP Basic</td><td>Never internet-facing.</td></tr>
+<tr><td class="mono">2</td><td>wss://</td><td>HTTP Basic</td><td><strong>Production baseline.</strong> Mandated by the updated OCPP 1.6 certification programme.</td></tr>
+<tr><td class="mono">3</td><td>mutual TLS</td><td>client certificate</td><td>Target for high-value DC sites, v2.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="flag">
+<span class="lbl">Rotation order — get this wrong and the charger is bricked</span>
+<p>Set <code>AuthorizationKey</code> <strong>first</strong>, then raise <code>SecurityProfile</code>.
+Accept both old and new keys for a grace window and handle the charger reconnecting with the new
+credential on the very next connect. The key must be random 16–20 bytes hex-encoded and
+<strong>WriteOnly</strong> — never returned in a <code>GetConfiguration</code> response, never stored
+in plaintext.</p>
+</div>
+
+<h3>Provisioning</h3>
+<p>On every <code>BootNotification</code>: resolve or <strong>park</strong> the charge point (a
+rejected charger retries forever and the installer gets no feedback), resolve its quirk profile, dump
+all config, diff, then write each differing key.</p>
+
+<div class="rule">
+<span class="lbl">Degrade, never fail</span>
+<p><strong>Record every <code>Rejected</code> / <code>NotSupported</code> into the quirk profile and
+continue.</strong> Autel units are documented to reject
+<code>MeterValuesSampledData=Energy.Active.Import.Register</code>. Treating a rejected metering key
+as a fatal provisioning error would strand the fleet.</p>
+</div>
+
+<h3>The vendor quirk registry</h3>
+<p>Keyed on <code>(vendor, model, firmware)</code> from <code>BootNotification</code>, storing what
+was learned empirically: which config keys are rejected, which measurands are actually emitted,
+whether the hardware wants amps or watts, whether <code>GetCompositeSchedule</code> can be trusted,
+whether <code>TxDefaultProfile</code> on connector 0 propagates, whether remote firmware update works
+at all.</p>
+<p><strong>Build it on day one, not year two.</strong> It is what makes adding vendor #2 cost a sprint
+instead of a rewrite.</p>
+
+<h3>Offline tolerance is a requirement, not a nicety</h3>
+<p>Indonesian sites are predominantly 4G-backhauled with poor fixed-line reliability. Chargers queue
+transaction messages while offline and replay them on reconnect — <strong>out of order and with stale
+timestamps</strong>.</p>
+<ul>
+<li><strong>Bill on the charger's timestamps, never on receipt time.</strong></li>
+<li>Key sessions on <code>(chargePointId, connectorId, txRef, startTimestamp)</code> and make CDR generation idempotent.</li>
+<li>Sync the local auth list aggressively so offline authorisation keeps working.</li>
+<li>Show connectivity history separately from fault state. A charger that is offline is not necessarily faulted, and support must tell the difference at a glance.</li>
+</ul>
+
+<h3>Smart charging traps in OCPP 1.6</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Trap</th><th>Rule</th></tr></thead>
+<tbody>
+<tr><td><code>TxProfile</code> needs an active transaction; <code>transactionId</code> is mandatory</td><td>Never send it to connector 0 — that combination is invalid.</td></tr>
+<tr><td><code>ChargePointMaxProfile</code> is valid <em>only</em> at connector 0</td><td>This is your breaker guard. Persistent.</td></tr>
+<tr><td>A top-stack profile with <strong>no duration never expires</strong></td><td>Always set <code>duration</code> or <code>validTo</code> on transient profiles. Clear aggressively.</td></tr>
+<tr><td>How a station splits its max profile between connectors is <strong>vendor-defined</strong></td><td>A real hazard on Autel dual-socket AC and dual-gun DC. Measure it; record it in the quirk registry; never assume fairness.</td></tr>
+<tr><td><code>chargingRateUnit</code>: AC wants <code>A</code>, DC wants <code>W</code></td><td>Store watts and phase count internally; convert at the adapter boundary (230 V L-N / 400 V L-L, 50 Hz).</td></tr>
+<tr><td><code>ClearChargingProfile</code> with no fields clears <strong>everything</strong></td><td>Always scope it.</td></tr>
+<tr><td><code>GetCompositeSchedule</code> varies wildly by vendor</td><td>Useful for diagnostics. Never load-bearing in the control loop.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="flag">
+<span class="lbl">Certification note</span>
+<p>If PlugSure certifies as an OCPP 1.6 <em>CSMS</em>, <strong>Smart Charging is mandatory</strong> —
+unlike on the charging-station side, where it is optional. Budget it into v1. Start the free 14-day
+OCTT trial early; it costs nothing and finds protocol bugs faster than field deployment.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ autel ══ -->
+<section id="autel">
+<h2><span class="n">08</span>Autel specifics</h2>
+<p class="sub">Eight risks to close before any fleet commitment.</p>
+
+<h3>How you point an Autel at your own backend</h3>
+<p>Via the <strong>Autel Config</strong> installer app over Bluetooth LE. The fields are
+<code>Security Profile</code>, <code>Server IP/Domain</code>, <code>Server Path</code>,
+<code>Server Port</code>, <code>Chargebox Identity</code> (blank = serial number), plus APN settings on
+4G units. The endpoint assembles as
+<code>wss://&lt;domain&gt;:&lt;port&gt;&lt;path&gt;&lt;chargeBoxId&gt;</code>.</p>
+<p>Autel Config has <strong>no public registration</strong> — installers must be enrolled Autel
+partners. Budget for that in procurement. The consumer Autel Charge app exposes an OCPP server list on
+some builds, but it is often a pre-provisioned whitelist rather than a free-text field. Do not plan on
+it — but <em>do</em> ask Autel whether PlugSure can be added to that list. If granted, it is a real
+distribution advantage.</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th>#</th><th class="n">Severity</th><th>Risk</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td class="mono">1</td><td class="n"><span class="chip c-hi">HIGH</span></td>
+    <td>Enabling third-party OCPP may be <strong>irreversible</strong> and permanently disables Autostart. Autel support is documented as saying <em>"once your charger takes the 3rd party OCPP configuration there is no way for us to make changes to it."</em></td>
+    <td>Written confirmation from Autel APAC that the endpoint can be re-pointed in the field. Bench-test on a sacrificial unit first.</td></tr>
+<tr><td class="mono">2</td><td class="n"><span class="chip c-hi">HIGH</span></td>
+    <td>No confirmed Autel presence in Indonesia — no public evidence of a local office, distributor, or SNI/import certification.</td>
+    <td>Identify the distributor, RMA path and certification status before specifying Autel at all.</td></tr>
+<tr><td class="mono">3</td><td class="n"><span class="chip c-md">MED</span></td>
+    <td><code>SetChargingProfile</code> current control is firmware-sensitive. Some builds accept the profile and do not change current.</td>
+    <td>Acceptance test must validate the profile is accepted <em>and</em> that current actually responds, per firmware build.</td></tr>
+<tr><td class="mono">4</td><td class="n"><span class="chip c-md">MED</span></td>
+    <td>OCPP 2.0.1 support is model- and firmware-dependent. Only DH480 is documented as "1.6J &amp; 2.0.1"; DC Compact says "upgradeable"; the EU AC Wallbox datasheet says 1.6J only.</td>
+    <td><strong>Treat 1.6J as the contractual baseline</strong> for any Autel AC fleet.</td></tr>
+<tr><td class="mono">5</td><td class="n"><span class="chip c-md">MED</span></td>
+    <td>Whether OCPP <code>UpdateFirmware</code> from a third-party CSMS works at all is unverified.</td>
+    <td>Key acceptance test before promising OTA to a customer.</td></tr>
+<tr><td class="mono">6</td><td class="n"><span class="chip c-md">MED</span></td>
+    <td>"Plug &amp; Charge ready" is ambiguous — true ISO 15118-2 with contract certificates, or Autocharge?</td>
+    <td>Ship <strong>Autocharge</strong> regardless; PnC needs an eMAID PKI that does not meaningfully exist in Indonesia. Model eMAID as just another token type.</td></tr>
+<tr><td class="mono">7</td><td class="n"><span class="chip c-md">MED</span></td>
+    <td>Firmware observed downloading over plain <strong>HTTP</strong> before switching to HTTPS after reboot.</td>
+    <td>Security-relevant for a regulated deployment. Raise with Autel.</td></tr>
+<tr><td class="mono">8</td><td class="n"><span class="chip c-lo">LOW</span></td>
+    <td>No published Autel <code>DataTransfer</code> extension catalogue.</td>
+    <td><strong>Never reject an unknown DataTransfer.</strong> Respond <code>UnknownVendorId</code>, log the frame, mine the logs. That is how the extensions get discovered.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="rule">
+<span class="lbl">Architectural instruction</span>
+<p>Treat Autel's <strong>local dynamic load balancing</strong> — external meter and CT clamps over
+Modbus RS485, master/secondary between units, documented limit of 8 chargers per meter — as the layer
+that <em>actually guarantees the incoming breaker</em>. Layer OCPP <code>SetChargingProfile</code> on
+top for tariff- and grid-driven shaping. Never build the site power budget on the assumption that
+OCPP smart charging alone protects the breaker: the RS485 path works when the WAN is down, and in
+Indonesia the WAN will be down.</p>
+</div>
+</section>
+
+<hr>
+
+<!-- ══════════════════════════════════════════════════════ tariff ══ -->
+<section id="tariff">
+<h2><span class="n">09</span>Tariff &amp; tax</h2>
+<p class="sub">Five layers on a single retail session. None of them is a constant.</p>
+
+<div class="formula">1. Energy       kWh × rate       <span class="c">regulated: N × 1,650  (1.0 ≤ N ≤ 1.5)</span>
+                                 <span class="c">bulk:      Q × 707    (0.8 ≤ Q ≤ 3.0)</span>
+2. Service fee  per session      <span class="c">ceiling Rp 25,000 fast · Rp 57,000 ultrafast</span>
+3. Admin fee    operator's own   <span class="c">e.g. Rp 4,000</span>
+4. PBJT         up to 10%        <span class="c">SET PER KABUPATEN/KOTA — never national</span>
+5. PPN          12% on DPP       <span class="c">DPP = 11/12 × price → 11% effective</span></div>
+
+<h3>Model the multiplier, not the rate</h3>
+<p>The widely-quoted retail price of Rp 2,466–2,475/kWh is simply <code>N = 1.5</code>. PLN sets the
+multiplier by Direksi decision and it varies by scheme, voltage level and period — public sources give
+the bulk rate as Rp 700, 707, 714 and 1,100 at different dates, which is entirely consistent with a
+<code>Q</code> multiplier design. The base itself moves too: the Q3-2026 layanan khusus tariff
+published at <strong>Rp 1,645</strong>, not 1,650.</p>
+
+<div class="rule">
+<span class="lbl">Design consequence</span>
+<p>Store the base as a <strong>versioned, effective-dated value</strong> and the multiplier as a
+per-tenant, per-site configurable. Then add a <strong>hard regulatory ceiling layer above operator
+pricing</strong>, validated at <em>save</em> time — so an illegal tariff can never be assigned, rather
+than being discovered when the invoice is already out.</p>
+</div>
+
+<h3>Get the PPN arithmetic exactly right</h3>
+<p>The headline rate is 12%, but non-luxury goods and services use <em class="term">DPP nilai lain</em>
+of 11/12 of the selling price, giving an effective 11%. Compute it as the regulation specifies:</p>
+<div class="formula">DPP = 11/12 × price        <span class="c">→ this figure must appear on the faktur pajak</span>
+PPN = 12%   × DPP</div>
+<p>Applying 11% directly produces the right total and the <strong>wrong DPP</strong>, which fails an
+audit. Getting the arithmetic right but the document wrong is still a failure.</p>
+
+<h3>Time of use — build it now, even though it is flat today</h3>
+<p>WBP (peak) and LWBP (off-peak) blocks exist structurally in the SPKLU tariff schedules, but both are
+currently priced the same. PLN already applies WBP/LWBP differentials to industrial categories and runs
+a 30% night discount on home charging — clear policy appetite for temporal signals. Retrofitting
+time-of-use into a flat-rate engine is expensive; anticipating it is nearly free.</p>
+
+<h3>Two rules for tax data</h3>
+<ul>
+<li><strong>PBJT resolves from the site's kabupaten/kota code</strong> — which the SPKLU identity number already encodes. Never model it as one national rate.</li>
+<li><strong>Store every tax field on the transaction, not derived at report time.</strong> Rates change; historical invoices must reproduce exactly as issued.</li>
+</ul>
+
+<div class="flag">
+<span class="lbl">Metrology overrides telemetry</span>
+<p>Where the OCPP <code>MeterValues</code> stream and the legally verified meter register diverge,
+<strong>bill from the verified register</strong>. <code>StopTransaction.transactionData</code>
+typically carries the authoritative total; prefer it over the last periodic sample.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ load ══ -->
+<section id="load">
+<h2><span class="n">10</span>Load management</h2>
+<p class="sub">In Indonesia the ROI is capacity-cost avoidance, not energy arbitrage — and it is quantifiable.</p>
+
+<div class="formula">rekening minimum = 40 × connected kVA × block cost   <span class="c">payable whether used or not</span></div>
+
+<ol>
+<li><strong>The minimum monthly bill is set by subscribed capacity</strong>, equivalent to 40 hours of full-capacity running. Load management that lets an operator subscribe less kVA reduces the bill floor directly. Expose <strong>kVA headroom as a first-class operator metric</strong> — it maps to money.</li>
+<li><strong>The 200 kVA TR/TM cliff.</strong> Above it, the connection moves to 20 kV medium voltage and the customer buys a transformer, switchgear and MV metering. Note the power-factor trap: a 168 kW peak is 177 kVA at PF 0.95 but <strong>210 kVA at PF 0.80</strong> — it crosses the cliff on power factor alone.</li>
+<li><strong>Shared building circuits.</strong> In Indonesian malls, offices and apartments chargers are almost never on a dedicated supply. Without dynamic balancing against the building's real-time load, they either trip the main or must be throttled to a uselessly conservative static limit.</li>
+<li><strong>Genset transfer.</strong> Backup gensets are sized for building essentials, not 120 kW of DC charging. Chargers must curtail or stop when the site transfers — which needs a site input signal and an explicit curtailment policy.</li>
+</ol>
+
+<h3>Three layers, and only the bottom one guarantees the breaker</h3>
+<div class="dia">
+<pre>Layer 3   PlugSure optimiser        cloud · seconds-to-minutes · revenue, fairness, ToU aware
+Layer 2   OCPP SetChargingProfile   survives brief WAN loss via the charger's own copy
+Layer 1   charger-local DLB         RS485 CT clamps · works with the WAN down   ← the real guard</pre>
+</div>
+
+<p><strong>Fail-safe behaviour:</strong> if the optimiser cannot reach a charger, the charger falls back
+to a conservatively-set <code>TxDefaultProfile</code>. If the optimiser itself is unhealthy it stops
+issuing profiles rather than issuing stale ones — a stale ceiling is worse than a conservative one.</p>
+
+<p>Allocation is fair-share water-filling with a minimum-viable floor. When the budget cannot give
+every session its minimum, <strong>shed the lowest-priority sessions entirely rather than starving all
+of them</strong>: a depot of vehicles each drawing 1 kW is worse than half of them charging properly.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ pay ══ -->
+<section id="pay">
+<h2><span class="n">11</span>Payments</h2>
+<p class="sub">One constraint shapes everything: the dominant rail cannot hold funds.</p>
+
+<p>At session start the final amount is unknown; payment must be secured before electricity flows.
+Globally this is solved with a pre-authorisation hold. <strong>QRIS has no pre-authorisation and, in
+its current form, never will</strong> — it is a single immediate debit of a fixed amount.</p>
+
+<p>The workaround — charge the maximum then refund — should not be built. Debiting Rp 250,000 to
+deliver Rp 80,000 of electricity is a conversion killer in a price-sensitive market, refund settlement
+is slow and issuer-dependent, and a high refund ratio attracts PJP risk-team attention.</p>
+
+<h3>The tiered model</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Tier</th><th>Who</th><th>Mechanism</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td class="mono">1</td><td>Registered driver</td><td><strong>E-wallet tokenisation.</strong> Link once at signup; validate at session start; charge the <em>exact</em> final amount server-side at the end.</td>
+    <td>Strictly better UX than pre-auth — one clean transaction for the right amount, no "why is Rp 250,000 pending on my DANA". No hold, no float, no e-money licence. <strong>The primary path.</strong></td></tr>
+<tr><td class="mono">2</td><td>Premium / fleet</td><td><strong>Card pre-auth then capture.</strong> 7-day hold; capture ≤ authorised.</td>
+    <td>Card penetration is ~35%, so this is a premium path, not a default. First transaction must clear 3DS; recurring needs acquirer approval with real lead time — start that negotiation early.</td></tr>
+<tr><td class="mono">3</td><td>Walk-up guest, <strong>no app install</strong></td><td><strong>QRIS pre-purchase.</strong> Scan the charger QR → pick Rp 50k / 100k / 150k → the charger delivers exactly that much energy and stops.</td>
+    <td>Inverts the unknown-amount problem instead of fighting it. This is what PLN already does at SPKLU, so it matches driver expectations rather than teaching new ones.</td></tr>
+<tr><td class="mono">4</td><td>B2B fleet</td><td><strong>Postpaid</strong> against a dedicated fixed virtual account.</td>
+    <td>Solves Indonesia's reconciliation problem — banks do not reliably expose sender identity, and 60–80% of B2B volume moves by bank transfer.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="flag">
+<span class="lbl">Board-level, not an implementation detail</span>
+<p><strong>Do not build a stored-balance driver wallet without counsel and a licensing plan.</strong>
+Under PBI 20/6/PBI/2018 a closed-loop wallet is exempt from BI licensing only below
+<strong>Rp 1,000,000,000 of float</strong> — 10,000 drivers × Rp 100,000 average balance reaches it.
+Worse: the closed-loop test is whether the payment recipient is the same party that issued the
+e-money. If a driver tops up a PlugSure balance and spends it on electricity delivered by a
+third-party site host, a regulator can readily characterise it as <strong>open loop — licence
+required at any float level, exemption inapplicable</strong>. This is exactly where the multi-tenant
+architecture collides with the regulation.</p>
+</div>
+
+<h3>Gateway selection</h3>
+<p><strong>Xendit primary, Midtrans secondary.</strong> Xendit is the only gateway with both
+capabilities this product needs: e-wallet tokenisation, and xenPlatform native sub-merchant splitting
+that lets each site host be a sub-merchant with funds split at transaction time and PlugSure's
+take-rate deducted automatically rather than reconciled after the fact. Midtrans wins on headline
+price — VA at Rp 4,000 flat against Xendit's Rp 13,000 list is decisive on B2B volume — and its GoPay
+Mini App is genuine distribution: PlugSure embedded inside GoPay, users auto-logged-in, no setup fee.</p>
+
+<div class="rule">
+<span class="lbl">A regulatory tailwind worth designing around</span>
+<p>From <strong>1 October 2026</strong> Bank Indonesia extends <strong>0% MDR to all merchant
+categories for transactions ≤ Rp 100,000</strong>. At ~Rp 2,466/kWh a 40 kWh session is ~Rp 99,000, and
+AC destination charging is almost always under the line. <strong>Price the QRIS pre-purchase tiers at
+or below Rp 100,000 deliberately.</strong> This also weakens the case for a prepaid wallet — the
+classic reason to hold balance is amortising per-transaction fees, and that argument largely
+evaporates along with the reason to take on e-money risk.</p>
+</div>
+
+<h3>e-Faktur</h3>
+<p>No Indonesian payment gateway issues tax invoices. Invoicing, VAT and e-Faktur are PlugSure's build.
+Use a <strong>PJAP</strong> rather than integrating Coretax directly — DJP interfaces change with
+little notice and this is not where a CPO platform should spend engineering capacity.</p>
+<div class="flag">
+<span class="lbl">A common and expensive design error</span>
+<p>A faktur may not be issued to the customer <strong>before the serial number (NSFP) returns from
+Coretax</strong>. The invoicing pipeline must treat this as a synchronous dependency with an explicit
+pending state, not a fire-and-forget async job.</p>
+</div>
+<p>Because a public session is high-volume, low-value and often anonymous, issue e-Faktur on request
+for B2B, fleet and consumers who need one, and cover retail with simplified documentation —
+<strong>distinguishing B2C from B2B at the transaction level</strong>, since their invoicing paths
+differ.</p>
+
+<p><strong>PlugSure's own receivables:</strong> software services are an object of
+<strong>PPh 23 at 2%</strong>, so Indonesian corporate customers withhold it from every invoice. It is
+creditable — cash-flow timing, not lost revenue — but bukti potong must be collected from every
+customer to claim it. Model receivables net of 2% from day one, and describe the offering
+consistently as a <em>service</em>: characterising it as a licence or royalty changes the rate to 15%.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ comply ══ -->
+<section id="comply">
+<h2><span class="n">12</span>Compliance vault</h2>
+<p class="sub">Three certificate regimes, three expiries, per site — with enforcement hooks, not just flags.</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th>Artefact</th><th>Held at</th><th>Enforcement</th></tr></thead>
+<tbody>
+<tr><td><strong>SPKLU identity number</strong><div class="mono">01.POSO.20.3275.010</div></td><td>Site</td>
+    <td>Format-validated and parsed. The municipality code drives PBJT resolution; the operating scheme drives the tenancy and permission model.</td></tr>
+<tr><td><strong>SLO</strong><div class="mono">Sertifikat Laik Operasi</div></td><td>Site</td>
+    <td>Mandatory before commercial operation. Alert at 90 / 30 / 7 days.</td></tr>
+<tr><td><strong>Tera / tera ulang</strong></td><td><strong>Connector</strong></td>
+    <td><strong>Block the connector from commercial sessions when verification lapses.</strong> Alert at 60 / 30 / 7 days.</td></tr>
+<tr><td><strong>Licence chain</strong><div class="mono">NIB · WILUS · RUPTL · IUPTLU</div></td><td>Organisation</td>
+    <td>Determines what the tenant is legally permitted to do inside the platform.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The tera regime is the newest and the one no international CSMS models. On 25 May 2026 Kemendag
+launched type approval and verification for EV charger measuring instruments, classifying EVSE as
+<strong>UTTP</strong> — the same regime as fuel dispensers — and targeting phased testing of all
+operational SPKLU within one year, covering 4,769 EVSE units at launch.</p>
+
+<div class="rule">
+<span class="lbl">A legal carve-out to design around</span>
+<p>Entities that merely <em>lease equipment</em> or <em>perform maintenance</em> in partnership with a
+licensed provider explicitly do <strong>not</strong> need WILUS, RUPTL, IUPTLU or an SPKLU identity
+number. This is the basis on which PlugSure serves site hosts as a pure software vendor without
+becoming a licensed electricity seller — and it means a large share of the addressable market operates
+<em>under someone else's licence</em>. <strong>The tenancy model must support a licence-holder umbrella
+with many sub-operators beneath it.</strong></p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ trust ══ -->
+<section id="trust">
+<h2><span class="n">13</span>Access &amp; data protection</h2>
+<p class="sub">Scoped permissions, a tamper-evident log, and a regulator about to acquire teeth.</p>
+
+<h3>RBAC</h3>
+<p>Permissions are <code>(action, resource)</code> pairs; roles bundle them; assignments are
+<strong>scoped</strong> to an organisation, a site or a fleet. A site host gets
+<code>session:read</code> scoped to their own sites and never sees another host's revenue.</p>
+<p><strong>Enforcement belongs at the query layer, not the controller.</strong> Every tenant-scoped
+query goes through a repository that injects the scope predicate. Postgres row-level security is the
+second line of defence, not the first.</p>
+
+<h3>Audit</h3>
+<p>Append-only and hash-chained per organisation, covering authentication, permission changes, tariff
+changes with before/after, <strong>every remote command issued to a charger and who issued it</strong>,
+token lifecycle, compliance document changes, payment state transitions and data exports. Retained
+seven years. When a driver calls to ask why their session stopped, support answers in one query.</p>
+
+<h3>UU PDP</h3>
+<p>Fully in force — the transition expired 17 October 2024. Charging data is sensitive in aggregate:
+identity, location, travel patterns, payment. Obligations to design in: explicit separable consent,
+purpose limitation, data subject rights, <strong>72-hour breach notification</strong>, records of
+processing, DPIA, and a DPO — likely required, since the platform performs large-scale regular
+systematic monitoring.</p>
+
+<div class="flag">
+<span class="lbl">Do not read the absent regulator as absent risk</span>
+<p>The Badan PDP has still not been established (target 2026; Kemkomdigi is exercising oversight in the
+interim), but criminal provisions are enforced by police and prosecutors, not by the data authority.
+Sanctions run to an administrative fine of <strong>2% of annual revenue</strong> and criminal penalties
+up to 5 years and Rp 5bn. Enforcement capacity is about to increase sharply. Be compliant by design
+rather than retrofitting under a new regulator's first enforcement wave.</p>
+</div>
+
+<h3>Residency, stated precisely</h3>
+<p>PP 71/2019 <strong>permits</strong> private electronic system operators to process and store data
+outside Indonesia — it relaxed the strict onshore mandate of PP 82/2012. The binding condition is
+guaranteed access for government supervision, plus declaring data location at registration. Two
+qualifications: sector rules can override (BI/OJK impose stricter onshore requirements on payment
+services — routing payments through a licensed PSP avoids inheriting them), and contracting with PLN
+or government can flow an onshore obligation through contractually.</p>
+<p><strong>Host in Jakarta anyway.</strong> Four reasons converge: latency to chargers and drivers;
+removing residency from every enterprise sales conversation; satisfying pass-through obligations; and
+possibly improving TKDN, since foreign cloud is a foreign-service cost line that dilutes the domestic
+ratio. <strong>Evaluate hosting for TKDN and residency jointly, not separately.</strong></p>
+
+<p>PlugSure is a <strong>PSE Lingkup Privat</strong> and must register via OSS
+<em>before the system begins operation</em>. Sanctions escalate to permanent access blocking, which
+Komdigi has actively used.</p>
+</section>
+
+<hr>
+
+<!-- ══════════════════════════════════════════════════════ roadmap ══ -->
+<section id="roadmap">
+<h2><span class="n">14</span>Build sequence</h2>
+<p class="sub">Six months to a defensible v1.</p>
+
+<ol class="phases">
+<li><div class="ph">wk 1–4</div><div>
+  <div class="ttl">Foundations</div>
+  <div class="bd">Repo, CI, Terraform for the Jakarta VPC, Postgres + Timescale, Redis. Tenancy, RBAC, audit log. <strong>Register in SIINas</strong> (free, gates TKDN) and start PSE registration. Request the OCTT free trial.</div>
+</div></li>
+<li><div class="ph">wk 5–12</div><div>
+  <div class="ttl">OCPP core &amp; monitoring</div>
+  <div class="bd">Transport with security profile 2. The 1.6J adapter, canonical model and quirk registry. Provisioning. Live console with remote start/stop, reset, unlock and the raw frame log. Virtual charger fleet for load and failure-path testing. <strong>Bench-test a real Autel unit against risks 1, 3 and 5.</strong></div>
+</div></li>
+<li><div class="ph">wk 13–20</div><div>
+  <div class="ttl">Sessions, tariffs, money</div>
+  <div class="bd">Tokens and local auth list sync. Session lifecycle and idempotent CDRs. The Indonesian layered tariff engine with ceilings, Q/N multipliers, the ToU dimension, per-municipality PBJT and exact PPN. QRIS pre-purchase driver web. B2B postpaid via virtual accounts.</div>
+</div></li>
+<li><div class="ph">wk 21–26</div><div>
+  <div class="ttl">Load management &amp; compliance → v1 launch</div>
+  <div class="bd">Site power budget, optimiser, profile generation with correct purpose and stack levels, fail-safe fallback. kVA headroom. Compliance vault with connector blocking on lapse. Alerting with WhatsApp. Open API and webhooks.</div>
+</div></li>
+<li><div class="ph">mo 7–12</div><div>
+  <div class="ttl">v2</div>
+  <div class="bd">Driver accounts, e-wallet tokenisation, card pre-auth. e-Faktur via a PJAP. Firmware OTA. Fleet module. Revenue share and automated site-host payouts. Reporting warehouse. White-label theming. <strong>The OCPP 2.0.1 adapter.</strong> Pursue TKDN certification and OCPP 1.6 CSMS certification.</div>
+</div></li>
+<li><div class="ph">mo 13+</div><div>
+  <div class="ttl">v3</div>
+  <div class="bd">Native driver app. OCPI 2.3.0 CPO role. PLN Single Gateway. Battery swap — OCPP 2.1 Block S targets two- and three-wheelers, a large and distinct Indonesian market where entry capital is ~Rp 85.5m against ~Rp 400m for a fast-charging SPKLU. DER and V2X.</div>
+</div></li>
+</ol>
+
+<h3>Team</h3>
+<p>Two backend (one owning the gateway), one frontend, one full-stack on the driver surface, half a
+DevOps, and one product/compliance lead with Indonesian energy-sector fluency. <strong>The compliance
+lead is not optional</strong> — most of the moat lives in that role's domain knowledge.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ open ══ -->
+<section id="open">
+<h2><span class="n">15</span>Open questions</h2>
+<p class="sub">Twelve items to close before the design freezes, ranked by impact.</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th class="n">#</th><th>Question</th><th>Why it matters</th><th>How to close</th></tr></thead>
+<tbody>
+<tr><td class="n mono">1</td><td><strong>What does PLN's SPKLU integration actually require?</strong></td><td>Likely the biggest external-interface risk; will shape session, tariff and token models more than OCPI</td><td>PLN partnership team, directly</td></tr>
+<tr><td class="n mono">2</td><td>Is <strong>Single Gateway</strong> integration mandatory for private CPOs? API or manual upload?</td><td>Could be a required compliance feature; being early is a differentiator</td><td>Direktorat Pembinaan Pengusahaan Ketenagalistrikan; attend a bimtek</td></tr>
+<tr><td class="n mono">3</td><td>Can an Autel be <strong>re-pointed</strong> to a different OCPP backend after the first switch?</td><td>If irreversible it changes procurement and pilot design entirely</td><td>Written confirmation from Autel APAC + a sacrificial bench unit</td></tr>
+<tr><td class="n mono">4</td><td>Does a multi-tenant CPO platform holding driver balances qualify as <strong>closed-loop</strong>?</td><td>Determines whether a wallet is buildable at all; the Rp 1bn exemption may not apply</td><td>Indonesian payments counsel. Include PADG 32/2025 in the brief</td></tr>
+<tr><td class="n mono">5</td><td>Has <strong>Permen ESDM 1/2023</strong> been amended? Does Kepmen 24.K/2025 supersede the fee ceilings?</td><td>Foundation of the licensing model and the billing ceilings</td><td>JDIH ESDM primary text + energy counsel</td></tr>
+<tr><td class="n mono">6</td><td><strong>Tera-ulang interval</strong> and penalties for EVSE</td><td>Drives the compliance-alerting design</td><td>Direktorat Metrologi, Kemendag</td></tr>
+<tr><td class="n mono">7</td><td>Exact <strong>TKDN calculation annex for software</strong></td><td>Determines the achievable score — hiring and hosting should be structured <em>before</em> certification</td><td>TKDN consultant + SIINas</td></tr>
+<tr><td class="n mono">8</td><td>Which <strong>e-wallets support Xendit tokenisation</strong> beyond OVO?</td><td>Determines Tier 1's addressable base</td><td>Xendit, in writing</td></tr>
+<tr><td class="n mono">9</td><td>Is EV charging assigned <strong>SPBU MDR (0.4%)</strong> or standard (0.7%)? Who is the merchant?</td><td>0.3% delta is material at scale</td><td>The PJP, in writing at onboarding</td></tr>
+<tr><td class="n mono">10</td><td>Current <strong>Q and N values</strong> by scheme and voltage level</td><td>Tariff engine defaults</td><td>PLN partnership team</td></tr>
+<tr><td class="n mono">11</td><td>Is <strong>SNI mandatory</strong> for EVSE? What is the SLO validity period?</td><td>Hardware onboarding validation; compliance field configuration</td><td>BSN / Kemenperin; a LIT such as Sucofindo</td></tr>
+<tr><td class="n mono">12</td><td>Does Autel accept <strong>OCPP-driven firmware updates</strong> from a third-party CSMS?</td><td>Gates the OTA feature promise</td><td>Bench acceptance test</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="flag">
+<span class="lbl">On sourcing</span>
+<p>Indonesian government portals — <code>gatrik.esdm.go.id</code>, <code>jdih.esdm.go.id</code>,
+<code>peraturan.bpk.go.id</code>, <code>tkdn.kemenperin.go.id</code> — are heavily JavaScript-rendered
+and frequently blocked automated retrieval during this research. Several primary regulatory documents
+were reachable only through secondary reporting or direct PDF links. <strong>Items 5, 2 and 1 in
+particular should be confirmed against primary text with Indonesian energy-sector counsel</strong> — a
+change there would alter product requirements rather than merely refine them.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ nfr ══ -->
+<section id="nfr">
+<h2><span class="n">16</span>Targets</h2>
+
+<div class="tbl">
+<table>
+<thead><tr><th>Area</th><th>Target</th></tr></thead>
+<tbody>
+<tr><td>Charger connection capacity</td><td>20,000 concurrent sockets per cluster; 5,000 per node</td></tr>
+<tr><td>Command round-trip</td><td>p95 &lt; 3 s from API call to CALLRESULT, excluding charger latency</td></tr>
+<tr><td>Console live update</td><td>p95 &lt; 2 s from OCPP frame to browser</td></tr>
+<tr><td>Availability</td><td>99.9% gateway (a charger that cannot connect cannot earn); 99.5% console</td></tr>
+<tr><td>Session durability</td><td>Zero session loss on node failure — chargers reconnect and replay</td></tr>
+<tr><td>Retention</td><td>Frame log 90 d hot / 1 y compressed · meter values 3 y · CDRs and invoices 10 y · audit 7 y</td></tr>
+<tr><td>RPO / RTO</td><td>5 min (PITR) / 1 h</td></tr>
+<tr><td>Localisation</td><td>Full Bahasa Indonesia and English across every surface, receipts and WhatsApp templates included. IDR formatting; WIB/WITA/WIT</td></tr>
+<tr><td>Driver web performance</td><td>First contentful paint &lt; 2 s on 3G and a low-end Android device</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ sources ══ -->
+<section id="sources">
+<h2><span class="n">17</span>Sources</h2>
+<div class="src">
+
+<h4>OCPP &amp; open source</h4>
+<p><a href="https://openchargealliance.org/certification-program/">OCA certification programme</a> ·
+<a href="https://openchargealliance.org/test-tool/">OCTT test tool</a> ·
+<a href="https://openchargealliance.org/wp-content/uploads/2024/01/new_in_ocpp_201-v10.pdf">What is new in OCPP 2.0.1</a> ·
+<a href="https://openchargealliance.org/wp-content/uploads/2023/11/ocpp_1_6_ISO_15118_v10.pdf">ISO 15118 PnC over OCPP 1.6</a> ·
+<a href="https://ocpp.md/ocpp-1.6j/">ocpp.md 1.6J</a> ·
+<a href="https://ocpp.md/ocpp-1.6j/smart-charging/">1.6J smart charging</a> ·
+<a href="https://ocpp.md/ocpp-2.0.1/">ocpp.md 2.0.1</a> ·
+<a href="https://ocpp.md/ocpp-2.1/">ocpp.md 2.1</a> ·
+<a href="https://coreevi.com/a/2/ocpp-basic-auth-securityprofile">OCPP Basic auth &amp; SecurityProfile</a> ·
+<a href="https://aminacharging.com/articles/ocpp-security-profiles/">OCPP security profiles</a> ·
+<a href="https://github.com/citrineos/citrineos-core">CitrineOS</a> ·
+<a href="https://github.com/steve-community/steve">SteVe</a> ·
+<a href="https://github.com/mikuso/ocpp-rpc">ocpp-rpc</a> ·
+<a href="https://github.com/lorenzodonini/ocpp-go">ocpp-go</a> ·
+<a href="https://github.com/mobilityhouse/ocpp">mobilityhouse/ocpp</a> ·
+<a href="https://evroaming.org/ocpi/">OCPI</a></p>
+
+<h4>Autel hardware</h4>
+<p><a href="https://autelenergy.com/global/product/all">Autel global catalogue</a> ·
+<a href="https://wallboxcenter.de/wp-content/uploads/2026/06/Autel-Maxi-Charger-22-MID-BK_Datenblatt.pdf">AC Wallbox EU datasheet (MID)</a> ·
+<a href="https://sevadis.com/wp-content/uploads/2024/07/MaxiCharger-DC-Compact-40-47kW-Datasheet.pdf">DC Compact datasheet</a> ·
+<a href="https://www.elfor.org/wp-content/uploads/2024/09/MaxiCharger-DH480_camion.pdf">DH480 datasheet</a> ·
+<a href="https://sevadis.com/wp-content/uploads/2024/03/Sevadis-Dynamic-Balancing-Document.pdf">Sevadis dynamic load balancing</a> ·
+<a href="https://partners.clenergy-ev.com/hubfs/Onboarding%20Guides%20(PDF)/Autel%20Sevadis%20Maxicharger%20-%20Onboarding%20Guide%20(New%20branding).pdf?hsLang=en">Clenergy — Autel OCPP onboarding guide</a> ·
+<a href="https://chargelab.zendesk.com/hc/en-us/articles/42340494306203-Autel-AC-Lite-Maxi-Charge-Configuration-Guide">ChargeLab Autel config guide</a> ·
+<a href="https://www.thezdi.com/blog/2025/1/15/reviewing-the-attack-surface-of-the-autel-maxicharger-part-two">ZDI — MaxiCharger attack surface</a> ·
+<a href="https://github.com/lbbrhzn/ocpp/issues/1955">Autostart disabled irreversibly (#1955)</a> ·
+<a href="https://github.com/lbbrhzn/ocpp/discussions/669">Autel OCPP quirks (#669)</a> ·
+<a href="https://store.autelenergy.com/products/autel-charge-cloud">Autel Charge Cloud — US/Canada only</a></p>
+
+<h4>Indonesian regulation</h4>
+<p><a href="https://jdih.kemenkeu.go.id/api/download/2426f667-7c15-4afb-8a52-4efc01da5e9b/2023perpres079.pdf">Perpres 79/2023</a> ·
+<a href="https://peraturan.bpk.go.id/Details/252409/permen-esdm-no-1-tahun-2023">Permen ESDM 1/2023</a> ·
+<a href="https://jdih.esdm.go.id/common/dokumen-external/Permen%20ESDM%20Nomor%207%20Tahun%202024.pdf">Permen ESDM 7/2024 (tariffs)</a> ·
+<a href="https://gatrik.esdm.go.id/infogatrik/api//storage/2025/konten/pdf/7QYZeAN2hV_02062025021414.pdf">Ditjen Gatrik — SPKLU licensing</a> ·
+<a href="https://gatrik.esdm.go.id/berita/?slug=pasca-pp-28-2025-pemerintah-sederhanakan-izin-spklu-dan-perkuat-sistem-data-ketenagalistrikan&amp;category=ketenagalistrikan">PP 28/2025 &amp; Single Gateway</a> ·
+<a href="https://www.esdm.go.id/id/media-center/arsip-berita/percepat-ekosistem-kendaraan-listrik-pemerintah-resmi-terbitkan-tarif-dan-biaya-layanan-pengisian-listrik-pada-spklu">ESDM — SPKLU service fee ceilings</a> ·
+<a href="https://prolegal.id/jenis-jenis-izin-usaha-stasiun-pengisian-kendaraan-listrik-umum-spklu/">SPKLU licence types</a> ·
+<a href="https://peraturan.bpk.go.id/Details/333003/permenperin-no-35-tahun-2025">Permenperin 35/2025 (TKDN)</a> ·
+<a href="https://uno.id/batas-minimal-nilai-tkdn/">TKDN thresholds</a></p>
+
+<h4>Metrology, grid &amp; tax</h4>
+<p><a href="https://www.kemendag.go.id/berita/siaran-pers/kemendag-luncurkan-layanan-persetujuan-tipe-tera-dan-tera-ulang-alat-ukur-pengisi-daya-kendaraan-listrik">Kemendag — EVSE tera launch, 25 May 2026</a> ·
+<a href="https://www.antaranews.com/berita/4105503/pemerintah-sebut-alat-ukur-di-spklu-wajib-ditera">Antara — alat ukur SPKLU wajib ditera</a> ·
+<a href="https://peraturan.bpk.go.id/Details/305838/permendag-no-24-tahun-2024">Permendag 24/2024</a> ·
+<a href="https://www.cnbcindonesia.com/news/20260727084544-4-753968/daftar-resmi-tarif-listrik-pln-per-kwh-berlaku-juli-september-2026">Q3 2026 PLN tariff table</a> ·
+<a href="https://listrikindonesia.com/detail/14957/tingkatkan-minat-bangun-spklu-pln-beri-tarif-curah-dan-diskon-penyambungan-50">Tarif curah &amp; connection discount</a> ·
+<a href="https://www.maskoelectrical.com/post/biaya-dan-potensi-bisnis-spklu-tr-vs-tm">TR vs TM economics</a> ·
+<a href="https://www.maskoelectrical.com/post/cara-menjalin-kerja-sama-dengan-pln-untuk-membangun-spklu-di-lokasi-anda">PLN partnership schemes</a> ·
+<a href="https://news.ddtc.co.id/berita/nasional/44010/begini-ketentuan-tarif-pbjt-atas-konsumsi-tenaga-listrik-di-uu-hkpd">PBJT under UU HKPD</a> ·
+<a href="https://muc.co.id/en/article/effective-now-12-vat-for-luxury-goods-11-for-non-luxury-goods">12% luxury / 11% non-luxury VAT</a></p>
+
+<h4>Payments &amp; data protection</h4>
+<p><a href="https://www.bi.go.id/en/fungsi-utama/sistem-pembayaran/ritel/kanal-layanan/qris/default.aspx">Bank Indonesia — QRIS</a> ·
+<a href="https://www.bi.go.id/id/publikasi/ruang-media/cerita-bi/Pages/mdr-qris.aspx">BI — MDR QRIS</a> ·
+<a href="https://www.antaranews.com/berita/5697901/bi-perluas-kebijakan-mdr-qris-0-persen-untuk-pelaku-umkm">0% MDR expansion, Oct 2026</a> ·
+<a href="https://www.xendit.co/en-id/pricing/">Xendit pricing</a> ·
+<a href="https://help.xendit.co/hc/en-us/articles/13322736469529-How-to-create-eWallet-Tokenization">Xendit — eWallet tokenisation</a> ·
+<a href="https://docs.xendit.co/docs/split-payments">Xendit — split payments</a> ·
+<a href="https://midtrans.com/pricing">Midtrans pricing</a> ·
+<a href="https://docs.midtrans.com/reference/card-feature-pre-authorization">Midtrans — pre-authorization</a> ·
+<a href="https://midtrans.com/product/gopay-mini-app">GoPay Mini App</a> ·
+<a href="https://ssek.com/blog/bank-indonesia-sets-new-limits-for-the-provision-of-e-money/">SSEK — e-money limits</a> ·
+<a href="https://peraturan.bpk.go.id/Details/229798/uu-no-27-tahun-202">UU 27/2022 (PDP)</a> ·
+<a href="https://jdih.komdigi.go.id/produk_hukum/view/id/695/t/peraturan+pemerintah+nomor+71+tahun+2019">PP 71/2019</a> ·
+<a href="https://aws.amazon.com/blogs/aws/now-open-aws-asia-pacific-jakarta-region">AWS Jakarta region</a></p>
+
+<h4>Market</h4>
+<p><a href="https://www.ntvnews.id/ekonomi/01113855/pln-perluas-jaringan-spklu-seiring-lonjakan-konsumsi-listrik-kendaraan-listrik">NTV — 5,016 SPKLU, June 2026</a> ·
+<a href="https://www.jawapos.com/ekonomi/2605110427/esdm-patok-target-fantastis-jumlah-spklu-62-ribu-hingga-2030-saat-ini-baru-4892-unit">Jawa Pos — 62,918 target by 2030</a> ·
+<a href="https://ecobiz.asia/spklu-pln-melonjak-44-persen-sepanjang-2025-layanan-home-charging-naik-dua-kali-lipat/">Ecobiz — 2025 growth breakdown</a> ·
+<a href="https://www.cnnindonesia.com/otomotif/20260818100748-603-1393454/penjualan-mobil-listrik-di-indonesia-melesat-88-persen">CNN — BEV sales +88.6%</a> ·
+<a href="https://www.garduoto.com/142917/peta-tarif-fast-charging-non-pln-di-indonesia-mana-paling-praktis">Gardu Oto — non-PLN fast charging tariffs</a> ·
+<a href="https://www.ampeco.com/">AMPECO</a> ·
+<a href="https://monta.com/">Monta</a></p>
+
+</div>
+</section>
+
+<div class="foot">
+  <span>PlugSure · technical architecture v0.1</span>
+  <span>23 August 2026</span>
+  <span>Claims marked for verification are unconfirmed from primary sources</span>
+</div>
+
+</div>
+</main>
+</div>
+
+<script>
+// Highlight the current section in the rail.
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  var map = {};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(!e.isIntersecting) return;
+      links.forEach(function(a){ a.classList.remove('on'); });
+      var a = map[e.target.id];
+      if(a) a.classList.add('on');
+    });
+  }, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+  document.querySelectorAll('section[id]').forEach(function(s){ obs.observe(s); });
+})();
+</script>

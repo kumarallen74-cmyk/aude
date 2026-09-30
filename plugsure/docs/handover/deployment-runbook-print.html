@@ -1,0 +1,423 @@
+<!doctype html><html><head><meta charset='utf-8'><title>PlugSure CSMS — Deployment Runbook</title><style>
+@page {
+  size: A4;
+  margin: 17mm 15mm 18mm 15mm;
+}
+:root{
+  --ink:#0f1620; --body:#2f3944; --muted:#606b78; --faint:#8a939d;
+  --line:#c6ced6; --line-soft:#dde3e9; --panel:#f2f5f7;
+  --live:#0a5d8c; --live-soft:#e4f0f7;
+  --caution:#8a5309; --caution-soft:#faf0dc;
+  --stop:#8e241d; --stop-soft:#fae4e1;
+  --ok:#155b42; --ok-soft:#e0efe8;
+  --code:#eef1f4;
+  --f-dis:"DejaVu Sans Condensed","Liberation Sans Narrow",sans-serif;
+  --f-body:"Carlito","Liberation Sans",Arial,sans-serif;
+  --f-mono:"DejaVu Sans Mono","Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:#fff;color:var(--body);font-family:var(--f-body);
+     font-size:9.7pt;line-height:1.5;orphans:3;widows:3;
+     -webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+h1{font-family:var(--f-dis);font-weight:700;color:var(--ink);font-size:22pt;line-height:1.06;
+   margin:0 0 6pt;letter-spacing:-.2pt}
+h2{font-family:var(--f-dis);font-weight:700;color:var(--ink);font-size:13.5pt;line-height:1.15;
+   margin:20pt 0 5pt;padding-bottom:3pt;border-bottom:1pt solid var(--ink);
+   break-after:avoid;page-break-after:avoid}
+h3{font-family:var(--f-dis);font-weight:700;color:var(--ink);font-size:10.8pt;margin:0 0 4pt;
+   break-after:avoid;page-break-after:avoid}
+p{margin:0 0 6pt}
+strong{color:var(--ink);font-weight:700}
+ul,ol{margin:0 0 7pt;padding-left:14pt}
+li{margin-bottom:3pt}
+code{font-family:var(--f-mono);font-size:8.4pt;background:var(--code);color:var(--ink);
+     padding:0.5pt 2.5pt;border-radius:2pt}
+
+/* cover block */
+.cover{border-bottom:2.5pt solid var(--ink);padding-bottom:12pt;margin-bottom:14pt}
+.kicker{font-family:var(--f-mono);font-size:7.6pt;font-weight:700;letter-spacing:1.4pt;
+        text-transform:uppercase;color:var(--live);margin:0 0 7pt}
+.standfirst{font-size:11pt;color:var(--body);margin:0 0 11pt;max-width:150mm}
+.ctrl{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1pt solid var(--line);
+      border-radius:2pt;overflow:hidden;margin-top:4pt}
+.ctrl div{padding:6pt 8pt;border-right:1pt solid var(--line)}
+.ctrl div:last-child{border-right:0}
+.ctrl .k{font-family:var(--f-mono);font-size:6.8pt;letter-spacing:.9pt;text-transform:uppercase;
+         color:var(--muted);margin-bottom:2.5pt}
+.ctrl .v{font-family:var(--f-dis);font-weight:700;font-size:9.4pt;color:var(--ink);line-height:1.2}
+
+/* callouts */
+.must,.warn,.note{break-inside:avoid;page-break-inside:avoid;margin:0 0 9pt;border-radius:0 2pt 2pt 0}
+.must{border:1pt solid #d9aaa3;border-left:3.5pt solid var(--stop);background:var(--stop-soft);padding:8pt 10pt}
+.warn{border-left:3pt solid var(--caution);background:var(--caution-soft);padding:7pt 10pt}
+.note{border-left:3pt solid var(--live);background:var(--live-soft);padding:7pt 10pt}
+.lbl{font-family:var(--f-mono);font-size:7pt;font-weight:700;letter-spacing:1.1pt;
+     text-transform:uppercase;display:block;margin-bottom:4pt}
+.must .lbl{color:var(--stop)} .warn .lbl{color:var(--caution)} .note .lbl{color:var(--live)}
+.must p:last-child,.warn p:last-child,.note p:last-child{margin-bottom:0}
+
+/* steps */
+.step{display:grid;grid-template-columns:26pt 1fr;gap:10pt;padding:10pt 0;
+      border-top:.75pt solid var(--line);
+      /* Steps may split across a page — the inner blocks below never do — otherwise
+         a long step pushes a third of a page of whitespace ahead of it. */
+      break-inside:auto;page-break-inside:auto;orphans:3;widows:3}
+.step:first-of-type{border-top:1.5pt solid var(--ink)}
+.step .n{font-family:var(--f-mono);font-size:11pt;font-weight:700;color:var(--live)}
+.step > div > :last-child{margin-bottom:0}
+
+/* terminal */
+.term{background:var(--code);border:.75pt solid var(--line);border-radius:2pt;margin:0 0 7pt;
+      overflow:hidden;break-inside:avoid;page-break-inside:avoid}
+.term .bar{font-family:var(--f-mono);font-size:6.8pt;font-weight:700;letter-spacing:.9pt;
+           text-transform:uppercase;color:var(--muted);padding:4pt 8pt;
+           border-bottom:.75pt solid var(--line);background:var(--panel)}
+.term pre{margin:0;padding:7pt 8pt;font-family:var(--f-mono);font-size:8pt;line-height:1.5;
+          color:var(--ink);white-space:pre-wrap;word-break:break-word}
+.term .c{color:var(--muted)}
+.term .p{color:var(--live);font-weight:700}
+
+.expect{border:.75pt solid var(--ok);border-left:2.5pt solid var(--ok);background:var(--ok-soft);
+        border-radius:0 2pt 2pt 0;padding:6pt 9pt;margin:0 0 7pt;
+        break-inside:avoid;page-break-inside:avoid}
+.expect .lbl{color:var(--ok)}
+.expect pre{margin:0;font-family:var(--f-mono);font-size:7.8pt;line-height:1.45;color:var(--ink);
+            white-space:pre-wrap;word-break:break-word}
+.expect p{margin:0;font-size:9.2pt}
+.expect pre + p{margin-top:4pt}
+
+/* tables */
+table{border-collapse:collapse;width:100%;font-size:8.6pt;line-height:1.4;margin:0 0 9pt;
+      break-inside:auto}
+th{font-family:var(--f-mono);font-size:6.9pt;font-weight:700;letter-spacing:.9pt;text-transform:uppercase;
+   color:var(--muted);text-align:left;padding:5pt 7pt;border-bottom:1pt solid var(--ink);
+   background:var(--panel)}
+td{padding:5.5pt 7pt;border-bottom:.6pt solid var(--line-soft);vertical-align:top}
+tr{break-inside:avoid;page-break-inside:avoid}
+td.k{font-family:var(--f-mono);font-size:8pt;color:var(--ink)}
+td.st{font-family:var(--f-mono);font-size:8.6pt;font-weight:700;white-space:nowrap}
+.sec{color:var(--stop)} .cau{color:var(--caution)} .good{color:var(--ok)} .inf{color:var(--live)}
+
+.pb{break-before:page;page-break-before:always}
+.foot{margin-top:16pt;padding-top:7pt;border-top:1.5pt solid var(--ink);
+      font-family:var(--f-mono);font-size:7.4pt;letter-spacing:.4pt;color:var(--muted)}
+</style></head><body>
+<div class="cover">
+  <p class="kicker">Deployment runbook &middot; for the installing engineer</p>
+  <h1>PlugSure CSMS &mdash; server deployment</h1>
+  <p class="standfirst">Nine steps from a bare Ubuntu VM to an EV charge point holding a live
+  WebSocket. Every step states what correct output looks like, so you can confirm each one before
+  moving on.</p>
+  <div class="ctrl">
+    <div><div class="k">Document</div><div class="v">Deployment runbook</div></div>
+    <div><div class="k">Audience</div><div class="v">Installing engineer</div></div>
+    <div><div class="k">Platform</div><div class="v">Ubuntu 24.04 &middot; Docker</div></div>
+    <div><div class="k">Contains</div><div class="v">No credentials</div></div>
+  </div>
+</div>
+
+<div class="note">
+  <span class="lbl">Placeholders in this document</span>
+  <p>Every value shown as <code>example.com</code>, <code>&lt;ANGLE_BRACKETS&gt;</code> or an
+  obvious dummy string is a placeholder. <strong>All credentials, the real hostname and the
+  database passwords are supplied separately</strong> and appear nowhere in this document.</p>
+</div>
+
+<h2>Three settings that are not optional</h2>
+
+<div class="must">
+  <span class="lbl">Read before configuring anything</span>
+  <p><strong><code>OCPP_MIN_SECURITY_PROFILE=2</code></strong> &mdash; the software's own default is
+  <code>0</code>, which means <em>no per-charger authentication at all</em>. At <code>0</code>, any
+  host that can reach the OCPP port can open a session impersonating any charge point and write into
+  billing data. The API key issued to a hardware vendor does not restrict this, because it is a
+  different port and a different mechanism.</p>
+  <p><strong><code>OCPP_TRUST_PROXY_PROTO=true</code></strong> &mdash; TLS terminates at Caddy, and
+  without this the application cannot tell that it did, so it refuses every charger with
+  <code>403</code>. The gateway refuses to <em>start</em> in that combination, so a misconfiguration
+  surfaces immediately rather than during a site visit.</p>
+  <p><strong>The application must run as the <code>plugsure_app</code> database role, never as the
+  database owner.</strong> A superuser bypasses every row-level security policy. The process refuses
+  to start that way under <code>NODE_ENV=production</code>. The migration step creates this role for
+  you &mdash; do not create it by hand.</p>
+</div>
+
+<h2>Prerequisites</h2>
+
+<table>
+<thead><tr><th>Item</th><th>Specification</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td class="k">VM</td><td>Ubuntu 24.04 LTS, 2 vCPU / 4&nbsp;GB RAM, 20&nbsp;GB disk</td><td>PostgreSQL and both application processes on one host. The protocol frame log is verbose &mdash; plan for disk growth.</td></tr>
+<tr><td class="k">Static IP</td><td>Elastic IP or equivalent reserved address</td><td>The address is written into charge point firmware. If it moves, every unit needs a physical site visit.</td></tr>
+<tr><td class="k">DNS</td><td>A hostname you control, e.g. <code>ocpp.example.com</code></td><td>Let's Encrypt requires a real hostname. Charge points reject self-signed certificates.</td></tr>
+<tr><td class="k">Inbound ports</td><td><code>443</code> and <code>80</code> from anywhere; <code>22</code> from the admin network only</td><td>443 for chargers, 80 for the ACME challenge, 22 for administration. <strong>Do not open 9200 or 5432.</strong></td></tr>
+<tr><td class="k">Outbound</td><td>HTTPS to Docker Hub, the Debian/Ubuntu repositories and Let's Encrypt</td><td>The container image is built on the VM. Confirm egress before starting &mdash; a blocked registry stops the build at step 6.</td></tr>
+</tbody>
+</table>
+
+<div class="warn">
+  <span class="lbl">Fix the hostname before any hardware is configured</span>
+  <p>The Central System URL is written into every charge point's firmware. Changing it afterwards
+  means visiting each unit. Confirm the hostname with the project owner before commissioning.</p>
+</div>
+
+<h2 class="pb">Step-by-step deployment</h2>
+<p style="color:#606b78;margin-bottom:10pt">Run these in order. Each step depends on the previous one
+having succeeded.</p>
+
+<div class="step"><div class="n">01</div><div>
+<h3>Install packages</h3>
+<div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo apt-get update
+<span class="p">$</span> sudo apt-get install -y ca-certificates curl postgresql-client-16 \
+    docker.io docker-compose-v2 debian-keyring debian-archive-keyring apt-transport-https
+
+<span class="c"># Caddy, from its own repository</span>
+<span class="p">$</span> curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+    | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+<span class="p">$</span> curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+    | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+<span class="p">$</span> sudo apt-get update &amp;&amp; sudo apt-get install -y caddy</pre></div>
+<div class="expect"><span class="lbl">Confirm</span><pre>$ docker compose version   →  Docker Compose version v2.x
+$ caddy version            →  v2.x</pre></div>
+</div></div>
+
+<div class="step"><div class="n">02</div><div>
+<h3>Point DNS at the VM and verify it</h3>
+<p>One <code>A</code> record, TTL 300:</p>
+<div class="term"><div class="bar">dns zone</div><pre>ocpp.example.com.     A     &lt;RESERVED_IP&gt;     300</pre></div>
+<div class="term"><div class="bar">verify before requesting a certificate</div><pre><span class="p">$</span> dig +short ocpp.example.com
+<span class="p">$</span> curl -sI http://ocpp.example.com/ | head -1</pre></div>
+<div class="expect"><span class="lbl">Expected</span><p><code>dig</code> returns the reserved IP and
+nothing else. If it returns an old address or nothing, wait for propagation before continuing.</p></div>
+<div class="warn"><span class="lbl">Certificate authority rate limit</span>
+<p>Let's Encrypt permits five failed validations per hostname per hour. Discovering a firewall
+problem against the production endpoint locks you out for an hour. Confirm DNS resolves and port 80
+reaches the VM first.</p></div>
+</div></div>
+
+<div class="step"><div class="n">03</div><div>
+<h3>Place the application on the VM</h3>
+<div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo mkdir -p /opt/plugsure &amp;&amp; sudo chown $USER /opt/plugsure
+<span class="p">$</span> cd /opt/plugsure &amp;&amp; unzip ~/plugsure.zip &amp;&amp; cd plugsure
+<span class="p">$</span> npm ci --dry-run</pre></div>
+<div class="expect"><span class="lbl">Expected</span><pre>added N packages ...</pre>
+<p>An <code>ETARGET</code> error means an out-of-date copy of the source. Request a current archive
+rather than working around it.</p></div>
+</div></div>
+
+<div class="step"><div class="n">04</div><div>
+<h3>Create the environment file</h3>
+<p>Generate four secrets. <strong>Record them in the project password manager before continuing.</strong>
+Changing <code>AUDIT_HMAC_KEY</code> later invalidates every audit record already written.</p>
+<div class="term"><div class="bar">generate</div><pre><span class="p">$</span> openssl rand -hex 32   <span class="c"># AUDIT_HMAC_KEY</span>
+<span class="p">$</span> openssl rand -hex 32   <span class="c"># SECRETS_KEY</span>
+<span class="p">$</span> openssl rand -hex 24   <span class="c"># POSTGRES_PASSWORD</span>
+<span class="p">$</span> openssl rand -hex 24   <span class="c"># POSTGRES_APP_PASSWORD</span></pre></div>
+<div class="term"><div class="bar">/opt/plugsure/plugsure/.env</div><pre>NODE_ENV=production
+TZ=Asia/Jakarta
+
+<span class="c"># Database. The application connects as the SECOND role, not the first.</span>
+POSTGRES_PASSWORD=&lt;GENERATED&gt;
+POSTGRES_APP_PASSWORD=&lt;GENERATED&gt;
+
+<span class="c"># No defaults. Startup fails without these.</span>
+AUDIT_HMAC_KEY=&lt;GENERATED&gt;
+SECRETS_KEY=&lt;GENERATED&gt;
+
+<span class="c"># The three mandatory settings from page 1.</span>
+OCPP_MIN_SECURITY_PROFILE=2
+OCPP_TRUST_PROXY_PROTO=true
+OCPP_AUTO_ADOPT=false
+
+<span class="c"># Caddy is on the same host and is the only proxy in front.</span>
+API_TRUSTED_PROXIES=127.0.0.1
+
+<span class="c"># Bind application ports to loopback. Caddy reaches them; the internet does not.</span>
+OCPP_BIND=127.0.0.1
+API_BIND=127.0.0.1</pre></div>
+<div class="term"><div class="bar">restrict permissions</div><pre><span class="p">$</span> chmod 600 .env</pre></div>
+<div class="note"><span class="lbl">Why two database passwords</span>
+<p>Schema migrations require DDL privileges and run as the owner. The gateway and API run as
+<code>plugsure_app</code>, which cannot alter the schema and cannot bypass row-level security. The
+migration step provisions that role from <code>POSTGRES_APP_PASSWORD</code>.</p></div>
+</div></div>
+
+<div class="step"><div class="n">05</div><div>
+<h3>Configure Caddy and obtain the certificate</h3>
+<p>The supplied <code>Caddyfile</code> ships with <code>example.id</code> placeholders. Substitute
+the hostname and contact address you were given:</p>
+<div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+
+<span class="c"># replace BOTH placeholders with the real values supplied to you</span>
+<span class="p">$</span> sudo sed -i 's/ocpp\.example\.id/&lt;OCPP_HOSTNAME&gt;/g' /etc/caddy/Caddyfile
+<span class="p">$</span> sudo sed -i 's/ops@example\.id/&lt;OPS_CONTACT_EMAIL&gt;/'  /etc/caddy/Caddyfile
+<span class="p">$</span> grep -n 'example\.id' /etc/caddy/Caddyfile   <span class="c"># must return nothing</span>
+<span class="p">$</span> sudo caddy validate --config /etc/caddy/Caddyfile
+<span class="p">$</span> sudo systemctl reload caddy
+<span class="p">$</span> sudo journalctl -u caddy -f</pre></div>
+<div class="expect"><span class="lbl">Watch for</span><pre>certificate obtained successfully</pre></div>
+<p>The supplied Caddyfile already handles the two details that matter: it proxies
+<code>/ocpp/*</code> to <code>127.0.0.1:9220</code> without altering the
+<code>Sec-WebSocket-Protocol</code> header, and it <em>assigns</em> <code>X-Forwarded-Proto</code>
+rather than appending to a client-supplied value, so a charge point cannot claim a secure transport
+it is not using. Do not edit those directives.</p>
+<div class="warn"><span class="lbl">Rehearse with the staging endpoint</span>
+<p>Uncomment the <code>acme_ca</code> line in the Caddyfile global block, reload, confirm issuance
+works end to end, then comment it out <strong>and delete the staging certificate</strong>, or Caddy
+continues serving it:</p>
+<div class="term" style="margin:6pt 0 0"><pre><span class="p">$</span> sudo rm -rf /var/lib/caddy/.local/share/caddy/certificates
+<span class="p">$</span> sudo systemctl restart caddy</pre></div>
+</div>
+</div></div>
+
+<div class="step"><div class="n">06</div><div>
+<h3>Start the stack</h3>
+<div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> docker compose build
+<span class="p">$</span> docker compose up -d
+<span class="p">$</span> docker compose ps</pre></div>
+<div class="expect"><span class="lbl">Expected</span><pre>migrate    Exited (0)
+postgres   healthy
+gateway    healthy
+api        healthy</pre></div>
+<p>Start order is enforced by the compose file: <code>postgres</code> healthy &rarr;
+<code>migrate</code> exits 0 &rarr; <code>gateway</code> and <code>api</code>. The applications
+cannot start against an unmigrated database.</p>
+<p><strong>Now verify the two conditions that fail silently.</strong></p>
+<div class="term"><div class="bar">database role</div><pre><span class="p">$</span> docker compose logs api | grep 'row-level security'</pre></div>
+<div class="expect"><span class="lbl">Must report</span><pre>row-level security is in force for application queries</pre>
+<p>Any other result means the application is running as a superuser and tenant isolation has one
+layer of protection instead of two. Stop and correct the database URL.</p></div>
+<div class="term"><div class="bar">gateway security</div><pre><span class="p">$</span> docker compose logs gateway | grep -E 'listening|profile'</pre></div>
+<div class="expect"><span class="lbl">Must show</span><pre>"minSecurityProfile": 2, "tls": "expected at proxy"</pre>
+<p>If the gateway exited instead, the error names which of TLS or
+<code>OCPP_TRUST_PROXY_PROTO</code> is missing. That refusal is intentional: the alternative is a
+gateway that appears healthy while rejecting every charge point.</p></div>
+</div></div>
+
+<div class="step"><div class="n">07</div><div>
+<h3>Initialise data and capture the API key</h3>
+<div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> docker compose run --rm migrate node dist/db/seed.js</pre></div>
+<div class="expect"><span class="lbl">Expected &mdash; record this line</span>
+<pre>API key (shown once):  psk_&lt;prefix&gt;_&lt;secret&gt;</pre>
+<p>The key is displayed once and cannot be retrieved afterwards. Store it in the project password
+manager immediately and hand it to the project owner.</p></div>
+<div class="note"><span class="lbl">Key handling</span>
+<p>This key carries full organisation permissions. Any key issued from it can only ever carry a
+subset of its own permissions, so a delegated key cannot escalate. Issue narrower keys for other
+parties rather than sharing this one.</p></div>
+<p>The operator console is an internal surface. Reach it over an SSH tunnel rather than exposing
+port 9200:</p>
+<div class="term"><div class="bar">from an administrator workstation</div><pre><span class="p">$</span> ssh -N -L 9200:127.0.0.1:9200 ubuntu@&lt;VM_ADDRESS&gt;
+<span class="c"># then browse to http://127.0.0.1:9200/</span></pre></div>
+</div></div>
+
+<div class="step"><div class="n">08</div><div>
+<h3>Register a charge point &mdash; four calls, in this order</h3>
+<p>A production gateway refuses unknown identities and requires credentials, so both must exist
+<em>before</em> the hardware connects. The order matters: setting the security profile before a key
+exists is refused by design.</p>
+<div class="term"><div class="bar">through the ssh tunnel</div><pre><span class="p">$</span> export K=&lt;API_KEY&gt;
+<span class="p">$</span> export API=http://127.0.0.1:9200
+<span class="p">$</span> export ID=&lt;CHARGE_POINT_IDENTITY&gt;   <span class="c"># exactly as the vendor configures it</span>
+
+<span class="c"># 1. register the identity — created in pending_adoption</span>
+<span class="p">$</span> curl -sS -X POST $API/v1/charge-points \
+    -H "Authorization: Bearer $K" -H 'Content-Type: application/json' \
+    -d "{\"ocppIdentity\":\"$ID\",\"siteId\":\"&lt;SITE_UUID&gt;\"}"
+
+<span class="c"># 2. issue the AuthorizationKey — RETURNED ONCE</span>
+<span class="p">$</span> curl -sS -X POST $API/v1/charge-points/$ID/authorization-key \
+    -H "Authorization: Bearer $K"
+
+<span class="c"># 3. set the security profile (PUT, not POST)</span>
+<span class="p">$</span> curl -sS -X PUT $API/v1/charge-points/$ID/security-profile \
+    -H "Authorization: Bearer $K" -H 'Content-Type: application/json' \
+    -d '{"profile":2}'
+
+<span class="c"># 4. activate — this is what permits transactions</span>
+<span class="p">$</span> curl -sS -X POST $API/v1/charge-points/$ID/activate \
+    -H "Authorization: Bearer $K"</pre></div>
+<div class="expect"><span class="lbl">Expected</span><pre>1 → {"ok":true,"status":"pending_adoption","next":[...]}
+2 → {"key":"&lt;RETURNED ONCE&gt;","warning":"This key is shown once..."}
+3 → {"ok":true,"profile":2}
+4 → {"ok":true}</pre></div>
+<p>Obtain <code>siteId</code> from <code>GET /v1/charge-points</code>, or create a site in the
+console first. The response to step 1 lists the remaining steps.</p>
+<div class="warn"><span class="lbl">Configure the charge point before raising the profile</span>
+<p>Set the <code>AuthorizationKey</code> on the hardware first, <em>then</em> perform step 3. The
+reverse order leaves a unit that cannot connect and an engineer on site with no way to proceed.</p></div>
+</div></div>
+
+<div class="step"><div class="n">09</div><div>
+<h3>Validate with the supplied simulator before hardware arrives</h3>
+<p>A virtual charge point ships with the application. Point it at the live gateway and run a
+complete session, so that a real unit is not the first thing to connect.</p>
+<div class="term"><div class="bar">on the VM, or any host with node 22</div><pre><span class="p">$</span> export PLUGSURE_KEY=&lt;API_KEY&gt;
+<span class="p">$</span> npx tsx tools/simulator/autel-sim.ts \
+    --url wss://ocpp.example.com/ocpp \
+    --id &lt;CHARGE_POINT_IDENTITY&gt; --auth-key &lt;AUTHORIZATION_KEY&gt; \
+    --scenario happy</pre></div>
+<div class="expect"><span class="lbl">Expected</span><pre>--- happy: PASS ---</pre>
+<p>The scenario checks, against the API, that the system recorded exactly the energy the simulator
+delivered.</p></div>
+<p>The following scenarios are also worth running and cost nothing:
+<code>offline-replay</code> (store-and-forward after a network drop),
+<code>reconnect-storm</code>, and <code>meter-rollover</code>.</p>
+</div></div>
+
+<h2>Diagnosing a charge point that will not connect</h2>
+<p style="color:#606b78">Every connection attempt is recorded before the WebSocket upgrade completes
+&mdash; source address, requested path, offered subprotocols, transport security, whether credentials
+were presented, and the outcome. This log is the fastest route to a diagnosis.</p>
+
+<div class="term"><div class="bar">read the attempt log</div><pre><span class="p">$</span> curl -sS "$API/v1/connection-attempts?limit=20" -H "Authorization: Bearer $K" | jq</pre></div>
+
+<table>
+<thead><tr><th>Status</th><th>Meaning</th><th>Resolution</th></tr></thead>
+<tbody>
+<tr><td class="st good">101</td><td>Connected successfully</td><td>&mdash;</td></tr>
+<tr><td class="st cau">400</td><td>No supported subprotocol offered</td><td>Set the unit to OCPP 1.6J. Only <code>ocpp1.6</code> is advertised, by design.</td></tr>
+<tr><td class="st sec">401</td><td>Missing or incorrect credentials</td><td>The HTTP Basic username must be the charge point identity byte-for-byte; the password is the AuthorizationKey.</td></tr>
+<tr><td class="st sec">403</td><td>Insecure transport at security profile 2</td><td>The unit is using <code>ws://</code> and must use <code>wss://</code>. If <em>every</em> unit reports this, check <code>OCPP_TRUST_PROXY_PROTO</code>.</td></tr>
+<tr><td class="st cau">404</td><td>Identity not registered</td><td>Perform step 8.1. The identity is case-sensitive and character-exact.</td></tr>
+<tr><td class="st inf">Pending</td><td>Connected and authenticated, not yet activated</td><td>Not a fault. Perform step 8.4.</td></tr>
+</tbody>
+</table>
+
+<h2>Routine operations</h2>
+
+<table>
+<thead><tr><th>Task</th><th>Command</th></tr></thead>
+<tbody>
+<tr><td>Follow gateway logs</td><td class="k">docker compose logs -f gateway</td></tr>
+<tr><td>Warnings and errors only, last 30 min</td><td class="k">docker compose logs --since 30m api | jq -c 'select(.level &gt;= 40)'</td></tr>
+<tr><td>Caddy / TLS logs</td><td class="k">sudo journalctl -u caddy -f</td></tr>
+<tr><td>API health</td><td class="k">curl -s http://127.0.0.1:9200/healthz | jq</td></tr>
+<tr><td>Gateway health and live charger count</td><td class="k">curl -s http://127.0.0.1:9220/healthz | jq</td></tr>
+<tr><td>Restart one service</td><td class="k">docker compose restart gateway</td></tr>
+<tr><td>Database backup</td><td class="k">pg_dump "$DATABASE_URL" -Fc -f /var/backups/plugsure-$(date +%F-%H%M).dump</td></tr>
+<tr><td>Apply an updated build</td><td class="k">docker compose build &amp;&amp; docker compose up -d</td></tr>
+</tbody>
+</table>
+
+<div class="note">
+  <span class="lbl">Two operational notes</span>
+  <p><strong>Take a database backup before every update.</strong> There is no automated backup
+  schedule in this deployment; add one to your own monitoring if the service is contracted to you.</p>
+  <p><strong>Deploy the API and the gateway independently where possible.</strong> They run as
+  separate containers from the same image on purpose, so that updating one does not drop the
+  WebSocket connections held by the other.</p>
+</div>
+
+<h2>Escalation</h2>
+<p>When reporting a problem, include <strong>the charge point identity</strong> and
+<strong>a UTC timestamp</strong>. Incidents are looked up by those two fields, and the frame log can
+then be replayed message by message in both directions.</p>
+
+<div class="foot">
+  PlugSure CSMS &mdash; deployment runbook &middot; contains no credentials &middot;
+  all secrets and the production hostname supplied separately
+</div>
+</body></html>

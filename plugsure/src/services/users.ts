@@ -1,0 +1,279 @@
+import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+import { one, many, query } from '../db/pool.js';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
+import { SYSTEM_ROLES, CONSOLE_ROLES } from './authz.js';
+import { createSession } from './auth.js';
+
+/**
+ * Operator accounts for the console (SPEC Module 10).
+ *
+ * v1.2.1 had users, roles and a session table, and no way to sign in: nothing
+ * called createSession(), the console sent no credentials at all and only worked
+ * with the development auth bypass switched on. This is the missing front door.
+ *
+ * Passwords are scrypt (N=2^15, r=8, p=1), salted per user, compared in constant
+ * time. Repeated failures lock the account for a while; the lock is per account,
+ * and the global per-IP limiter in the API still applies on top.
+ */
+
+const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, keylen: number, opts: object) => Promise<Buffer>;
+
+const N = 1 << 15;
+const R = 8;
+const P = 1;
+const KEYLEN = 32;
+/** scrypt needs 128*N*r bytes; give it headroom above the 32 MiB default cap. */
+const MAXMEM = 128 * N * R * 2;
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  const hash = await scrypt(password, salt, KEYLEN, { N, r: R, p: P, maxmem: MAXMEM });
+  return `scrypt$${N}$${R}$${P}$${salt.toString('base64url')}$${hash.toString('base64url')}`;
+}
+
+export async function verifyPassword(password: string, stored: string | null | undefined): Promise<boolean> {
+  if (!stored) return false;
+  const parts = stored.split('$');
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  const [, n, r, p, saltB64, hashB64] = parts as [string, string, string, string, string, string];
+  const expected = Buffer.from(hashB64, 'base64url');
+  // A corrupt stored hash (bad N/r/p) must fail the login, not 500 it.
+  const got = await scrypt(password, Buffer.from(saltB64, 'base64url'), expected.length, {
+    N: Number(n),
+    r: Number(r),
+    p: Number(p),
+    maxmem: 128 * Number(n) * Number(r) * 2,
+  }).catch(() => null);
+  if (!got) return false;
+  return got.length === expected.length && timingSafeEqual(got, expected);
+}
+
+/** Returns an error message, or null when the password is acceptable. */
+export function passwordProblem(pw: unknown): string | null {
+  if (typeof pw !== 'string') return 'password is required';
+  const min = config.console.passwordMinLength;
+  if (pw.length < min) return `password must be at least ${min} characters`;
+  if (pw.length > 256) return 'password is too long';
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((re) => re.test(pw)).length;
+  if (classes < 3) return 'password must mix at least three of: lower case, upper case, digits, symbols';
+  return null;
+}
+
+/** A readable one-time password for invitations and resets. */
+export function generateTemporaryPassword(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const bytes = randomBytes(14);
+  let out = '';
+  for (const b of bytes) out += alphabet[b % alphabet.length];
+  return `${out.slice(0, 5)}-${out.slice(5, 10)}-${out.slice(10)}!7`;
+}
+
+export interface LoginResult {
+  ok: boolean;
+  token?: string;
+  error?: string;
+  mustChangePassword?: boolean;
+  user?: { id: string; name: string; email: string; orgId: string };
+}
+
+// A dummy hash so an unknown email costs the same scrypt work as a known one —
+// otherwise response time reveals which addresses have accounts.
+let dummyHash: string | null = null;
+
+/**
+ * verifyPassword with the same scrypt work every time: an account with no password yet (an
+ * invitation not accepted) is checked against the dummy hash, and still never matches.
+ */
+async function checkPassword(pw: string, stored: string | null): Promise<boolean> {
+  dummyHash ??= await hashPassword(randomBytes(12).toString('hex'));
+  if (!stored) { await verifyPassword(pw, dummyHash); return false; }
+  return verifyPassword(pw, stored);
+}
+
+export async function login(emailRaw: unknown, password: unknown, ip?: string): Promise<LoginResult> {
+  const email = String(emailRaw ?? '').trim().toLowerCase();
+  const pw = String(password ?? '');
+  // ONE answer for every failure: unknown address, wrong password, locked account. A distinct
+  // "locked" message confirmed the address had an account. It names the pause, so a person who
+  // really is locked out knows to wait.
+  const generic = {
+    ok: false,
+    error: `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`,
+  };
+  if (!email || !pw) return generic;
+
+  const u = await one<{
+    id: string;
+    org_id: string;
+    name: string;
+    email: string;
+    status: string;
+    password_hash: string | null;
+    failed_logins: number;
+    locked_until: Date | null;
+    must_change_password: boolean;
+  }>(
+    `SELECT id, org_id, name, email, status, password_hash, failed_logins, locked_until, must_change_password
+       FROM app_user WHERE lower(email) = $1`,
+    [email],
+  );
+
+  if (!u) {
+    await checkPassword(pw, null);
+    return generic;
+  }
+  if (u.locked_until && new Date(u.locked_until) > new Date()) {
+    // The same password work as any other attempt: an instant answer would reveal the lock
+    // (and so the account) by timing alone. The password is not accepted, even if right.
+    await checkPassword(pw, u.password_hash);
+    return generic;
+  }
+  const good = await checkPassword(pw, u.password_hash);
+  if (!good || u.status !== 'active') {
+    const failures = u.failed_logins + 1;
+    const lock = failures >= config.console.loginMaxFailures;
+    await query(
+      `UPDATE app_user
+          SET failed_logins = $2,
+              locked_until = CASE WHEN $3 THEN now() + ($4 || ' minutes')::interval ELSE locked_until END
+        WHERE id = $1`,
+      [u.id, lock ? 0 : failures, lock, config.console.loginLockMinutes],
+    );
+    if (lock) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
+    return generic;
+  }
+
+  await query(`UPDATE app_user SET failed_logins = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [u.id]);
+  const token = await createSession(u.id);
+  return {
+    ok: true,
+    token,
+    mustChangePassword: u.must_change_password,
+    user: { id: u.id, name: u.name, email: u.email, orgId: u.org_id },
+  };
+}
+
+export async function changePassword(userId: string, current: unknown, next: unknown): Promise<string | null> {
+  const u = await one<{ password_hash: string | null }>(`SELECT password_hash FROM app_user WHERE id = $1`, [userId]);
+  if (!u) return 'user not found';
+  if (!(await verifyPassword(String(current ?? ''), u.password_hash))) return 'current password is incorrect';
+  const problem = passwordProblem(next);
+  if (problem) return problem;
+  await query(`UPDATE app_user SET password_hash = $2, must_change_password = false WHERE id = $1`, [
+    userId,
+    await hashPassword(String(next)),
+  ]);
+  return null;
+}
+
+/** Make sure every system role exists with the permissions this build defines. */
+export async function ensureSystemRoles(): Promise<void> {
+  for (const [name, perms] of Object.entries(SYSTEM_ROLES)) {
+    const existing = await one<{ id: string }>(`SELECT id FROM role WHERE org_id IS NULL AND name = $1`, [name]);
+    if (existing) {
+      await query(`UPDATE role SET permissions = $2 WHERE id = $1`, [existing.id, perms]);
+    } else {
+      await query(`INSERT INTO role (org_id, name, permissions) VALUES (NULL, $1, $2)`, [name, perms]);
+    }
+  }
+}
+
+export async function listUsers(orgId: string) {
+  return many(
+    `SELECT u.id, u.name, u.email, u.phone_display AS phone, u.status, u.created_at, u.last_login_at,
+            (u.locked_until IS NOT NULL AND u.locked_until > now()) AS locked,
+            (u.password_hash IS NOT NULL) AS has_password, u.must_change_password,
+            COALESCE(json_agg(json_build_object(
+              'role', r.name, 'scopeType', ur.scope_type, 'scopeId', ur.scope_id, 'siteName', s.name, 'ownerName', so.name, 'fleetName', fa.name
+            )) FILTER (WHERE r.id IS NOT NULL), '[]') AS roles
+       FROM app_user u
+       LEFT JOIN user_role ur ON ur.user_id = u.id
+       LEFT JOIN role r ON r.id = ur.role_id
+       LEFT JOIN site s ON ur.scope_type = 'site' AND s.id = ur.scope_id
+       LEFT JOIN site_owner so ON ur.scope_type = 'owner' AND so.id = ur.scope_id
+       LEFT JOIN fleet_account fa ON ur.scope_type = 'fleet' AND fa.id = ur.scope_id
+      WHERE u.org_id = $1
+      GROUP BY u.id
+      ORDER BY u.name`,
+    [orgId],
+  );
+}
+
+export interface UserInput {
+  name: string;
+  email: string;
+  phone?: string | null;
+  role: string;
+  siteIds?: string[];
+  /** For owner-scoped roles (Site Owner portal). */
+  ownerId?: string | null;
+  /** For fleet-scoped roles (fleet customer portal). */
+  fleetAccountId?: string | null;
+}
+
+export function validRole(role: string): boolean {
+  return CONSOLE_ROLES.some((r) => r.name === role);
+}
+
+/** Replace a user's role grants with exactly one console role (optionally site- or owner-scoped). */
+export async function setUserRole(userId: string, orgId: string, role: string, siteIds: string[] = [], ownerId: string | null = null, fleetAccountId: string | null = null) {
+  const r = await one<{ id: string }>(`SELECT id FROM role WHERE org_id IS NULL AND name = $1`, [role]);
+  if (!r) throw new Error(`role ${role} is not provisioned`);
+  await query(`DELETE FROM user_role WHERE user_id = $1`, [userId]);
+  const def = CONSOLE_ROLES.find((x) => x.name === role);
+  const siteScoped = def?.siteScoped;
+  if (def?.fleetScoped) {
+    if (!fleetAccountId) throw new Error('a fleet-scoped role needs a fleet account');
+    await query(`INSERT INTO user_role (user_id, role_id, scope_type, scope_id) VALUES ($1,$2,'fleet',$3)`, [userId, r.id, fleetAccountId]);
+  } else if (def?.ownerScoped) {
+    if (!ownerId) throw new Error('an owner-scoped role needs an owner');
+    await query(`INSERT INTO user_role (user_id, role_id, scope_type, scope_id) VALUES ($1,$2,'owner',$3)`, [userId, r.id, ownerId]);
+  } else if (siteScoped) {
+    for (const siteId of siteIds) {
+      await query(`INSERT INTO user_role (user_id, role_id, scope_type, scope_id) VALUES ($1,$2,'site',$3)`, [
+        userId,
+        r.id,
+        siteId,
+      ]);
+    }
+  } else {
+    await query(`INSERT INTO user_role (user_id, role_id, scope_type, scope_id) VALUES ($1,$2,'org',$3)`, [
+      userId,
+      r.id,
+      orgId,
+    ]);
+  }
+}
+
+export async function createUser(orgId: string, input: UserInput): Promise<{ id: string; temporaryPassword: string }> {
+  const temporaryPassword = generateTemporaryPassword();
+  const row = await one<{ id: string }>(
+    `INSERT INTO app_user (org_id, email, name, phone_display, status, password_hash, must_change_password)
+     VALUES ($1, lower($2), $3, $4, 'active', $5, true)
+     RETURNING id`,
+    [orgId, input.email.trim(), input.name.trim(), input.phone ?? null, await hashPassword(temporaryPassword)],
+  );
+  await setUserRole(row!.id, orgId, input.role, input.siteIds ?? [], input.ownerId ?? null, input.fleetAccountId ?? null);
+  return { id: row!.id, temporaryPassword };
+}
+
+export async function resetPassword(userId: string): Promise<string> {
+  const temporaryPassword = generateTemporaryPassword();
+  await query(
+    `UPDATE app_user SET password_hash = $2, must_change_password = true, failed_logins = 0, locked_until = NULL
+      WHERE id = $1`,
+    [userId, await hashPassword(temporaryPassword)],
+  );
+  // Every existing session for the account ends with the old password.
+  await query(`UPDATE auth_session SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+  return temporaryPassword;
+}
+
+export async function setUserStatus(userId: string, status: 'active' | 'disabled') {
+  await query(`UPDATE app_user SET status = $2 WHERE id = $1`, [userId, status]);
+  if (status === 'disabled') {
+    await query(`UPDATE auth_session SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+  }
+}

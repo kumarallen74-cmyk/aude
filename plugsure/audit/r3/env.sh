@@ -1,0 +1,15 @@
+export API=http://127.0.0.1:9700
+export OCPPPORT=9720
+export PGURL="postgresql://postgres:plugsure@127.0.0.1:5432/plugsure_r3s"
+export A_KEY='psk_fcbcb3cbb2ad_k_HtgNTgjwHUUFNOrCjwJ4sNpimvSGfc4uNCprQCZC8'
+export B_KEY='psk_4b7bbac076f5_mNSmEDMsScD45mZigbxwo6hQLnALxRCkxEec11pDvUI'
+export ORG_A=21c84a03-d418-4063-9df9-84f7d21f26ae
+export ORG_B=8b32b3d1-77d3-43f8-82d7-a2010b203e15
+export SITE_A=c94816b5-638d-4744-8a15-c2b04d31f7b8
+export SITE_B=6c6418cd-f9d0-4c78-87b5-a061a3878ed9
+export CP_A=AUTEL-AC22-SMB-001
+export CP_B=RIVAL-DC180-XYZ-001
+export CPID_B=9b224680-218d-4d62-a5cd-a8a2cf6e825b
+export SESSION_B=e9d32b61-bec7-4eb8-8764-df35e6188ee7
+export AH="Authorization: Bearer $A_KEY"
+export BH="Authorization: Bearer $B_KEY"

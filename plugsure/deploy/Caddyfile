@@ -1,0 +1,418 @@
+# PlugSure — TLS edge for the single-VM Jakarta deployment.
+#
+#   Chargers ──wss://ocpp.example.id:443/ocpp/<CP-IDENTITY>──▶ Caddy ──ws──▶ gateway:9220
+#   Operators ──https://console.example.id──▶ Caddy (IP allow-list) ──▶ api:9200
+#   Chargers  ──https://ocpp.example.id/fw/*, /diag/*──▶ api:9200 (FOTA + log upload)
+#   Partners  ──https://ocpi.example.id/ocpi/*──▶ api:9200 (roaming, token-authenticated)
+#   Integrators ──https://api.example.id/v1/*──▶ api:9200 (API keys only; optional)
+#
+# Install:  /etc/caddy/Caddyfile   then  systemctl reload caddy
+# Validate: caddy validate --config /etc/caddy/Caddyfile
+#
+# `caddy validate` prints "Unnecessary header_up X-Forwarded-*: the reverse
+# proxy's default behavior is to pass headers to the upstream" for this file.
+# That warning is expected and must NOT be "fixed" by deleting those lines: the
+# default is to PASS THROUGH (and, for X-Forwarded-For, to append to) whatever
+# the client sent, which is precisely the spoofing hole we are closing. The
+# explicit header_up lines below ASSIGN observed values over anything a charger
+# claims. Verified: a request carrying `X-Forwarded-Proto: https` over a plain
+# HTTP connection arrives upstream as `x-forwarded-proto: http`.
+#
+# Replace ocpp.example.id with the real hostname before use. That hostname is
+# what goes into the charger's CentralSystem URL, so it must be final before the
+# hardware vendor commissions anything — changing it means re-flashing config on
+# every unit in the field.
+{
+	# ACME account contact. Let's Encrypt mails expiry warnings here.
+	email ops@example.id
+
+	# ---------------------------------------------------------------- ACME staging
+	# Uncomment BOTH lines below while testing DNS/firewall/renewal. The staging CA
+	# has effectively no rate limits; the production CA allows only 5 failed
+	# validations per account/hostname/hour, and burning them means no certificate
+	# on integration day. Certificates issued by staging are NOT trusted by
+	# chargers — expect TLS errors from the charge point until you switch back.
+	# Remember to `rm -rf /var/lib/caddy/.local/share/caddy/certificates` after
+	# switching back to production, or Caddy keeps serving the staging cert.
+	#
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+
+	# Structured access logs to journald-friendly stdout; per-site logs below.
+	log {
+		output stderr
+		format json
+		level INFO
+	}
+
+	# White-label driver apps: a certificate is issued on first use for an
+	# operator's own web address (Commercial → Driver app), and only after the
+	# API confirms the name belongs to a driver app. Without this sk, anyone
+	# pointing a domain here could make Caddy request certificates for it.
+	on_demand_tls {
+		ask http://127.0.0.1:9200/d/tls-ask
+	}
+
+	# NOTE on trusted proxies: this Caddy IS the internet edge — nothing sits in
+	# front of it — so no client-supplied X-Forwarded-* header may ever be
+	# believed. Caddy's default is to trust NO proxy, which is exactly right here;
+	# adding a `servers { trusted_proxies ... }` block would only weaken it. If an
+	# ALB or CloudFront is ever put in front, add trusted_proxies naming that
+	# proxy's ranges — and only that proxy's.
+}
+
+# =============================================================================
+# OCPP endpoint — the ONLY thing exposed to the internet.
+# =============================================================================
+ocpp.example.id {
+	# ---------------------------------------------------------------- Security Profile 3
+	# Chargers on Profile 3 present a client certificate issued by PlugSure's
+	# charging-station CA. Download it from the console (Operate → Onboarding →
+	# Certificate authority) to /etc/caddy/plugsure-charger-ca.pem, then uncomment.
+	# "verify_if_given": Profile 1/2 chargers present no certificate and still connect;
+	# a certificate that IS presented must chain to the CA. The gateway then checks
+	# the fingerprint against the one bound to that charger.
+	#
+	# tls {
+	# 	client_auth {
+	# 		mode verify_if_given
+	# 		trusted_ca_cert_file /etc/caddy/plugsure-charger-ca.pem
+	# 	}
+	# }
+
+	log {
+		output file /var/log/caddy/ocpp-access.log {
+			roll_size 50MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	# The charge point identity is the FINAL PATH SEGMENT and the gateway parses
+	# it out of req.url (see extractIdentity() in src/ocpp/server.ts). It must
+	# arrive byte-for-byte as the charger sent it.
+	#
+	# Therefore: match with `handle` + a path matcher, NEVER with `handle_path`
+	# (which strips the matched prefix), and never add `uri strip_prefix`,
+	# `rewrite`, or a redirect. A stripped prefix turns
+	#   /ocpp/AUTEL-AC22-SMB-001  into  /AUTEL-AC22-SMB-001
+	# which still "works" by luck, and
+	#   /ocpp/  into  /  which returns 404 "charge point id missing from path".
+	@ocpp path /ocpp/*
+	handle @ocpp {
+		reverse_proxy 127.0.0.1:9220 {
+			# --- WebSocket upgrade -------------------------------------------------
+			# Connection, Upgrade, Sec-WebSocket-Key/-Version/-Protocol and
+			# Authorization all reach the gateway UNMODIFIED, and there is
+			# deliberately no `header_up` line for any of them. Why:
+			#
+			#  * Connection / Upgrade are hop-by-hop. Caddy detects the upgrade,
+			#    hijacks the connection and re-emits both headers on the upstream
+			#    request itself. Overriding them by hand breaks the hijack.
+			#
+			#  * Sec-WebSocket-Protocol carries the OCPP version list, and the
+			#    gateway echoes back exactly ONE value (ocpp2.1 / ocpp2.0.1 /
+			#    ocpp1.6). Caddy forwards it verbatim. Do NOT "make it explicit"
+			#    with `header_up Sec-WebSocket-Protocol {http.request.header.
+			#    Sec-Websocket-Protocol}`: when a charger omits the header — which
+			#    some older 1.6 units do, and which negotiate() in
+			#    src/ocpp/server.ts explicitly tolerates by defaulting to ocpp1.6 —
+			#    that line injects an EMPTY header, and `ws` rejects an empty
+			#    subprotocol list with 400 before the gateway ever sees it. That
+			#    turns a supported charger into an unexplainable handshake failure.
+			#
+			#  * Authorization carries the HTTP Basic AuthorizationKey that
+			#    checkAuth() verifies for security profiles 1 and 2. Caddy passes it
+			#    through; strip it and every charger gets 401.
+			#
+			# The rule for this block: only ASSIGN headers whose value the edge must
+			# dictate (below). Never restate a header whose value the client owns.
+
+			# --- Truthful, unspoofable forwarding metadata -------------------------
+			# The app refuses security profile 2 over plaintext, and it decides that
+			# from X-Forwarded-Proto. These are assignments, not appends: whatever the
+			# client sent under these names is DISCARDED and replaced with what this
+			# server actually observed. A charger (or an attacker) cannot claim TLS.
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Real-IP {http.request.remote.host}
+			# Security Profile 3: the fingerprint of the client certificate THIS server
+			# verified — an assignment, like the lines above. Without it a charger could
+			# send its own X-Client-Cert-Fingerprint header naming another charger's
+			# certificate, and the gateway (OCPP_TRUST_PROXY_PROTO=true) would believe it.
+			# Empty when no certificate was presented. Keep this line even while no
+			# charger uses Profile 3.
+			header_up X-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
+			# Drop the legacy aliases entirely so nothing downstream reads a forged one.
+			header_up -X-Forwarded-Ssl
+			header_up -X-Forwarded-Scheme
+			header_up -Forwarded
+
+			transport http {
+				# OCPP_HEARTBEAT_S defaults to 300. A well-behaved charger may send
+				# nothing at all between heartbeats, so any read timeout at or below
+				# 300s guarantees the edge kills healthy sockets every few minutes —
+				# which looks exactly like flaky hardware and wastes days of
+				# integration time. 900s is 3 missed heartbeats.
+				read_timeout 900s
+				write_timeout 900s
+				dial_timeout 10s
+				# Keep idle upstream connections alive longer than the heartbeat too.
+				keepalive 900s
+				keepalive_idle_conns 512
+				# No HTTP/2 to the upstream: WebSocket upgrade is HTTP/1.1 only.
+				versions h1
+			}
+
+			# Stream frames immediately instead of buffering. Without this, OCPP
+			# CALLRESULTs can sit in a buffer and the charger times out the call.
+			flush_interval -1
+		}
+	}
+
+	# v1.3 — the two HTTP endpoints CHARGERS call (they cannot log in, so the
+	# capability is the unguessable token in the path; nothing is listable):
+	#   /fw/<token>/<file>  firmware download for UpdateFirmware (FOTA campaigns)
+	#   /diag/<token>[/f]   built-in receiver for GetDiagnostics / GetLog uploads
+	# Set PUBLIC_BASE_URL to this hostname (https://ocpp.example.id) so the URLs
+	# the CSMS hands to chargers point here.
+	@charger_http path /fw/* /diag/*
+	handle @charger_http {
+		request_body {
+			max_size 512MB
+		}
+		reverse_proxy 127.0.0.1:9200 {
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-For {http.request.remote.host}
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+		}
+	}
+
+	# v1.3 — callbacks from providers on the internet. Small bodies only.
+	#   /pay/notify/<key>       payment notifications from the QRIS acquirer
+	#                           (Midtrans, Xendit, a bank's SNAP); one URL per account,
+	#                           shown in Govern → Integrations, verified with its secret
+	#   /hooks/whatsapp/<key>   WhatsApp delivery statuses for alerts (Meta webhook);
+	#                           shown in Alert routing → WhatsApp → Edit settings,
+	#                           signed with the Meta app secret
+	@payments path /pay/* /hooks/*
+	handle @payments {
+		request_body {
+			max_size 256KB
+		}
+		reverse_proxy 127.0.0.1:9200 {
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-For {http.request.remote.host}
+		}
+	}
+
+	# Anything else on this hostname is not part of the OCPP contract. Answer
+	# tersely rather than leaking the console or an error page to the internet.
+	handle {
+		respond "PlugSure OCPP endpoint. Connect to /ocpp/<chargePointIdentity>." 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}
+
+# =============================================================================
+# Roaming (OCPI 2.2.1) — called by roaming partners (eMSPs, hubs) from the internet
+# =============================================================================
+#
+# Only /ocpi/* is served here. Every call must carry the partner's credentials
+# token (`Authorization: Token …`); without one the API answers 401, and a
+# partner sees only its own drivers' sessions and records. Partners' own IP
+# ranges are rarely fixed or published, so there is no allow-list; the API's
+# per-IP rate limit applies. Set OCPI_PUBLIC_URL=https://ocpi.example.id on the
+# API so the versions URL handed to partners points here.
+ocpi.example.id {
+	@ocpi path /ocpi/*
+	handle @ocpi {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy 127.0.0.1:9200 {
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up -X-Forwarded-Ssl
+			transport http {
+				read_timeout 60s
+				dial_timeout 5s
+			}
+		}
+	}
+	handle {
+		respond "PlugSure OCPI endpoint. Start at /ocpi/versions with your credentials token." 404
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	log {
+		output file /var/log/caddy/ocpi-access.log
+		format json
+	}
+}
+
+# =============================================================================
+# Operator console + REST API (v1.3: password sign-in, RBAC, audited)
+# =============================================================================
+#
+# Since v1.3 the console has real authentication: operators sign in with an
+# email + password (scrypt, lockout after repeated failures), the session is an
+# HttpOnly SameSite=Strict cookie, every write needs a CSRF header, and every
+# role is least-privilege (see Users & Roles). It may therefore be published —
+# on its OWN hostname, separate from the OCPP endpoint so that a console-side
+# mistake can never take the charger endpoint down — and still behind an office
+# / VPN IP allow-list, because an admin console should not be internet-wide.
+#
+# Replace console.example.id and the allow-listed range before use. Remove the
+# block entirely to keep the v1.2 posture (SSH tunnel to 127.0.0.1:9200 only).
+#
+# Portal users (site owners, fleet customers) sign in here from outside your
+# office. If you use a portal, serve the console to them too: a second hostname
+# with this same block minus the allow-list, or their addresses added below.
+console.example.id {
+	@notoffice not remote_ip 203.0.113.0/24 10.0.0.0/8
+	respond @notoffice "forbidden" 403
+
+	# The driver app (/app, /d/*) is public by design; if it shares this host,
+	# exempt it from the allow-list above with its own matcher.
+
+	request_body {
+		# firmware uploads stream through here
+		max_size 512MB
+	}
+	reverse_proxy 127.0.0.1:9200 {
+		header_up X-Forwarded-Proto {http.request.scheme}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-For {http.request.remote.host}
+		header_up -X-Forwarded-Ssl
+		transport http {
+			read_timeout 15m
+			dial_timeout 5s
+		}
+		# the live stream (SSE) must not be buffered
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# "?" = only when the API has not set it: the API sends DENY everywhere
+		# except the driver app, which the console frames for its live preview
+		# (Commercial → Driver app) and which is sent as SAMEORIGIN.
+		?X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/console-access.log
+		format json
+	}
+}
+
+# =============================================================================
+# Integration API (optional) — /v1 for your own systems and integrators' sandboxes
+# =============================================================================
+#
+# Machines call the REST API with API keys (`Authorization: Bearer psk_…`), and
+# integrators build against sandbox keys. Serve that on its own hostname so the
+# console can stay behind the office allow-list:
+#   - /v1/*            the API, bearer keys only (the console sign-in routes and
+#                      the cookie session are NOT served here)
+#   - /openapi.json    the published OpenAPI 3.1 document
+#   - /api-docs.html   the API reference
+# Keep an allow-list if your integrators have fixed addresses; otherwise the
+# API's per-IP rate limit applies. Remove the block to keep /v1 console-only.
+api.example.id {
+	@signin path /v1/auth/*
+	respond @signin "not served on this host" 404
+	@cookie header Cookie *
+	request_header @cookie -Cookie
+
+	@api path /v1/* /openapi.json /api-docs.html
+	handle @api {
+		reverse_proxy 127.0.0.1:9200 {
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up -X-Forwarded-Ssl
+			# the live event streams (SSE) must not be buffered
+			flush_interval -1
+		}
+	}
+	handle {
+		respond "not found" 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/api-access.log
+		format json
+	}
+}
+
+# Loopback listener so `curl -I http://127.0.0.1:8080/healthz` works on the box.
+http://127.0.0.1:8080 {
+	reverse_proxy 127.0.0.1:9200 {
+		header_up X-Forwarded-Proto {http.request.scheme}
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
+}
+
+# =============================================================================
+# White-label driver apps — each operator's own web address (e.g. app.operator.co.id)
+# =============================================================================
+#
+# An operator points its address at this server (DNS CNAME to the console or
+# driver hostname) and sets it in Commercial → Driver app. The certificate is
+# issued on first request (on_demand_tls above, which asks the API). Only the
+# driver app, its API and the store association files are served here; the API
+# picks the brand from the Host header, which reverse_proxy passes through.
+# This block must stay LAST: it catches every HTTPS name not matched above.
+https:// {
+	tls {
+		on_demand
+	}
+	@root path /
+	redir @root /app/ 302
+
+	@driver path /app /app/* /d/* /.well-known/assetlinks.json /.well-known/apple-app-site-association
+	handle @driver {
+		reverse_proxy 127.0.0.1:9200 {
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Ssl
+		}
+	}
+	respond 404
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	log {
+		output file /var/log/caddy/driver-apps-access.log
+		format json
+	}
+}

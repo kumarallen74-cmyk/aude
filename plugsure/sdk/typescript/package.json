@@ -1,0 +1,18 @@
+{
+  "name": "@plugsure/csms-sdk",
+  "version": "1.3.0",
+  "description": "TypeScript client for the PlugSure CSMS operator API, generated from its OpenAPI document. No dependencies.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=18" },
+  "sideEffects": false
+}

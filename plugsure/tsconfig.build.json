@@ -1,0 +1,28 @@
+{
+  // Production build config. `tsconfig.json` is the editor/typecheck config and
+  // keeps `noEmit: true`; this one is the only place that emits JavaScript.
+  //
+  // rootDir is pinned to `src` so the emitted layout is `dist/apps/gateway.js`,
+  // `dist/api/server.js`, `dist/db/migrate.js` — i.e. dist mirrors src exactly.
+  // That matters for two runtime path lookups that must keep working:
+  //   * src/api/server.ts   -> join(here, '../web')          => dist/web
+  //   * src/db/migrate.ts   -> join(here, '../../db/migrations') => <app>/db/migrations
+  // See the Dockerfile: it copies src/web -> dist/web and keeps db/migrations
+  // next to dist so both resolve.
+  //
+  // `tools/` (the charger simulator) and `*.test.ts` are deliberately excluded —
+  // they are dev-only and would drag test fixtures into the production image.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true,
+    "removeComments": false,
+    "incremental": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "node_modules", "dist"]
+}

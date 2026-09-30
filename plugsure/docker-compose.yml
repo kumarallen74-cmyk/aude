@@ -1,0 +1,260 @@
+# PlugSure CSMS — local development and single-VM deployment.
+#
+#   cp .env.example .env      # then edit; see deploy/README.md for production values
+#   docker compose up -d      # postgres -> migrate -> gateway + api
+#   docker compose logs -f gateway
+#
+# Boot order is enforced, not hoped for:
+#   postgres (healthy) -> migrate (exits 0) -> gateway, api
+# The apps never start against an unmigrated database.
+#
+# Host port bindings are overridable so this stack can run alongside another one:
+#   PG_HOST_PORT=55432 OCPP_HOST_PORT=9330 API_HOST_PORT=9331 docker compose up -d
+name: plugsure
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: plugsure:${PLUGSURE_TAG:-local}
+  env_file:
+    # Not required, so `docker compose up` still works on a box that only sets
+    # variables in the shell environment. Every value it can supply also has a
+    # default below or in src/config.ts.
+    - path: .env
+      required: false
+  environment:
+    NODE_ENV: production
+    # Inside the compose network the database is reachable by service name.
+    # This overrides whatever DATABASE_URL is in .env (which points at a host DB
+    # for the no-Docker path). The `migrate` service overrides it back to the
+    # owner, because migrations issue DDL that the runtime role must not have.
+    DATABASE_URL: postgresql://${POSTGRES_APP_USER:-plugsure_app}:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-plugsure}
+    POSTGRES_APP_USER: ${POSTGRES_APP_USER:-plugsure_app}
+    POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
+    POSTGRES_DB: ${POSTGRES_DB:-plugsure}
+    TZ: ${TZ:-Asia/Jakarta}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  # Container logs are JSON lines on stdout (pino). Rotate them so a chatty
+  # charger cannot fill the VM's disk. This is the local half of log shipping;
+  # see deploy/README.md for forwarding to CloudWatch.
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+      tag: "{{.Name}}"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      # Required, no default: a known superuser password would let anything that reaches the
+      # database log in as superuser, which bypasses row-level security (tenant isolation).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-plugsure}
+      # Deterministic collation regardless of host locale — collation drift
+      # between environments silently changes index ordering.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      TZ: ${TZ:-Asia/Jakarta}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound to loopback ONLY. Postgres is never internet-reachable.
+      - "127.0.0.1:${PG_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-plugsure}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # Runs once per `up`, before the apps. Exits 0 when the schema is current.
+  # Uses the COMPILED migrator, not `npm run migrate`: the npm script is
+  # `tsx src/db/migrate.ts`, and tsx is a devDependency that is deliberately
+  # absent from the production image. dist/db/migrate.js is the same code and
+  # is equally idempotent (it tracks applied files in schema_migration).
+  # Migrations run as the OWNER (the postgres superuser). They issue DDL and
+  # create the runtime role; the application services below deliberately do not.
+  migrate:
+    <<: *app-common
+    environment:
+      # Migrations need DDL, so they run as the owner.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-plugsure}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-plugsure_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-plugsure}
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Jakarta}
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?set AUDIT_HMAC_KEY in .env — openssl rand -hex 32}
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env — openssl rand -hex 32}
+    # migrate.js also provisions the runtime role's password when
+    # POSTGRES_APP_PASSWORD is set, which is what makes the app services below
+    # able to connect as a non-superuser.
+    command: ["node", "dist/db/migrate.js"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  # OCPP WebSocket gateway. This is the process chargers connect to.
+  # Deployed separately from the API on purpose: an API deploy must never drop
+  # live charger sockets.
+  gateway:
+    <<: *app-common
+    command: ["node", "dist/apps/gateway.js"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # NOT the superuser. assertRlsPosture() refuses to start in production as a
+      # role that bypasses row-level security, so pointing the app services at
+      # POSTGRES_USER meant the container path could never come up at all.
+      DATABASE_URL: postgresql://${POSTGRES_APP_USER:-plugsure_app}:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-plugsure}
+      TZ: ${TZ:-Asia/Jakarta}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # No defaults: the process exits at boot without these. `:?` makes compose
+      # say so up front instead of leaving a container in a restart loop.
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?set AUDIT_HMAC_KEY in .env — openssl rand -hex 32}
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env — openssl rand -hex 32}
+
+      OCPP_PORT: "9220"
+      # v1.3 bridge: the API reaches chargers through this gateway. Same token on both.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env — openssl rand -hex 32}
+      EVENT_RELAY: "true"
+      # Load management, compliance sweep and FOTA scheduler run where the sockets are.
+      RUN_WORKERS: "true"
+      # Minutes a charger may be offline before a critical alert (and webhook).
+      OFFLINE_ALERT_MINUTES: ${OFFLINE_ALERT_MINUTES:-15}
+      # Alert e-mails and WhatsApp messages are sent from here. The link in them
+      # points at the console; the WhatsApp/SMTP settings themselves are in the console.
+      CONSOLE_PUBLIC_URL: ${CONSOLE_PUBLIC_URL:-${PUBLIC_BASE_URL:-}}
+      ALERT_TIMEZONE: ${ALERT_TIMEZONE:-Asia/Jakarta}
+      ALERT_NOTIFY_MAX_PER_15MIN: ${ALERT_NOTIFY_MAX_PER_15MIN:-20}
+      # Roaming: CDRs and live updates to partners are sent from here, and a
+      # charger's Authorize asks the partner in real time when it must.
+      OCPI_PUBLIC_URL: ${OCPI_PUBLIC_URL:-${PUBLIC_BASE_URL:-}}
+      OCPI_PBJT_IN_EXCL_VAT: ${OCPI_PBJT_IN_EXCL_VAT:-true}
+      OCPI_REALTIME_AUTH_TIMEOUT_MS: ${OCPI_REALTIME_AUTH_TIMEOUT_MS:-5000}
+      # Driver app: push notifications are sent and reservations swept from here.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@plugsure.id}
+      PUSH_ALLOWED_HOSTS: ${PUSH_ALLOWED_HOSTS:-fcm.googleapis.com,push.services.mozilla.com,web.push.apple.com,notify.windows.com}
+      DRIVER_RESERVATIONS: ${DRIVER_RESERVATIONS:-true}
+      DRIVER_RESERVATION_MINUTES: ${DRIVER_RESERVATION_MINUTES:-15}
+      DRIVER_RESERVATION_NO_SHOW_LIMIT: ${DRIVER_RESERVATION_NO_SHOW_LIMIT:-2}
+      # The gateway serves a real /healthz that queries the database. Health-checking
+      # on the 426 from the upgrade listener only proved the event loop was alive.
+      # That IS the healthy response — see the HEALTHCHECK note in the Dockerfile.
+      HEALTHCHECK_URL: http://127.0.0.1:9220/healthz
+      HEALTHCHECK_OK_STATUS: "200"
+    ports:
+      # Caddy terminates TLS on 443 and proxies here. Bind to loopback when Caddy
+      # runs on the same VM; use 0.0.0.0 only for a bench test with no TLS.
+      - "${OCPP_BIND:-127.0.0.1}:${OCPP_HOST_PORT:-9220}:9220"
+    # A charger disconnect storm is expensive: give the gateway time to drain
+    # (terminate sockets, close the pg pool) before SIGKILL.
+    stop_grace_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+        reservations:
+          memory: 256m
+
+  # Fastify API + operator console.
+  # Operator console (password sign-in, RBAC) + REST API. Publish it only on its own
+  # hostname behind Caddy with an IP allow-list — see deploy/Caddyfile.
+  api:
+    <<: *app-common
+    command: ["node", "dist/apps/api.js"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # NOT the superuser. assertRlsPosture() refuses to start in production as a
+      # role that bypasses row-level security, so pointing the app services at
+      # POSTGRES_USER meant the container path could never come up at all.
+      DATABASE_URL: postgresql://${POSTGRES_APP_USER:-plugsure_app}:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-plugsure}
+      TZ: ${TZ:-Asia/Jakarta}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # No defaults: the process exits at boot without these. `:?` makes compose
+      # say so up front instead of leaving a container in a restart loop.
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?set AUDIT_HMAC_KEY in .env — openssl rand -hex 32}
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env — openssl rand -hex 32}
+
+      API_PORT: "9200"
+      GATEWAY_INTERNAL_URL: http://gateway:9220
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env — openssl rand -hex 32}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      OCPP_PUBLIC_URL: ${OCPP_PUBLIC_URL:-}
+      STORAGE_DIR: /var/lib/plugsure
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      # Platform commission and fee statements (computed in the API).
+      BILLING_ISSUER_NAME: ${BILLING_ISSUER_NAME:-PT. RailSure Solutions Indonesia (PlugSure)}
+      BILLING_ISSUER_NPWP: ${BILLING_ISSUER_NPWP:-}
+      BILLING_TIMEZONE: ${BILLING_TIMEZONE:-Asia/Jakarta}
+      # Roaming (OCPI): the public origin partners call (see the ocpi.* block in deploy/Caddyfile).
+      OCPI_PUBLIC_URL: ${OCPI_PUBLIC_URL:-${PUBLIC_BASE_URL:-}}
+      OCPI_PBJT_IN_EXCL_VAT: ${OCPI_PBJT_IN_EXCL_VAT:-true}
+      # Driver app: station map tiles (the CSP follows the host), the push key
+      # published to phones, and connector reservations.
+      MAP_TILE_URL: ${MAP_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+      MAP_ATTRIBUTION: ${MAP_ATTRIBUTION:-© OpenStreetMap contributors}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@plugsure.id}
+      PUSH_ALLOWED_HOSTS: ${PUSH_ALLOWED_HOSTS:-fcm.googleapis.com,push.services.mozilla.com,web.push.apple.com,notify.windows.com}
+      DRIVER_RESERVATIONS: ${DRIVER_RESERVATIONS:-true}
+      DRIVER_RESERVATION_MINUTES: ${DRIVER_RESERVATION_MINUTES:-15}
+      DRIVER_RESERVATION_NO_SHOW_LIMIT: ${DRIVER_RESERVATION_NO_SHOW_LIMIT:-2}
+      API_HOST: "0.0.0.0"
+      HEALTHCHECK_URL: http://127.0.0.1:9200/healthz
+      HEALTHCHECK_OK_STATUS: "200"
+    volumes:
+      # Uploaded firmware images and retrieved charger diagnostic logs.
+      - plugsure-storage:/var/lib/plugsure
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_HOST_PORT:-9200}:9200"
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+        reservations:
+          memory: 256m
+
+volumes:
+  pgdata:
+    name: plugsure-pgdata
+  plugsure-storage:
+    name: plugsure-storage

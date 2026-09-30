@@ -1,0 +1,370 @@
+/**
+ * Payment provider abstraction.
+ *
+ * The tiered model this interface exists to serve:
+ *
+ *   Tier 1  registered driver   e-wallet TOKENISATION  — link once, charge the exact
+ *                               final amount server-side after the session. No hold,
+ *                               no float, no e-money licence. The primary path.
+ *   Tier 2  premium / fleet     card PRE-AUTH then capture (7-day hold, capture <= auth).
+ *   Tier 3  walk-up guest       QRIS PRE-PURCHASE. QRIS has no pre-authorisation and
+ *                               never will — so invert the problem: the driver buys a
+ *                               fixed rupiah amount and the charger delivers exactly
+ *                               that much energy. This is what PLN already does at
+ *                               SPKLU, so it matches driver expectations.
+ *   Tier 4  B2B fleet           postpaid against a fixed virtual account.
+ *
+ * Two things this interface deliberately does NOT support:
+ *   - a stored-balance driver wallet (open-loop e-money licensing exposure that the
+ *     multi-tenant model makes worse — legal advice required before it is built)
+ *   - charge-max-then-refund on QRIS (bad UX that only postpones the same problem)
+ */
+
+export type PaymentMethod = 'qris' | 'ewallet_token' | 'card' | 'va';
+export type PaymentMode = 'prepurchase' | 'tokenized' | 'preauth' | 'postpaid';
+
+export interface CreateQrisChargeArgs {
+  referenceId: string;
+  amountIdr: number;
+  expiresInS?: number;
+  description?: string;
+}
+
+export interface QrisCharge {
+  providerRef: string;
+  /** EMVCo payload string to render as a QR at the charger or in the browser. */
+  qrString: string;
+  amountIdr: number;
+  expiresAt: string;
+  status: 'pending' | 'paid' | 'expired' | 'failed';
+}
+
+export interface TokenizedChargeArgs {
+  referenceId: string;
+  /** Payment method id returned when the driver linked their wallet, once, at signup. */
+  paymentMethodId: string;
+  amountIdr: number;
+  description?: string;
+}
+
+export interface PreauthArgs {
+  referenceId: string;
+  cardTokenId: string;
+  /** Conservative worst-case amount. Capture may be lower, never higher. */
+  amountIdr: number;
+}
+
+export interface CaptureArgs {
+  providerRef: string;
+  amountIdr: number;
+}
+
+export interface PaymentResult {
+  providerRef: string;
+  status: 'pending' | 'authorised' | 'captured' | 'failed' | 'expired';
+  amountIdr: number;
+  raw?: unknown;
+}
+
+/**
+ * How a driver pays. QRIS: a QR code any bank or e-wallet app scans. The
+ * e-wallets: their own app (deeplink / redirect), or — OVO — a push to the
+ * driver's OVO app for their phone number. CARD: the acquirer's hosted card
+ * page with 3-D Secure; card numbers never reach PlugSure.
+ */
+export type Channel = 'QRIS' | 'GOPAY' | 'SHOPEEPAY' | 'OVO' | 'DANA' | 'LINKAJA' | 'CARD';
+export const CHANNELS: Channel[] = ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD'];
+export const CHANNEL_LABEL: Record<Channel, string> = {
+  QRIS: 'QRIS', GOPAY: 'GoPay', SHOPEEPAY: 'ShopeePay', OVO: 'OVO', DANA: 'DANA', LINKAJA: 'LinkAja', CARD: 'Kartu kredit / debit',
+};
+export const methodOf = (c: Channel): 'qris' | 'ewallet' | 'card' => (c === 'QRIS' ? 'qris' : c === 'CARD' ? 'card' : 'ewallet');
+
+export interface CheckoutArgs {
+  referenceId: string;
+  amountIdr: number;
+  channel: Exclude<Channel, 'QRIS'>;
+  /** Where the acquirer sends the driver back after paying (the app's return page). */
+  returnUrl: string;
+  description?: string;
+  expiresInS?: number;
+  /** E.164; OVO charges are pushed to this number's OVO app. */
+  customerPhone?: string;
+  /** CARD: authorise only (a hold); the amount is captured later, up to this. */
+  preauth?: boolean;
+  /** CARD: the acquirer keeps the card and returns a token (in the notification) for later payments. */
+  saveCard?: boolean;
+  /** The acquirer's customer reference (PlugSure's driver id; nothing personal). Needed to save a card. */
+  customerId?: string;
+}
+
+/** A saved card as the acquirer reports it: its token and what may be shown. Never the card number. */
+export interface SavedCardInfo {
+  token: string;
+  brand: string | null;
+  last4: string | null;
+  expMonth?: number | null;
+  expYear?: number | null;
+  tokenExpiresAt?: string | null;
+}
+
+export interface SavedCardChargeArgs {
+  referenceId: string;
+  amountIdr: number;
+  /** The acquirer's token for the card. */
+  token: string;
+  preauth: boolean;
+  returnUrl: string;
+  customerId: string;
+  description?: string;
+}
+
+export interface SavedCardCharge {
+  providerRef: string;
+  providerPaymentId?: string;
+  /** authorised / captured: done, no driver action; pending: 3-D Secure at checkoutUrl; failed: declined. */
+  status: 'authorised' | 'captured' | 'pending' | 'failed';
+  checkoutUrl: string | null;
+  expiresAt: string;
+  message?: string;
+  /** Failed because the e-wallet link, or the saved card's token, has ended at the acquirer (unlinked, deleted or expired): link or save again. */
+  linkEnded?: boolean;
+}
+
+/**
+ * The linked e-wallet's link was ended at the acquirer: the driver unlinked it in
+ * the e-wallet app, or it expired. Nothing can be charged to it; link again.
+ */
+export class WalletLinkEnded extends Error {
+  constructor(public readonly acquirerStatus: string) { super(`the e-wallet link is ${acquirerStatus.toLowerCase()} at the acquirer`); }
+}
+
+export interface HoldArgs {
+  providerRef: string;
+  providerPaymentId?: string | null;
+  amountIdr: number;
+  idempotencyKey: string;
+}
+
+export interface HoldResult {
+  ok: boolean;
+  /** The acquirer's message when not ok (kept for the retry and the console). */
+  error?: string;
+  /** The authorisation expired at the acquirer: nothing can be captured, and nothing is held any more. */
+  expired?: boolean;
+  raw?: unknown;
+}
+
+export interface Checkout {
+  providerRef: string;
+  /** 'redirect': open checkoutUrl (the e-wallet app or the card page); 'push': the driver approves in their app. */
+  action: 'redirect' | 'push';
+  checkoutUrl: string | null;
+  expiresAt: string;
+  providerPaymentId?: string;
+}
+
+export interface RefundArgs {
+  /** The acquirer's own id of the payment, for refund APIs that need it. */
+  providerPaymentId?: string | null;
+  channel?: string | null;
+  providerRef: string;
+  amountIdr: number;
+  reason: string;
+  /** Stable per refund, so a retried call cannot pay the driver twice. */
+  idempotencyKey: string;
+}
+
+export interface RefundResult {
+  status: 'refunded' | 'pending' | 'failed';
+  refundRef: string;
+  raw?: unknown;
+}
+
+export interface PaymentProvider {
+  readonly name: string;
+  /**
+   * The sandbox only: its notifications carry no amount (no real money moves). Every real
+   * acquirer's paid or authorised notification MUST state the amount, or it is not recorded
+   * (registry.handleNotification). A new provider is held to that unless it opts out here.
+   */
+  readonly unverifiedAmounts?: boolean;
+  createQrisCharge(a: CreateQrisChargeArgs): Promise<QrisCharge>;
+  chargeTokenized(a: TokenizedChargeArgs): Promise<PaymentResult>;
+  authorizeCard(a: PreauthArgs): Promise<PaymentResult>;
+  captureCard(a: CaptureArgs): Promise<PaymentResult>;
+  /**
+   * Pay money back to the original payer. Optional: not every QRIS acquirer
+   * exposes a refund API. Without it, refunds are made by bank transfer and
+   * recorded manually with the transfer reference (see services/refunds.ts).
+   */
+  refund?(a: RefundArgs): Promise<RefundResult>;
+  /**
+   * Verify a webhook signature. NON-NEGOTIABLE on every Indonesian rail — never
+   * trust an unsigned JSON payload, and pair this with idempotency keys because
+   * replayed events are routine.
+   */
+  verifyWebhook(rawBody: string, headers: Record<string, string | string[] | undefined>): boolean;
+  /**
+   * A payment notification, verified: null when the signature (or token) does
+   * not check out or the body is not a payment notification. `path` is the
+   * path the provider called (SNAP signs it).
+   */
+  parseNotification?(rawBody: string, headers: Record<string, string | string[] | undefined>, path: string): PaymentNotification | null;
+  /**
+   * A linked e-wallet's status change the acquirer notifies (activated, ended, linking failed), verified like a payment
+   * notification: null when it does not check out or is not such an event. linkRef is the link's id at the acquirer.
+   */
+  parseLinkEvent?(rawBody: string, headers: Record<string, string | string[] | undefined>): { linkRef: string; status: 'active' | 'ended' | 'failed'; event: string } | null;
+  /** The body and status to answer a notification with (some providers expect a specific reply). */
+  notificationAck?(ok: boolean): { status: number; body: unknown };
+  /** Check the credentials against the provider without moving money. */
+  testConnection?(): Promise<{ ok: boolean; message: string }>;
+  /** A test double: payments are confirmed with the demo button. */
+  readonly demo?: boolean;
+  /** The payment channels this acquirer offers (the operator chooses which to enable). */
+  channels?(): Channel[];
+  /** An e-wallet or card payment: the driver completes it in the e-wallet app or on the hosted card page. */
+  createCheckout?(a: CheckoutArgs): Promise<Checkout>;
+  /** Whether refund() can pay back a payment made through this channel (otherwise: bank transfer). */
+  canRefund?(channel: string | null): boolean;
+  /** Card holds and saved cards: what this acquirer adapter supports. */
+  cardFeatures?(): { holds: boolean; savedCards: boolean };
+  /** Pay with a saved card (its token), as a hold or a sale. May need 3-D Secure (checkoutUrl). */
+  chargeSavedCard?(a: SavedCardChargeArgs): Promise<SavedCardCharge>;
+  /** Capture a hold, up to the authorised amount; the rest is released. */
+  captureHold?(a: HoldArgs): Promise<HoldResult>;
+  /** Release a hold entirely (nothing is taken). */
+  releaseHold?(a: Omit<HoldArgs, 'amountIdr'>): Promise<HoldResult>;
+  /** Forget a saved card at the acquirer, where it offers that. */
+  deleteSavedCard?(token: string, customerId: string): Promise<void>;
+  /** The e-wallets this acquirer can link for one-tap payments. */
+  linkableWallets?(): Channel[];
+  /** Start linking an e-wallet: the driver approves in the e-wallet app (activationUrl). */
+  linkWallet?(a: WalletLinkArgs): Promise<WalletLink>;
+  /** Where a link stands (polled after the driver comes back). */
+  walletStatus?(linkRef: string, channel: Channel): Promise<WalletLinkStatus>;
+  /** Charge a linked e-wallet: usually at once; some need the e-wallet PIN (checkoutUrl). */
+  chargeWallet?(a: WalletChargeArgs): Promise<SavedCardCharge>;
+  /** Unlink at the acquirer. */
+  unlinkWallet?(linkRef: string, channel: Channel): Promise<void>;
+  /** The linked e-wallet's balance, where the acquirer reports it (null: unknown). Throws WalletLinkEnded when the link has ended. */
+  walletBalance?(token: string, channel: Channel): Promise<number | null>;
+}
+
+export interface WalletLinkArgs {
+  channel: Channel;
+  /** The acquirer's customer reference (PlugSure's driver id). */
+  customerId: string;
+  /** E.164, the e-wallet account's phone number. */
+  phone: string;
+  returnUrl: string;
+}
+
+export interface WalletLink {
+  linkRef: string;
+  status: 'pending' | 'active' | 'failed';
+  activationUrl: string | null;
+  /** Once active: the token to charge with (opaque; sealed by the caller). */
+  token?: string;
+}
+
+export interface WalletLinkStatus {
+  status: 'pending' | 'active' | 'failed';
+  token?: string;
+  message?: string;
+}
+
+export interface WalletChargeArgs {
+  referenceId: string;
+  amountIdr: number;
+  channel: Channel;
+  token: string;
+  returnUrl: string;
+  customerId: string;
+  description?: string;
+}
+
+/** A phone number as the e-wallet account shows it to its owner: ••••7890. */
+export const maskAccount = (phone: string | null | undefined): string | null => {
+  const d = String(phone ?? '').replace(/\D/g, '');
+  return d.length >= 4 ? `••••${d.slice(-4)}` : null;
+};
+
+export interface PaymentNotification {
+  /** The reference PlugSure stored on the payment (payment_intent.provider_ref). */
+  providerRef: string;
+  paid: boolean;
+  /** The provider's status word, for the log. */
+  status: string;
+  amountIdr: number | null;
+  /** The provider's own id of the payment (needed by some refund APIs). */
+  paymentId?: string;
+  /** A card hold was authorised (the money is reserved, not yet taken). */
+  authorised?: boolean;
+  /** The card was saved at the acquirer (the driver asked): its token. */
+  savedCard?: SavedCardInfo;
+}
+
+/** Card brand from the first digits of a masked card number (e.g. "481111-1114"). */
+export function cardBrand(masked: string | null | undefined): string | null {
+  const d = String(masked ?? '').replace(/\D/g, '');
+  if (!d) return null;
+  if (d.startsWith('4')) return 'VISA';
+  if (/^(5[1-5]|2[2-7])/.test(d)) return 'MASTERCARD';
+  if (/^3[47]/.test(d)) return 'AMEX';
+  if (/^35/.test(d)) return 'JCB';
+  if (/^(60|65|62)/.test(d)) return 'GPN';
+  return null;
+}
+export const last4Of = (masked: string | null | undefined): string | null => {
+  const d = String(masked ?? '').replace(/\D/g, '');
+  return d.length >= 4 ? d.slice(-4) : null;
+};
+
+/** fetch with a timeout and a readable error. */
+export async function providerFetch(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<{ status: number; body: any; text: string }> {
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(init.timeoutMs ?? 15_000) });
+  } catch (e) {
+    throw new Error(`cannot reach ${new URL(url).host}: ${(e as Error).message}`);
+  }
+  const text = await res.text();
+  let body: any = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  return { status: res.status, body, text };
+}
+
+/**
+ * Merchant discount rate estimator.
+ *
+ * From 1 October 2026 Bank Indonesia extends 0% MDR to ALL merchant categories
+ * for transactions <= Rp 100,000. At ~Rp 2,466/kWh a 40 kWh session is ~Rp 99,000,
+ * so a large share of Indonesian charging volume lands in the free band.
+ *
+ * Price the QRIS pre-purchase tiers at or below Rp 100,000 deliberately.
+ *
+ * Note: surcharging is prohibited — MDR may not be passed to the consumer as a
+ * line item. Build it into the kWh tariff instead.
+ */
+export function estimateQrisMdrIdr(
+  amountIdr: number,
+  opts: { category?: 'UMI' | 'UKE' | 'UME' | 'UBE' | 'SPBU'; onOrAfterOct2026?: boolean } = {},
+): number {
+  const category = opts.category ?? 'UKE';
+  const zeroBandActive = opts.onOrAfterOct2026 ?? new Date() >= new Date('2026-10-01T00:00:00+07:00');
+
+  if (category === 'UMI') {
+    return amountIdr <= 500_000 ? 0 : Math.round(amountIdr * 0.003);
+  }
+  if (zeroBandActive && amountIdr <= 100_000) return 0;
+
+  // VERIFY with the PJP whether EV charging is assigned the SPBU category (0.4%)
+  // or standard (0.7%). Globally EV charging has its own MCC 5552. The 0.3%
+  // delta is material at scale.
+  const rate = category === 'SPBU' ? 0.004 : 0.007;
+  return Math.round(amountIdr * rate);
+}
+
+/** Per-transaction QRIS ceiling, PADG 3/2025. Not Rp 20M — that figure is from a superseded 2022 announcement. */
+export const QRIS_MAX_TRANSACTION_IDR = 10_000_000;

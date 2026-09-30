@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PlugSure CSMS v1.3.0 — Deployment Guide</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 18mm; }
+  :root { --brand:#1b4d8c; --accent:#0d7d5a; --ink:#111827; --muted:#5b6470; --line:#dfe3e8; --warn:#9a5b06; --warnbg:#fdf3dc; --crit:#b42318; --critbg:#fde8e6; --okbg:#e5f4ee; }
+  * { box-sizing: border-box; }
+  body { font: 10.5pt/1.5 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; color: var(--ink); margin: 0; }
+  .cover { height: 250mm; display: flex; flex-direction: column; justify-content: space-between; padding: 10mm 4mm; page-break-after: always; }
+  .cover .logo { display:flex; align-items:center; gap:12px; }
+  .cover .logo svg { width: 46px; height: 46px; }
+  .cover h1 { font-size: 30pt; line-height: 1.15; margin: 0 0 8px; color: var(--brand); letter-spacing: -.02em; }
+  .cover .sub { font-size: 13pt; color: var(--muted); }
+  .cover table { border-collapse: collapse; font-size: 10pt; }
+  .cover td { padding: 4px 16px 4px 0; vertical-align: top; }
+  .cover td:first-child { color: var(--muted); }
+  h1 { font-size: 17pt; color: var(--brand); margin: 0 0 8px; letter-spacing: -.01em; page-break-after: avoid; }
+  h2 { font-size: 13.5pt; color: var(--brand); margin: 20px 0 6px; padding-top: 4px; border-top: 2px solid var(--brand); page-break-after: avoid; }
+  h3 { font-size: 11pt; margin: 14px 0 4px; page-break-after: avoid; }
+  p { margin: 5px 0 8px; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 9pt; background: #f2f4f7; padding: 0 3px; border-radius: 3px; }
+  pre { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.6pt; line-height: 1.45; background: #0f1720; color: #e3e8ee; padding: 9px 11px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; page-break-inside: avoid; margin: 6px 0 10px; }
+  pre .c { color: #8fa3b8; }
+  table.t { width: 100%; border-collapse: collapse; margin: 6px 0 12px; font-size: 9.3pt; page-break-inside: auto; }
+  table.t th { background: #eef2f7; text-align: left; padding: 5px 7px; border: 1px solid var(--line); font-weight: 600; }
+  table.t td { padding: 5px 7px; border: 1px solid var(--line); vertical-align: top; }
+  table.t tr { page-break-inside: avoid; }
+  .note, .warn, .crit, .ok { padding: 7px 10px; border-radius: 6px; margin: 8px 0 10px; font-size: 9.6pt; page-break-inside: avoid; }
+  .note { background: #eaf1fb; border-left: 4px solid var(--brand); }
+  .warn { background: var(--warnbg); border-left: 4px solid var(--warn); }
+  .crit { background: var(--critbg); border-left: 4px solid var(--crit); }
+  .ok { background: var(--okbg); border-left: 4px solid var(--accent); }
+  ol, ul { margin: 4px 0 8px; padding-left: 20px; }
+  li { margin: 2px 0; }
+  .toc ol { columns: 2; column-gap: 28px; }
+  .check li { list-style: none; margin-left: -18px; }
+  .check li::before { content: "☐  "; }
+  .arch { font-family: Consolas, monospace; font-size: 8.8pt; background: #f6f8fa; border: 1px solid var(--line); padding: 10px; border-radius: 6px; white-space: pre; line-height: 1.35; }
+  .pb { page-break-before: always; }
+  .small { font-size: 9pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="logo"><svg viewBox="0 0 120 120"><rect width="120" height="120" rx="28" fill="#1b4d8c"/><rect x="40" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><rect x="70" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><path d="M32 68 56 92 92 46" stroke="#2fd6a7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+    <b style="font-size:18pt">PlugSure CSMS</b></div>
+  <div>
+    <h1>Deployment Guide<br>Version 1.3.0</h1>
+    <div class="sub">Enterprise Operator Console — installation, configuration, first charger, upgrade and operations</div>
+  </div>
+  <table>
+    <tr><td>Package</td><td><code>plugsure-v1.3.0.zip</code></td></tr>
+    <tr><td>Implements</td><td>SPEC-UI-CSMS-2026-FINAL (Modules 1–10)</td></tr>
+    <tr><td>Stack</td><td>Node.js 22 · PostgreSQL 16 · Caddy 2 · OCPP 1.6-J, 2.0.1 &amp; 2.1</td></tr>
+    <tr><td>Verified</td><td>Re-run on PostgreSQL 16 on 29 September 2026, after the running-cost and security fixes: typecheck clean · 571/571 unit tests · 96/96 console + 50/50 driver-app + 147/147 field-conditions + 17/17 Live Activities + 22/22 integrations + 21/21 e-wallet &amp; card payments + 38/38 card holds &amp; saved cards + 19/19 linked e-wallets + 40/40 post-pay + 24/24 promotions &amp; memberships + 21/21 bidirectional charging end-to-end checks. From the 27–28 September runs (PostgreSQL 18), not re-run since: 46/46 map, push &amp; reservations + 19/19 driver queue + 12/12 reservation fees + 74/74, 60/60 and 36/36 roaming + 38/38 API &amp; sandbox + 23/23 SDK &amp; rate limits + 20/20 signed meter values + 17/17 sandbox OCPP 2.x + 28/28 white-label driver apps + 20/20 iOS notifications + 53/53 fleet billing + 37/37 Plug &amp; Charge + 19/19 onboarding.</td></tr>
+    <tr><td>Date</td><td>29 September 2026</td></tr>
+    <tr><td>Audience</td><td>Deployment engineers and the platform operations team</td></tr>
+  </table>
+</section>
+
+<h1>Contents</h1>
+<div class="toc"><ol>
+  <li>Overview</li><li>Architecture</li><li>Prerequisites</li><li>Prepare the configuration</li>
+  <li>Install — Path A: Docker Compose</li><li>Install — Path B: systemd (no Docker)</li>
+  <li>Caddy, DNS and firewall</li><li>Create the first administrator</li><li>Verify the installation</li>
+  <li>Commission the first charger</li><li>Upgrading from v1.2.1</li><li>Operations</li>
+  <li>Troubleshooting</li><li>Go-live checklist</li><li>Configuration reference</li>
+</ol></div>
+
+<h2>1. Overview</h2>
+<p>PlugSure is deployed as two Node.js processes built from the same package, plus PostgreSQL and a Caddy TLS edge:</p>
+<table class="t">
+  <tr><th>Component</th><th>Port</th><th>Role</th></tr>
+  <tr><td><b>OCPP gateway</b> (<code>dist/apps/gateway.js</code>)</td><td>9220</td><td>Charger WebSockets (OCPP 1.6-J / 2.0.1). Also runs the background workers: load-management control loop, compliance sweep, session reconciliation, firmware (FOTA) scheduler.</td></tr>
+  <tr><td><b>API + operator console</b> (<code>dist/apps/api.js</code>)</td><td>9200</td><td>REST API, the web console at <code>/</code>, the driver app at <code>/app</code>, and the charger-facing firmware download (<code>/fw/*</code>) and log upload (<code>/diag/*</code>) endpoints.</td></tr>
+  <tr><td><b>PostgreSQL 16</b></td><td>5432</td><td>All data. Loopback only.</td></tr>
+  <tr><td><b>Caddy 2</b></td><td>443</td><td>TLS for chargers and operators; the only internet-facing component.</td></tr>
+</table>
+<p>The API reaches chargers <b>through the gateway</b> (the "bridge"): commands over an authenticated internal HTTP call, liveness mirrored every few seconds, live events relayed through PostgreSQL <code>NOTIFY</code>. Both processes must share the same <code>INTERNAL_API_TOKEN</code>.</p>
+<div class="note">A single-process mode (<code>dist/apps/all-in-one.js</code>) exists for development and very small sites. This guide covers the recommended two-process production layout.</div>
+
+<h2>2. Architecture</h2>
+<div class="arch">  Chargers ──wss://ocpp.example.co.id/ocpp/&lt;ID&gt;──┐
+  Chargers ──https://ocpp.example.co.id/fw/*, /diag/*┤                 ┌──────────── server (one VM) ─────────────┐
+                                                  ├──▶  Caddy :443 ──┤  /ocpp/*        ──▶ gateway :9220 ─┐      │
+  Operators ──https://console.example.co.id──────┘   (TLS, IP        │  /fw /diag /    ──▶ api     :9200 ─┤      │
+  Drivers   ──https://…/app  (driver PWA)             allow-list)    │         api ──internal token──▶ gateway │
+                                                                    │  both ──▶ PostgreSQL :5432 (loopback)  │
+                                                                    └───────────────────────────────────────────┘</div>
+
+<h2>3. Prerequisites</h2>
+<table class="t">
+  <tr><th>Item</th><th>Requirement</th></tr>
+  <tr><td>Server</td><td>Ubuntu 22.04 / 24.04 LTS (or equivalent), 2 vCPU, 4 GB RAM, 40 GB SSD minimum; 4 vCPU / 8 GB for more than ~300 chargers. Timezone <code>Asia/Jakarta</code>.</td></tr>
+  <tr><td>Path A</td><td>Docker Engine 24+ and the Docker Compose plugin.</td></tr>
+  <tr><td>Path B</td><td>Node.js 22 LTS, PostgreSQL 16, build tools (<code>build-essential</code>).</td></tr>
+  <tr><td>Both</td><td>Caddy 2.7+, <code>openssl</code>, <code>jq</code> (for log reading).</td></tr>
+  <tr><td>DNS</td><td>Two hostnames pointing at the server: one for chargers (e.g. <code>ocpp.example.co.id</code>) and one for the console (e.g. <code>console.example.co.id</code>).</td></tr>
+  <tr><td>Network</td><td>Inbound TCP 443 (and 80 for certificate issuance). Nothing else inbound. Outbound 443 for Let's Encrypt and, if used, the OpenStreetMap tiles in the operators' browsers.</td></tr>
+  <tr><td>Optional</td><td>HashiCorp Vault with a PKI engine, for Security Profile 3 client certificates. Not needed: PlugSure's own charging-station CA issues them.</td></tr>
+</table>
+<div class="crit"><b>Decide the charger hostname before any charger is configured.</b> It is written into every charger's Central System URL; changing it later means reconfiguring every unit in the field.</div>
+
+<h2 class="pb">4. Prepare the configuration</h2>
+<h3>4.1 Generate secrets</h3>
+<p>Run once, store the values in your password manager, and never commit them:</p>
+<pre>openssl rand -hex 32   <span class="c"># AUDIT_HMAC_KEY      — keys the tamper-evident audit log</span>
+openssl rand -hex 32   <span class="c"># SECRETS_KEY         — encrypts provider credentials at rest</span>
+openssl rand -hex 32   <span class="c"># INTERNAL_API_TOKEN  — API ↔ gateway bridge (same value on both)</span>
+openssl rand -base64 24 <span class="c"># POSTGRES_APP_PASSWORD — runtime DB role plugsure_app</span>
+openssl rand -base64 24 <span class="c"># owner DB password (POSTGRES_PASSWORD on Path A, plugsure role on Path B)</span></pre>
+<div class="warn"><b>AUDIT_HMAC_KEY cannot be changed casually.</b> Rotating it makes every existing audit entry fail verification. Export and re-anchor the audit log first.</div>
+
+<h3>4.2 Production values</h3>
+<table class="t">
+  <tr><th>Variable</th><th>Production value</th><th>Why</th></tr>
+  <tr><td><code>NODE_ENV</code></td><td><code>production</code></td><td>Enables every production safety check.</td></tr>
+  <tr><td><code>OCPP_MIN_SECURITY_PROFILE</code></td><td><code>2</code></td><td>Chargers must use TLS + a per-unit key (or Profile 3 mTLS).</td></tr>
+  <tr><td><code>OCPP_TRUST_PROXY_PROTO</code></td><td><code>true</code></td><td>TLS terminates at Caddy; the gateway learns it from Caddy's header.</td></tr>
+  <tr><td><code>OCPP_AUTO_ADOPT</code></td><td><code>false</code></td><td>Unknown chargers wait for an operator instead of enrolling themselves.</td></tr>
+  <tr><td><code>OCPP_VERSIONS</code></td><td><code>ocpp1.6,ocpp2.0.1</code></td><td>Dual stack. Use <code>ocpp1.6</code> alone until 2.0.1 hardware is certified. Add <code>ocpp2.1</code> for OCPP 2.1 stations (bidirectional charging).</td></tr>
+  <tr><td><code>PUBLIC_BASE_URL</code></td><td><code>https://ocpp.example.co.id</code></td><td>Firmware download and log-upload URLs handed to chargers.</td></tr>
+  <tr><td><code>OCPP_PUBLIC_URL</code></td><td><code>wss://ocpp.example.co.id/ocpp</code></td><td>Printed on commissioning exports and QR codes.</td></tr>
+  <tr><td><code>INTERNAL_API_TOKEN</code></td><td>(secret)</td><td>Required. Without it the console cannot reach chargers.</td></tr>
+  <tr><td><code>API_TRUSTED_PROXIES</code></td><td>Path A: <code>172.16.0.0/12</code><br>Path B: <code>127.0.0.1</code></td><td>Lets the API see the real client IP and HTTPS scheme behind Caddy (rate limiting, audit IPs, Secure cookie).</td></tr>
+  <tr><td><code>TZ</code></td><td><code>Asia/Jakarta</code></td><td>Billing and ToU (WBP/LWBP) boundaries.</td></tr>
+</table>
+<p>The full list is in section 15.</p>
+
+<h2>5. Install — Path A: Docker Compose (recommended)</h2>
+<ol>
+  <li>Copy and extract the package:
+<pre>sudo mkdir -p /opt &amp;&amp; cd /opt
+sudo unzip ~/plugsure-v1.3.0.zip        <span class="c"># creates /opt/plugsure</span>
+cd /opt/plugsure
+sudo cp .env.example .env &amp;&amp; sudo chmod 600 .env</pre></li>
+  <li>Edit <code>/opt/plugsure/.env</code> and set at least:
+<pre>NODE_ENV=production
+TZ=Asia/Jakarta
+POSTGRES_PASSWORD=&lt;owner password&gt;
+POSTGRES_APP_PASSWORD=&lt;runtime password&gt;
+AUDIT_HMAC_KEY=&lt;hex&gt;
+SECRETS_KEY=&lt;hex&gt;
+INTERNAL_API_TOKEN=&lt;hex&gt;
+OCPP_MIN_SECURITY_PROFILE=2
+OCPP_TRUST_PROXY_PROTO=true
+OCPP_AUTO_ADOPT=false
+OCPP_VERSIONS=ocpp1.6,ocpp2.0.1
+PUBLIC_BASE_URL=https://ocpp.example.co.id
+OCPP_PUBLIC_URL=wss://ocpp.example.co.id/ocpp
+API_TRUSTED_PROXIES=172.16.0.0/12</pre>
+  The compose file already sets <code>GATEWAY_INTERNAL_URL=http://gateway:9220</code>, <code>EVENT_RELAY=true</code> and the storage volume.</li>
+  <li>Build and start (PostgreSQL → migrations → gateway + API, in that order):
+<pre>sudo docker compose build
+sudo docker compose up -d
+sudo docker compose ps                  <span class="c"># migrate: exited (0); postgres, gateway, api: healthy</span>
+sudo docker compose logs --tail=50 api  <span class="c"># expect "API bridge engaged" and "API + console listening"</span>
+sudo docker compose logs --tail=50 gateway <span class="c"># expect "OCPP gateway listening", "background workers started"</span></pre></li>
+</ol>
+<div class="note">Persistent data lives in two named volumes: <code>plugsure-pgdata</code> (database) and <code>plugsure-storage</code> (firmware images, charger logs). Back both up (section 12).</div>
+
+<h2 class="pb">6. Install — Path B: systemd (no Docker)</h2>
+<ol>
+  <li>Create the service user and install the code:
+<pre>sudo useradd --system --home /opt/plugsure --shell /usr/sbin/nologin plugsure
+sudo mkdir -p /opt &amp;&amp; cd /opt &amp;&amp; sudo unzip ~/plugsure-v1.3.0.zip
+cd /opt/plugsure
+sudo npm ci
+sudo npm run build
+sudo cp -R src/web dist/web &amp;&amp; sudo cp -R src/driver-web dist/driver-web   <span class="c"># REQUIRED: the console is served from dist/web</span>
+sudo chown -R plugsure:plugsure /opt/plugsure
+sudo mkdir -p /var/lib/plugsure/storage &amp;&amp; sudo chown -R plugsure:plugsure /var/lib/plugsure</pre></li>
+  <li>Create the database. The owner role needs <code>CREATEROLE</code> (the migrations create the restricted runtime role <code>plugsure_app</code>); it must <b>not</b> be a superuser:
+<pre>sudo -u postgres createuser plugsure --createrole --pwprompt
+sudo -u postgres createdb plugsure -O plugsure</pre>
+  <div class="warn"><b>Server that already has a <code>plugsure_app</code> role</b> (shared cluster, rebuild, or an earlier install): PostgreSQL 16+ only lets the owner alter a role it administers. Grant that once, or migration 006 fails with <i>permission denied to alter role</i>:
+<pre>sudo -u postgres psql -c "GRANT plugsure_app TO plugsure WITH ADMIN OPTION;"</pre></div></li>
+  <li>Create <code>/etc/plugsure/plugsure.env</code> (mode 600, owner root) — shared by both units:
+<pre>NODE_ENV=production
+TZ=Asia/Jakarta
+<span class="c"># the API and gateway run as the restricted role (row-level security enforced)</span>
+DATABASE_URL=postgresql://plugsure_app:&lt;APP_PW&gt;@127.0.0.1:5432/plugsure
+<span class="c"># migrations run as the owner (ExecStartPre of plugsure-api.service)</span>
+MIGRATION_DATABASE_URL=postgresql://plugsure:&lt;OWNER_PW&gt;@127.0.0.1:5432/plugsure
+POSTGRES_APP_USER=plugsure_app
+POSTGRES_APP_PASSWORD=&lt;APP_PW&gt;
+AUDIT_HMAC_KEY=&lt;hex&gt;
+SECRETS_KEY=&lt;hex&gt;
+INTERNAL_API_TOKEN=&lt;hex&gt;
+GATEWAY_INTERNAL_URL=http://127.0.0.1:9220
+EVENT_RELAY=true
+RUN_WORKERS=true
+API_HOST=127.0.0.1
+API_PORT=9200
+OCPP_PORT=9220
+API_TRUSTED_PROXIES=127.0.0.1
+OCPP_MIN_SECURITY_PROFILE=2
+OCPP_TRUST_PROXY_PROTO=true
+OCPP_AUTO_ADOPT=false
+OCPP_VERSIONS=ocpp1.6,ocpp2.0.1
+PUBLIC_BASE_URL=https://ocpp.example.co.id
+OCPP_PUBLIC_URL=wss://ocpp.example.co.id/ocpp</pre>
+  <div class="warn">If a password contains <code>@ : / ? #</code> or <code>%</code>, percent-encode it inside the URL (e.g. <code>@</code> → <code>%40</code>).</div></li>
+  <li>Install and start the units (the API migrates the schema before it starts; the gateway starts after it):
+<pre>sudo install -m 0644 deploy/plugsure-api.service deploy/plugsure-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now plugsure-api plugsure-gateway
+journalctl -u plugsure-api -n 50 --no-pager      <span class="c"># "migrations up to date", "API bridge engaged"</span>
+journalctl -u plugsure-gateway -n 50 --no-pager  <span class="c"># "row-level security is in force", "background workers started"</span></pre></li>
+</ol>
+
+<h2>7. Caddy, DNS and firewall</h2>
+<ol>
+  <li>Point the DNS names at the server's public IP and wait for propagation: the charger host, the console host and, for roaming, the <code>ocpi.</code> host.</li>
+  <li>Install <code>deploy/Caddyfile</code> as <code>/etc/caddy/Caddyfile</code>, then edit:
+    <ul>
+      <li>replace <code>ocpp.example.id</code> with your charger hostname, <code>console.example.id</code> with your console hostname and <code>ocpi.example.id</code> with your roaming hostname (or delete that block if you do not roam);</li>
+      <li>replace the allow-listed ranges (<code>203.0.113.0/24 10.0.0.0/8</code>) with your office / VPN ranges;</li>
+      <li>set the ACME contact e-mail.</li>
+    </ul>
+<pre>sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy</pre>
+  <p>The charger host serves <code>/ocpp/*</code> (→ gateway) and <code>/fw/*</code>, <code>/diag/*</code> (→ API, used by chargers for firmware and logs). The console host serves the console and API behind the allow-list. The roaming host serves only <code>/ocpi/*</code>, with no allow-list: partners authenticate with their credentials token. The optional <code>api.</code> host serves <code>/v1/*</code>, <code>/openapi.json</code> and <code>/api-docs.html</code> to integrators. It strips cookies and blocks the console sign-in routes, so only API keys (including sandbox keys) work there. Replace <code>api.example.id</code> with your hostname, or delete the block to keep the API console-only.</p></li>
+  <li>Firewall — only 22 (restricted), 80 and 443 inbound:
+<pre>sudo ufw default deny incoming
+sudo ufw allow from &lt;admin-ip&gt; to any port 22 proto tcp
+sudo ufw allow 80,443/tcp
+sudo ufw enable</pre>
+  <div class="crit">Never expose 9200, 9220 or 5432 directly. The gateway's <code>/internal/*</code> endpoints are protected by the token, but should also be unreachable from outside.</div></li>
+</ol>
+
+<h2 class="pb">8. Create the first administrator</h2>
+<p>This is the only command-line step in normal operation; every other user is invited from <b>Users &amp; Roles</b> in the console.</p>
+<pre><span class="c"># Path A</span>
+sudo docker compose run --rm api node dist/db/create-admin.js \
+     --email ops.lead@your-cpo.co.id --name "Ops Lead" \
+     --org-slug your-cpo --org-name "PT Your CPO Indonesia"
+
+<span class="c"># Path B</span>
+cd /opt/plugsure &amp;&amp; sudo -u plugsure bash -c 'set -a; . /etc/plugsure/plugsure.env; set +a; \
+  node dist/db/create-admin.js --email ops.lead@your-cpo.co.id --name "Ops Lead" \
+       --org-slug your-cpo --org-name "PT Your CPO Indonesia"'</pre>
+<p>The command prints a <b>one-time password</b>. Sign in at <code>https://console.example.co.id/</code>; you will be asked to choose your own password (12+ characters, mixing three of: lower case, upper case, digits, symbols). Then complete the organisation details (NPWP, PKP status) and invite your team:</p>
+<table class="t">
+  <tr><th>Role</th><th>For</th></tr>
+  <tr><td>Super Administrator</td><td>Platform owners — everything, including users.</td></tr>
+  <tr><td>CPO Operations Manager</td><td>Runs the network; can view but not change users.</td></tr>
+  <tr><td>Site Host / Landlord</td><td>Sees only their assigned site(s): status, revenue, power. No commands.</td></tr>
+  <tr><td>Field Technician</td><td>Monitoring, diagnostics, configuration; remote start only with technician/VIP test cards.</td></tr>
+  <tr><td>Financial Auditor</td><td>Read-only with full session/invoice export and audit log.</td></tr>
+</table>
+
+<h2>9. Verify the installation</h2>
+<pre>curl -s http://127.0.0.1:9200/healthz | jq     <span class="c"># {"ok":true,"db":true,...}</span>
+curl -s http://127.0.0.1:9220/healthz | jq     <span class="c"># gateway: {"ok":true,...}</span>
+curl -sI https://ocpp.example.co.id/ocpp/test  <span class="c"># 426 Upgrade Required = TLS edge + gateway reachable</span>
+curl -sI https://console.example.co.id/        <span class="c"># 200 from the allow-listed network, 403 elsewhere</span></pre>
+<p>In the console, confirm: the top-right <b>live</b> indicator is green; <b>Dashboard</b> loads; the sidebar footer shows <code>v1.3.0 · production</code>.</p>
+<div class="note"><b>Automated acceptance run (staging only).</b> <code>tools/e2e/console-e2e.mts</code> drives 96 checks across all modules with the bundled charger simulator. It creates test sites, chargers and users — <b>never run it against production</b>. See the header of that file.</div>
+
+<h2 class="pb">10. Commission the first charger</h2>
+<ol>
+  <li><b>Sites → Create site.</b> Enter the PLN group, subscribed kVA and power factor (the card shows the kVA × PF ceiling, the 200 kVA TR/TM cliff and the rekening minimum), SPKLU ID and scheme, SLO certificate and the PBJT-TL rate of the kabupaten/kota.</li>
+  <li><b>Load management.</b> Confirm the ceiling (it cannot exceed kVA × PF), set the auxiliary reserve, choose fair-share or priority.</li>
+  <li><b>Tariffs → Create tariff plan</b> and assign it to the site (optionally AC-only / DC-only). Prices above the PLN layanan-khusus ceiling or the Kepmen ESDM service-fee caps cannot be saved.</li>
+  <li><b>Onboarding → Add charge point.</b> The wizard walks through identity and hardware (manufacturer, model, serial by camera scan, firmware, OCPP version), site, security, EVSE/connectors (with tera data) and review.
+    <ul>
+      <li><b>Profile 2:</b> it generates the key and shows a <b>QR code and .json commissioning file — shown once</b>. Tick <b>move it to Profile 3 automatically</b> to have the charger get its certificate over OCPP after its first connection.</li>
+      <li><b>Profile 3:</b> <b>Issue automatically</b> makes the key and certificate. Download <code>client.key</code>, <code>client.crt</code> and <code>ca.pem</code> <b>once</b> and load them with the charger's commissioning tool. Alternatively, paste the charger's CSR so its key never leaves it.</li>
+    </ul></li>
+  <li>Configure the charger with the Central System URL <code>wss://ocpp.example.co.id/ocpp/&lt;IDENTITY&gt;</code> and the key, then power-cycle it. The wizard's final step turns green: <b>Hardware Connected &amp; Adopted</b>.</li>
+  <li><b>RFID &amp; Access → Push to all chargers at site</b> so registered cards work during WAN outages.</li>
+</ol>
+<div class="warn"><b>Security order matters:</b> the key must be on the charger before the profile is raised. The wizard does this in the right order; if you change keys later from the Security tab, set the new key on the charger first. The previous key keeps working for 24 hours.</div>
+<div class="note"><b>Security Profile 3 (client certificates).</b> Put PlugSure's charging-station CA on the TLS terminator first: Onboarding → Certificate authority → download <code>plugsure-charger-ca.pem</code> to <code>/etc/caddy/</code>, uncomment the <code>tls { client_auth … }</code> block in <code>deploy/Caddyfile</code> and reload Caddy. Keep its <code>header_up X-Client-Cert-Fingerprint</code> line: it stops a charger forging another's certificate. Certificates are renewed over OCPP before they expire; Onboarding → Certificates shows them all.</div>
+<p><b>If the charger does not appear:</b> open <b>Connections</b>. It lists every handshake with the reason it was refused (unknown identity, wrong key, no TLS, wrong OCPP version) in plain language.</p>
+
+<h2>11. Upgrading from v1.2.1</h2>
+<ol>
+  <li><b>Back up</b> the database (and, from now on, the storage volume):
+<pre>pg_dump "$OWNER_DATABASE_URL" -Fc -f /var/backups/plugsure-pre-1.3.0-$(date +%F).dump</pre></li>
+  <li>Keep your existing <code>.env</code> / <code>plugsure.env</code> and <b>add</b>: <code>INTERNAL_API_TOKEN</code>, <code>PUBLIC_BASE_URL</code>, <code>OCPP_PUBLIC_URL</code>, <code>API_TRUSTED_PROXIES</code>; on Path B also <code>GATEWAY_INTERNAL_URL</code>, <code>EVENT_RELAY=true</code>, <code>MIGRATION_DATABASE_URL</code>, and ensure the owner role has <code>CREATEROLE</code> (<code>ALTER ROLE plugsure CREATEROLE;</code>).</li>
+  <li>Replace the code with the v1.3.0 package (keep <code>.env</code>), then:
+    <ul><li>Path A: <code>docker compose build &amp;&amp; docker compose up -d</code> (migrations 009 to 042 run automatically);</li>
+        <li>Path B: <code>npm ci &amp;&amp; npm run build</code>, copy <code>src/web</code> and <code>src/driver-web</code> into <code>dist/</code>, reinstall <code>deploy/plugsure-api.service</code>, <code>systemctl daemon-reload</code>, restart both units.</li></ul></li>
+  <li>Create the first administrator (section 8) — the old console had no sign-in.</li>
+  <li>Update Caddy from the new <code>deploy/Caddyfile</code> (adds <code>/fw</code>, <code>/diag</code>, the console host and the roaming host).</li>
+</ol>
+<p>Migrations 009 to 042 are additive (013 adds commission statements, every site starting as "public"; 014 adds site owners, none assigned until you do; 015 to 017 add roaming, with nothing shared until you publish a site or share a card; 018 adds the driver app's favourites, push notifications and reservations; 019 adds developer sandboxes, none until one is created; 020 adds fleet billing, linking existing fleet cards to one account per fleet name, with nothing invoiced until you issue; 021 adds promotions and memberships, none until one is created; 022 adds Plug &amp; Charge, off until switched on; 023 adds charger certificates, nothing changes until one is issued; 024 adds console-managed integrations, environment variables apply until something is set; 025 adds e-wallet and card payments, QRIS only until an operator enables more; 026 adds card holds and saved cards, off until an operator enables them; 027 adds linked e-wallets, off until an operator enables linking; 028 lets drivers pay an expired card hold in the app, used only when a hold expires; 029 adds WhatsApp delivery status, SMS, on-call rotas and per-site offline thresholds, none of which does anything until set up; 030 adds fleet credit notes and the fleet customer portal, with nothing credited and no portal user until you create them; 031 adds pass renewal, proration and loyalty points, with nothing renewing and nobody earning points until switched on; 032 adds the OCPP 2.0.1 device model, empty until a station reports; 033 adds the driver queue, off at every site until switched on; 034 adds reserving partner chargers, unused until a fleet driver reserves one; 035 adds reservation fees, none until you set one on a site; 036 adds partners' charging limits and hub client lists, empty until a partner sends them; 037 adds per-key API rate limits and usage, every key keeping the default; 038 adds ISO 15118 charging needs and bidirectional charging, off until a site is enabled; 039 adds signed meter values, recorded and verified but never blocking a session until a site is set to require them; 040 adds white-label driver apps, none until an operator creates one; 041 adds native iOS notifications, unused until an operator uploads an APNs key; 042 adds Live Activities, unused until an iOS app registers one): existing tariffs keep billing identically, existing connectors are treated as "tera verified", and nothing changes for chargers until an operator changes something. 010 adds the driver-app fleet PIN lockout counters; 011 adds refund tracking, charger outage history and the webhook outbox. 012 adds alert routing (e-mail and WhatsApp) and marks existing alerts as already routed, so nothing is sent for history.</p>
+<div class="note"><b>Behaviour changes to brief operators on:</b>
+<ul>
+  <li>A power ceiling above kVA × PF is now refused instead of silently clamped.</li>
+  <li>Connectors marked "pending calibration" cannot sell energy.</li>
+  <li>Unknown chargers are no longer auto-adopted outside development.</li>
+  <li>A prepaid (QRIS) driver must start within 30 minutes of paying. After that the QR stops working and the payment appears under <b>Refunds</b>.</li>
+  <li>Right after the upgrade, expect one critical "offline" alert for each charger that was already offline. Decommission units that are gone for good.</li>
+</ul></div>
+
+<h2 class="pb">12. Operations</h2>
+<h3>Backups</h3>
+<pre><span class="c"># nightly — database</span>
+pg_dump "$OWNER_DATABASE_URL" -Fc -f /var/backups/plugsure-$(date +%F).dump
+<span class="c"># nightly — firmware images and diagnostic logs</span>
+tar czf /var/backups/plugsure-storage-$(date +%F).tgz /var/lib/plugsure/storage        <span class="c"># Path B</span>
+docker run --rm -v plugsure-storage:/s -v /var/backups:/b alpine tar czf /b/plugsure-storage-$(date +%F).tgz -C /s .  <span class="c"># Path A</span></pre>
+<p>Copy backups off the server. Test a restore every quarter.</p>
+<h3>Logs</h3>
+<pre>docker compose logs -f gateway            |  journalctl -u plugsure-gateway -f
+docker compose logs --since 30m api | jq -c 'select(.level >= 40)'     <span class="c"># warnings and errors</span></pre>
+<p>Every OCPP frame is also stored and searchable in the console (<b>OCPP log</b>, with a live tail and NDJSON export). Every operator action is in <b>Audit log</b> with hash-chain verification.</p>
+<h3>Alert notifications (e-mail, WhatsApp and SMS)</h3>
+<p>Set up in the console under <b>Govern → Alert routing</b>, by a Super Admin or CPO Operations Manager. The gateway sends the messages, so it needs outbound access to your SMTP server (port 587 or 465), to <code>graph.facebook.com:443</code> and to your SMS provider (<code>api.twilio.com:443</code>, <code>console.zenziva.net:443</code> or your gateway). Set <code>CONSOLE_PUBLIC_URL</code> so each message links to the console.</p>
+<ol>
+  <li><b>E-mail.</b> Enter the SMTP server, port, security (STARTTLS on 587 or TLS on 465), user name and password, and a sender address on a domain whose SPF/DKIM allows that server (otherwise alerts land in spam). For Google Workspace use <code>smtp.gmail.com</code>, 587, STARTTLS and an app password. Press <b>Send a test</b>.</li>
+  <li><b>WhatsApp.</b> You need a Meta Business account with a WhatsApp Business sender number.
+    <ul>
+      <li>In WhatsApp Manager create a <b>Utility</b> template named <code>plugsure_alert</code> (language Indonesian, <code>id</code>) with this body:
+        <pre>Peringatan PlugSure ({{1}}): {{2}} Waktu: {{3}}</pre>
+        Here {{1}} is the status (CRITICAL, WARNING, RESOLVED, ESCALATED …), {{2}} the alert, site and console link, and {{3}} the time (WIB). Wait for approval.</li>
+      <li>Create a System User with the <code>whatsapp_business_messaging</code> permission and generate a <b>permanent</b> token.</li>
+      <li>In the console enter the <b>Phone number ID</b> (API setup page, not the phone number), the token, the template name and language. Press <b>Send a test</b> to your own number.</li>
+      <li><b>Delivery status.</b> Open the channel's <b>Edit settings</b> again: it now shows a <b>callback URL</b> (<code>PUBLIC_BASE_URL/hooks/whatsapp/&lt;key&gt;</code>) and a <b>verify token</b>. In the Meta app go to WhatsApp → Configuration → Webhook, enter both, press <i>Verify and save</i>, and subscribe to the <code>messages</code> field. Then copy the <b>App secret</b> (App settings → Basic) into the channel's App secret field and save. Status callbacks without a valid <code>X-Hub-Signature-256</code> are refused. The callback URL must be reachable from the internet: the supplied Caddyfile forwards <code>/hooks/*</code> on the public OCPP host, next to <code>/pay/*</code>.</li>
+    </ul></li>
+  <li><b>SMS</b> (optional; for people without WhatsApp, or as a fallback). Choose the provider:
+    <ul>
+      <li><i>Twilio</i>: Account SID, auth token, and a sender number or a Messaging Service SID. For Indonesia register an alphanumeric sender through a Messaging Service; unregistered senders are often filtered.</li>
+      <li><i>Zenziva</i>: user key and pass key (the regular SMS API).</li>
+      <li><i>Your own gateway</i>: a URL that accepts <code>POST {"to":"+62…","message":"…","channel":"sms","purpose":"alert"}</code> with the token as a bearer token.</li>
+    </ul>
+    Press <b>Send a test</b>.</li>
+  <li><b>Contacts.</b> Add the people on call, with e-mail, WhatsApp number (any spelling, e.g. 0812…) and, only if it differs, an SMS number.</li>
+  <li><b>On-call rotas</b> (optional). Under <b>On-call rotas</b>, create one per team: the people in shift order, daily or weekly, the handover time (in <code>ALERT_TIMEZONE</code>) and the first day. Use <b>Cover a shift</b> for leave and swaps. Rules can then notify "whoever is on duty".</li>
+  <li><b>Rules.</b> A good start:
+    <ul>
+      <li><i>Critical → whoever is on duty</i>: WhatsApp with "send an SMS instead when WhatsApp fails", all sites, "resolved" messages on, escalate to the operations manager after 30 minutes.</li>
+      <li><i>Warnings → office</i>: e-mail, quiet hours 21:00–07:00.</li>
+      <li><i>Compliance (all types) → compliance officer</i>: e-mail.</li>
+    </ul></li>
+  <li>Whoever takes an alert presses <b>Acknowledge</b> on the dashboard; that stops escalation. When the charger recovers the alert resolves itself and a "resolved" message goes out.</li>
+</ol>
+<p>Every message is listed in <b>Alert routing → Delivery log</b>, with the provider's reason when one fails. With the Meta webhook set up, WhatsApp messages also show <i>delivered</i>, <i>read</i> or <i>failed</i>; without it "sent" only means accepted by WhatsApp, so check each contact's number once with <b>Send a test</b>. An SMS sent as a fallback is marked as such.</p>
+<p><b>Offline alerts per site.</b> A charger offline longer than <code>OFFLINE_ALERT_MINUTES</code> (default 15) raises a critical alert. A site with a weak mobile signal can have its own threshold: <b>Sites → edit → Monitoring → Offline alert after</b> (1–1440 minutes).</p>
+
+<h3>Platform commission and fee statements</h3>
+<p>Each customer organisation gets a monthly statement of what it owes the platform:</p>
+<ul>
+  <li>commission on public charging, with the session subtotal (energy, service, admin and idle fees, <b>excluding PBJT-TL and PPN</b>) as the base</li>
+  <li>the minimum per charger</li>
+  <li>flat fees for private chargers</li>
+</ul>
+<p>The default rates are the published ones (8% / 6.5% / 5% by site, minimum per charger Rp 150,000 AC / Rp 350,000 DC, private Rp 250,000 AC / Rp 450,000 DC).</p>
+<ol>
+  <li>Create the operator's billing account in the <b>operator's own</b> organisation, never in a customer's:
+<pre>npm run create-admin -- --email billing@plugsure.com --org-slug plugsure --org-name "PlugSure" --platform-admin</pre></li>
+  <li>Signed in with it, open <b>Govern → Platform billing</b>. For each customer:
+    <ul>
+      <li>set the plan if it differs from the published rates; a plan takes effect from a chosen month</li>
+      <li>mark fleet depots and staff or residential sites <b>Private</b>; every site starts as Public</li>
+    </ul></li>
+  <li>Monthly, after the month ends: review each draft (notes flag, for example, a private site where drivers paid, or sessions awaiting review), then <b>Finalise month</b>. That freezes and numbers the statement (<code>PSC-YYYYMM-…</code>). Issue the faktur pajak separately.</li>
+  <li>Customers see their statements under <b>Commercial → Statements</b>, with CSV and a printable copy. They need org-wide invoice access.</li>
+</ol>
+
+<h3>Site owners: owner portal and billing</h3>
+<p>For sites that belong to other businesses (hotels, retail, offices) and that you operate.</p>
+<ol>
+  <li><b>Commercial → Owners → Add owner</b>: name, legal name and NPWP (printed on statements), contact. Open the owner and tick its <b>sites</b>.</li>
+  <li><b>Invite a portal user for this owner</b>, from the owner or from Users &amp; Roles with the role <i>Site Owner (portal)</i>. Share the one-time password securely. The owner signs in at the console address with e-mail and password and sees only its own chargers, sessions, availability and monthly statement. It is read-only and follows the owner's sites automatically; archiving the owner removes access at once. It works on a phone or tablet; the owner can pick light or dark mode from the user menu (by default it follows the device).</li>
+  <li><b>Commercial → Billing</b> shows every owner's month: kWh, sessions, gross, taxes, commission base, the owner's share and your share, plus your own sites, with totals and CSV. Open an owner to see its statement and to set its plan (from a chosen month). After the month ends, <b>Finalise month</b>.</li>
+  <li>Keep <i>Seller on driver receipts</i> as the operator until driver payments are settled to the owner's own merchant account; then switch it, so receipts carry the owner's legal name and NPWP.</li>
+</ol>
+<div class="note">A site that already has charging history with one owner cannot be given to another (the new owner would see the old owner's revenue). Create a new site for the new owner and move the chargers; their earlier OCPP log stays hidden from the new owner.</div>
+
+<h3>Bidirectional charging (V2G / V2B, ISO 15118-20)</h3>
+<p>Cars that support bidirectional charging can give energy back to a site while its load peaks. Off everywhere by default.</p>
+<ol>
+  <li><b>Chargers.</b> Only OCPP 2.1 stations can be asked to discharge. Add <code>ocpp2.1</code> to <code>OCPP_VERSIONS</code> on the gateway and register the charger as OCPP 2.1. Test each charger model with each car on the bench, including ISO 15118-20 dynamic control.</li>
+  <li><b>The site's own load.</b> Under Load management, set the auxiliary load (air-conditioning, lighting, the shop). Without a PLN export agreement, discharge is capped at it, so energy never flows back to the grid.</li>
+  <li><b>The programme.</b> Under Sites → Edit site → Bidirectional charging, set:
+    <ul>
+      <li>the hours, e.g. the 17:00–22:00 evening peak;</li>
+      <li>a site limit, if wanted;</li>
+      <li>the battery floor, 40 % by default;</li>
+      <li>the driver's credit per kWh, taken off their session before tax.</li>
+    </ul>
+    Tick <i>Energy may flow back to the PLN grid</i> only with a PLN export agreement.</li>
+  <li><b>Consent.</b> App drivers are offered it on the live-charge screen when their car can give energy back. Fleets agree for their cards under Fleet billing → account. Nothing discharges without consent, below the floor, or in the hour before the driver leaves.</li>
+  <li><b>Watch.</b> A session's <b>Car (ISO 15118)</b> tab shows what the car asked for, its battery level, energy given back and the credit, and whether it is discharging, or why not.</li>
+</ol>
+<div class="note">Agree the tax treatment of the credit with your tax adviser. PlugSure treats it as a reduction of the session before PBJT-TL and PPN.</div>
+<div class="note"><b>Not included yet:</b> grid-support functions (frequency and voltage support, DER control) and price schedules sent to the car wait for a PLN or DSO grid code for EV discharge. Exported energy is not sold on a market, because PLN is the single buyer, so the credit is your own. AC bidirectional (AC_BPT) runs in the sandbox but has not been tried on AC hardware: bench-test it first.</div>
+
+<h3>White-label driver apps</h3>
+<p>An operator can give its drivers its own app: the same driver app, under the operator's name, colours and icon, on its own web address, showing only its stations. Set it up under <b>Commercial → Driver app</b>.</p>
+<ol>
+  <li><b>Name and look.</b> Enter:
+    <ul>
+      <li>the app name, a short name and a tagline;</li>
+      <li>one accent colour, which PlugSure adjusts per theme so text in it always reads at 4.5:1;</li>
+      <li>an icon background;</li>
+      <li>support contacts and the privacy policy.</li>
+    </ul>
+    Upload one square PNG icon, 1024 px if possible. The phone-sized preview beside the form is the real app.</li>
+  <li><b>Web address.</b> Choose one, e.g. <code>app.operator.co.id</code>, and point it at the driver host with a DNS <code>CNAME</code>. Save it and set the status to <b>Live</b>. Caddy issues the certificate on the first HTTPS request, after checking with PlugSure that the name belongs to a driver app. This needs the <code>on_demand_tls</code> option and the catch-all block from the supplied Caddyfile.</li>
+  <li><b>iOS notifications.</b> In the Apple Developer account, go to Certificates, Identifiers &amp; Profiles &rarr; Keys &rarr; <b>+</b> and tick <i>Apple Push Notifications service (APNs)</i>. Download the <code>.p8</code>; Apple lets you do this once. Upload it with its Key ID under <b>iOS notifications</b>. PlugSure checks it with Apple straight away without notifying anyone, and shows how many iPhones are registered. The app icon then shows how many sessions wait to be paid, and notifications carry buttons (stop charging, view receipt, pay now, give up my turn, cancel reservation) and, when charging finishes, a picture of the charge. For the buttons and the picture, follow the two Xcode steps in the build kit's README. <b>Live Activities</b> (iOS 16.2+) show a charge under way on the lock screen and in the Dynamic Island: add the kit's widget extension and plugin (README step 6). The same key sends their updates; the gateway checks every 5 s and sends at most every 30 s (<code>LIVE_ACTIVITY_MIN_INTERVAL_S</code>). The gateway needs outbound HTTPS to <code>api.push.apple.com</code> and <code>api.sandbox.push.apple.com</code>.</li>
+  <li><b>Store apps.</b> Fill in:
+    <ul>
+      <li>the Android package name;</li>
+      <li>the signing-certificate SHA-256 fingerprints (the upload key, and later Play's app-signing key);</li>
+      <li>the iOS bundle identifier and Apple Team ID;</li>
+      <li>the version.</li>
+    </ul>
+    Then download the <b>Build kit</b> and follow its README:
+    <ul>
+      <li>Android: a Trusted Web Activity built with Bubblewrap, or the included GitHub Actions workflow;</li>
+      <li>iOS: a Capacitor shell built in Xcode on a Mac.</li>
+    </ul>
+    Raise the version code for every upload. The web address serves the files that tie the store apps to it (<code>/.well-known/assetlinks.json</code>, <code>/.well-known/apple-app-site-association</code>).</li>
+</ol>
+<div class="note">
+  <p>The store accounts, signing keys and builds are the operator's.</p>
+  <ul>
+    <li>Keep the Android upload keystore safe: without it the app cannot be updated.</li>
+
+    <li>Apple reviews web-based apps strictly (guideline 4.2). Describe the charging features in the review notes and give a test account.</li>
+  </ul>
+</div>
+
+<h3>Signed meter values (OCMF)</h3>
+<p>Calibration-law meters sign their register readings. PlugSure verifies each signature against the meter's public key, then checks the signed start and end readings against the energy it bills. Drivers and auditors can check the result. Nothing changes for chargers that do not sign.</p>
+<ol>
+  <li><b>Register the meter.</b> In Onboard, enter each connector's <b>meter serial</b> and <b>meter public key</b>, from the meter's label or the vendor. Hex, base64, PEM and the raw 64/65-byte point are all accepted. Without a registered key, readings are only "unverified key": PlugSure never trusts a key sent by the charger itself.</li>
+  <li><b>Switch signing on at the charger.</b> For OCPP 2.0.1 / 2.1, use <code>POST /v1/charge-points/&lt;identity&gt;/signed-metering</code> with <code>{"enabled":true}</code>. It sets SignReadings, and sends the public key once per transaction. For OCPP 1.6, use the vendor's configuration key.</li>
+  <li><b>Choose the policy.</b> Under Sites → Edit site → Signed meter data:
+    <ul>
+      <li><i>Record</i> (default): keep, verify and warn on a mismatch;</li>
+      <li><i>Require</i>: sessions that are not verified are parked for review and not invoiced;</li>
+      <li><i>Off</i>.</li>
+    </ul></li>
+  <li><b>Check.</b> A session's <b>Signed meter data</b> tab shows the outcome, the readings and the OCMF text, with an XML download for the Transparency Software. The tax receipt and the driver app show the status, and OCPI CDRs carry the signed data.</li>
+</ol>
+<div class="note">Statuses: <b>verified</b>; <b>unverified key</b> (valid only against the charger's own key); <b>mismatch</b> (signed kWh differ from the bill by more than 2 Wh); <b>invalid</b> (a bad signature, another meter, or a key conflict); <b>incomplete</b> (start or end missing); <b>missing</b> (required, none sent). Only OCMF is verified; other formats are kept as "unsupported".</div>
+
+<h3>Roaming (OCPI 2.2.1)</h3>
+<p>Two directions, on one page (Commercial → Roaming):</p>
+<ul><li>Drivers of other networks charge on <b>your</b> chargers. Their provider (an eMSP, directly or through a roaming hub) receives a charge record (CDR) for every session and pays you. Your prices, taxes and receipts are unchanged.</li>
+<li>Your RFID and fleet cards charge on <b>other operators'</b> chargers. The operator (CPO) sends you a CDR for every session; you pay it and bill your card holder.</li></ul>
+<ol>
+  <li><b>Expose the roaming host.</b> Keep the <code>ocpi.example.id</code> block of <code>deploy/Caddyfile</code> (section 7) and set <code>OCPI_PUBLIC_URL=https://ocpi.example.id</code> on the API and the gateway. Partners must reach <code>/ocpi/*</code> from the internet; the console host's allow-list would block them.</li>
+  <li><b>Commercial → Roaming → Set roaming identity:</b> country code <code>ID</code> and a three-character party ID agreed with your hub or partners (e.g. <code>PLS</code>). Partners cannot follow a change later.</li>
+  <li><b>Add partner</b>, either way round:
+    <ul><li><i>The partner connects to us:</i> send them the versions URL and the one-time token shown (it stops working once they register);</li>
+        <li><i>We connect to them:</i> enter their versions URL and token. PlugSure picks OCPI 2.2.1 and registers.</li></ul>
+    The partner shows as <b>connected</b> when done.</li>
+  <li><b>Shared sites:</b> share the sites partners may show. A site needs a map location, a street address and a city (Sites → Edit); private sites cannot be shared. Changes reach partners within a minute; status changes within seconds.</li>
+  <li><b>Watch:</b> each partner's message log and "sent to partner" list, and <b>Roaming sessions</b> (was each CDR accepted?). A CDR a partner does not accept raises an alert; fix the connection, then <b>Send failed again</b>.</li>
+  <li><b>Your cards on other networks:</b> add the operator as a partner of type <i>Charge point operator</i>. Its chargers appear under <b>Partner network</b>. Under <b>Cards abroad</b>, allow roaming per card (or <b>Share all active cards</b>). Cards with an energy or spending limit are checked with PlugSure before every session, and roaming charges count towards the limit. Blocking a card in the RFID centre stops it on every network within seconds. Fleet drivers with such a card see the partner chargers in the driver app (<b>Jaringan mitra</b>), can start and stop charges there, and get the operator's charge record in their history.</li>
+  <li><b>Bill on:</b> <b>Cards abroad → Export CSV</b> lists every charge record from other networks (where, card, holder, fleet, energy, amounts) for invoicing your fleets. Driver-app (QRIS) users cannot roam: they pay upfront and have nothing to bill afterwards.</li>
+  <li><b>Partner smart charging:</b> a partner may limit how fast its driver's session charges (OCPI ChargingProfiles). The limit is applied through load management, on top of the site's power budget, so it can only slow a session down. Current limits are listed under <b>Roaming sessions</b>. Your chargers must accept transaction profiles (SetChargingProfile), as load management already requires.</li>
+  <li><b>Hubs:</b> a hub reports the parties behind it (OCPI HubClientInfo). They are listed in its panel under <b>Behind this hub</b>, refreshed every 6 hours or with <b>Refresh from hub</b>. Once a hub has sent the list, it may act only for the parties on it that are connected or offline.</li>
+</ol>
+<div class="note">Before live traffic: run the partner's or hub's connection test against its test environment, agree settlement terms, and confirm the tax treatment. By default a CDR's <code>excl_vat</code> is the subtotal plus PBJT-TL and <code>incl_vat</code> is the receipt total (<code>OCPI_PBJT_IN_EXCL_VAT</code>).</div>
+
+<h3>Driver app: map, notifications and reservations</h3>
+<p>No setup is needed to switch these on. Things to know:</p>
+<ul>
+  <li><b>Map tiles.</b> The station map loads tiles from <code>MAP_TILE_URL</code>, which defaults to the OpenStreetMap Foundation's server. That server is for light use only. Before real traffic, point it at your own tile server or a commercial one (e.g. MapTiler, Stadia, Thunderforest), set the provider's <code>MAP_ATTRIBUTION</code>, and restart the API. The page's security policy allows the new tile host automatically. Sites need latitude and longitude (Sites → edit) to appear on the map.</li>
+  <li><b>Push notifications.</b> The first use generates a VAPID key pair and stores it in the database, sealed with <code>SECRETS_KEY</code>, so the API and gateway share it. Keep that key: changing it, or <code>SECRETS_KEY</code>, means every phone must switch notifications on again. The <b>gateway</b> sends notifications and needs outbound HTTPS to <code>fcm.googleapis.com</code>, <code>*.push.services.mozilla.com</code>, <code>web.push.apple.com</code> and <code>*.notify.windows.com</code>. Set <code>VAPID_SUBJECT</code> to a mailbox you read, because push services use it to contact senders.</li>
+  <li><b>Reservation fees.</b> Free by default. Set a fee per site under Sites → Edit site → Reservations. App drivers pay it before the connector is held; fleet cards are billed on the fleet invoice. It is kept once the connector is held, and refunded (Refunds) or left off the invoice when the charger refuses or the driver cancels within 2 minutes. The fleet invoice's e-Faktur uses the fee item code (Fleet billing → Settings) for these lines too.</li>
+  <li><b>Many stations.</b> Stations that would overlap on the map are grouped into a numbered bubble until the driver zooms in; nothing to configure.</li>
+  <li><b>Partner chargers.</b> Fleet drivers with a roaming card can reserve a partner operator's charger for 15 minutes. PlugSure sends the operator OCPI <code>RESERVE_NOW</code>, and the answers show in Commercial → Roaming → commands. Ask each partner whether it accepts reservations. One that does not answers <code>NOT_SUPPORTED</code>, and the driver is told.</li>
+  <li><b>iPhone.</b> Web Push works only when the driver has added the app to the Home Screen (iOS 16.4 or later); the app explains this under Akun.</li>
+  <li><b>Reservations.</b> The charger receives <code>ReserveNow</code> for 15 minutes (<code>DRIVER_RESERVATION_MINUTES</code>). Chargers that do not support reservations answer Rejected, and the driver is told so. Turn the feature off with <code>DRIVER_RESERVATIONS=false</code>. Check it once per charger model during acceptance: reserve, confirm the connector shows Reserved at the charger, then start with the same card or QR.</li>
+</ul>
+
+<h3>API reference and developer sandboxes</h3>
+<ul>
+  <li><b>Reference.</b> <code>/openapi.json</code> is the OpenAPI 3.1 document and <code>/api-docs.html</code> the readable reference. Both are public, static and part of the build. After changing a route, run <code>npm run openapi</code>; <code>npm test</code> fails if the document is out of date.</li>
+  <li><b>Sandboxes</b> are created under <b>Govern → Developers</b>, by a user with <code>org:write</code>. Each one is a separate tenant with two virtual chargers, a site, a tariff, three RFID cards and its own API key, shown once. The limit is 3 per operator. Hand the key to the integrator; rotate or delete the sandbox when the work is done.</li>
+  <li><b>Protocols.</b> A charger registered in a sandbox becomes a virtual charger speaking the version it is registered with: OCPP 1.6, 2.0.1 or 2.1. The gateway's <code>OCPP_VERSIONS</code> must list that version. Each virtual charger has a signing meter (OCMF), with its key registered automatically, so its sessions show as verified. On 2.1 the virtual car can give energy back (DC_BPT on DC, AC_BPT on AC), so bidirectional charging can be tried without hardware.</li>
+  <li><b>Virtual chargers run in the gateway</b> (the process with <code>RUN_WORKERS=true</code>). They are started within 10 seconds of creation and after every gateway restart. They use no network port and no extra configuration. A gateway restart interrupts their running sessions, as a power cut would; the stuck-session reconciliation closes them later.</li>
+  <li><b>Isolation.</b> Sandbox tenants never appear in the driver app, in roaming, in platform billing or in the operator's own lists. Their chargers cannot be reached from the network. Their records stay in the audit trail after deletion.</li>
+  <li><b>Load.</b> A sandbox charger costs about as much as a real one: a few database writes per meter sample. Three sandboxes add six chargers.</li>
+  <li><b>TypeScript SDK.</b> Download it from <b>Govern → Developers → TypeScript SDK</b> (<code>/sdk/plugsure-csms-sdk.tgz</code>) and give it to integrators. They install it with <code>npm install ./plugsure-csms-sdk.tgz</code>. After changing a route, run <code>npm run openapi</code> and then <code>npm run sdk</code>; <code>npm test</code> fails if either is out of date. The <code>/sdk/</code> path sits on the console host, behind its office allow-list.</li>
+  <li><b>Rate limits.</b> Each API key has its own limit: 600 requests a minute by default (<code>API_KEY_RATE_LIMIT_PER_MIN</code>). Set a key's own limit, and see its usage, under <b>Users &amp; roles → API keys</b>. The console and other callers without a key are limited per IP (<code>API_RATE_LIMIT_PER_MIN</code>). Limits are kept per API process: two API processes behind a balancer double each key's allowance.</li>
+</ul>
+
+<h3>Fleet billing and e-Faktur</h3>
+<p>Fleet cards are billed monthly to their company's <b>fleet account</b> (Commercial → Fleet billing). One-time setup:</p>
+<ol>
+  <li><b>Settings:</b>
+    <ul>
+      <li>enter your NPWP (16 digits), NITKU and billing address, the invoice number prefix, and how to pay (bank account)</li>
+      <li>for e-Faktur, enter the item type (goods A or services B), the 6-digit code and the Coretax unit code as your tax adviser classifies EV charging, then tick <b>confirmed</b></li>
+      <li>until then the XML export is refused</li>
+    </ul></li>
+  <li><b>Accounts:</b> every fleet name on your cards already has an account. Add each company's legal name, NPWP (or NIK), NITKU if a branch, billing e-mail and payment terms. Without an NPWP/NIK, no faktur can be prepared for that account.</li>
+  <li><b>E-mail:</b> invoices go out through the e-mail channel under Govern → Alert routing. Set it up and send a test.</li>
+</ol>
+<p>Each month, after it ends:</p>
+<ol>
+  <li>Open the month and check the drafts and their warnings.</li>
+  <li>Click <b>Issue all invoices</b>, then e-mail them. The e-mail carries the invoice as a <b>PDF</b> and the session list as CSV; the console downloads the same PDF.</li>
+  <li>Download <b>e-Faktur XML</b> and import it in Coretax (Faktur Pajak → Pajak Keluaran → Impor Data). Check the drafts there, then approve and sign them.</li>
+  <li>Record each faktur number back on its invoice.</li>
+  <li>Record payments as they arrive. Unsettled credit notes are listed under <b>Credit notes</b>: record each refund there once it is paid out.</li>
+</ol>
+<p><b>Correcting an issued invoice.</b> Open it and choose <b>Credit note</b>: the whole of what is left, or lines of an amount each (what the customer gets back, PPN included; a line with PPN is split into DPP and PPN like an invoice line). The invoice itself never changes.</p>
+<ul>
+  <li>On an unpaid invoice the credit reduces what is owed, and settles the invoice when nothing is left.</li>
+  <li>On a paid invoice it is refunded (record the refund when paid) or deducted from the account's next invoice.</li>
+  <li>If the invoice's faktur pajak was already reported, record the matching <i>nota pembatalan</i> (or a replacement faktur) in Coretax. The console warns you. Credit notes are not in the XML export.</li>
+  <li>A credit note issued in error can be voided while nothing has been done with it.</li>
+</ul>
+<p><b>Fleet customer portal.</b> In the fleet account, <b>Portal access → Invite a user</b> (needs user management), or Users &amp; Roles with the role <i>Fleet customer (portal)</i>. Share the one-time password securely. The customer's staff sign in at the console address and see only that account: what it owes, its invoices and credit notes as PDF, this month so far, and its cards. They can block a lost card at once, and unblock only a card they blocked themselves; a card you blocked stays blocked. Archiving the fleet account removes their access.</p>
+<div class="note"><b>Portal users are outside your office.</b> The supplied Caddyfile keeps the console behind an office / VPN IP allow-list. Fleet customers (and site owners) need to reach it: publish the console on its own hostname without the allow-list for them, or add their addresses. Every portal route checks the user's own account, and portal users hold no operator permission.</div>
+<div class="note"><b>Before the first real export:</b> import one file into Coretax and compare it with the invoice. The file follows the DJP import template, which DJP revises from time to time. To correct an issued invoice before it is paid, you can also void it (the number is kept) and issue again; if its faktur was already approved, cancel or replace it in Coretax too. Once paid, use a credit note.</div>
+
+<h3>Integrations (payments, sign-in codes)</h3>
+<p>Connect the services drivers depend on under <b>Govern → Integrations</b>. <b>In production, QRIS checkout and phone sign-in are refused until these are connected.</b> Secrets are stored encrypted with <code>SECRETS_KEY</code> and never shown again; changing that key means entering them again.</p>
+<ol>
+  <li><b>QRIS payments:</b> choose Midtrans, Xendit or your bank (BI-SNAP) and enter the credentials from the provider's dashboard. Each operator can connect its own merchant account; the platform's is the default.
+    <ul>
+      <li>Copy the <b>payment notification URL</b> shown after saving into the provider's dashboard. <code>/pay/*</code> must be public; <code>deploy/Caddyfile</code> routes it on the OCPP host.</li>
+      <li>Press <b>Test</b>, then make one real payment of a small amount and check it in the Activity list.</li>
+      <li><b>Payment methods offered to drivers:</b> QRIS by default. Tick GoPay, ShopeePay and cards (Midtrans), or OVO, DANA, ShopeePay, LinkAja and cards (Xendit), only if they are activated on your acquirer account. Test one small payment with each method you enable.</li>
+      <li><b>Card holds and saved cards</b> (optional, off by default): <i>hold, then charge only what is used</i> turns card payments for charging into pre-authorisations: the session's total is captured, the rest released. <i>Let signed-in drivers save a card</i> keeps the acquirer's token, never the card number; a card whose token has ended at the acquirer (deleted at the bank, or expired) is refused with a message naming it and no longer offered. Ask the acquirer to enable card pre-authorisation and card saving first, then test a hold end to end: hold, charge, capture, release. A hold that expires at the acquirer before capture (after about 7 days at Midtrans) is shown under Refunds as <i>expired, not charged</i> with the amount to collect, with a critical alert; it cannot be retried, and the driver can pay it from the receipt in the app (then <i>expired, paid in app</i>, and the alert resolves).</li>
+      <li><b>Linked e-wallets</b> (optional, off by default): <i>let signed-in drivers link … for one-tap payments</i> lets drivers link GoPay (Midtrans, or Xendit with GoPay recurring activated) or OVO / DANA / ShopeePay / LinkAja (Xendit) once and pay in one tap; the chosen amount is charged and unused balance refunded automatically. Ask the acquirer to enable e-wallet tokenisation, then test a link, a one-tap payment and its automatic refund.</li>
+      <li><b>Post-pay</b> (optional, off by default): <i>linked e-wallets: charge after the session</i> starts the session with nothing charged and charges the rated total to the linked e-wallet afterwards, up to the per-session limit under Advanced (default Rp 200,000; larger amounts are charged up front). E-wallet balances (GoPay, OVO, DANA, ShopeePay, LinkAja) are checked before starting where the acquirer reports them (for GoPay at Midtrans: the wallet, or GoPay Tabungan, never PayLater credit; the GoPay token is looked up again before each charge, as Midtrans asks; a GoPay, OVO, DANA, ShopeePay or LinkAja link the driver ended in the e-wallet app, or that expired, is refused with “link … again” instead of a balance message, and an unpaid session can be paid once it is linked again); <i>post-pay only when the e-wallet balance can be checked</i> (Advanced) charges the others up front. Unpaid charges are retried, can be paid by the driver from the receipt (by the e-wallet again, or in the app with any other method, also while the e-wallet PIN is pending or after it expired, was denied or was cancelled, with an unpaid notice on the home screen and Web Push reminders 15 minutes, 1 day and 3 days after the session, and a tax receipt issued as a nil transaction (Rp 0, “NIHIL / NIL”) until paid; with Xendit, also point its payment method and payment token callbacks at the payment notification URL so ended links are known at once; a payment that arrives after the session is paid is refunded), and are listed under <b>Refunds → Holds and post-pay</b>.</li>
+    </ul></li>
+  <li><b>Driver sign-in codes:</b> WhatsApp Cloud API (an approved <i>Authentication</i> template with a copy-code button), Twilio, Zenziva or your own gateway. Add an SMS fallback, and test with your own number.</li>
+  <li><b>Plug &amp; Charge PKI</b> and <b>map tiles</b> are here too. The environment variables still work when nothing is set.</li>
+</ol>
+<div class="note"><b>E-wallets and cards</b> are pre-purchases like QRIS: the driver pays a fixed amount in the e-wallet app, or on the acquirer's hosted 3-D Secure card page, so card numbers never reach PlugSure. The acquirer returns the driver to <code>/app/paid.html</code> on <code>DRIVER_PUBLIC_URL</code> (else <code>CONSOLE_PUBLIC_URL</code>), and its signed notification confirms the payment. Unused balance is refunded by API where the acquirer supports it (Midtrans; Xendit for e-wallets); otherwise it is refunded by bank transfer from the Refunds page.</div>
+<div class="note"><b>Card holds</b> never need a refund: the capture is for what the session cost. A capture the acquirer refuses is retried automatically and listed under <b>Refunds → Card holds</b> with <b>Retry now</b>; after the last automatic try a critical alert is raised. An authorisation lapses at the acquirer (Midtrans: 7 days by default), so clear sessions parked for review before then.</div>
+<div class="note">Switching acquirer keeps the old account for the payments it took: its notification URL still works and its refunds still go to it. Leave the old URL in the old provider's dashboard until those payments have settled.</div>
+
+<h3>Promotions and memberships</h3>
+<p>Set up under Commercial → Promotions &amp; plans (permission <code>tariff:write</code>). Discounts are applied at rating, before PBJT-TL and PPN, and printed as lines on the receipt. Each session gets the customer's membership plus at most one promotion, whichever is cheapest for the customer.</p>
+<ul>
+  <li><b>Plans:</b> a monthly fee with a member price per kWh, % off energy, included kWh and/or a waived service fee.
+    <ul>
+      <li>Fleet accounts or single cards are enrolled on the Members tab; their fee is charged on the monthly fleet invoice, for the days of the month the membership was in force (a whole month costs the whole fee). Set the membership-fee e-Faktur item (usually services, B) in Fleet billing → Settings and confirm it with your tax adviser.</li>
+      <li>Tick <b>offered in the app</b> to let drivers buy a 30-day pass (QRIS, e-wallet or card). Drivers are reminded 3 days before it ends.</li>
+      <li><b>Automatic renewal:</b> a driver who pays with a saved card or linked e-wallet can let the pass renew itself; the gateway charges it a day before the end, retries a decline, and tells the driver when a PIN or 3-D Secure is needed or renewal had to stop. Saved cards and linked e-wallets must be on for the acquirer (Govern → Integrations). On Midtrans, unattended saved-card charges need 3-D Secure off for saved cards (<code>savedCard3ds: false</code>), otherwise every renewal waits for the driver.</li>
+      <li><b>Switching plans:</b> the unused value of the current pass is credited: a dearer plan costs the difference, a cheaper one is free and runs longer.</li>
+    </ul></li>
+  <li><b>Promotions:</b> for everyone, new drivers, chosen fleet accounts, plan members, or a promo code entered in the app. They can be limited by dates, days, a time window, sites, AC/DC, minimum kWh, total and per-customer uses, and a budget. Stop one by switching it off; sessions already rated keep their discount.</li>
+</ul>
+<p><b>Loyalty points</b> (Loyalty points tab, off by default): set the points per Rp 1,000, what a point is worth, the most points may pay of a session and when they expire, then switch it on. Drivers signed in to the app earn on every session; those who tick "use my points" get them off their next sessions automatically, before PBJT-TL and PPN. The tab shows the points outstanding and their value in rupiah: <b>book that as a liability</b>, and brief finance before switching it on. Adjust a driver's points there (goodwill or corrections; audited).</p>
+<div class="note">Check a new promotion on a test session before announcing it. App passes are paid through the same acquirer as charging, so the live acquirer (P0) is needed before passes can be sold.</div>
+
+<h3>ISO 15118 Plug &amp; Charge</h3>
+<p>A car with a charging contract identifies itself with its contract certificate; the driver just plugs in. PlugSure is the CSMS side. You also need a V2G PKI provider (Hubject or similar) with a CPO agreement, and chargers with ISO 15118 Plug &amp; Charge firmware.</p>
+<ol>
+  <li><b>Connect the PKI.</b> Set <code>PNC_PKI=http</code>, <code>PNC_PKI_URL</code> and <code>PNC_PKI_TOKEN</code> on the API and the gateway. The URL is your PKI gateway, whose three calls are listed in deploy/README.md (Plug &amp; Charge). Allow the gateway outbound HTTP/HTTPS to the PKI's OCSP responders.</li>
+  <li><b>Trust anchors</b> (Operate → Plug &amp; Charge): <b>Fetch from the PKI</b>. This gets the V2G root, and the mobility operator roots that contract chains are checked against.</li>
+  <li><b>Chargers:</b> for each ISO 15118 charger, <b>Switch Plug &amp; Charge on</b>, <b>Install trust anchors</b> and <b>Request V2G certificate</b>. Its certificate appears as installed with its expiry. It is renewed 30 days before it expires (<code>PNC_RENEW_DAYS</code>), and an alert is raised a week before.</li>
+  <li><b>Contracts:</b> register your customers' eMAIDs, retail or billed to a fleet account. Partners' contracts arrive through roaming.</li>
+  <li><b>Overview:</b> switch Plug &amp; Charge on. Decide whether to accept a contract when its OCSP responder cannot be reached; the default is accept, since the charger has checked the chain.</li>
+</ol>
+<div class="note">Try each charger model with a test contract from your PKI before announcing Plug &amp; Charge. The <b>Log</b> tab shows every exchange with its outcome. <code>PNC_PKI=mock</code> is a test PKI for development and sandboxes; production refuses it.</div>
+
+<h3>OCPP 2.0.1 stations: the device model</h3>
+<p>OCPP 2.0.1 stations are configured through their device model rather than 1.6 configuration keys. Open the charger and go to the <b>Device model</b> tab. Nothing needs setting up: migration 032 adds the tables.</p>
+<ol>
+  <li><b>Request report</b> (full inventory). The station sends its components and variables in parts, and the tab shows them as they arrive.</li>
+  <li>Change a value and press <b>Save</b>. The console checks the value against the station's own limits and allowed values before it sends SetVariables. <i>RebootRequired</i> means it applies after the next reboot (Remote control → Reboot).</li>
+  <li><b>Monitor…</b> on a variable that supports it adds a threshold, delta or periodic monitor. An alerting monitor raises a <code>charge_point.device_event</code> alert, routed like any other. It resolves when the station reports the event cleared.</li>
+</ol>
+<div class="note">Security settings (SecurityCtrlr) and the network connection profile are not changed from this tab. Use the Security tab and Onboarding, which keep the station from being locked out. Before rollout, request a full report from each 2.0.1 station model on the bench: vendors differ in which variables they report and which they allow to be changed.</div>
+
+<h3>Driver queue at busy sites</h3>
+<p>For sites where drivers regularly find every connector taken. Open the site, choose <b>Edit site</b> and tick <b>Driver queue</b>. Then set:</p>
+<ul>
+  <li><b>Time to start</b>: how long a freed connector is held for the next driver (2–15 minutes, default 5).</li>
+  <li><b>Longest queue</b>: the most drivers waiting at once (default 20).</li>
+  <li><b>Longest wait</b>: how long a driver can wait before their place ends (default 120 minutes).</li>
+</ul>
+<p>How it works:</p>
+<ul>
+  <li>Drivers join from the station page in the app. It is first come, first served.</li>
+  <li>When a connector frees up, the charger holds it (ReserveNow) for the first driver waiting who can use it. Nobody else can take it meanwhile.</li>
+  <li>A driver who does not start in time misses their turn, and the next driver gets the connector.</li>
+</ul>
+<p>The site's <b>Driver queue</b> tab shows who is waiting and who holds a connector, with the last 24 hours. You can remove a driver there. Nothing to configure on the servers: offers are made by the gateway.</p>
+<div class="note">Check first that the site's chargers accept ReserveNow (reserve a connector from the app once). A charger that refuses it cannot hold connectors for the queue. Waiting drivers are still protected in the app, but a walk-up with an RFID card could take the connector at the charger.</div>
+<h3>Updates and rollback</h3>
+<p>Take a backup before every update. Roll back <b>code</b>, never the schema — migrations are forward-only:</p>
+<pre><span class="c"># Path A</span>  PLUGSURE_TAG=&lt;previous-tag&gt; docker compose up -d --no-deps gateway api
+<span class="c"># Path B</span>  restore the previous package into /opt/plugsure, rebuild, copy web assets, restart both units</pre>
+<p>If a migration itself is the problem, restore the pre-upgrade dump.</p>
+<h3>Routine</h3>
+<ul>
+  <li>Daily: Dashboard alerts (tera lapsed / due, SLO expiry, faults, key rotation due).</li>
+  <li>Weekly: Compliance page; Sessions → filter "review" and resolve.</li>
+  <li>Daily (finance): <b>Refunds</b>. Pay what is due through the provider, or refund by bank transfer and record the reference. Drivers see "refund in progress" until you do.</li>
+  <li>Monthly: <b>Availability</b>. Check uptime per charger (export CSV for site hosts and SLA reviews).</li>
+  <li>Integrations: <b>Webhooks</b> pushes sessions, CDRs, charger status, alerts and refunds to your own systems. Receivers must verify the <code>PlugSure-Signature</code> header. Failed deliveries can be replayed from the endpoint's delivery log.</li>
+  <li>Per rotation policy: rotate AuthorizationKeys from the charger's Security tab.</li>
+</ul>
+
+<h2>13. Troubleshooting</h2>
+<table class="t">
+  <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  <tr><td>Console shows every charger <b>offline</b>; commands fail "not connected"</td><td>Bridge not configured</td><td>Same <code>INTERNAL_API_TOKEN</code> on both processes; <code>GATEWAY_INTERNAL_URL</code> on the API. API log must say "API bridge engaged".</td></tr>
+  <tr><td>Charger refused, Connections shows <code>rejected_tls_required</code></td><td>Charger uses <code>ws://</code> while Profile ≥ 2</td><td>Configure <code>wss://</code> on the charger.</td></tr>
+  <tr><td><code>rejected_auth</code></td><td>Wrong or missing key</td><td>Re-enter the key on the charger, or rotate it from the Security tab.</td></tr>
+  <tr><td><code>rejected_unknown_cp</code></td><td>Identity not registered / typo</td><td>Onboard it, or use Connections → Pending adoption → Suggestions to spot the typo.</td></tr>
+  <tr><td>Gateway exits "requires TLS"</td><td>Profile 2 without TLS info</td><td>Set <code>OCPP_TRUST_PROXY_PROTO=true</code> (TLS at Caddy).</td></tr>
+  <tr><td>Process exits "AUDIT_HMAC_KEY" / "superuser"</td><td>Missing secret / wrong DB role</td><td>Set the secrets; the app must connect as <code>plugsure_app</code>, never a superuser.</td></tr>
+  <tr><td>Migration fails "permission denied to create role"</td><td>Owner lacks CREATEROLE (Path B)</td><td><code>ALTER ROLE plugsure CREATEROLE;</code></td></tr>
+  <tr><td>Migration 006 fails "permission denied to alter role"</td><td><code>plugsure_app</code> already existed, created by another role</td><td><code>GRANT plugsure_app TO plugsure WITH ADMIN OPTION;</code></td></tr>
+  <tr><td>Console 404 while <code>/healthz</code> works (Path B)</td><td>Web assets not copied</td><td><code>cp -R src/web dist/web</code></td></tr>
+  <tr><td>Sign-in works but you are logged out immediately</td><td>Secure cookie over plain HTTP</td><td>Use HTTPS via Caddy; set <code>API_TRUSTED_PROXIES</code> correctly.</td></tr>
+  <tr><td>Firmware campaign fails "PUBLIC_BASE_URL is not configured"</td><td>No public URL for downloads</td><td>Set <code>PUBLIC_BASE_URL</code> to the charger hostname.</td></tr>
+  <tr><td>Sign-in refused with "invalid email or password" although the password is right</td><td>5 failed sign-ins paused the account for 15 minutes. The message is the same for every failure on purpose, so it never reveals whether an address has an account.</td><td>Wait 15 minutes, or an administrator resets the password.</td></tr>
+  <tr><td>Webhook endpoint shows "failing" / "disabled"</td><td>Receiver down, slow (&gt; 10 s), or not https</td><td>Fix the receiver, press <b>Send test event</b>, then <b>Enable</b> and <b>Replay failed</b>. An endpoint is disabled only after 50 straight failures with no success for 24 h.</td></tr>
+  <tr><td>Webhook deliveries fail "signing secret cannot be decrypted"</td><td><code>SECRETS_KEY</code> was changed</td><td>Rotate the secret on each endpoint and update the receivers.</td></tr>
+  <tr><td>WhatsApp alert "failed" with code 132001 / "template does not exist"</td><td>Template name or language differs from the approved one, or not approved yet</td><td>Match the name and language code exactly (e.g. <code>id</code>); wait for approval.</td></tr>
+  <tr><td>WhatsApp "failed" with code 190 / "access token"</td><td>Temporary token expired</td><td>Use a permanent System User token.</td></tr>
+  <tr><td>WhatsApp "sent" but the person got nothing</td><td>Number not on WhatsApp, or not the right format</td><td>Send a test to that number; check the contact's number includes the country code.</td></tr>
+  <tr><td>Alert e-mails fail "Greeting never received" / time out</td><td>Outbound SMTP blocked (many clouds block port 25/587)</td><td>Open outbound 587/465 from the gateway, or use a provider on 2525/443.</td></tr>
+  <tr><td>Alert e-mails arrive in spam</td><td>Sender domain has no SPF/DKIM for the SMTP server</td><td>Use a sender address on a domain configured for that server.</td></tr>
+  <tr><td>No alert messages at all</td><td>Channel off, no matching rule, or workers off</td><td>Check the channel status and rules; one gateway must run with <code>RUN_WORKERS=true</code>.</td></tr>
+  <tr><td>No webhooks are sent at all</td><td>Workers off on every gateway</td><td>Run one gateway with <code>RUN_WORKERS=true</code>.</td></tr>
+<tr><td>Offline alerts arrive late, all at once</td><td>The gateway did not run for a while (host sleep, suspended VM, blocked event loop): the log shows <code>gateway paused</code></td><td>Keep the host awake and powered (no sleep, lid-close or battery-saver standby). <code>GATEWAY_DIAG=verbose</code> logs event-loop delay, worker pass times and database waits every 10 s.</td></tr>
+  <tr><td>Plug &amp; Charge car refused; Log shows <code>CertChainError</code> or <code>unknown_contract</code></td><td>MO root not installed / contract not registered</td><td>Trust anchors → Fetch from the PKI, then Install on the charger; register the eMAID under Contracts (or check the partner's roaming token).</td></tr>
+  <tr><td>Charger V2G certificate "signing failed"</td><td>PKI gateway unreachable or not configured</td><td>Check <code>PNC_PKI_URL</code> / <code>PNC_PKI_TOKEN</code> on the gateway process; Overview shows the PKI problem. Request the certificate again.</td></tr>
+  <tr><td>Profile 3 charger refused, Connections shows "Client certificate check failed"</td><td>CA not trusted by the TLS terminator, or another certificate on the charger</td><td>Install the CA from Onboarding → Certificate authority on Caddy (<code>client_auth</code>); check the certificate on the charger is the one issued (Onboarding → Certificates shows its serial).</td></tr>
+  <tr><td>Remote start refused "tera"</td><td>Meter lapsed or pending calibration</td><td>Update the connector's tera data (Connectors tab) after re-verification.</td></tr>
+</table>
+
+<h2 class="pb">14. Go-live checklist</h2>
+<ul class="check">
+  <li>Production values set: <code>NODE_ENV=production</code>, Profile 2, auto-adopt off, trust-proxy on</li>
+  <li>All secrets generated, stored in the password manager, <code>.env</code> is mode 600</li>
+  <li>Charger hostname final; TLS certificate issued (not the ACME staging CA)</li>
+  <li>Ports 9200 / 9220 / 5432 not reachable from outside; console host IP allow-listed</li>
+  <li>Logs show "row-level security is in force" and "API bridge engaged"</li>
+  <li>First administrator created and password changed; team invited with least-privilege roles</li>
+  <li>Organisation NPWP / PKP status confirmed with the finance team</li>
+  <li>Every site has SPKLU ID, SLO and the correct PBJT-TL rate; tariffs assigned</li>
+  <li>Tax treatment confirmed with a tax adviser (PBJT base, PBJT inside PPN base)</li>
+  <li>Acceptance demo (<code>docs/ACCEPTANCE-v1.3.md</code>) passed on at least one real charger, including cable unlock &lt; 3 s</li>
+  <li>Nightly database and storage backups running, copied off-server; one restore tested</li>
+  <li>Local authorisation lists pushed to every site</li>
+  <li>Platform billing account created (<code>--platform-admin</code>, operator's own organisation); every customer's plan and private sites set</li>
+  <li>Roaming (if used): <code>ocpi.</code> host reachable over https from outside; roaming identity set; first partner's connection test passed; tax treatment of roaming CDRs agreed</li>
+  <li>Fleet billing (if used): seller NPWP/NITKU and e-Faktur items confirmed with the tax adviser; every fleet account has its NPWP and billing e-mail; one test XML imported into Coretax and checked</li>
+  <li>Promotions and memberships (if used): the membership-fee e-Faktur item confirmed; each new promotion tried on a test session; app passes only after the live QRIS acquirer is connected</li>
+  <li>Plug &amp; Charge (if used): the PKI gateway connected, trust anchors fetched and installed, each charger's V2G certificate installed, one test contract charged on each charger model</li>
+  <li>Profile 3 chargers: the charging-station CA on the TLS terminator, Caddy updated from deploy/Caddyfile (<code>X-Client-Cert-Fingerprint</code> assigned), and one charger connected with its certificate</li>
+  <li>Integrations (if used): the <code>api.</code> host answers <code>/openapi.json</code> and refuses <code>/v1/auth/login</code>; each integrator has a sandbox key for testing and a production key with only the permissions it needs</li>
+  <li>Integrations: the QRIS acquirer connected and its notification URL set in its dashboard, one small real payment confirmed with each enabled method (QRIS, each e-wallet, a card), and, if card holds are on, one hold captured after a real session; if linking is on, one e-wallet linked, paid in one tap and its unused balance refunded; the sign-in code provider (and fallback) connected and a code received on a test phone</li>
+  <li>Driver app: <code>MAP_TILE_URL</code> points at your own or a commercial tile service; a test phone received a "charging started" notification; a reservation was honoured by each charger model in use</li>
+  <li>Alert routing: e-mail and WhatsApp test messages received; at least one critical rule to an on-call contact with escalation; a test fault on a bench charger produced the alert, the escalation and the "resolved" message</li>
+</ul>
+
+<h2>15. Configuration reference</h2>
+<table class="t">
+  <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+  <tr><td><code>DATABASE_URL</code></td><td>local dev DB</td><td>App connection (runtime role <code>plugsure_app</code>).</td></tr>
+  <tr><td><code>MIGRATION_DATABASE_URL</code></td><td>—</td><td>Path B only: owner connection for the migrator.</td></tr>
+  <tr><td><code>POSTGRES_APP_USER</code> / <code>POSTGRES_APP_PASSWORD</code></td><td><code>plugsure_app</code> / —</td><td>Runtime role provisioned by the migrator.</td></tr>
+  <tr><td><code>AUDIT_HMAC_KEY</code>, <code>SECRETS_KEY</code></td><td>— (required)</td><td>Audit-log keying; secrets encryption.</td></tr>
+  <tr><td><code>INTERNAL_API_TOKEN</code></td><td>—</td><td>API ↔ gateway bridge secret.</td></tr>
+  <tr><td><code>GATEWAY_INTERNAL_URL</code></td><td>—</td><td>API: where the gateway is.</td></tr>
+  <tr><td><code>EVENT_RELAY</code></td><td><code>false</code></td><td>Gateway: relay live events to the API.</td></tr>
+  <tr><td><code>RUN_WORKERS</code></td><td><code>true</code></td><td>Gateway: background workers (incl. webhook delivery, refunds, outage alerts). Set false on extra replicas.</td></tr>
+<tr><td><code>GATEWAY_DIAG</code></td><td>(unset)</td><td>Gateway: <code>verbose</code> logs a health summary every 10 s (event-loop delay, database pool, worker passes). Unset, only problems are logged.</td></tr>
+  <tr><td><code>OFFLINE_ALERT_MINUTES</code></td><td>15</td><td>Gateway: minutes a charger may be offline before a critical alert (and webhook). Resolves itself on reconnect.</td></tr>
+  <tr><td><code>CONSOLE_PUBLIC_URL</code></td><td><code>PUBLIC_BASE_URL</code></td><td>Gateway: console address linked from alert e-mails and WhatsApp messages.</td></tr>
+  <tr><td><code>ALERT_TIMEZONE</code></td><td><code>Asia/Jakarta</code></td><td>Quiet hours and times in alert messages.</td></tr>
+  <tr><td><code>BILLING_ISSUER_NAME</code> / <code>BILLING_ISSUER_NPWP</code></td><td>PT. RailSure Solutions Indonesia (PlugSure) / —</td><td>API: issuer printed on commission statements.</td></tr>
+  <tr><td><code>BILLING_TIMEZONE</code></td><td><code>Asia/Jakarta</code></td><td>API: where calendar months are cut for statements.</td></tr>
+  <tr><td><code>ALERT_NOTIFY_MAX_PER_15MIN</code></td><td>20</td><td>Flood guard per recipient and channel; past it, one "messages paused" notice.</td></tr>
+  <tr><td><code>OCPI_PUBLIC_URL</code></td><td><code>PUBLIC_BASE_URL</code></td><td>API and gateway: public origin roaming partners call (versions URL = <code>&lt;this&gt;/ocpi/versions</code>).</td></tr>
+  <tr><td><code>OCPI_PBJT_IN_EXCL_VAT</code></td><td><code>true</code></td><td>API and gateway: count PBJT-TL in a roaming CDR's <code>excl_vat</code>. Confirm with a tax adviser.</td></tr>
+  <tr><td><code>OCPI_REALTIME_AUTH_TIMEOUT_MS</code></td><td>5000</td><td>Gateway: how long a charger waits for a partner's real-time approval of a card.</td></tr>
+  <tr><td><code>MAP_TILE_URL</code> / <code>MAP_ATTRIBUTION</code></td><td>OpenStreetMap tiles / © OpenStreetMap contributors</td><td>API: driver-app map tiles (<code>{z}/{x}/{y}</code>, optional <code>{s}</code>) and their credit line. The CSP follows the host.</td></tr>
+  <tr><td><code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code></td><td>empty (generated and stored)</td><td>API and gateway: Web Push key pair. Set only to bring an existing key.</td></tr>
+  <tr><td><code>VAPID_SUBJECT</code></td><td><code>mailto:ops@plugsure.id</code></td><td>Gateway: contact given to push services.</td></tr>
+  <tr><td><code>PUSH_ALLOWED_HOSTS</code></td><td>FCM, Mozilla, Apple, Windows</td><td>Gateway: push services notifications may go to in production (suffix match; SSRF guard).</td></tr>
+  <tr><td><code>DRIVER_RESERVATIONS</code> / <code>DRIVER_RESERVATION_MINUTES</code> / <code>DRIVER_RESERVATION_NO_SHOW_LIMIT</code></td><td><code>true</code> / 15 / 2</td><td>API: connector reservations from the app, their length, and unused reservations per 24 h before reserving pauses.</td></tr>
+  <tr><td><code>API_HOST</code> / <code>API_PORT</code> / <code>OCPP_PORT</code></td><td><code>0.0.0.0</code> / 9200 / 9220</td><td>Listen addresses.</td></tr>
+  <tr><td><code>API_TRUSTED_PROXIES</code></td><td>empty</td><td>Proxies whose X-Forwarded-* headers are believed.</td></tr>
+  <tr><td><code>API_RATE_LIMIT_PER_MIN</code></td><td>600</td><td>Per-IP request limit.</td></tr>
+  <tr><td><code>OCPP_VERSIONS</code></td><td><code>ocpp1.6</code></td><td>Negotiated protocols.</td></tr>
+  <tr><td><code>OCPP_MIN_SECURITY_PROFILE</code></td><td>0</td><td>Minimum charger security profile (production: 2).</td></tr>
+  <tr><td><code>OCPP_TRUST_PROXY_PROTO</code></td><td><code>false</code></td><td>Believe Caddy's TLS/cert headers.</td></tr>
+  <tr><td><code>OCPP_AUTO_ADOPT</code></td><td>on in development only</td><td>Auto-enrol unknown chargers.</td></tr>
+  <tr><td><code>OCPP_HEARTBEAT_S</code></td><td>300</td><td>Heartbeat interval sent to chargers.</td></tr>
+  <tr><td><code>OCPP_KEY_ROTATION_GRACE_MS</code></td><td>86400000</td><td>Old key accepted for 24 h after rotation.</td></tr>
+  <tr><td><code>OCPP_MAX_MESSAGES_PER_S</code> / <code>OCPP_MESSAGE_BURST</code></td><td>20 / 200</td><td>Gateway: per-charger message budget. Past it the charger's messages are paced, never refused or dropped; the burst covers a charger uploading its queue after an outage. 0 disables it.</td></tr>
+  <tr><td><code>PUBLIC_BASE_URL</code>, <code>OCPP_PUBLIC_URL</code></td><td>—</td><td>URLs handed to chargers / printed on commissioning exports.</td></tr>
+  <tr><td><code>STORAGE_DIR</code></td><td><code>./var/storage</code></td><td>Firmware images and logs (persistent volume).</td></tr>
+  <tr><td><code>MAX_FIRMWARE_BYTES</code> / <code>MAX_DIAGNOSTICS_BYTES</code></td><td>512 MB / 200 MB</td><td>Upload limits.</td></tr>
+  <tr><td><code>FIRMWARE_LINK_GRACE_HOURS</code></td><td>24</td><td>API: a charger's firmware download link works while a campaign needs the image, then this many hours after the charger's job last moved.</td></tr>
+  <tr><td><code>CONSOLE_COOKIE_SECURE</code></td><td>true in production</td><td>HTTPS-only session cookie.</td></tr>
+  <tr><td><code>LOGIN_MAX_FAILURES</code> / <code>LOGIN_LOCK_MINUTES</code> / <code>PASSWORD_MIN_LENGTH</code></td><td>5 / 15 / 12</td><td>Sign-in policy.</td></tr>
+  <tr><td><code>VAULT_ADDR</code>, <code>VAULT_TOKEN</code>, <code>VAULT_PKI_MOUNT</code>, <code>VAULT_PKI_ROLE</code>, <code>VAULT_CERT_TTL</code></td><td>— / pki / ocpp-charger / 8760h</td><td>Optional Profile 3 certificate issuance.</td></tr>
+  <tr><td><code>CHARGER_CA_CERT_FILE</code> / <code>CHARGER_CA_KEY_FILE</code></td><td>— (created on first use)</td><td>Your own CA for charger certificates; otherwise PlugSure creates one (key sealed with <code>SECRETS_KEY</code>).</td></tr>
+  <tr><td><code>CHARGER_CERT_DAYS</code> / <code>CHARGER_CERT_RENEW_DAYS</code></td><td>730 / 30</td><td>Charger certificate validity; renewal over OCPP this many days before expiry.</td></tr>
+  <tr><td><code>CSMS_ROOT_CA_FILE</code></td><td>—</td><td>Root of the OCPP host's TLS certificate, handed to chargers as <code>csms-root.pem</code> (empty for a public CA).</td></tr>
+  <tr><td><code>PNC_PKI</code>, <code>PNC_PKI_URL</code>, <code>PNC_PKI_TOKEN</code></td><td>none in production</td><td>ISO 15118 Plug &amp; Charge: the PKI gateway (deploy/README.md). <code>mock</code> = test PKI, refused in production.</td></tr>
+  <tr><td><code>PNC_V2G_SIGNER</code>, <code>PNC_VAULT_MOUNT</code>, <code>PNC_VAULT_ROLE</code></td><td>pki / pki_v2g / secc</td><td>Sign chargers' V2G certificates with your own sub-CA in Vault instead of the PKI.</td></tr>
+  <tr><td><code>PNC_RENEW_DAYS</code> / <code>PNC_OCSP_TIMEOUT_MS</code></td><td>30 / 5000</td><td>V2G certificate renewal lead time; OCSP request timeout.</td></tr>
+  <tr><td><code>PPN_RATE_BPS</code>, <code>PPN_DPP_NUM</code>/<code>DEN</code>, <code>PBJT_BASE</code>, <code>PBJT_IN_PPN_BASE</code></td><td>1200, 11/12, energy, true</td><td>Tax treatment — confirm with a tax adviser.</td></tr>
+  <tr><td><code>PLN_LK_BASE</code>, <code>PLN_CURAH_BASE</code></td><td>1645, 707</td><td>PLN base rates for the regulated ceilings.</td></tr>
+  <tr><td><code>IDLE_FEE_CAP_IDR</code></td><td>100000</td><td>Per-session cap on idle/time fees.</td></tr>
+  <tr><td><code>WBP_START</code> / <code>WBP_END</code></td><td>17:00 / 22:00</td><td>Peak (WBP) window for time-of-use pricing.</td></tr>
+</table>
+<p class="small">PlugSure CSMS v1.3.0 · Deployment Guide · See also RELEASE-NOTES-v1.3.0.md, deploy/README.md (full runbook) and docs/ACCEPTANCE-v1.3.md.</p>
+</body>
+</html>
