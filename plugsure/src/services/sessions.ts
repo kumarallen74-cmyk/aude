@@ -10,7 +10,7 @@ import { redemptionFor, pointsToRedeem, pointsAdjustment, discountable, recordLo
 import { benefitsFor, adjustmentOptions, pickCheapest, recordBenefits, type Who, type Benefits } from './benefits.js';
 import { loadTariffForConnector } from './tariff-store.js';
 import type { CanonicalMeterValue, TransactionEvent } from '../domain/canonical.js';
-import { energyWhFrom, powerWFrom } from '../domain/canonical.js';
+import { energyWhFrom, energySeriesFrom, powerWFrom } from '../domain/canonical.js';
 import { markRefundDue } from './refunds.js';
 import { linkRoamingSession } from '../ocpi/authorize.js';
 import { normaliseEmaid } from '../pnc/emaid.js';
@@ -65,6 +65,8 @@ export interface SessionRow {
   started_at: Date;
   ended_at: Date | null;
   meter_start_wh: number;
+  /** True while the start register has not been observed (migration 043). */
+  meter_start_unknown: boolean;
   meter_stop_wh: number | null;
   energy_wh: number;
   idle_minutes: number;
@@ -111,44 +113,104 @@ export async function handleTransactionEvent(
 // ------------------------------------------------------------------ start
 
 async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<SessionRow | null> {
-  const startWh = energyWhFrom(ev.meterValue) ?? 0;
+  /**
+   * An ABSENT start register is not a zero one. OCPP 2.0.1 makes meterValue on
+   * TransactionEvent(Started) optional, and `?? 0` here made the first Updated
+   * sample — the charger's lifetime register, 8,450,000 Wh in the reproduction —
+   * the session's energy. The start is recorded as unknown instead and taken
+   * from the first register the session observes (updateSession / endSession).
+   */
+  const observedStartWh = energyWhFrom(ev.meterValue);
+  const startWh = observedStartWh ?? 0;
   const tokenId = ev.idToken ? await resolveTokenId(c.org_id, ev.idToken.idToken) : null;
   const flags: SessionFlag[] = [];
 
   const skewFlag = clockSkewFlag(ev.timestamp);
   if (skewFlag) flags.push(skewFlag);
 
-  // A prepaid intent parked on this connector claims the session it starts —
-  // but only the intent whose PAYER is the token starting it.
-  const prepaid = await claimPrepaidIntent(c.id, ev.idToken?.idToken ?? null);
+  /**
+   * START IS ATOMIC PER CONNECTOR.
+   *
+   * A retried StartTransaction (or TransactionEvent Started) arriving alongside
+   * the original — across a reconnect, typically — used to pass the "existing
+   * session" check in both requests; the second then closed the session the
+   * first had just created as "superseded", and its own INSERT hit ON CONFLICT
+   * and handed back that CLOSED row. The charger went on charging against a
+   * session that was already ended and parked.
+   *
+   * Everything that decides what a start means — is this the same start again,
+   * is another session still open here, which prepaid intent does it claim —
+   * now runs under one transaction-scoped advisory lock on (charge point,
+   * connector). A duplicate waits, then finds the original by its idempotency
+   * key and changes nothing; only a genuinely new start closes an orphan, and
+   * never the row carrying its own key.
+   */
+  const started = await tx(async (client) => {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended('session-start:' || $1::text || ':' || $2::text, 0))`,
+      [c.charge_point_id, ev.evse.evseId],
+    );
 
-  const row = await one<SessionRow>(
-    `INSERT INTO charging_session
-        (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
-         token_id, state, started_at, meter_start_wh, energy_wh, payment_mode,
-         prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,0,$10,$11,$12,$13,$14,$15)
-     ON CONFLICT (idem_key) DO UPDATE
-        SET ocpp_transaction_id = COALESCE(charging_session.ocpp_transaction_id, EXCLUDED.ocpp_transaction_id)
-     RETURNING *`,
-    [
-      c.org_id,
-      c.site_id,
-      c.id,
-      c.charge_point_id,
-      ev.idemKey,
-      ev.transactionId,
-      tokenId,
-      ev.timestamp,
-      startWh,
-      prepaid ? 'prepurchase' : 'postpaid',
-      prepaid?.amount_authorised_idr ?? null,
-      prepaid?.allowance_wh ?? null,
-      prepaid?.id ?? null,
-      JSON.stringify(flags),
-      flags.some((f) => f.severity === 'violation'),
-    ],
-  );
+    const same = await client.query<SessionRow>(
+      `UPDATE charging_session
+          SET ocpp_transaction_id = COALESCE(ocpp_transaction_id, $2)
+        WHERE idem_key = $1
+        RETURNING *`,
+      [ev.idemKey, ev.transactionId],
+    );
+    if (same.rows[0]) return { row: same.rows[0], created: false, prepaid: null, orphans: [] as Orphan[] };
+
+    // A new transaction on a connector we still believe is busy means we missed
+    // a stop. Close the stale one for review rather than losing either session.
+    const orphans = await closeOrphansLocked(client, c.charge_point_id, ev.evse.evseId, ev.idemKey, 'superseded by a new transaction');
+
+    // A prepaid intent parked on this connector claims the session it starts —
+    // but only the intent whose PAYER is the token starting it. Claimed under
+    // the lock, so a duplicate start cannot claim a second intent.
+    const prepaid = await claimPrepaidIntent(c.id, ev.idToken?.idToken ?? null, client);
+
+    const ins = await client.query<SessionRow & { inserted: boolean }>(
+      `INSERT INTO charging_session
+          (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
+           token_id, state, started_at, meter_start_wh, meter_start_unknown, energy_wh, payment_mode,
+           prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16)
+       ON CONFLICT (idem_key) DO UPDATE
+          SET ocpp_transaction_id = COALESCE(charging_session.ocpp_transaction_id, EXCLUDED.ocpp_transaction_id)
+       RETURNING *, (xmax = 0) AS inserted`,
+      [
+        c.org_id,
+        c.site_id,
+        c.id,
+        c.charge_point_id,
+        ev.idemKey,
+        ev.transactionId,
+        tokenId,
+        ev.timestamp,
+        startWh,
+        observedStartWh === null,
+        prepaid ? 'prepurchase' : 'postpaid',
+        prepaid?.amount_authorised_idr ?? null,
+        prepaid?.allowance_wh ?? null,
+        prepaid?.id ?? null,
+        JSON.stringify(flags),
+        flags.some((f) => f.severity === 'violation'),
+      ],
+    );
+    const { inserted, ...row } = ins.rows[0]!;
+    // Bound inside the lock too: an intent claimed but not yet pointed at its
+    // session is still claimable by the next start on this connector.
+    if (prepaid && inserted) {
+      await client.query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
+    }
+    return { row: row as SessionRow, created: inserted, prepaid, orphans };
+  });
+
+  for (const o of started.orphans) announceOrphan(o, 'superseded by a new transaction');
+  // A repeat of a start already recorded: the original row, with none of the
+  // start's side effects (meter values, prepaid binding, session.started) run twice.
+  if (!started.created) return started.row;
+  const { row, prepaid } = started;
 
   if (row) {
     await insertMeterValues(row.id, ev.meterValue);
@@ -158,7 +220,6 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
     await applyFleetConsent(row.id).catch(() => false);
     await trackMeter(row.id, ev.meterValue, ev.operationMode).catch(() => null);
     if (prepaid) {
-      await query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
       if (prepaid.claim_id_tag == null) {
         await addFlag(row.id, {
           code: 'PREPAID_UNBOUND_INTENT',
@@ -211,6 +272,24 @@ async function updateSession(ev: TransactionEvent, c: ConnectorRow): Promise<Ses
     replan = (await trackMeter(row.id, ev.meterValue, ev.operationMode, client)).replanSiteId;
 
     if (observedWh === null) return row;
+
+    // The start register was never reported (a 2.0.1 Started without meterValue).
+    // The FIRST register observed is the start: energy 0 at that point, not the
+    // charger's lifetime total. The lowest register in the batch, so a batch of
+    // several samples still counts what flowed between them.
+    if (row.meter_start_unknown) {
+      if (row.state !== 'active') return row; // closed with no start: nothing to measure from
+      const startWh = Math.min(...energySeriesFrom(ev.meterValue));
+      await client.query(
+        `UPDATE charging_session
+            SET meter_start_wh = $2, meter_start_unknown = false, last_meter_at = $3,
+                flags = flags || $4::jsonb
+          WHERE id = $1 AND meter_start_unknown`,
+        [row.id, startWh, ev.timestamp, JSON.stringify([startInferredFlag(startWh, ev.timestamp)])],
+      );
+      row.meter_start_wh = startWh;
+      row.meter_start_unknown = false;
+    }
 
     const candidate = observedWh - row.meter_start_wh;
 
@@ -292,10 +371,28 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
 
     const flags: SessionFlag[] = [];
     const observedWh = energyWhFrom(ev.meterValue);
-    let stopWh: number;
+    let stopWh: number | null;
     let energy: number;
 
-    if (ev.meterStopAbsent || observedWh === null) {
+    // No start register was ever reported. If this stop carries one it is the
+    // first observation and the start (updateSession explains why); if it does
+    // not, nothing was ever measured and nothing is billed — a start of "0"
+    // would bill the lifetime register.
+    const startUnknown = row.meter_start_unknown && observedWh === null;
+    if (row.meter_start_unknown && observedWh !== null) {
+      row.meter_start_wh = Math.min(...energySeriesFrom(ev.meterValue));
+      flags.push(startInferredFlag(row.meter_start_wh, ev.timestamp));
+    }
+
+    if (startUnknown) {
+      stopWh = null;
+      energy = 0;
+      flags.push({
+        code: 'METER_REGISTER_ABSENT',
+        severity: 'warning',
+        message: 'The charger reported no energy register at any point in the session; billed 0 Wh.',
+      });
+    } else if (ev.meterStopAbsent || observedWh === null) {
       // Fall back to the running total rather than billing zero. The previous
       // `?? 0` made this path unreachable and lost a fully metered 45 kWh session.
       stopWh = row.meter_start_wh + row.energy_wh;
@@ -414,11 +511,17 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
     // tariffs are allowed to define could never actually be charged.
     const idleMinutes = await computeIdleMinutes(client, row.id, endedAt);
 
+    // More energy than the connector could physically have delivered in the
+    // time: a wrong start register, a unit mix-up or a meter fault. Parked.
+    const implausible = implausibleEnergyFlag(energy, durationS, c.max_power_w);
+    if (implausible) flags.push(implausible);
+
     const violation = flags.some((f) => f.severity === 'violation');
 
     const upd = await client.query<SessionRow>(
       `UPDATE charging_session
           SET state = 'ended', ended_at = $2, meter_stop_wh = $3, energy_wh = $4,
+              meter_start_wh = $14, meter_start_unknown = $15,
               duration_s = $5, stop_reason = $6, idle_minutes = $7, v2x_discharging = false,
               flags = flags || $8::jsonb, needs_review = needs_review OR $9,
               review_reason = COALESCE(review_reason, $10),
@@ -439,6 +542,8 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
         signed?.status ?? null,
         signed?.signedWh ?? null,
         signed?.detail ?? null,
+        row.meter_start_wh,
+        startUnknown,
       ],
     );
     return upd.rows[0] ?? row;
@@ -617,6 +722,14 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
   });
 
   const flags = [...result.flags];
+  // Checked again here, not only at the stop: every path to a CDR comes through
+  // this function, including sessions closed by reconciliation.
+  const implausible = implausibleEnergyFlag(
+    energyWh,
+    Math.round((new Date(s.ended_at ?? s.started_at).getTime() - new Date(s.started_at).getTime()) / 1000),
+    s.max_power_w,
+  );
+  if (implausible) flags.push(implausible);
   if (fallback) {
     // Silently dropping to the built-in default lost the service and admin fees.
     flags.push({
@@ -787,31 +900,65 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedIdr: numb
  * Close a session left active on a connector that has started a new transaction.
  * Without this the unique index would reject the new session outright, and the
  * revenue from both would be lost.
+ *
+ * Session start does this itself, under its per-connector lock (startSession):
+ * closing from OUTSIDE that lock is what let a duplicate StartTransaction close
+ * the session its twin had just opened. This entry point takes the same lock.
  */
 export async function closeOrphanedSession(chargePointId: string, connectorNo: number, reason: string) {
-  const orphan = await one<{ id: string; org_id: string }>(
-    `SELECT cs.id, cs.org_id
-       FROM charging_session cs
-       JOIN connector c ON c.id = cs.connector_uuid
-       JOIN evse e ON e.id = c.evse_uuid
-      WHERE e.charge_point_id = $1 AND e.evse_id = $2 AND cs.state = 'active'`,
-    [chargePointId, connectorNo],
-  );
-  if (!orphan) return;
+  const orphans = await tx(async (client) => {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended('session-start:' || $1::text || ':' || $2::text, 0))`,
+      [chargePointId, connectorNo],
+    );
+    return closeOrphansLocked(client, chargePointId, connectorNo, null, reason);
+  });
+  for (const o of orphans) announceOrphan(o, reason);
+}
 
-  await query(
+interface Orphan { id: string; org_id: string }
+
+/**
+ * The close itself. The caller holds the connector's session-start lock.
+ * `keepIdemKey` is the start being recorded: its own row is never an orphan,
+ * whatever state a concurrent retry left it in.
+ */
+async function closeOrphansLocked(
+  client: Pick<PoolClient, 'query'>,
+  chargePointId: string,
+  connectorNo: number,
+  keepIdemKey: string | null,
+  reason: string,
+): Promise<Orphan[]> {
+  const r = await client.query<Orphan>(
     `UPDATE charging_session
         SET state = 'ended', ended_at = now(), stop_reason = 'Other',
             needs_review = true, review_reason = 'ORPHANED_SESSION',
-            flags = flags || $2::jsonb
-      WHERE id = $1 AND state = 'active'`,
+            flags = flags || $4::jsonb
+      WHERE id IN (
+              SELECT cs.id
+                FROM charging_session cs
+                JOIN connector c ON c.id = cs.connector_uuid
+                JOIN evse e ON e.id = c.evse_uuid
+               WHERE e.charge_point_id = $1 AND e.evse_id = $2 AND cs.state = 'active'
+                 AND ($3::text IS NULL OR cs.idem_key <> $3)
+            )
+        AND state = 'active'
+      RETURNING id, org_id`,
     [
-      orphan.id,
+      chargePointId,
+      connectorNo,
+      keepIdemKey,
       JSON.stringify([
         { code: 'ORPHANED_SESSION', severity: 'violation', message: `Closed without a StopTransaction: ${reason}.` },
       ]),
     ],
   );
+  return r.rows;
+}
+
+/** After the closing transaction has committed: log and alert. */
+function announceOrphan(orphan: Orphan, reason: string) {
   logger.warn({ sessionId: orphan.id, reason }, 'closed an orphaned session');
   bus.emit('alert.raised', {
     orgId: orphan.org_id,
@@ -905,6 +1052,41 @@ export async function clearReviewAndRate(sessionId: string, orgId?: string, forc
 }
 
 // ------------------------------------------------------------------ helpers
+
+/** The session's start register was taken from its first observation, not the start event. */
+function startInferredFlag(startWh: number, at: string): SessionFlag {
+  return {
+    code: 'METER_START_INFERRED',
+    severity: 'info',
+    message:
+      `The start event carried no energy register; the first register observed ` +
+      `(${startWh} Wh at ${at}) was taken as the start.`,
+  };
+}
+
+/**
+ * Energy the connector could not physically have delivered in the time.
+ *
+ * Nameplate power × duration, with 25 % headroom for a nameplate that
+ * understates the hardware and 1 kWh for clock granularity and registers that
+ * tick in whole kWh. Above that the number is wrong — a lifetime register taken
+ * as a start of zero (8,450 kWh in a 40-minute session), a kWh/Wh mix-up, a
+ * meter fault — and billing it is not a judgement call. Only asserted when both
+ * the nameplate and the duration are known; neither is ever guessed.
+ */
+export function implausibleEnergyFlag(energyWh: number, durationS: number, maxPowerW: number | null | undefined): SessionFlag | null {
+  const w = Number(maxPowerW);
+  if (!Number.isFinite(w) || w <= 0 || !(durationS > 0)) return null;
+  const limitWh = w * (durationS / 3600) * 1.25 + 1000;
+  if (!(energyWh > limitWh)) return null;
+  return {
+    code: 'IMPLAUSIBLE_ENERGY',
+    severity: 'violation',
+    message:
+      `${energyWh} Wh in ${Math.round(durationS / 60)} min exceeds what a ${w} W connector can ` +
+      `deliver (${Math.round(limitWh)} Wh with headroom). Parked for review.`,
+  };
+}
 
 function clockSkewFlag(timestamp: string): SessionFlag | null {
   const t = new Date(timestamp).getTime();
@@ -1001,19 +1183,40 @@ export function detectRollover(
  *
  * IDLE_THRESHOLD_WH is what separates "still charging slowly" from "parked":
  * below it, the vehicle is drawing maintenance current, not taking a charge.
+ *
+ * The comparison is in Wh OF THE REGISTER, and it was not: `value - prev` ran on
+ * raw meter_value rows whatever their unit or phase. A charger reporting kWh
+ * never moved 50 "units" between samples, so idle was the whole session; one
+ * reporting per phase interleaved L1/L2/L3 rows at the same timestamp, so every
+ * phase-to-phase step looked like a delivery (or a regression) and idle was
+ * never. The register is rebuilt per timestamp exactly as canonical.ts reads
+ * one (registerFromEntry): kWh normalised to Wh, the untagged total when there
+ * is one, otherwise the sum of the per-phase registers. One row per timestamp
+ * also makes the lag order total — meter_value has no id to break ts ties with,
+ * and duplicate (replayed) rows collapse instead of reading as zero-deltas.
  */
 const IDLE_THRESHOLD_WH = 50;
 
 async function computeIdleMinutes(client: Pick<PoolClient, 'query'>, sessionId: string, endedAt: Date): Promise<number> {
   const r = await client.query<{ ts: Date }>(
-    `WITH series AS (
-       SELECT ts, value,
-              lag(value) OVER (ORDER BY ts) AS prev
+    `WITH per_phase AS (
+       SELECT ts, phase,
+              max(CASE WHEN lower(COALESCE(unit, 'Wh')) = 'kwh' THEN value * 1000 ELSE value END) AS wh
          FROM meter_value
         WHERE session_id = $1 AND measurand = 'Energy.Active.Import.Register'
+          AND (phase IS NULL OR phase IN ('L1', 'L2', 'L3', 'L1-N', 'L2-N', 'L3-N'))
+        GROUP BY ts, phase
+     ), register AS (
+       SELECT ts,
+              COALESCE(max(wh) FILTER (WHERE phase IS NULL), sum(wh) FILTER (WHERE phase IS NOT NULL)) AS wh
+         FROM per_phase
+        GROUP BY ts
+     ), series AS (
+       SELECT ts, wh, lag(wh) OVER (ORDER BY ts) AS prev
+         FROM register
      )
      SELECT ts FROM series
-      WHERE prev IS NULL OR value - prev >= $2
+      WHERE prev IS NULL OR wh - prev >= $2
       ORDER BY ts DESC
       LIMIT 1`,
     [sessionId, IDLE_THRESHOLD_WH],
@@ -1153,8 +1356,8 @@ async function addFlag(sessionId: string, flag: SessionFlag, client?: any) {
  */
 export const PREPAID_CLAIM_WINDOW_MIN = 30;
 
-async function claimPrepaidIntent(connectorUuid: string, idTag: string | null) {
-  return one<{
+async function claimPrepaidIntent(connectorUuid: string, idTag: string | null, client: Pick<PoolClient, 'query'>) {
+  const r = await client.query<{
     id: string;
     amount_authorised_idr: number;
     allowance_wh: number;
@@ -1185,6 +1388,7 @@ async function claimPrepaidIntent(connectorUuid: string, idTag: string | null) {
       RETURNING id, amount_authorised_idr, allowance_wh, claim_id_tag`,
     [connectorUuid, idTag],
   );
+  return r.rows[0] ?? null;
 }
 
 async function insertMeterValues(sessionId: string, mv: CanonicalMeterValue[], client?: any) {

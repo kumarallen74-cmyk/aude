@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { bus } from '../services/events.js';
 import * as assets from '../services/assets.js';
-import { handleTransactionEvent, sessionIdemKey, closeOrphanedSession, PREPAID_CLAIM_WINDOW_MIN } from '../services/sessions.js';
+import { handleTransactionEvent, sessionIdemKey, PREPAID_CLAIM_WINDOW_MIN } from '../services/sessions.js';
 import { recordFinding } from './quirks.js';
 import { OcppCallError } from './rpc.js';
 import { onFirmwareStatus, onBootFirmware, logFirmwareHookError } from '../services/firmware.js';
@@ -313,8 +313,11 @@ async function onStartTransaction(ctx: AdapterContext, p: any) {
   }
 
   // A new transaction on a connector we still believe is busy means we missed a
-  // stop. Close the stale one for review rather than losing either session.
-  await closeOrphanedSession(ctx.chargePointId, connectorNo, 'superseded by a new transaction');
+  // stop; the stale one is closed for review rather than losing either session.
+  // That close happens INSIDE session start, under its per-connector lock
+  // (services/sessions.ts startSession). Done here, before the insert and
+  // outside any lock, a duplicate of this very request arriving alongside it
+  // closed the session its twin had just opened as "superseded".
 
   const seq = await one<{ id: number }>(`SELECT nextval('ocpp_tx_seq')::int AS id`);
   const transactionId = seq?.id ?? Math.floor(Date.now() / 1000);

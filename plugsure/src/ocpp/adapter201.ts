@@ -372,6 +372,10 @@ export function toCanonicalTransactionEvent201(ctx: AdapterContext, p: any): Tra
   const idTokenValue: string | undefined = p.idToken?.idToken;
   const idTokenType: string | undefined = p.idToken?.type;
   const mv = toCanonicalMeterValues201(p.meterValue ?? []);
+  // For the idempotency key ONLY. meterValue on Started is optional in 2.0.1; an
+  // absent register keys as 0 (the same on every retry), but is never billed as a
+  // start of 0 — startSession records it as unknown and takes the first register
+  // the session observes, or the lifetime total would become session energy.
   const meterStartWh = energyWhFrom(mv) ?? 0;
 
   return {
