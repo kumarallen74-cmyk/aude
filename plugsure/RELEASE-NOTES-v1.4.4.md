@@ -93,7 +93,7 @@ Docker Compose already kept the owner credential in its `migrate` service only a
   - a roaming-card case in the scan test, which fails on v1.4.3.
 - **End-to-end, all 29 suites in full mode on a fresh database as `plugsure_app`.** New checks:
   - **driver:** a suspended charger is shown Unavailable and refuses a quote and a checkout; a paid charge cannot start once the charger is suspended; a connected charger reads online straight after Resume;
-  - **driver-plus:** a suspended charger offers no reservation and refuses one, with no ReserveNow sent; suspending with a live reservation sends CancelReservation and leaves no reservation to lapse into a no-show;
+  - **driver-plus:** a suspended charger offers no reservation and refuses one, with no ReserveNow sent; suspending with a live reservation sends CancelReservation, tells the driver by push, and leaves no reservation to lapse into a no-show;
   - **reservation-fees:** a fee paid after suspension holds nothing and is owed back;
   - **pilot-fixes:** the operator QRIS checkout is refused for a suspended charger, and a charger resumed while disconnected is offline from now.
 - **systemd units:** checked under systemd 255, the version in Ubuntu 24.04, with the real unit files and a stand-in for `node`:
