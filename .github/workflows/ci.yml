@@ -340,7 +340,8 @@ jobs:
           curl -fsS http://127.0.0.1:9200/healthz | tee /dev/stderr | grep -q '"ok":true'
           # The console is static HTML served from dist/web. If the Dockerfile
           # stops copying it, this is where we find out.
-          curl -fsS http://127.0.0.1:9200/ | grep -q "PlugSure Operator Console"
+          curl -fsS -o /tmp/console.html http://127.0.0.1:9200/
+          grep -q "<title>PlugSure CSMS — Operator Console</title>" /tmp/console.html
           docker rm -f plugsure-api
 
       # The production-required OCPP settings: profile 2 behind a TLS-terminating
