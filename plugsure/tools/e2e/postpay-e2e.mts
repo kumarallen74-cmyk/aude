@@ -619,6 +619,13 @@ try {
     need.status === 200 && need.data.secretHints?.secretKey && flags.LINKAJA === false && flags.OVO === true && flags.DANA === true && flags.SHOPEEPAY === true
       && ljOn.status === 200 && ljOn.data.payment.postpay === false && ljOnI.mode === 'prepurchase' && ljOnI.state === 'captured' && ljCharge.payment_method_id === 'pm-linkaja' && ljCharge.amount === 20_000
       && spOn.data.payment?.postpay === true, { flags, ljOn: ljOn.data.payment, ljOnI, ljCharge, spOn: spOn.data.payment });
+  // Released like any unused post-pay session, so the ShopeePay balance (Rp 30,000) is free for the checks further down:
+  // post-pay exposure counts every session still held on the same e-wallet.
+  if (spOn.data.chargeId) {
+    const spOnI = await intentOfCharge(spOn.data.chargeId);
+    await pg.query(`UPDATE payment_intent SET created_at = now() - interval '40 minutes' WHERE id = $1`, [spOnI.id]);
+    await until(() => intentOfCharge(spOn.data.chargeId), (i) => i.hold_state === 'released', 100_000, 2000);
+  }
 
   // GoPay through Xendit: a v3 payment token, its balance from token_details (Rp 40,000 in the fake).
   const tG = Date.now();
