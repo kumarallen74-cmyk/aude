@@ -367,4 +367,94 @@ Some suites need their documented prerequisites, and were run with them:
 - Keys that held only `charge_point:command` (the `api_client` role) can no longer push firmware, set charging profiles or send DataTransfer.
 - Migration 043 is additive.
 
-§3.2 (before public paid charging) and §3.3/§3.4 remain open.
+§3.3/§3.4 remain open. §3.2 is addressed in §8.
+
+---
+
+## 8. Public-launch blocker fixes (1 October 2026)
+
+All 13 items in §3.2 are fixed on the same branch.
+
+| §3.2 | Fix | Commit |
+|---|---|---|
+| 13 | A prepaid token is bound to the connector it was paid for. A start that claims nothing is refused (1.6: transactionId 0, Invalid/ConcurrentTx; 2.0.1: idTokenInfo), and no postpaid session is ever created for a prepaid token. | `064327f` |
+| 14 | A pass payment is refused from another operator's acquirer account and when underpaid. A payment after a void is refunded. | `f0296a2` |
+| 15 | Post-pay, e-wallet and saved-card charges use deterministic references saved before the call. A retry after a lost answer looks up the status instead of charging again. Checkout and pass purchase record the payment first. | `f0296a2`, `0348509` |
+| 16 | OTP and PIN attempts are claimed atomically. There are per-phone, per-IP, per-device, per-card and global budgets, and send budgets are claimed before the SMS goes out. | `756de29` |
+| 17 | Partner roles, party and kind are pinned to what the operator chose. A token cannot be moved to another partner. A hub acts for nobody until HubClientInfo arrives. | `7d5ad81` |
+| 18 | The eMSP receiver endpoints are CPO-only. Unlinked or implausible CDRs are held for operator review and are not invoiced, counted against limits or shown to drivers. | `7d5ad81` |
+| 19 | A Midtrans capture notification reconciles the hold, and a refused capture checks the order status. | `f0296a2` |
+| 20 | Refund state changes are conditional. A bank transfer is refused while a provider refund is in flight. Stuck refunds are polled. A DB CHECK enforces refund ≤ captured. | `f0296a2` |
+| 21 | The post-pay decision runs under a per-driver lock over all held exposure. | `f0296a2` |
+| 22 | Points and promotions are reserved in the CDR transaction under locks. Pre-purchase sessions do not take points. Device-only guests do not get new-driver or per-customer promotions. | `064327f` |
+| 23 | Webhooks and OCPI have hard total deadlines; outbox passes use allSettled and run concurrently over leased rows. | `1c207e6` |
+| 24 | Every tenant-configured URL goes through guardedFetch, with a connect-time check, no redirects and a size cap. Provider bodies are not echoed. Internal SMTP hosts need `SMTP_ALLOWED_INTERNAL_HOSTS`. net-guard covers NAT64, 6to4 and IPv4-compatible addresses. | `1c207e6` |
+| 25 | The OCPI base URL and response_url come from `OCPI_PUBLIC_URL` / `PUBLIC_BASE_URL` only. | `7d5ad81`, `756de29` |
+
+### Verification
+
+- **Typecheck and build:** clean.
+- **Unit and database tests:** 702/702.
+- **End-to-end:** a fresh database (migrations 001–047, 46 files; 045 was not needed), with the API and gateway run as `plugsure_app`.
+
+| Suite | Result |
+|---|---|
+| pilot-fixes | 16/16 |
+| isolation | 45/45 |
+| ocpi-auth | 9/9 |
+| console | 96/96 |
+| field | 139/139 |
+| driver | 50/50 |
+| driver-plus | 46/46 |
+| queue | 19/19 |
+| reservation-fees | 12/12 |
+| fleet-billing | 53/53 |
+| pricing | 24/24 |
+| pnc | 37/37 |
+| onboarding | 19/19 |
+| integrations | 22/22 |
+| payment-methods | 21/21 |
+| card-holds | 38/38 |
+| linked-wallets | 19/19 |
+| postpay | 40/40 |
+| ocpi | 74/74 |
+| ocpi-emsp | 63/63 |
+| ocpi-profiles | 36/36 |
+| sdk | 23/23 |
+| v2x | 21/21 |
+| ocmf | 20/20 |
+| sandbox-2x | 17/17 |
+| brand | 28/28 |
+| apns | 20/20 |
+| live-activity | 17/17 |
+| api-sandbox | 38/38 |
+
+Two suites were adjusted for intended behaviour:
+- **ocpi-emsp:** its CDR now quotes the authorisation it belongs to, and the suite also checks the held/reject flow.
+- **postpay:** it releases unused ShopeePay sessions, because exposure now counts every session still held on the same e-wallet.
+
+### What operators must set or know
+
+- **Environment:**
+  - `OCPI_PUBLIC_URL` (or `PUBLIC_BASE_URL`) is required outside development/test, or the OCPI API and roaming commands answer 503.
+  - A same-host SMTP relay must be listed in `SMTP_ALLOWED_INTERNAL_HOSTS`.
+  - Provider URLs on private networks are refused, and provider redirects now fail.
+- **Driver sign-in limits:** defaults are 10 codes per phone per day, 10 per IP per hour, 5 per device per hour, 5,000 per day globally, 10 wrong codes per phone per day, 20 PIN attempts per IP per hour, and 15 PIN attempts per card per day. Each can be changed with a `DRIVER_*` environment variable. Mobile carrier NAT may need the per-IP limits raised. Limit refusals answer 429.
+- **Roaming:**
+  - A partner that is both CPO and eMSP needs two connections.
+  - A hub acts for no clients until it sends HubClientInfo.
+  - Held partner CDRs wait in `GET /v1/roaming/cdrs/held` until accepted or rejected.
+- **Charging and payments:**
+  - A prepaid QR presented on the wrong connector is refused at the charger.
+  - Pre-purchase sessions no longer use loyalty points (they still earn them).
+  - Promotion budgets are never exceeded.
+  - Webhook receivers must answer within 15 s.
+- **Migrations:** 044 (refund bound), 046 (driver auth limits) and 047 (OCPI trust) are additive.
+
+### Still open
+
+- §3.3/§3.4 (hardening and Low items).
+- Xendit has no payment-status lookup by reference; retries rely on its idempotency key.
+- A pending refund at an acquirer without a refund-status API stays "processing" with no alert.
+- Web Push delivery has only an idle timeout. Its targets are restricted to known push services.
+
