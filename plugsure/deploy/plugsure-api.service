@@ -44,6 +44,10 @@ Environment=TZ=Asia/Jakarta
 # up yet at boot), within StartLimitBurst. The '+' runs just this command with full
 # privileges (systemctl needs them); the API itself stays sandboxed.
 ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
+# The start timeout covers ExecStartPre, i.e. the migration (up to plugsure-migrate's
+# TimeoutStartSec=600): without this the default 90 s would report a long migration as a
+# failed deploy while it is still running.
+TimeoutStartSec=infinity
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/api.js
 
 Restart=always

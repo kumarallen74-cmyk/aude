@@ -24,7 +24,12 @@ A reservation fee paid *after* the charger was suspended holds nothing and sends
 - live reservations are cancelled (CancelReservation), and their fee is waived or refunded whatever the grace period, so it is not counted as a no-show;
 - queue offers go back to waiting, so the driver keeps their place.
 
-The suspend response reports how many were released (`reservationsReleased`).
+- roaming partners' reservations (OCPI) on the charger are cancelled too;
+- the drivers concerned get a push notice ("Reservasi dibatalkan" / "Giliran Anda ditunda").
+
+The database changes happen in the suspend request; CancelReservation, the notices and the queue's next offer are sent after it has committed. A ReserveNow still in flight when the charger is suspended cannot revive the reservation. A reservation that had already lapsed before the suspension is left to expire normally. The suspend response reports how many were released (`reservationsReleased`).
+
+**Known limitation:** a driver put back to waiting keeps their original join time, so on a site with a short maximum wait their place can expire soon after.
 
 The operator API's walk-up QRIS checkout (`POST /v1/checkout/qris`) also answers 409 for a suspended, unadopted or decommissioned charger, or a connector on maintenance hold.
 
@@ -45,6 +50,7 @@ Migrations now run in a new one-shot unit, `deploy/plugsure-migrate.service`. On
 - The gateway therefore never starts against an old schema either.
 - The nightly backup's `/etc/plugsure/backup.env`, which also holds the owner credential, is now root-only (0600).
 - Both app units hide `migrate.env` and `backup.env` with `InaccessiblePaths=`.
+- Both app units set `TimeoutStartSec=infinity`, so a long migration (bounded by the migrate unit's own 600 s) is not reported as a failed start while it runs.
 
 Docker Compose already kept the owner credential in its `migrate` service only and is unchanged.
 

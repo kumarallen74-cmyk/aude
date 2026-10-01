@@ -1015,7 +1015,7 @@ export async function buildApi(): Promise<FastifyInstance> {
    * and starts (adapter16 stationRefusal); a session already running is left to
    * finish, and its MeterValues and stop are still accepted. Resume reverses it.
    */
-  app.post('/v1/charge-points/:identity/suspend', async (req) => {
+  app.post('/v1/charge-points/:identity/suspend', async (req, reply) => {
     const { identity } = req.params as { identity: string };
     const owner = await ownedChargePoint(req, identity, 'charge_point:write');
     const reason = String((req.body as any)?.reason ?? '').trim().slice(0, 500) || null;
@@ -1045,8 +1045,11 @@ export async function buildApi(): Promise<FastifyInstance> {
     await closeOutage(identity);
     // Drivers holding a reservation or a queue offer on it lose nothing: released,
     // fee waived or refunded, queue place kept (v1.4.4).
+    // Database changes here, in this request's transaction; CancelReservation, driver
+    // notices and queue re-allocation after the response (so after the commit).
     const released = await (await import('../driver/reservations.js')).releaseForSuspension(owner.chargePointId);
-    return { ok: true, reservationsReleased: released };
+    if (released.count) afterResponse(reply.raw, released.after, (e) => logger.warn({ cp: identity, err: e.message }, 'post-suspension release steps failed'));
+    return { ok: true, reservationsReleased: released.count };
   });
 
   app.post('/v1/charge-points/:identity/resume', async (req, reply) => {

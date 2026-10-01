@@ -299,10 +299,16 @@ export async function offerEnded(r: { queue_entry_id: string; site_name?: string
  * The offered connector was withdrawn by the operator (charger suspended, v1.4.4): the
  * driver did nothing wrong, so they keep their place and wait for the next free connector.
  */
-export async function requeueOffer(entryId: string): Promise<void> {
-  const e = await one<{ site_id: string }>(
-    `UPDATE driver_queue_entry SET state = 'waiting', offered_at = NULL WHERE id = $1 AND state = 'offered' RETURNING site_id`, [entryId]);
-  if (e) void allocate(e.site_id);
+export async function requeueOffer(entryId: string): Promise<{ site_id: string; device_id: string } | null> {
+  // Only the row: the caller allocates (and notifies) after its transaction commits, outside
+  // the request scope — allocation sends ReserveNow and must not run inside the operator's request.
+  return one<{ site_id: string; device_id: string }>(
+    `UPDATE driver_queue_entry SET state = 'waiting', offered_at = NULL WHERE id = $1 AND state = 'offered' RETURNING site_id, device_id`, [entryId]);
+}
+
+/** Tell a driver whose offer was withdrawn by a suspension that they keep their place. */
+export async function notifyRequeued(deviceId: string, entryId: string, siteName: string): Promise<void> {
+  await notifyQueue(deviceId, entryId, 'requeued', siteName ?? '', null);
 }
 
 const running = new Map<string, Promise<void>>();

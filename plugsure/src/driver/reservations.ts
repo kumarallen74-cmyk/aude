@@ -195,11 +195,22 @@ export async function holdConnector(h: Holder, c: HoldTarget, minutes: number, q
   }
   if (status !== 'Accepted') {
     // Not held: no fee (a paid one is refunded by the caller).
-    await query(`UPDATE driver_reservation SET state = 'rejected', charger_status = $2, ended_at = now(), fee_state = CASE WHEN fee_state = 'none' THEN 'none' ELSE 'waived' END WHERE id = $1`, [row.id, status]);
+    // Only while still 'requested': a suspension may have cancelled it meanwhile (and owes its fee back).
+    await query(`UPDATE driver_reservation SET state = 'rejected', charger_status = $2, ended_at = now(), fee_state = CASE WHEN fee_state = 'none' THEN 'none' ELSE 'waived' END WHERE id = $1 AND state = 'requested'`, [row.id, status]);
     await retireClaimToken(row);
     return { ok: false, status };
   }
-  await query(`UPDATE driver_reservation SET state = 'active', charger_status = 'Accepted', held_at = now() WHERE id = $1`, [row.id]);
+  const activated = await one<{ id: string }>(
+    `UPDATE driver_reservation SET state = 'active', charger_status = 'Accepted', held_at = now() WHERE id = $1 AND state = 'requested' RETURNING id`, [row.id]);
+  if (!activated) {
+    // Cancelled while ReserveNow was in flight (the charger was suspended, v1.4.4): undo the hold.
+    try {
+      await cancelReservation(c.ocpp_identity, row.ocpp_reservation_id, { type: 'system' });
+    } catch (e) {
+      logger.warn({ reservation: row.id, err: (e as Error).message }, 'CancelReservation after a cancelled hold not delivered');
+    }
+    return { ok: false, status: 'Cancelled' };
+  }
   logger.info({ reservation: row.id, cp: c.ocpp_identity, connector: c.connector_no, queueEntry: queueEntryId }, queueEntryId ? 'queue offer held' : 'driver reservation accepted');
   return { ok: true, row: { ...row, state: 'active' } };
 }
@@ -234,15 +245,50 @@ export async function releaseReservation(id: string): Promise<void> {
  * fee is waived or refunded whatever the grace period (the driver could not have used
  * it), and a queue offer goes back to waiting with its place kept. Not a no-show.
  */
-export async function releaseForSuspension(chargePointId: string): Promise<number> {
+export async function releaseForSuspension(chargePointId: string): Promise<{ count: number; after: () => Promise<void> }> {
+  // Database only, in the caller's transaction. One that has already lapsed (not yet swept) is
+  // left to the sweep: it ended before the suspension, as a no-show if it was one.
   const live = await many<any>(
-    `${SELECT} WHERE r.charge_point_id = $1 AND r.state IN ('requested','active')`, [chargePointId]);
+    `${SELECT} WHERE r.charge_point_id = $1 AND r.state IN ('requested','active') AND r.expires_at > now()`, [chargePointId]);
+  const queue = await import('./queue.js');
+  const released: Array<{ r: any; requeued: { site_id: string; device_id: string } | null }> = [];
   for (const r of live) {
-    await releaseReservation(r.id);
+    const ended = await one<{ id: string }>(
+      `UPDATE driver_reservation SET state = 'cancelled', ended_at = now() WHERE id = $1 AND state IN ('requested','active') RETURNING id`, [r.id]);
+    if (!ended) continue;
+    await retireClaimToken(r);
     if (r.fee_state && r.fee_state !== 'none') await waiveFee(r, 'Charger suspended by the operator');
-    if (r.queue_entry_id) await (await import('./queue.js')).requeueOffer(r.queue_entry_id);
+    const requeued = r.queue_entry_id ? await queue.requeueOffer(r.queue_entry_id) : null;
+    released.push({ r, requeued });
   }
-  return live.length;
+  // Roaming partners' reservations (OCPI ReserveNow) on this charger end too.
+  const roaming = await many<{ id: number; ocpp_identity: string }>(
+    `UPDATE ocpi_reservation r SET state = 'cancelled'
+       FROM charge_point cp
+      WHERE cp.id = r.charge_point_id AND r.charge_point_id = $1 AND r.state IN ('requested','active') AND r.expires_at > now()
+      RETURNING r.id, cp.ocpp_identity`, [chargePointId]);
+  // After the commit, outside the request (the caller runs it with afterResponse): tell the
+  // charger, tell the drivers, and offer the queue the next free connector.
+  const after = async () => {
+    for (const { r, requeued } of released) {
+      try {
+        await cancelReservation(r.ocpp_identity, r.ocpp_reservation_id, { type: 'system' });
+      } catch (e) {
+        logger.warn({ reservation: r.id, err: (e as Error).message }, 'CancelReservation not delivered (the charger drops it at expiry)');
+      }
+      if (requeued) await queue.notifyRequeued(requeued.device_id, r.queue_entry_id, r.site_name).catch(() => {});
+      else await notifyReservation(r.device_id, r.id, 'released', r.site_name, new Date(r.expires_at)).catch(() => {});
+    }
+    for (const x of roaming) {
+      try {
+        await cancelReservation(x.ocpp_identity, x.id, { type: 'system' });
+      } catch (e) {
+        logger.warn({ ocpiReservation: x.id, err: (e as Error).message }, 'CancelReservation (roaming) not delivered');
+      }
+    }
+    for (const site of new Set(released.flatMap(({ requeued }) => (requeued ? [requeued.site_id] : [])))) await queue.allocate(site);
+  };
+  return { count: released.length + roaming.length, after };
 }
 
 /** A minted claim token that was never paid for must not outlive its reservation. */

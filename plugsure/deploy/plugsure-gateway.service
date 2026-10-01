@@ -48,6 +48,10 @@ Environment=TZ=Asia/Jakarta
 
 # A failed migration fails this start too; Restart=always retries it (v1.4.4).
 ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
+# The start timeout covers ExecStartPre, i.e. the migration (up to plugsure-migrate's
+# TimeoutStartSec=600): without this the default 90 s would report a long migration as a
+# failed deploy while it is still running.
+TimeoutStartSec=infinity
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/gateway.js
 # Deliberately NO ExecReload. The gateway installs no SIGHUP handler, and node's
 # default action for SIGHUP is to terminate: an `ExecReload=/bin/kill -HUP` here made

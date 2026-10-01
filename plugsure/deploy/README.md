@@ -795,6 +795,7 @@ hand-editing:
 
 ```bash
 # take one before every deploy (as the OWNER — plugsure_app is subject to RLS)
+sudo install -d -o plugsure -g plugsure -m 0700 /var/backups/plugsure   # once; the nightly backup uses it too
 sudo -u plugsure pg_dump "$OWNER_URL" -Fc -f /var/backups/plugsure/plugsure-predeploy-$(date +%F-%H%M).dump   # OWNER_URL as in §4
 ```
 

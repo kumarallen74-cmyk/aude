@@ -245,7 +245,17 @@ export async function notifyRoamingCdr(tokenId: string, cdrId: string, site: str
   });
 }
 
-export async function notifyReservation(deviceId: string, reservationId: string, kind: 'reminder' | 'expired', site: string, expiresAt: Date) {
+export async function notifyReservation(deviceId: string, reservationId: string, kind: 'reminder' | 'expired' | 'released', site: string, expiresAt: Date) {
+  // The operator suspended the charger (v1.4.4): the reservation is cancelled, any fee refunded.
+  if (kind === 'released') {
+    const m: Msg = {
+      id: { title: 'Reservasi dibatalkan', body: `${site} · charger sementara tidak beroperasi; biaya dikembalikan`, detail: 'Charger sementara tidak beroperasi; biaya dikembalikan' },
+      en: { title: 'Reservation cancelled', body: `${site} · the charger is temporarily out of service; any fee is refunded`, detail: 'The charger is temporarily out of service; any fee is refunded' },
+      url: '/app/#home', tag: `res-${reservationId}`, site, urgent: true,
+    };
+    await notifyDevices([deviceId], 'reservation.released', `reservation.released:${reservationId}`, m);
+    return;
+  }
   const m: Msg = kind === 'reminder'
     ? { id: { title: 'Reservasi berakhir dalam 5 menit', body: `${site} · mulai isi sebelum ${hhmm(expiresAt)}`, detail: `Mulai isi sebelum ${hhmm(expiresAt)}` },
         en: { title: 'Reservation ends in 5 minutes', body: `${site} · start charging before ${hhmm(expiresAt)}`, detail: `Start charging before ${hhmm(expiresAt)}` },
@@ -258,7 +268,7 @@ export async function notifyReservation(deviceId: string, reservationId: string,
 }
 
 /** The site queue: your turn (a connector is held for you), you missed it, your wait ended, or you were taken off. */
-export async function notifyQueue(deviceId: string, entryId: string, kind: 'offer' | 'missed' | 'expired' | 'removed' | 'closed', site: string, until: Date | null) {
+export async function notifyQueue(deviceId: string, entryId: string, kind: 'offer' | 'missed' | 'expired' | 'removed' | 'closed' | 'requeued', site: string, until: Date | null) {
   const q = (idTitle: string, idDetail: string, enTitle: string, enDetail: string, extra: Partial<Msg> = {}): Msg => ({
     id: { title: idTitle, body: `${site} · ${idDetail}`, detail: idDetail.charAt(0).toUpperCase() + idDetail.slice(1) },
     en: { title: enTitle, body: `${site} · ${enDetail}`, detail: enDetail.charAt(0).toUpperCase() + enDetail.slice(1) },
@@ -272,6 +282,7 @@ export async function notifyQueue(deviceId: string, entryId: string, kind: 'offe
     expired: q('Antrean berakhir', 'batas waktu menunggu habis', 'Your place in the queue ended', 'the waiting time ran out'),
     removed: q('Anda keluar dari antrean', 'dikeluarkan oleh operator', 'You were taken off the queue', 'by the operator'),
     closed: q('Antrean ditutup', 'lokasi ini tidak memakai antrean lagi', 'The queue was closed', 'this site no longer uses a queue'),
+    requeued: q('Giliran Anda ditunda', 'charger sementara tidak beroperasi; Anda tetap di antrean', 'Your turn is on hold', 'the charger is temporarily out of service; you keep your place'),
   };
   await notifyDevices([deviceId], `queue.${kind}`, `queue.${kind}:${entryId}`, m[kind]);
 }

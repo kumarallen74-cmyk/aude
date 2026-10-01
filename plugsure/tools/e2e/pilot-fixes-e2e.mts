@@ -112,8 +112,10 @@ try {
   const resumed = await call('GET', `/v1/charge-points/${CP}`);
   check('the resumed charger is back in service', !['suspended', 'pending_adoption', 'decommissioned'].includes(resumed.d?.status), resumed.d?.status);
   const since = resumed.d?.offline_since ? Date.parse(resumed.d.offline_since) : NaN;
-  check('a charger resumed while disconnected is offline from now, not from before the suspension',
-    resumed.d?.status === 'offline' && Number.isFinite(since) && Date.now() - since < 120_000, { status: resumed.d?.status, offline_since: resumed.d?.offline_since });
+  // Disconnected (the usual case here): offline from now. Connected (a simulator attached): online, no offline_since.
+  check('a resumed charger is offline from now (not from before the suspension), or online if connected',
+    resumed.d?.status === 'offline' ? Number.isFinite(since) && Date.now() - since < 120_000 : resumed.d?.status === 'online' && !resumed.d?.offline_since,
+    { status: resumed.d?.status, offline_since: resumed.d?.offline_since });
   const res2 = await call('POST', `/v1/charge-points/${CP}/resume`);
   check('resuming a charger that is not suspended answers 409', res2.s === 409, res2);
 } finally {
