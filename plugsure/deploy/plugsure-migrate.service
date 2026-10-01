@@ -1,0 +1,79 @@
+# PlugSure schema migrations — systemd unit for the no-Docker deployment path (v1.4.4).
+#
+# Install:
+#   install -o root -g root -m 0644 deploy/plugsure-migrate.service \
+#       /etc/systemd/system/plugsure-migrate.service
+#   install -o root -g root -m 0600 /dev/null /etc/plugsure/migrate.env   # then fill it in
+#   systemctl daemon-reload
+#
+# Not enabled on its own: plugsure-api.service Requires= it and is ordered After= it,
+# so every start or restart of the API runs the migrator first, and a failed
+# migration stops the API from starting against a half-migrated schema.
+# dist/db/migrate.js is idempotent and takes an advisory lock.
+#
+# Why a separate unit: migrations need the database OWNER (DDL, creating and
+# altering plugsure_app). Before v1.4.4 the API unit ran them from ExecStartPre
+# with MIGRATION_DATABASE_URL taken from /etc/plugsure/plugsure.env, the file both
+# app processes load, so the running API and gateway carried the owner password
+# in their environment. The owner credential now lives only in
+# /etc/plugsure/migrate.env (root:root 0600), which only this unit reads.
+#
+# /etc/plugsure/migrate.env:
+#   DATABASE_URL=postgresql://plugsure:<OWNER_PW>@127.0.0.1:5432/plugsure
+#   POSTGRES_APP_PASSWORD=<APP_PW>      # the same password as in plugsure.env's DATABASE_URL
+#   # MIGRATION_LOCK_TIMEOUT=10s
+#
+# Run by hand:   systemctl start plugsure-migrate && journalctl -u plugsure-migrate -n 50
+
+[Unit]
+Description=PlugSure schema migrations
+Documentation=file:/opt/plugsure/deploy/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=plugsure
+Group=plugsure
+WorkingDirectory=/opt/plugsure
+
+# Read by systemd as root before dropping to the plugsure user: the file can stay root-only.
+EnvironmentFile=/etc/plugsure/migrate.env
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--enable-source-maps
+Environment=TZ=Asia/Jakarta
+
+ExecStart=/usr/bin/node /opt/plugsure/dist/db/migrate.js
+# A migration that waits on a lock fails after MIGRATION_LOCK_TIMEOUT; this bounds the rest.
+TimeoutStartSec=600
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plugsure-migrate
+
+# --- hardening (as plugsure-api.service) ----------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=no
+UMask=0027

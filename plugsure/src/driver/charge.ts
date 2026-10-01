@@ -57,6 +57,8 @@ interface ConnFull {
   site_id: string;
   in_maintenance: boolean;
   listed: boolean;
+  /** Suspended by the operator (v1.4.1): stays on the map, but sells nothing. */
+  suspended: boolean;
 }
 
 async function connFull(connectorUuid: string): Promise<ConnFull | null> {
@@ -66,7 +68,8 @@ async function connFull(connectorUuid: string): Promise<ConnFull | null> {
             cp.ocpp_identity, s.org_id, s.name AS site_name, c.max_power_w, s.pbjt_rate_bps,
             s.timezone, c.tera_status, c.current_type, s.id AS site_id,
             (c.maintenance_reason IS NOT NULL) AS in_maintenance,
-            (cp.status NOT IN ('pending_adoption', 'decommissioned') AND s.archived_at IS NULL) AS listed
+            (cp.status NOT IN ('pending_adoption', 'decommissioned') AND s.archived_at IS NULL) AS listed,
+            (cp.status = 'suspended') AS suspended
        FROM connector c
        JOIN evse e ON e.id = c.evse_uuid
        JOIN charge_point cp ON cp.id = e.charge_point_id
@@ -86,6 +89,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 function sellProblem(c: ConnFull): string | null {
   if (!c.listed) return 'Charger ini tidak lagi beroperasi.';
+  if (c.suspended) return 'Charger ini sementara tidak beroperasi.';
   if (!connectorMaySellEnergy(c.tera_status as any).allowed) return 'Konektor ini sedang tidak dapat menjual energi.';
   if (c.in_maintenance) return 'Konektor ini sedang dalam perawatan.';
   return null;
@@ -737,6 +741,9 @@ export async function startCharge(principal: DriverPrincipal, chargeId: string):
 
   const c = await connFull(dc.connector_uuid);
   if (!c) return { ok: false, error: 'Konektor tidak ditemukan.' };
+  // Suspended (or withdrawn) since checkout: the gateway would refuse the start,
+  // so do not send one or tell the driver to present the token.
+  if (!c.listed || c.suspended) return { ok: false, error: 'Charger ini sementara tidak beroperasi; sesi tidak dapat dimulai.' };
 
   const idTag = claimTok!.uid;
 

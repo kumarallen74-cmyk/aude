@@ -155,6 +155,8 @@ export async function recentUnknownTags(orgId: string, identity?: string) {
        FROM seen
       WHERE id_tag IS NOT NULL AND id_tag <> ''
         AND NOT EXISTS (SELECT 1 FROM token t WHERE t.org_id = $1 AND t.uid = seen.id_tag)
+        -- A roaming partner's card (v1.4.4): billed to the partner, not to be registered here.
+        AND NOT EXISTS (SELECT 1 FROM ocpi_token ot WHERE ot.org_id = $1 AND upper(ot.uid) = upper(seen.id_tag))
       GROUP BY id_tag
       ORDER BY max(ts) DESC
       LIMIT 20`,

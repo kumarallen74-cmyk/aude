@@ -400,6 +400,7 @@ jobs:
           systemd-analyze verify \
             deploy/plugsure-gateway.service \
             deploy/plugsure-api.service \
+            deploy/plugsure-migrate.service \
             deploy/plugsure-backup.service \
             deploy/plugsure-backup.timer > /tmp/units.log 2>&1 || true
           cat /tmp/units.log

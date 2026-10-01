@@ -9,6 +9,12 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.4.4 — pre-deployment review fixes (2 October 2026).** The driver app no longer sells,
+reserves or queues on a suspended charger; resume no longer backdates an outage; on systemd the
+database owner credential moves to a root-only `migrate.env` read only by the new
+`plugsure-migrate.service`. No migrations; systemd installs need one configuration change — see
+[`RELEASE-NOTES-v1.4.4.md`](RELEASE-NOTES-v1.4.4.md).
+
 **v1.4.3 — user menu icons (2 October 2026).** The user menu's icons are drawn at their intended
 size. Style only; no migrations or new settings; see [`RELEASE-NOTES-v1.4.3.md`](RELEASE-NOTES-v1.4.3.md).
 

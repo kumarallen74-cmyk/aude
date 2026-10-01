@@ -16,6 +16,11 @@ Description=PlugSure API and operator console
 Documentation=file:/opt/plugsure/deploy/README.md
 After=network-online.target postgresql.service
 Wants=network-online.target
+# Every start runs the migrator first (deploy/plugsure-migrate.service, v1.4.4); a
+# failed migration fails this start instead of bringing up an API against a
+# half-migrated schema.
+Requires=plugsure-migrate.service
+After=plugsure-migrate.service
 
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -33,17 +38,11 @@ Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--enable-source-maps
 Environment=TZ=Asia/Jakarta
 
-# --- migrations on boot -------------------------------------------------------
-# This unit is the SINGLE owner of schema migration on the systemd path;
-# plugsure-gateway.service is ordered After= this one so the two can never run
-# the migrator concurrently. dist/db/migrate.js is idempotent (it records applied
-# files in schema_migration) and exits non-zero on failure, which — because this
-# is an ExecStartPre without a '-' prefix — aborts the start instead of bringing
-# up an API against a half-migrated schema.
-# Migrations need the database OWNER (DDL, creating plugsure_app); the API itself
-# runs as the restricted plugsure_app role from DATABASE_URL. So the migrator gets its
-# own connection string, MIGRATION_DATABASE_URL, from /etc/plugsure/plugsure.env.
-ExecStartPre=/usr/bin/env DATABASE_URL=${MIGRATION_DATABASE_URL} /usr/bin/node /opt/plugsure/dist/db/migrate.js
+# --- migrations ---------------------------------------------------------------
+# Run by plugsure-migrate.service (Requires=/After= above), which alone reads the
+# database owner's credentials from /etc/plugsure/migrate.env. This unit, like the
+# gateway's, loads only /etc/plugsure/plugsure.env, where DATABASE_URL is the
+# restricted plugsure_app role: the running API never holds the owner password.
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/api.js
 
 Restart=always

@@ -123,11 +123,13 @@ Each scenario uses its own session.
 - [ ] **Suspend and resume.** In the console, open the charger and choose **Suspend…** with a reason. **Pass:**
   - It stays connected and is shown as suspended.
   - A registered card and a remote start are both refused.
+  - In the driver app it stays on the map, shown as temporarily out of service; a payment, a reservation and a queue place for it are all refused.
   - After a power cycle it boots `Pending`.
-  - **Resume** brings it back to `Accepted` within a minute without touching the charger, and both actions appear in the audit log with the reason.
+  - **Resume** needs nothing on the charger. If it is connected, the console shows it online at once. If it was power-cycled while suspended, it is `Accepted` at its next BootNotification: asked for at once, at the latest within its 5-minute `Pending` interval.
+  - Both actions appear in the audit log, the suspension with its reason.
 - [ ] **Tera ulang lapsed.** Set one connector's tera expiry date in the past. **Pass:** commercial sessions on that connector are blocked, and a critical alert is raised. Restore the date.
 - [ ] **Decommission and reinstate.** Do this last, after section 8, because decommissioning erases the charger's key. With no session running:
-  1. Decommission the charger (`POST /v1/charge-points/<identity>/decommission`). **Pass:** it is refused at connect.
+  1. Decommission the charger (`POST /v1/charge-points/<identity>/decommission`), then power-cycle it (a connection already open is not dropped by decommissioning). **Pass:** it is refused at connect, and while still connected it cannot start a session.
   2. Reinstate it (`POST /v1/charge-points/<identity>/reinstate`). **Pass:** it returns to awaiting adoption. It needs a new AuthorizationKey and Profile 2 again before it can connect, and then boots `Pending` until it is activated.
 
 ## 8. Maintenance features

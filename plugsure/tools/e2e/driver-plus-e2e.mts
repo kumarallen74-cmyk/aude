@@ -251,6 +251,19 @@ try {
   const detA0 = await a.get(`/v1/connectors/${conn1}`);
   check('reserve: offered to a signed-in driver, not to a guest', detA0.data.canReserve === true && detGuest0.data.canReserve === false, { a: detA0.data.canReserve, g: detGuest0.data.canReserve });
 
+  // A suspended charger (v1.4.4) offers no reservation, and refuses one (no fee, no ReserveNow).
+  const suspMark = cp.calls.length;
+  await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended' });
+  try {
+    const sDet = await a.get(`/v1/connectors/${conn1}`);
+    const sRes = await a.post('/v1/reservations', { connectorId: conn1 });
+    check('reserve: not offered on a suspended charger, and refused (no ReserveNow sent)',
+      sDet.data.canReserve === false && sRes.status === 422 && !cp.calls.slice(suspMark).some((c: any) => c.action === 'ReserveNow'), { can: sDet.data.canReserve, res: sRes.data });
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+  await until(() => a.get(`/v1/connectors/${conn1}`), (r) => r.data.canReserve === true, 15_000);
+
   let mark = cp.calls.length;
   const r1 = await a.post('/v1/reservations', { connectorId: conn1 });
   const rn1 = await cp.waitNew('ReserveNow', mark);

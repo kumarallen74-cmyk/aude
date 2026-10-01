@@ -86,17 +86,18 @@ export async function reserve(p: DriverPrincipal, connectorUuid: string, pay: Pa
   if (!config.driverApp.reservationsEnabled) return { ok: false, error: 'Reservasi tidak tersedia.' };
   if (!p.account && !p.fleet) return { ok: false, error: 'Masuk dengan nomor HP atau kartu armada untuk memesan.' };
   if (!/^[0-9a-f-]{36}$/i.test(connectorUuid)) return { ok: false, error: 'Konektor tidak ditemukan.' };
-  const c = await one<{ connector_uuid: string; connector_no: number; charge_point_id: string; ocpp_identity: string; org_id: string; status: string; tera_status: string; in_maintenance: boolean; listed: boolean; site_name: string; reservation_fee_idr: number; pkp: boolean }>(
+  const c = await one<{ connector_uuid: string; connector_no: number; charge_point_id: string; ocpp_identity: string; org_id: string; status: string; tera_status: string; in_maintenance: boolean; listed: boolean; suspended: boolean; site_name: string; reservation_fee_idr: number; pkp: boolean }>(
     `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id, c.status,
             c.tera_status, (c.maintenance_reason IS NOT NULL) AS in_maintenance, s.name AS site_name, s.reservation_fee_idr, o.pkp,
-            (cp.status NOT IN ('pending_adoption','decommissioned') AND s.archived_at IS NULL) AS listed
+            (cp.status NOT IN ('pending_adoption','decommissioned') AND s.archived_at IS NULL) AS listed,
+            (cp.status = 'suspended') AS suspended
        FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id JOIN site s ON s.id = cp.site_id
        JOIN organisation o ON o.id = s.org_id
       WHERE c.id = $1`,
     [connectorUuid],
   );
   if (!c || !c.listed) return { ok: false, error: 'Konektor tidak ditemukan.' };
-  if (!connectorMaySellEnergy(c.tera_status as any).allowed || c.in_maintenance) return { ok: false, error: 'Konektor ini sedang tidak dapat dipakai.' };
+  if (!connectorMaySellEnergy(c.tera_status as any).allowed || c.in_maintenance || c.suspended) return { ok: false, error: 'Konektor ini sedang tidak dapat dipakai.' };
   if (!registry.isOnline(c.ocpp_identity)) return { ok: false, error: 'Charger sedang luring; tidak dapat dipesan.' };
   if (c.status !== 'Available') return { ok: false, error: 'Konektor ini sedang tidak tersedia untuk dipesan.' };
   if (p.fleet && p.fleet.orgId !== c.org_id) return { ok: false, error: 'Charger ini bukan milik armada Anda.' };

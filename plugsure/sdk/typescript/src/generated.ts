@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.4.3";
+export const API_VERSION = "1.4.4";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -538,7 +538,7 @@ export interface ChargePoint {
   serial?: string | null;
   /** ocpp1.6 | ocpp2.0.1 | ocpp2.1, as registered or last booted. */
   ocpp_version?: string | null;
-  /** pending_adoption | provisioning | online | offline | decommissioned. */
+  /** pending_adoption | provisioning | online | offline | suspended | decommissioned. */
   status: string;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
@@ -801,7 +801,7 @@ export interface CommissioningKeysRequest {
 export interface CommissioningStatus {
   identity: string;
   online: boolean;
-  /** pending_adoption, provisioning, online, offline or decommissioned. */
+  /** pending_adoption, provisioning, online, offline, suspended or decommissioned. */
   status: string;
   bootCount: number;
   lastSeenAt: string | null;
@@ -8241,7 +8241,7 @@ export class Operations {
   /**
    * Resume a suspended charge point
    *
-   * Returns a suspended charge point to service; a connected unit is asked to boot again at once so it is Accepted without waiting. 409 when it is not suspended. Audited as charge_point.resumed.
+   * Returns a suspended charge point to service: online if it is connected (and asked to boot again), otherwise offline, with any outage counted from now. 409 when it is not suspended. Audited as charge_point.resumed.
    *
    * `POST /v1/charge-points/{identity}/resume` · needs `charge_point:write`
    */
@@ -8428,7 +8428,7 @@ export class Operations {
   /**
    * Send a command to a charge point
    *
-   * Generic command dispatcher; the named routes (remote-start, unlock, …) run the same code. Every command is written to the audit log with the caller. The configuration commands (get-configuration, change-configuration, get-diagnostics) also accept `charge_point:config`. A charger that is not connected makes the call fail with 500. Remote start answers 409 when the connector’s meter verification (tera) has lapsed or is pending.
+   * Generic command dispatcher; the named routes (remote-start, unlock, …) run the same code. Every command is written to the audit log with the caller. The configuration commands (get-configuration, change-configuration, get-diagnostics) also accept `charge_point:config`. A charger that is not connected makes the call fail with 500. Remote start answers 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or is pending.
    *
    * `POST /v1/charge-points/{identity}/commands/{command}` · needs `charge_point:command`
    */
@@ -8687,7 +8687,7 @@ export class Operations {
   /**
    * Start a session remotely
    *
-   * Sends RemoteStartTransaction for an RFID tag or driver account, optionally capped by energy, duration or amount. Refused with 409 when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` (e.g. a field technician) may only start with a technician or VIP card (403 otherwise). Audited.
+   * Sends RemoteStartTransaction for an RFID tag or driver account, optionally capped by energy, duration or amount. Refused with 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` (e.g. a field technician) may only start with a technician or VIP card (403 otherwise). Audited.
    *
    * `POST /v1/charge-points/{identity}/remote-start` · needs `charge_point:command`
    */
@@ -8774,7 +8774,7 @@ export class Operations {
   /**
    * Suspend a charge point
    *
-   * Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, and new authorisations, starts and remote starts are refused. A session already running finishes normally and is billed. 409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.
+   * Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, and new authorisations, starts and remote starts are refused; the driver app keeps it on the map but sells, reserves and queues nothing. A session already running finishes normally and is billed. Any open outage is closed (planned downtime). 409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.
    *
    * `POST /v1/charge-points/{identity}/suspend` · needs `charge_point:write`
    */

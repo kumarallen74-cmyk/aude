@@ -23,10 +23,11 @@ Wants=network-online.target
 # Ordering only. The database may be a container or an RDS instance rather than a
 # local postgresql.service, so this must not be a hard Requires= — that would
 # refuse to start the gateway on a host with no local Postgres at all.
-After=plugsure-api.service
-# The schema is migrated by plugsure-api.service's ExecStartPre (single writer,
-# so two units can never race the migrator). Ordering after it means the gateway
-# starts against a current schema. It does NOT require the API to be running.
+After=plugsure-migrate.service plugsure-api.service
+# The schema is migrated by plugsure-migrate.service, which plugsure-api.service
+# requires (one writer; the migrator also takes an advisory lock). Ordering after
+# both means the gateway starts against a current schema. It does NOT require the
+# API to be running, and it never holds the owner credential (migrate.env).
 
 # Crash-loop guard: if it fails 5 times in 5 minutes something is wrong that
 # restarting will not fix (bad DATABASE_URL, port in use). Stop and page.

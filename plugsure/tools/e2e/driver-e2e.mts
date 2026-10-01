@@ -158,6 +158,26 @@ try {
   const back = await until(() => d.get(`/v1/connectors/${conn2}`), (r) => r.data.status === 'Available', 10_000);
   check('maintenance: back to Available after Operative', back.data.status === 'Available', back.data.status);
 
+  // ------------------------------------------------------------ suspended charger: still listed, sells nothing (v1.4.4)
+  const susp = await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: site closed for electrical works' });
+  try {
+    const sv = await d.get(`/v1/connectors/${conn1}`);
+    check('suspended: the app shows the connector Unavailable, temporarily out of service', susp.status === 200 && sv.data.status === 'Unavailable' && sv.data.available === false && /Sementara tidak beroperasi/.test(sv.data.blockedReason ?? ''), { susp: susp.status, c: sv.data });
+    const sStations = await d.get('/v1/stations');
+    const sStation = sStations.data.stations?.find((x: any) => x.siteId === siteId);
+    check('suspended: the station stays on the map with no connector available', !!sStation && sStation.availableCount === 0, sStation?.connectors?.map((c: any) => c.status));
+    const sq = await d.post('/v1/charge/quote', { connectorId: conn1, amountIdr: 50000 });
+    check('suspended: cannot pay for a connector on a suspended charger (422)', sq.status === 422 && /sementara tidak beroperasi/i.test(sq.data.error ?? ''), sq.data);
+    const sco = await d.post('/v1/charge/prepaid', { connectorId: conn1, amountIdr: 50000 });
+    check('suspended: checkout refused too', sco.status >= 400 && !sco.data?.qr, sco.data);
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+  const sBack = await until(() => d.get(`/v1/connectors/${conn1}`), (r) => r.data.status === 'Available', 15_000);
+  check('suspended: back to Available after Resume', sBack.data.status === 'Available', sBack.data.status);
+  const sCp = await ops('GET', `/v1/charge-points/${ID}`);
+  check('suspended: a charger still connected reads online straight after Resume', sCp.data?.status === 'online', sCp.data?.status);
+
   // ------------------------------------------------------------ prepaid QRIS journey
   const q = await d.post('/v1/charge/quote', { connectorId: conn1, amountIdr: 50000 });
   check('prepaid: quote Rp 50,000 buys energy', q.status === 200 && q.data.allowanceKwh > 0, q.data);
@@ -173,6 +193,15 @@ try {
   const steal = await other.get(`/v1/charge/${chargeId}/status`);
   check('prepaid: another device cannot see this charge (404)', steal.status === 404, steal.status);
   await d.post(`/v1/charge/${chargeId}/confirm-payment`);
+  // Paid, then the operator suspends the charger: the start is refused, not sent.
+  await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended after payment' });
+  try {
+    const paidSusp = await d.post(`/v1/charge/${chargeId}/start`);
+    check('suspended: a paid charge cannot start while the charger is suspended', paidSusp.status === 400 && /sementara tidak beroperasi/i.test(paidSusp.data.error ?? '') && !paidSusp.data.presentToken, paidSusp.data);
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+  await until(() => d.get(`/v1/connectors/${conn1}`), (r) => r.data.status === 'Available', 15_000);
   const t0 = Date.now();
   const start = await d.post(`/v1/charge/${chargeId}/start`);
   check(`prepaid: remote start accepted through the bridge (${Date.now() - t0} ms)`, start.status === 200 && start.data.status === 'Accepted', start.data);

@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { one, pool, query } from '../db/pool.js';
 import { databaseTestLock } from '../db/test-lock.js';
 import { bus } from './events.js';
-import { claimOutageAlert, closeOutage, sweepOutages } from './uptime.js';
+import { claimOutageAlert, closeOutage, outageFromResume, sweepOutages } from './uptime.js';
 
 /**
  * Offline alerts (database-backed).
@@ -105,5 +105,52 @@ dbDescribe('offline alerts: one per outage, never for one that has ended', () =>
     assert.ok(a?.resolved_at, 'the offline alert is resolved');
     assert.equal(await claimOutageAlert(id), false, 'and nothing can alert for it any more');
     await query(`DELETE FROM alert WHERE id = $1`, [alert]);
+  });
+});
+
+dbDescribe('suspension is planned downtime, not an outage (v1.4.4)', () => {
+  test('resumed while disconnected: the outage starts now, no alert, the suspension is not downtime', async () => {
+    // Suspended three days ago with an outage already open; then resumed while still disconnected.
+    await query(`UPDATE charge_point SET status = 'suspended', last_seen_at = now() - interval '3 days' WHERE id = $1`, [cpId]);
+    const before = await openOutage(3 * 24 * 60);
+    await closeOutage(IDENT); // what suspend does
+    const ended = await one<{ came_online_at: Date | null }>(`SELECT came_online_at FROM charge_point_outage WHERE id = $1`, [before]);
+    assert.ok(ended?.came_online_at, 'suspending ends the open outage');
+
+    await query(`UPDATE charge_point SET status = 'offline' WHERE id = $1`, [cpId]); // what resume does
+    await outageFromResume(IDENT);
+    const mine: unknown[] = [];
+    let listening = true;
+    bus.on('alert.raised', (e: any) => { if (listening && e.targetId === cpId && e.kind === 'charge_point.offline') mine.push(e); });
+    try {
+      await sweepOutages();
+    } finally {
+      listening = false;
+    }
+    const open = await one<{ went_offline_at: Date }>(
+      `SELECT went_offline_at FROM charge_point_outage WHERE charge_point_id = $1 AND came_online_at IS NULL`, [cpId]);
+    assert.ok(open, 'an outage is open for the disconnected charger');
+    assert.ok(Date.now() - new Date(open!.went_offline_at).getTime() < 60_000, 'dated from the resume, not from before the suspension');
+    assert.equal(mine.length, 0, 'no critical alert the moment it is resumed');
+    await query(`UPDATE charge_point_outage SET came_online_at = now() WHERE charge_point_id = $1 AND came_online_at IS NULL`, [cpId]);
+    await query(`UPDATE charge_point SET last_seen_at = now() WHERE id = $1`, [cpId]);
+  });
+
+  test('without the fix the sweep would have dated it three days back (control)', async () => {
+    await query(`UPDATE charge_point SET status = 'offline', last_seen_at = now() - interval '3 days' WHERE id = $1`, [cpId]);
+    let listening = true;
+    const mine: unknown[] = [];
+    bus.on('alert.raised', (e: any) => { if (listening && e.targetId === cpId && e.kind === 'charge_point.offline') mine.push(e); });
+    try {
+      await sweepOutages();
+    } finally {
+      listening = false;
+    }
+    const open = await one<{ went_offline_at: Date }>(
+      `SELECT went_offline_at FROM charge_point_outage WHERE charge_point_id = $1 AND came_online_at IS NULL`, [cpId]);
+    assert.ok(open && Date.now() - new Date(open.went_offline_at).getTime() > 2 * 24 * 3600_000, 'the sweep alone backdates to last_seen_at');
+    assert.equal(mine.length, 1, 'and alerts at once');
+    await query(`UPDATE charge_point_outage SET came_online_at = now() WHERE charge_point_id = $1 AND came_online_at IS NULL`, [cpId]);
+    await query(`UPDATE charge_point SET last_seen_at = now() WHERE id = $1`, [cpId]);
   });
 });

@@ -36,6 +36,16 @@ async function openOutage(identity: string, at = new Date()) {
   );
 }
 
+/**
+ * Resumed from suspension (v1.4.4) while not connected: its outage starts now,
+ * not at the last contact before the suspension. Otherwise the next sweep would
+ * date it from last_seen_at, count the whole suspension as downtime and raise a
+ * critical alert at once.
+ */
+export async function outageFromResume(identity: string) {
+  await openOutage(identity, new Date());
+}
+
 export async function closeOutage(identity: string) {
   const cp = await cpByIdentity(identity);
   if (!cp) return;

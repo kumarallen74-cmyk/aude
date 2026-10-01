@@ -10,6 +10,7 @@ import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { one, many, query, enterOrgScope, runInRequestScope, afterResponse, outsideRequestScope, type OrgScopeHandle } from '../db/pool.js';
 import * as assets from '../services/assets.js';
+import { closeOutage, outageFromResume } from '../services/uptime.js';
 import * as commands from '../ocpp/commands.js';
 import * as registry from '../ocpp/registry.js';
 import { recentSessions, clearReviewAndRate, reconcileStuckSessions, PREPAID_CLAIM_WINDOW_MIN } from '../services/sessions.js';
@@ -1040,16 +1041,21 @@ export async function buildApi(): Promise<FastifyInstance> {
       after: { reason },
       ip: req.ip,
     });
+    // A suspension is planned downtime, not an outage: end any open outage (and its alert).
+    await closeOutage(identity);
     return { ok: true };
   });
 
   app.post('/v1/charge-points/:identity/resume', async (req, reply) => {
     const { identity } = req.params as { identity: string };
     const owner = await ownedChargePoint(req, identity, 'charge_point:write');
-    // 'offline' as activation does; the next BootNotification marks it online.
+    // A unit still connected is online now: it stayed Accepted while suspended, and
+    // some firmware ignores the BootNotification trigger below. Otherwise 'offline',
+    // with any outage counted from now rather than from before the suspension.
+    const connected = registry.isOnline(identity);
     const r = await query(
-      `UPDATE charge_point SET status = 'offline' WHERE id = $1 AND status = 'suspended'`,
-      [owner.chargePointId],
+      `UPDATE charge_point SET status = $2 WHERE id = $1 AND status = 'suspended'`,
+      [owner.chargePointId, connected ? 'online' : 'offline'],
     );
     if ((r.rowCount ?? 0) === 0) throw new ConflictError('this charge point is not suspended');
     await writeAudit({
@@ -1061,6 +1067,7 @@ export async function buildApi(): Promise<FastifyInstance> {
       targetId: identity,
       ip: req.ip,
     });
+    if (!connected) await outageFromResume(identity);
     // A suspended unit re-asks at its Pending interval; ask it to boot now.
     if (registry.isOnline(identity)) {
       const actor = actorOf(req);

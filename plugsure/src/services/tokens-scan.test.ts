@@ -24,6 +24,7 @@ async function cleanup() {
   const org = await one<{ id: string }>(`SELECT id FROM organisation WHERE slug = $1`, [SLUG]);
   if (!org) return;
   await query(`DELETE FROM token WHERE org_id = $1`, [org.id]);
+  await query(`DELETE FROM ocpi_partner WHERE org_id = $1`, [org.id]);
   await query(`DELETE FROM charge_point WHERE ocpp_identity = $1`, [IDENT]);
   await query(`DELETE FROM site WHERE org_id = $1`, [org.id]);
 }
@@ -57,7 +58,7 @@ async function frame(action: string, body: unknown, agoSeconds = 5) {
   );
 }
 
-dbTest('scan from live charger: unknown cards from 1.6 and 2.0.1 frames, registered and old ones left out', async () => {
+dbTest('scan from live charger: unknown cards from 1.6 and 2.0.1 frames; registered, roaming and old ones left out', async () => {
   await frame('Authorize', { idTag: 'SCAN-NEW-16' });
   await frame('StartTransaction', { connectorId: 1, idTag: 'SCAN-NEW-16', meterStart: 0, timestamp: new Date().toISOString() }, 2);
   await frame('TransactionEvent', { eventType: 'Started', idToken: { idToken: 'SCAN-NEW-201', type: 'ISO14443' } });
@@ -65,6 +66,12 @@ dbTest('scan from live charger: unknown cards from 1.6 and 2.0.1 frames, registe
   await frame('Authorize', { idTag: 'SCAN-OLD' }, 3600);
   await frame('Heartbeat', {});
   await query(`INSERT INTO token (org_id, kind, uid, status) VALUES ($1, 'rfid', 'SCAN-KNOWN', 'Accepted')`, [orgId]);
+  // A roaming partner's card is billed to the partner: never offered for registration here.
+  await frame('Authorize', { idTag: 'SCAN-ROAMING' });
+  const partner = (await one<{ id: string }>(`INSERT INTO ocpi_partner (org_id, name) VALUES ($1, 'Scan Test eMSP') RETURNING id`, [orgId]))!.id;
+  await query(
+    `INSERT INTO ocpi_token (org_id, partner_id, country_code, party_id, uid, type, contract_id, issuer, valid, whitelist, last_updated)
+     VALUES ($1, $2, 'ID', 'EMS', 'scan-roaming', 'RFID', 'ID-EMS-C0001', 'Scan eMSP', true, 'ALLOWED', now())`, [orgId, partner]);
 
   const rows = await recentUnknownTags(orgId, IDENT);
   const tags = rows.map((r: any) => r.id_tag).sort();
