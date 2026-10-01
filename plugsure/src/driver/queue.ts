@@ -295,6 +295,16 @@ export async function offerEnded(r: { queue_entry_id: string; site_name?: string
   void allocate(e.site_id);
 }
 
+/**
+ * The offered connector was withdrawn by the operator (charger suspended, v1.4.4): the
+ * driver did nothing wrong, so they keep their place and wait for the next free connector.
+ */
+export async function requeueOffer(entryId: string): Promise<void> {
+  const e = await one<{ site_id: string }>(
+    `UPDATE driver_queue_entry SET state = 'waiting', offered_at = NULL WHERE id = $1 AND state = 'offered' RETURNING site_id`, [entryId]);
+  if (e) void allocate(e.site_id);
+}
+
 const running = new Map<string, Promise<void>>();
 const again = new Set<string>();
 

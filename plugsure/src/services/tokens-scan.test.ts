@@ -71,7 +71,7 @@ dbTest('scan from live charger: unknown cards from 1.6 and 2.0.1 frames; registe
   const partner = (await one<{ id: string }>(`INSERT INTO ocpi_partner (org_id, name) VALUES ($1, 'Scan Test eMSP') RETURNING id`, [orgId]))!.id;
   await query(
     `INSERT INTO ocpi_token (org_id, partner_id, country_code, party_id, uid, type, contract_id, issuer, valid, whitelist, last_updated)
-     VALUES ($1, $2, 'ID', 'EMS', 'scan-roaming', 'RFID', 'ID-EMS-C0001', 'Scan eMSP', true, 'ALLOWED', now())`, [orgId, partner]);
+     VALUES ($1, $2, 'ID', 'EMS', 'SCAN-ROAMING', 'RFID', 'ID-EMS-C0001', 'Scan eMSP', true, 'ALLOWED', now())`, [orgId, partner]);
 
   const rows = await recentUnknownTags(orgId, IDENT);
   const tags = rows.map((r: any) => r.id_tag).sort();

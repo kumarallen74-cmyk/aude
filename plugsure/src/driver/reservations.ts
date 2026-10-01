@@ -229,6 +229,22 @@ export async function releaseReservation(id: string): Promise<void> {
   }
 }
 
+/**
+ * The operator suspended the charger (v1.4.4): every live reservation on it ends, its
+ * fee is waived or refunded whatever the grace period (the driver could not have used
+ * it), and a queue offer goes back to waiting with its place kept. Not a no-show.
+ */
+export async function releaseForSuspension(chargePointId: string): Promise<number> {
+  const live = await many<any>(
+    `${SELECT} WHERE r.charge_point_id = $1 AND r.state IN ('requested','active')`, [chargePointId]);
+  for (const r of live) {
+    await releaseReservation(r.id);
+    if (r.fee_state && r.fee_state !== 'none') await waiveFee(r, 'Charger suspended by the operator');
+    if (r.queue_entry_id) await (await import('./queue.js')).requeueOffer(r.queue_entry_id);
+  }
+  return live.length;
+}
+
 /** A minted claim token that was never paid for must not outlive its reservation. */
 async function retireClaimToken(r: { token_id: string; fleet_token_id: string | null }) {
   if (r.fleet_token_id) return;
@@ -345,10 +361,21 @@ export async function reservationFeePaid(intentId: string): Promise<{ ok: boolea
     }
     return null;
   }
-  const target = await one<ReserveTarget>(
-    `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id, s.name AS site_name
+  const target = await one<ReserveTarget & { sellable: boolean; tera_status: string }>(
+    `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id, s.name AS site_name,
+            c.tera_status,
+            (cp.status NOT IN ('pending_adoption','decommissioned','suspended') AND s.archived_at IS NULL
+               AND c.maintenance_reason IS NULL) AS sellable
        FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id JOIN site s ON s.id = cp.site_id WHERE c.id = $1`,
     [co.connector_uuid]);
+  // Suspended, withdrawn, on maintenance hold or blocked by metrology since checkout (v1.4.4):
+  // hold nothing, send no ReserveNow, and owe the fee back.
+  if (target && (!target.sellable || !connectorMaySellEnergy(target.tera_status as any).allowed)) {
+    const why = 'Charger ini sementara tidak dapat dipesan.';
+    await query(`UPDATE reservation_checkout SET state = 'failed', problem = $2, ended_at = now() WHERE id = $1`, [co.id, why]);
+    await markRefundDue(intentId, co.fee_total_idr, 'Reservation fee paid but the connector is no longer in service (suspended, maintenance or metrology)');
+    return { ok: false, error: `${why} Biaya reservasi dikembalikan.` };
+  }
   const held = target ? await holdConnector(
     { orgId: co.org_id, deviceId: co.device_id, appDriverId: co.app_driver_id, fleet: null }, target, config.driverApp.reservationMinutes, null,
     { feeIdr: co.fee_idr, dpp: co.fee_dpp_idr, ppn: co.fee_ppn_idr, total: co.fee_total_idr, state: 'paid', intentId, fleetAccountId: null },

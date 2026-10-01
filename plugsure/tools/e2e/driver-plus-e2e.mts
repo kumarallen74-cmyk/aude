@@ -299,6 +299,22 @@ try {
   const cx2 = await other.post(`/v1/reservations/${r1.data.reservation.id}/cancel`);
   check('cancel: another device cannot cancel someone\'s reservation (404)', cx2.status === 404, cx2.data);
 
+  // Suspending releases a live reservation: CancelReservation, no lapse into a no-show (v1.4.4)
+  mark = cp.calls.length;
+  const rs = await a.post('/v1/reservations', { connectorId: conn1 });
+  const suspR = await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended with a live reservation' });
+  try {
+    const crs = await cp.waitNew('CancelReservation', mark);
+    const curS = await a.get('/v1/reservation');
+    check('suspend: a live reservation is released (CancelReservation sent), not left to lapse as a no-show',
+      rs.status === 200 && suspR.status === 200 && suspR.data.reservationsReleased === 1 && !!crs && curS.data.reservation === null,
+      { rs: rs.status, susp: suspR.data, cancel: !!crs, cur: curS.data.reservation });
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+  await cp.status(1, 'Available');
+  await until(() => a.get(`/v1/connectors/${conn1}`), (r) => r.data.canReserve === true, 15_000);
+
   // A charger that refuses
   cp.handlers.ReserveNow = (p) => (p.connectorId === 2 ? { status: 'Occupied' } : { status: 'Accepted' });
   const occ = await a.post('/v1/reservations', { connectorId: conn2 });

@@ -22,6 +22,11 @@ const tr = (raw: string) => {
 const INDONESIAN = /\b(yang|dengan|sekarang|sudah|belum|tagihan|metode|lain|aplikasi|kartu|Anda|Tidak|tidak|Bayar|Dibayar|ditagih|Konfirmasi|ulang|pengisian|Terima kasih|Penahanan|Tautan|Saldo|atau|lagi|sesi|dan|bisa|dipakai|ditolak)\b/;
 
 const MESSAGES = [
+  // suspended chargers (v1.4.4)
+  'Sementara tidak beroperasi.', 'Charger ini sementara tidak beroperasi.',
+  'Charger ini sementara tidak beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.',
+  'Charger ini tidak lagi beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.',
+  'Charger ini sementara tidak dapat dipesan. Biaya reservasi dikembalikan.',
   // cost during the charge
   'biaya sejauh ini', 'Biaya sejauh ini Rp 23.415 dari Rp 50.000 dibayar', 'Termasuk pajak Rp 2.870', 'Hemat Rp 4.200',
   'Biaya parkir Rp 12.000: mobil tidak mengisi selama 12 menit. Cabut untuk menghentikannya.',

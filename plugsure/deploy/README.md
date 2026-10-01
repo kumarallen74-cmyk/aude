@@ -366,7 +366,20 @@ DATABASE_URL=postgresql://plugsure:CHANGE_ME@127.0.0.1:5432/plugsure
 # Migrations set plugsure_app's password from this: the same value as in
 # plugsure.env's DATABASE_URL.
 POSTGRES_APP_PASSWORD=CHANGE_ME_APP
-# MIGRATION_LOCK_TIMEOUT=10s
+# Optional: MIGRATION_LOCK_TIMEOUT=10s, PG_STATEMENT_TIMEOUT_MS=0 (a long data
+# migration), POSTGRES_APP_USER (only if the runtime role is not plugsure_app).
+```
+
+Write values unquoted, one `KEY=value` per line (systemd `EnvironmentFile` syntax).
+For owner commands by hand (checks, backups, troubleshooting), read the URL out of the
+file rather than sourcing it as shell code, so a password with `$`, `&` or quotes is safe:
+
+```bash
+# Path B (local Postgres or RDS alike)
+OWNER_URL=$(sudo sed -n 's/^DATABASE_URL=//p' /etc/plugsure/migrate.env)
+psql "$OWNER_URL" -c "select 1"
+# Path A (Docker Compose)
+docker compose exec postgres psql -U postgres plugsure -c "select 1"
 ```
 
 > **Read the commissioning order below before you point a charger at this.**
@@ -693,17 +706,21 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now plugsure-api plugsure-gateway
 ```
 
-`plugsure-api.service` `Requires=` and is ordered `After=` the one-shot
-`plugsure-migrate.service`, so every start of the API runs the migrator first, and a
-failed migration stops the API from starting. Only the migrate unit reads the owner
-credential (`/etc/plugsure/migrate.env`); the API and gateway load `plugsure.env`
-alone. The gateway is ordered after both, so it starts against a current schema.
+Both `plugsure-api.service` and `plugsure-gateway.service` start the one-shot
+`plugsure-migrate.service` (a privileged `ExecStartPre=+…systemctl start`) before their
+own process, so every start or restart runs the migrator first. A failed migration fails
+that start, and `Restart=always` retries it — for example while the database is still
+coming up at boot. Only the migrate unit reads the owner credential
+(`/etc/plugsure/migrate.env`, root-only); the API and gateway load `plugsure.env` alone,
+and `InaccessiblePaths=` hides `migrate.env` and `backup.env` from them.
 
 **Upgrading a Path B install from v1.4.3 or earlier:** move `MIGRATION_DATABASE_URL`
 (as `DATABASE_URL`) and `POSTGRES_APP_PASSWORD` out of `plugsure.env` into a new
 root-only `migrate.env`, install `plugsure-migrate.service` with the updated
 `plugsure-api.service` and `plugsure-gateway.service`, then `systemctl daemon-reload`
-and `systemctl restart plugsure-api plugsure-gateway`.
+and `systemctl restart plugsure-api plugsure-gateway`. If you run the nightly backup, also
+make `/etc/plugsure/backup.env` root-only (`chown root:root`, `chmod 0600`): it holds the
+owner credential too.
 
 **The `cp -R src/web dist/web` step is not optional.** `src/api/server.ts`
 resolves its static root as `join(here, '../web')`, which for `dist/api/server.js`
@@ -729,8 +746,9 @@ npm run migrate
 Check state:
 
 ```bash
-# as the owner: plugsure_app is subject to row-level security and sees no rows
-sudo -u postgres psql plugsure -c "select name, applied_at from schema_migration order by name"
+# as the owner (OWNER_URL as in §4; Path A: docker compose exec postgres psql -U postgres plugsure):
+# plugsure_app is subject to row-level security and would see no rows
+psql "$OWNER_URL" -c "select name, applied_at from schema_migration order by name"
 ```
 
 Each file runs in its own transaction with `lock_timeout` = `MIGRATION_LOCK_TIMEOUT`
@@ -777,7 +795,7 @@ hand-editing:
 
 ```bash
 # take one before every deploy (as the OWNER — plugsure_app is subject to RLS)
-sudo sh -c '. /etc/plugsure/migrate.env && pg_dump "$DATABASE_URL" -Fc -f /var/backups/plugsure/plugsure-predeploy-$(date +%F-%H%M).dump'
+sudo -u plugsure pg_dump "$OWNER_URL" -Fc -f /var/backups/plugsure/plugsure-predeploy-$(date +%F-%H%M).dump   # OWNER_URL as in §4
 ```
 
 ### Backups and restore rehearsal
@@ -859,7 +877,7 @@ change, because it only ever writes to stdout.
 The richest fault-finding tool is the **OCPP frame log**, not the process log:
 
 ```bash
-sudo -u postgres psql plugsure -c \
+psql "$OWNER_URL" -c \
   "select ts, direction, message_type, action, unique_id
      from ocpp_frame
     where ocpp_identity = '<IDENTITY>'
@@ -977,7 +995,8 @@ Handy commands:
 ```bash
 docker compose restart gateway            # never fixes step 1–4; only masks step 7
 # as the owner (plugsure_app is subject to row-level security and would see no rows)
-sudo -u postgres psql plugsure -c "select ocpp_identity, security_profile, last_seen_at from charge_point"
+docker compose exec postgres psql -U postgres plugsure -c "select ocpp_identity, security_profile, last_seen_at from charge_point"
+# Path B: psql "$OWNER_URL" -c "…" (OWNER_URL as in §4)
 ```
 
 ---

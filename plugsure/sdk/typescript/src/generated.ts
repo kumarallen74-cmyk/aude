@@ -5103,6 +5103,8 @@ export type SuspendChargePointBody = {
 
 export type SuspendChargePointResponse = {
   ok: true;
+  /** Driver reservations and queue offers on it that were released (fee waived or refunded, queue place kept). */
+  reservationsReleased: number;
 };
 
 export type SwitchPlugChargeOnOrOffAtChargerBody = {
@@ -5882,7 +5884,7 @@ export class Operations {
   /**
    * Create a QRIS pre-purchase
    *
-   * Creates a QRIS payment for a fixed amount of charging on one connector and quotes the energy it buys against the most expensive block the session could reach. The payment can only be claimed by `startToken` (the driver’s own token, or one minted here for a walk-up). Refused with 409 when the connector’s meter verification has lapsed or is pending, and 422 when the amount does not cover the fixed fees. Maximum Rp 10,000,000.
+   * Creates a QRIS payment for a fixed amount of charging on one connector and quotes the energy it buys against the most expensive block the session could reach. The payment can only be claimed by `startToken` (the driver’s own token, or one minted here for a walk-up). Refused with 409 when the connector’s meter verification has lapsed or is pending, the charge point is suspended, awaiting adoption or decommissioned, or the connector is on maintenance hold; 422 when the amount does not cover the fixed fees. Maximum Rp 10,000,000.
    *
    * `POST /v1/checkout/qris` · needs `payment:write`
    */
@@ -8774,7 +8776,7 @@ export class Operations {
   /**
    * Suspend a charge point
    *
-   * Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, and new authorisations, starts and remote starts are refused; the driver app keeps it on the map but sells, reserves and queues nothing. A session already running finishes normally and is billed. Any open outage is closed (planned downtime). 409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.
+   * Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, and new authorisations, starts and remote starts are refused; the driver app keeps it on the map but sells, reserves and queues nothing. Live driver reservations and queue offers on it are released, their fee waived or refunded and the queue place kept. A session already running finishes normally and is billed. Any open outage is closed (planned downtime). 409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.
    *
    * `POST /v1/charge-points/{identity}/suspend` · needs `charge_point:write`
    */

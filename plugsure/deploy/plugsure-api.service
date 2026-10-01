@@ -16,11 +16,6 @@ Description=PlugSure API and operator console
 Documentation=file:/opt/plugsure/deploy/README.md
 After=network-online.target postgresql.service
 Wants=network-online.target
-# Every start runs the migrator first (deploy/plugsure-migrate.service, v1.4.4); a
-# failed migration fails this start instead of bringing up an API against a
-# half-migrated schema.
-Requires=plugsure-migrate.service
-After=plugsure-migrate.service
 
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -39,10 +34,16 @@ Environment=NODE_OPTIONS=--enable-source-maps
 Environment=TZ=Asia/Jakarta
 
 # --- migrations ---------------------------------------------------------------
-# Run by plugsure-migrate.service (Requires=/After= above), which alone reads the
-# database owner's credentials from /etc/plugsure/migrate.env. This unit, like the
-# gateway's, loads only /etc/plugsure/plugsure.env, where DATABASE_URL is the
-# restricted plugsure_app role: the running API never holds the owner password.
+# Every start runs the migrator first, in its own unit (deploy/plugsure-migrate.service),
+# which alone reads the database owner's credentials from the root-only
+# /etc/plugsure/migrate.env. This unit, like the gateway's, loads only
+# /etc/plugsure/plugsure.env, where DATABASE_URL is the restricted plugsure_app role:
+# the running API never holds the owner password (v1.4.4).
+# `systemctl start` waits for the one-shot to finish and fails if it fails, so a failed
+# migration fails THIS start; Restart=always then retries it (e.g. the database not
+# up yet at boot), within StartLimitBurst. The '+' runs just this command with full
+# privileges (systemctl needs them); the API itself stays sandboxed.
+ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/api.js
 
 Restart=always
@@ -90,6 +91,8 @@ RestrictNamespaces=yes
 LockPersonality=yes
 RemoveIPC=yes
 ReadWritePaths=-/var/lib/plugsure
+# The owner credentials are for the migrate and backup units only (v1.4.4).
+InaccessiblePaths=-/etc/plugsure/migrate.env -/etc/plugsure/backup.env
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 AmbientCapabilities=

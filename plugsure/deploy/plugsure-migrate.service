@@ -6,10 +6,14 @@
 #   install -o root -g root -m 0600 /dev/null /etc/plugsure/migrate.env   # then fill it in
 #   systemctl daemon-reload
 #
-# Not enabled on its own: plugsure-api.service Requires= it and is ordered After= it,
-# so every start or restart of the API runs the migrator first, and a failed
-# migration stops the API from starting against a half-migrated schema.
-# dist/db/migrate.js is idempotent and takes an advisory lock.
+# Not enabled on its own: plugsure-api.service and plugsure-gateway.service each run
+# `systemctl start plugsure-migrate.service` as a privileged ExecStartPre, so every start
+# or restart of either runs the migrator first. A failed migration fails that start, and
+# the app unit's Restart=always retries it (for example while the database is still
+# coming up at boot). dist/db/migrate.js is idempotent and takes an advisory lock.
+#
+# Optional in migrate.env: POSTGRES_APP_USER (if the runtime role is not plugsure_app),
+# PG_STATEMENT_TIMEOUT_MS=0 (for a long data migration), MIGRATION_LOCK_TIMEOUT.
 #
 # Why a separate unit: migrations need the database OWNER (DDL, creating and
 # altering plugsure_app). Before v1.4.4 the API unit ran them from ExecStartPre
@@ -30,6 +34,8 @@ Description=PlugSure schema migrations
 Documentation=file:/opt/plugsure/deploy/README.md
 After=network-online.target postgresql.service
 Wants=network-online.target
+# Started on every app start (and retried with them): no start-rate limit of its own.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

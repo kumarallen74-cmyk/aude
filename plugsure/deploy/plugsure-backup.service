@@ -5,7 +5,9 @@
 #   install -o root -g root -m 0644 deploy/plugsure-backup.service deploy/plugsure-backup.timer \
 #       /etc/systemd/system/
 #   install -d -o plugsure -g plugsure -m 0700 /var/backups/plugsure
-#   install -o root -g plugsure -m 0640 /dev/null /etc/plugsure/backup.env   # then edit
+#   install -o root -g root -m 0600 /dev/null /etc/plugsure/backup.env       # then edit
+#   (root-only, v1.4.4: it holds the OWNER credential. systemd reads it as root before
+#    dropping to the plugsure user, so the running API and gateway cannot read it.)
 #   (needs pg_dump/pg_restore of the server's major version or newer: postgresql-client-16)
 #   systemctl daemon-reload && systemctl enable --now plugsure-backup.timer
 #

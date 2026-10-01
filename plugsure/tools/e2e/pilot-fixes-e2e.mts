@@ -100,6 +100,8 @@ try {
     check('suspending it again answers 409', again.s === 409, again);
     const rs = await call('POST', `/v1/charge-points/${CP}/remote-start`, { connectorId: 1, idTag: 'E2E-ANY' });
     check('a suspended charger refuses a remote start with 409', rs.s === 409 && /suspended/.test(rs.d?.error ?? ''), rs);
+    const qris = await call('POST', '/v1/checkout/qris', { ocppIdentity: CP, connectorId: 1, amountIdr: 50000 });
+    check('a suspended charger sells no operator QRIS checkout (409)', qris.s === 409 && /suspended/.test(qris.d?.error ?? ''), qris);
     const audit = await call('GET', '/v1/audit');
     const entry = (audit.d?.entries ?? []).find((e: any) => e.action === 'charge_point.suspended' && e.target_id === CP);
     check('the suspension and its reason are audited', entry?.after_state?.reason === reason, entry);
@@ -109,6 +111,9 @@ try {
   }
   const resumed = await call('GET', `/v1/charge-points/${CP}`);
   check('the resumed charger is back in service', !['suspended', 'pending_adoption', 'decommissioned'].includes(resumed.d?.status), resumed.d?.status);
+  const since = resumed.d?.offline_since ? Date.parse(resumed.d.offline_since) : NaN;
+  check('a charger resumed while disconnected is offline from now, not from before the suspension',
+    resumed.d?.status === 'offline' && Number.isFinite(since) && Date.now() - since < 120_000, { status: resumed.d?.status, offline_since: resumed.d?.offline_since });
   const res2 = await call('POST', `/v1/charge-points/${CP}/resume`);
   check('resuming a charger that is not suspended answers 409', res2.s === 409, res2);
 } finally {

@@ -23,11 +23,11 @@ Wants=network-online.target
 # Ordering only. The database may be a container or an RDS instance rather than a
 # local postgresql.service, so this must not be a hard Requires= — that would
 # refuse to start the gateway on a host with no local Postgres at all.
-After=plugsure-migrate.service plugsure-api.service
-# The schema is migrated by plugsure-migrate.service, which plugsure-api.service
-# requires (one writer; the migrator also takes an advisory lock). Ordering after
-# both means the gateway starts against a current schema. It does NOT require the
-# API to be running, and it never holds the owner credential (migrate.env).
+After=plugsure-api.service
+# Ordering only: it does NOT require the API to be running. The schema is migrated
+# by plugsure-migrate.service, which this unit (like the API's) starts before its own
+# process (ExecStartPre below), so the gateway never runs against an old schema. The
+# migrator is idempotent and takes an advisory lock, so the two never race.
 
 # Crash-loop guard: if it fails 5 times in 5 minutes something is wrong that
 # restarting will not fix (bad DATABASE_URL, port in use). Stop and page.
@@ -46,6 +46,8 @@ Environment=NODE_OPTIONS=--enable-source-maps
 # Time-of-use tariff windows (WBP 17:00-22:00) are evaluated in local time.
 Environment=TZ=Asia/Jakarta
 
+# A failed migration fails this start too; Restart=always retries it (v1.4.4).
+ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/gateway.js
 # Deliberately NO ExecReload. The gateway installs no SIGHUP handler, and node's
 # default action for SIGHUP is to terminate: an `ExecReload=/bin/kill -HUP` here made
@@ -104,6 +106,8 @@ RemoveIPC=yes
 # "if this path exists"; keep it so the unit still starts before the directory is
 # created on a fresh host.
 ReadWritePaths=-/var/lib/plugsure
+# The owner credentials are for the migrate and backup units only (v1.4.4).
+InaccessiblePaths=-/etc/plugsure/migrate.env -/etc/plugsure/backup.env
 # Listens on TCP and talks to Postgres over TCP or a unix socket.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # Binds 9220 (>1024), so it needs no capabilities at all.

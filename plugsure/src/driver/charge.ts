@@ -743,7 +743,8 @@ export async function startCharge(principal: DriverPrincipal, chargeId: string):
   if (!c) return { ok: false, error: 'Konektor tidak ditemukan.' };
   // Suspended (or withdrawn) since checkout: the gateway would refuse the start,
   // so do not send one or tell the driver to present the token.
-  if (!c.listed || c.suspended) return { ok: false, error: 'Charger ini sementara tidak beroperasi; sesi tidak dapat dimulai.' };
+  if (!c.listed) return { ok: false, error: 'Charger ini tidak lagi beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.' };
+  if (c.suspended) return { ok: false, error: 'Charger ini sementara tidak beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.' };
 
   const idTag = claimTok!.uid;
 

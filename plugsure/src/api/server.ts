@@ -1043,7 +1043,10 @@ export async function buildApi(): Promise<FastifyInstance> {
     });
     // A suspension is planned downtime, not an outage: end any open outage (and its alert).
     await closeOutage(identity);
-    return { ok: true };
+    // Drivers holding a reservation or a queue offer on it lose nothing: released,
+    // fee waived or refunded, queue place kept (v1.4.4).
+    const released = await (await import('../driver/reservations.js')).releaseForSuspension(owner.chargePointId);
+    return { ok: true, reservationsReleased: released };
   });
 
   app.post('/v1/charge-points/:identity/resume', async (req, reply) => {
@@ -1054,7 +1057,9 @@ export async function buildApi(): Promise<FastifyInstance> {
     // with any outage counted from now rather than from before the suspension.
     const connected = registry.isOnline(identity);
     const r = await query(
-      `UPDATE charge_point SET status = $2 WHERE id = $1 AND status = 'suspended'`,
+      `UPDATE charge_point SET status = $2,
+              offline_since = CASE WHEN $2 = 'online' THEN NULL ELSE now() END
+        WHERE id = $1 AND status = 'suspended'`,
       [owner.chargePointId, connected ? 'online' : 'offline'],
     );
     if ((r.rowCount ?? 0) === 0) throw new ConflictError('this charge point is not suspended');
@@ -1371,6 +1376,15 @@ export async function buildApi(): Promise<FastifyInstance> {
 
     const gate = connectorMaySellEnergy(c.tera_status as any);
     if (!gate.allowed) return reply.status(409).send({ error: gate.reason });
+    // Never sell a session the charger will refuse (v1.4.4): suspended, unadopted,
+    // decommissioned, or a connector on maintenance hold.
+    const cpState = await one<{ status: string; on_hold: boolean }>(
+      `SELECT cp.status, (SELECT maintenance_reason IS NOT NULL FROM connector WHERE id = $2) AS on_hold
+         FROM charge_point cp WHERE cp.id = $1`, [owner.chargePointId, c.id]);
+    if (cpState && assets.ADMINISTRATIVE_STATES.includes(cpState.status)) {
+      return reply.status(409).send({ error: `this charge point is ${cpState.status === 'pending_adoption' ? 'awaiting adoption' : cpState.status} and cannot sell a session` });
+    }
+    if (cpState?.on_hold) return reply.status(409).send({ error: 'this connector is on maintenance hold' });
 
     const now = new Date();
     const { tariff } = await loadTariffForConnector(c.id, c.org_id, now);
