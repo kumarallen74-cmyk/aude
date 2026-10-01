@@ -201,7 +201,12 @@ export async function handleCommand(
     // Only while still 'requested': the charger may have been suspended meanwhile (v1.4.4).
     const set = await one<{ id: number }>(
       `UPDATE ocpi_reservation SET state = $2 WHERE id = $1 AND state = 'requested' RETURNING id`, [res!.id, r === 'ACCEPTED' ? 'active' : 'failed']);
-    if (!set && r === 'ACCEPTED') await charger(() => ocpp.cancelReservation(evse.ocppIdentity, res!.id, actor)).catch(() => undefined);
+    if (!set && r === 'ACCEPTED') {
+      // Suspended during the round trip: undo the hold and tell the partner it did not stick.
+      await charger(() => ocpp.cancelReservation(evse.ocppIdentity, res!.id, actor)).catch(() => undefined);
+      await done('REJECTED', m);
+      return;
+    }
     await done(r, m);
   });
 }
