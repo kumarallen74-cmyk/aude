@@ -183,7 +183,7 @@ Mobile carriers put many phones behind one address, so the per-IP driver limits 
 ## Unchanged from v1.3.0
 
 These items still have to happen before a public launch:
-- the acceptance test on real charger hardware (`docs/ACCEPTANCE-v1.3.md`);
+- the acceptance test on real charger hardware, now `docs/ACCEPTANCE-v1.4.md`;
 - the QRIS acquirer and SMS/WhatsApp provider contracts;
 - the e-Faktur item classification confirmed with a tax adviser;
 - a V2G PKI provider for Plug & Charge;
