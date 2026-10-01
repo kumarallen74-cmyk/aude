@@ -37,7 +37,7 @@ charging is blocked on a QRIS acquirer and an OTP provider.
 > *Verification* in [`RELEASE-NOTES-v1.3.0.md`](RELEASE-NOTES-v1.3.0.md).
 >
 > **It has still never run against real charger hardware.** Pass
-> [`docs/ACCEPTANCE-v1.3.md`](docs/ACCEPTANCE-v1.3.md) on at least one real
+> [`docs/ACCEPTANCE-v1.4.md`](docs/ACCEPTANCE-v1.4.md) on at least one real
 > charger before the pilot: the simulator proves the protocol path, not the
 > hardware. The history below is why that matters.
 >
