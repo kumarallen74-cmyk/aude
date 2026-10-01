@@ -23,7 +23,7 @@ Tick each box. Record a UTC time, the session or transaction ID and the evidence
 | Reference meter (make, serial, calibration date) | |
 | Test vehicle(s) | |
 | Witnesses | |
-| PlugSure build (git tag, e.g. `v1.4.2`) | |
+| PlugSure build (git tag, e.g. `v1.4.4`) | |
 
 **Equipment:**
 - a calibrated reference energy meter on the test connector;
@@ -36,7 +36,7 @@ Tick each box. Record a UTC time, the session or transaction ID and the evidence
 
 ## 0. Before you go on site
 
-- [ ] The server runs the published release under test (`v1.4.2` or later; record the tag above), behind Caddy with a Let's Encrypt certificate (`deploy/Caddyfile` re-deployed).
+- [ ] The server runs the published release under test (`v1.4.4` or later; record the tag above), behind Caddy with a Let's Encrypt certificate (`deploy/Caddyfile` re-deployed).
 - [ ] The gateway environment has:
   - `NODE_ENV=production`;
   - `OCPP_MIN_SECURITY_PROFILE=2`;
