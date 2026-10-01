@@ -112,7 +112,12 @@ async function checkPassword(pw: string, stored: string | null): Promise<boolean
 export const loginFailureMessage = () =>
   `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`;
 
-export async function login(emailRaw: unknown, password: unknown, ip?: string): Promise<LoginResult> {
+/**
+ * `onlyOrgId` (v1.5.0): the sign-in came to an operator's own console web address, where
+ * only that operator's accounts may sign in. Any other account is refused exactly like a
+ * wrong password: counted as a failed attempt, no session, nothing reset, the same answer.
+ */
+export async function login(emailRaw: unknown, password: unknown, ip?: string, onlyOrgId?: string | null): Promise<LoginResult> {
   const email = String(emailRaw ?? '').trim().toLowerCase();
   const pw = String(password ?? '');
   const generic = { ok: false, error: loginFailureMessage() };
@@ -167,7 +172,7 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
   const good = await checkPassword(pw, u.password_hash);
   // An expired one-time password is refused with the same answer, after the same work: a
   // distinct message would confirm the address and that the password was right.
-  if (!good || u.status !== 'active' || u.temp_expired) {
+  if (!good || u.status !== 'active' || u.temp_expired || (onlyOrgId && u.org_id !== onlyOrgId)) {
     if (claimed.locked_now) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
     return generic;
   }

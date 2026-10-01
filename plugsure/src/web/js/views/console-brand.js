@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, icon, field, callout, toast, formValues, fieldErrors, confirmDialog,
+  $, $$, esc, api, state, registerView, pageHead, icon, field, callout, toast, formValues, fieldErrors, confirmDialog, tag, fmt,
 } from '../core.js';
 
 /**
@@ -27,8 +27,15 @@ registerView('console-brand', {
   perm: 'org:read',
   async render(root) {
     const canWrite = state.can('org:write');
+    const isPlatform = state.can('platform:admin');
     let data;
-    try { data = await api('/v1/console-brand'); } catch (e) { root.innerHTML = callout('crit', esc(e.message)); return; }
+    let claims = [];
+    try {
+      [data, claims] = await Promise.all([
+        api('/v1/console-brand'),
+        isPlatform ? api('/v1/platform/console-hostnames').then((r) => r.items) : Promise.resolve([]),
+      ]);
+    } catch (e) { root.innerHTML = callout('crit', esc(e.message)); return; }
 
     const paint = () => {
       const b = data.brand;
@@ -66,8 +73,12 @@ registerView('console-brand', {
 
           <fieldset style="margin-top:14px"><legend>Web address</legend><div class="form">
             ${field('Console web address', `<input name="hostname" value="${v('hostname')}" placeholder="console.yourcompany.co.id"${ro}>`,
-              { help: 'Optional. Your operator (the PlugSure host) adds it to the web server and its access rules, then you point it here with a DNS record. On this address the sign-in page shows your brand, and only your accounts can sign in.', opt: true, full: true })}
-          </div></fieldset>
+              { help: 'Optional. Point it at the console with a DNS record and ask your platform operator to add and approve it. Once approved, the sign-in page on it shows your brand and only your accounts can sign in.', opt: true, full: true })}
+          </div>
+          ${b?.hostname ? (b.hostnameApproved
+            ? `<p class="cell-sub">${tag('t-ok', 'active')} Approved ${esc(fmt.date(b.hostnameApprovedAt))}. Changing the address withdraws the approval.</p>`
+            : `<p class="cell-sub">${tag('t-warn', 'waiting for approval')} Until the platform operator approves it, the address shows the PlugSure sign-in page and does not restrict who signs in.</p>`) : ''}
+          </fieldset>
 
           <fieldset style="margin-top:14px"><legend>Credit</legend>
             <label class="row" style="gap:8px"><input type="checkbox" name="showPoweredBy"${b?.showPoweredBy === false ? '' : ' checked'}${ro}> Show “Powered by PlugSure” under the version in the sidebar</label>
@@ -81,6 +92,16 @@ registerView('console-brand', {
         </form>
 
         <aside class="da-side">
+          ${isPlatform ? `<div class="card" style="margin-bottom:14px"><div class="body">
+            <div class="cell-title">Console web addresses <span class="cell-sub">(platform operator)</span></div>
+            <p class="cell-sub" style="margin:6px 0 10px">Approve an address once its site block is on the web server (deploy/Caddyfile). Only one operator can have an address approved.</p>
+            ${claims.length ? `<table class="table"><tbody>${claims.map((c) => `<tr>
+              <td><div class="cell-title mono">${esc(c.hostname)}</div><div class="cell-sub">${esc(c.orgName)} · ${esc(c.productName)}</div></td>
+              <td style="text-align:right;white-space:nowrap">${c.approvedAt
+                ? `${tag('t-ok', 'approved')} <button class="btn sm ghost" type="button" data-revoke="${esc(c.orgId)}">Withdraw</button>`
+                : `<button class="btn sm primary" type="button" data-approve="${esc(c.orgId)}" data-host="${esc(c.hostname)}">Approve</button>`}</td>
+            </tr>`).join('')}</tbody></table>` : '<p class="cell-sub">No operator has entered a console web address.</p>'}
+          </div></div>` : ''}
           <div class="card"><div class="body">
             <div class="cell-title">Where it shows</div>
             <ul class="cell-sub" style="padding-left:18px;margin:8px 0 0">
@@ -129,10 +150,34 @@ registerView('console-brand', {
           repaint(data.view);
         } catch (e) { toast(e.message, 'crit'); }
       });
+      $$('[data-approve]', root).forEach((btn) => btn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: `Approve ${btn.dataset.host}?`,
+          message: 'Only that operator’s accounts will be able to sign in on this address, and its sign-in page will show the operator’s brand. Add the address’s site block to the web server first.',
+          confirmLabel: 'Approve',
+        });
+        if (!ok) return;
+        try {
+          await api(`/v1/platform/console-hostnames/${encodeURIComponent(btn.dataset.approve)}/approve`, { method: 'POST', body: { hostname: btn.dataset.host } });
+          toast('Approved.', 'ok');
+          claims = (await api('/v1/platform/console-hostnames')).items;
+          data = await api('/v1/console-brand');
+          paint();
+        } catch (e) { toast(e.message, 'crit'); }
+      }));
+      $$('[data-revoke]', root).forEach((btn) => btn.addEventListener('click', async () => {
+        try {
+          await api(`/v1/platform/console-hostnames/${encodeURIComponent(btn.dataset.revoke)}/revoke`, { method: 'POST' });
+          toast('Approval withdrawn.', 'ok');
+          claims = (await api('/v1/platform/console-hostnames')).items;
+          data = await api('/v1/console-brand');
+          paint();
+        } catch (e) { toast(e.message, 'crit'); }
+      }));
       $('[data-remove]', root)?.addEventListener('click', async () => {
         const ok = await confirmDialog({
           title: 'Go back to the PlugSure brand?',
-          message: data.brand.hostname
+          message: data.brand.hostnameApproved
             ? `Your name, colours and logo are removed. The sign-in page on ${data.brand.hostname} shows PlugSure, and any PlugSure account can sign in there again.`
             : 'Your name, colours and logo are removed from this console.',
           confirmLabel: 'Remove my brand', danger: true,

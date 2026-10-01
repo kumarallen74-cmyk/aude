@@ -843,7 +843,7 @@ export const ops: Op[] = [
     description:
       'Checks an operator e-mail and password and, on success, sets the HttpOnly `ps_session` cookie (12 hours).' +
       'Every attempt is audited. A wrong email or password answers 401 with a generic message; repeated failures lock the account for a while. ' +
-      'On an operator’s own console web address (Console branding) only that operator’s accounts sign in; any other gets the same 401.',
+      'On an operator’s own console web address (Console branding, once approved by the platform operator) only that operator’s accounts sign in; any other is refused exactly as a wrong password.',
     body: {
       required: true,
       schema: obj({ email: { type: 'string' }, password: { type: 'string' } }, ['email', 'password']),

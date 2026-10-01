@@ -87,18 +87,23 @@ const HOST = `console-${tag}.brand-e2e.example`;
 const slugB = `brand-e2e-b-${tag}`;
 const emailB = `b-${tag}@plugsure.test`;
 const pwB = 'BrandB-Test-2026!';
+const slugP = `brand-e2e-p-${tag}`;
+const emailP = `p-${tag}@plugsure.test`;
+const pwP = 'BrandP-Test-2026!';
 const db = new pg.Client({ connectionString: DB });
 await db.connect();
 
 const ops = session();
 const other = session();
+const plat = session();
 const keys: string[] = [];
 let orgB = '';
+let orgP = '';
 try {
   const login = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: PASSWORD });
   check('operator signs in', login.s === 200, login.s);
   const me0 = await ops('GET', '/v1/auth/me');
-  const orgA = me0.d?.org?.id;
+  const orgA: string = me0.d?.org?.id;
   // A previous run may have left a brand: start from PlugSure's.
   await ops('DELETE', '/v1/console-brand');
   check('no brand: the console is PlugSure’s (/v1/auth/me consoleBrand null)', (await ops('GET', '/v1/auth/me')).d?.consoleBrand === null);
@@ -118,6 +123,40 @@ try {
   const me = await ops('GET', '/v1/auth/me');
   check('/v1/auth/me gives the console its brand', me.d?.consoleBrand?.productName === 'NusaCharge Ops' && me.d?.consoleBrand?.tagline === 'Network operations' && me.d?.consoleBrand?.logoUrl === null, me.d?.consoleBrand);
 
+  check('a new web address waits for the platform operator’s approval', put.d?.brand?.hostnameApproved === false, put.d?.brand);
+
+  // ── second operator and the platform operator
+  const mk = (email: string, slug: string, pw: string, extra = '') => execSync(
+    `npx tsx src/db/create-admin.ts --email ${email} --name "Admin ${slug}" --org-slug ${slug} --org-name "Brand E2E ${slug}" --password '${pw}' ${extra}`,
+    { env: { ...process.env, DATABASE_URL: DB, MIGRATION_DATABASE_URL: DB }, stdio: 'pipe' },
+  );
+  mk(emailB, slugB, pwB);
+  mk(emailP, slugP, pwP, '--platform-admin');
+  orgB = (await db.query(`SELECT id FROM organisation WHERE slug = $1`, [slugB])).rows[0]?.id;
+  orgP = (await db.query(`SELECT id FROM organisation WHERE slug = $1`, [slugP])).rows[0]?.id;
+  await db.query(`UPDATE app_user SET must_change_password = false WHERE email = ANY($1)`, [[emailB, emailP]]);
+  check('the other operator signs in on PlugSure’s address', (await other('POST', '/v1/auth/login', { email: emailB, password: pwB })).s === 200);
+  check('the platform operator signs in', (await plat('POST', '/v1/auth/login', { email: emailP, password: pwP })).s === 200);
+
+  // ── before approval, the address does nothing
+  check('before approval the address shows no brand on the sign-in page', (await viaHost(HOST, 'GET', '/console-brand.json')).d?.brand === null);
+  const early = await viaHost(HOST, 'POST', '/v1/auth/login', { email: emailB, password: pwB });
+  check('… and restricts nobody (any account signs in)', early.s === 200, early.s);
+  const squat = await other('PUT', '/v1/console-brand', { productName: 'Squatter', hostname: HOST });
+  check('a claim waiting for approval blocks nobody: another operator may enter the same address', squat.s === 200 && squat.d?.brand?.hostnameApproved === false, squat.d);
+  const selfApprove = await ops('POST', `/v1/platform/console-hostnames/${orgA}/approve`, { hostname: HOST });
+  check('an operator cannot approve its own address (platform:admin only, 403)', selfApprove.s === 403, selfApprove.s);
+  const list = await plat('GET', '/v1/platform/console-hostnames');
+  const claims = (list.d?.items ?? []).filter((c: any) => c.hostname === HOST);
+  check('the platform operator sees both claims, waiting', claims.length === 2 && claims.every((c: any) => c.approvedAt === null), claims);
+  const stale = await plat('POST', `/v1/platform/console-hostnames/${orgA}/approve`, { hostname: `other-${HOST}` });
+  check('an approval must name the address the operator has now (409)', stale.s === 409, stale.d);
+  const ok = await plat('POST', `/v1/platform/console-hostnames/${orgA}/approve`, { hostname: HOST });
+  check('the platform operator approves the address for the operator', ok.s === 200 && !!ok.d?.approvedAt && ok.d?.orgId === orgA, ok.d);
+  const second = await plat('POST', `/v1/platform/console-hostnames/${orgB}/approve`, { hostname: HOST });
+  check('the same address cannot be approved for a second operator (409)', second.s === 409 && second.d?.fields?.hostname === 'taken', second.d);
+  check('/v1/console-brand shows the approval', (await ops('GET', '/v1/console-brand')).d?.brand?.hostnameApproved === true);
+
   // ── the sign-in page, by web address
   const pub = await viaHost(HOST, 'GET', '/console-brand.json');
   check('the brand’s web address serves its brand to the sign-in page, before sign-in', pub.s === 200 && pub.d?.brand?.productName === 'NusaCharge Ops' && !('hostname' in (pub.d?.brand ?? {})), pub.d);
@@ -129,30 +168,28 @@ try {
   check('the console itself is served on the brand’s address', index.s === 200 && /<div id="app"/.test(index.buf.toString()), index.s);
 
   // ── who may sign in there
-  execSync(
-    `npx tsx src/db/create-admin.ts --email ${emailB} --name "Admin B" --org-slug ${slugB} --org-name "Brand E2E ${tag}" --password '${pwB}'`,
-    { env: { ...process.env, DATABASE_URL: DB, MIGRATION_DATABASE_URL: DB }, stdio: 'pipe' },
-  );
-  orgB = (await db.query(`SELECT id FROM organisation WHERE slug = $1`, [slugB])).rows[0]?.id;
-  await db.query(`UPDATE app_user SET must_change_password = false WHERE email = $1`, [emailB]);
   const own = await viaHost(HOST, 'POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: PASSWORD });
   check('the operator’s own account signs in on its console address', own.s === 200 && /ps_session=/.test(String(own.h['set-cookie'] ?? '')), own.s);
+  const before = (await db.query(`SELECT failed_logins, last_login_at FROM app_user WHERE email = $1`, [emailB])).rows[0];
+  const sessionsBefore = Number((await db.query(`SELECT count(*) FROM auth_session s JOIN app_user u ON u.id = s.user_id WHERE u.email = $1`, [emailB])).rows[0].count);
   const foreign = await viaHost(HOST, 'POST', '/v1/auth/login', { email: emailB, password: pwB });
-  check('another operator’s admin is refused there, with the wrong-password answer and no session', foreign.s === 401 && /^invalid email or password/.test(foreign.d?.error ?? '') && !/ps_session=[^;]/.test(String(foreign.h['set-cookie'] ?? '')), { s: foreign.s, d: foreign.d, c: foreign.h['set-cookie'] });
+  check('another operator’s admin is refused there, with no session', foreign.s === 401 && /^invalid email or password/.test(foreign.d?.error ?? '') && !/ps_session=[^;]/.test(String(foreign.h['set-cookie'] ?? '')), { s: foreign.s, d: foreign.d, c: foreign.h['set-cookie'] });
+  const after1 = (await db.query(`SELECT failed_logins, last_login_at FROM app_user WHERE email = $1`, [emailB])).rows[0];
+  const sessionsAfter = Number((await db.query(`SELECT count(*) FROM auth_session s JOIN app_user u ON u.id = s.user_id WHERE u.email = $1`, [emailB])).rows[0].count);
+  check('… exactly like a wrong password: counted as a failed attempt, no sign-in recorded, no session made',
+    after1.failed_logins === before.failed_logins + 1 && String(after1.last_login_at) === String(before.last_login_at) && sessionsAfter === sessionsBefore,
+    { before, after1, sessionsBefore, sessionsAfter });
   const wrongPw = await viaHost(HOST, 'POST', '/v1/auth/login', { email: emailB, password: 'not-the-password' });
-  check('… the same answer as a wrong password', wrongPw.s === 401 && wrongPw.d?.error === foreign.d?.error, wrongPw.d);
-  const elsewhere = await other('POST', '/v1/auth/login', { email: emailB, password: pwB });
-  check('the other operator still signs in on PlugSure’s address', elsewhere.s === 200, elsewhere.s);
-  const auditRow = (await db.query(`SELECT 1 FROM audit_log WHERE action = 'auth.login_wrong_console' AND org_id = $1 AND target_id = $2`, [orgA, emailB])).rowCount;
-  check('the refused sign-in is audited for the console’s operator', auditRow === 1, auditRow);
+  check('… with the same answer as a wrong password', wrongPw.s === 401 && wrongPw.d?.error === foreign.d?.error, wrongPw.d);
+  const hostAudit = (await db.query(`SELECT count(*) FROM audit_log WHERE org_id = $1 AND target_id = $2`, [orgA, emailB])).rows[0].count;
+  check('nothing about the other operator’s account is written to this operator’s audit log', Number(hostAudit) === 0, hostAudit);
   const meB = await other('GET', '/v1/auth/me');
-  check('the other operator sees PlugSure’s console, not this brand', meB.d?.consoleBrand === null, meB.d?.consoleBrand);
+  check('the other operator sees its own console, not this brand', meB.d?.consoleBrand?.productName === 'Squatter', meB.d?.consoleBrand);
 
   // ── the address is the operator's
-  const steal = await other('PUT', '/v1/console-brand', { productName: 'Thief', hostname: HOST });
-  check('another operator cannot take the console’s web address (409)', steal.s === 409 && steal.d?.fields?.hostname === 'taken', steal.d);
   const stealApp = await other('PUT', '/v1/driver-app', { appName: 'Thief App', hostname: HOST });
-  check('… nor use it for a driver app (409)', stealApp.s === 409 && stealApp.d?.fields?.hostname === 'taken', stealApp.d);
+  check('the approved address cannot be used for another operator’s driver app (409)', stealApp.s === 409 && stealApp.d?.fields?.hostname === 'taken', stealApp.d);
+  await other('DELETE', '/v1/console-brand');
 
   // ── the logo
   const tooSmall = await ops('PUT', '/v1/console-brand/logo', { png: logo(32) });
@@ -178,6 +215,13 @@ try {
   const audit = await ops('GET', '/v1/audit');
   const actions = new Set((audit.d?.entries ?? []).filter((e: any) => e.target_type === 'console_brand').map((e: any) => e.action));
   check('saving and the logo are audited', actions.has('console_brand.created') && actions.has('console_brand.logo_changed'), [...actions]);
+  const moved = await ops('PUT', '/v1/console-brand', { hostname: `new-${HOST}` });
+  check('changing the address withdraws the approval', moved.s === 200 && moved.d?.brand?.hostnameApproved === false && (await viaHost(HOST, 'GET', '/console-brand.json')).d?.brand === null, moved.d?.brand);
+  await ops('PUT', '/v1/console-brand', { hostname: HOST });
+  await plat('POST', `/v1/platform/console-hostnames/${orgA}/approve`, { hostname: HOST });
+  const revoked = await plat('POST', `/v1/platform/console-hostnames/${orgA}/revoke`);
+  check('the platform operator can withdraw an approval; the address stops taking effect', revoked.s === 200 && (await viaHost(HOST, 'GET', '/console-brand.json')).d?.brand === null, revoked.d);
+  await plat('POST', `/v1/platform/console-hostnames/${orgA}/approve`, { hostname: HOST });
   const rmLogo = await ops('DELETE', '/v1/console-brand/logo');
   check('the logo can be removed', rmLogo.s === 200 && rmLogo.d?.brand?.hasLogo === false, rmLogo.d?.brand);
   const del = await ops('DELETE', '/v1/console-brand');
@@ -189,12 +233,13 @@ try {
 } finally {
   for (const id of keys) if (id) await ops('DELETE', `/v1/api-keys/${id}`).catch(() => undefined);
   await ops('DELETE', '/v1/console-brand').catch(() => undefined);
-  if (orgB) {
-    await db.query(`DELETE FROM console_brand WHERE org_id = $1`, [orgB]).catch(() => {});
-    await db.query(`DELETE FROM auth_session WHERE user_id IN (SELECT id FROM app_user WHERE org_id = $1)`, [orgB]).catch(() => {});
-    await db.query(`DELETE FROM user_role WHERE user_id IN (SELECT id FROM app_user WHERE org_id = $1)`, [orgB]).catch(() => {});
-    await db.query(`DELETE FROM app_user WHERE org_id = $1`, [orgB]).catch(() => {});
-    await db.query(`DELETE FROM organisation WHERE id = $1`, [orgB]).catch(() => {});
+  for (const org of [orgB, orgP]) {
+    if (!org) continue;
+    await db.query(`DELETE FROM console_brand WHERE org_id = $1`, [org]).catch(() => {});
+    await db.query(`DELETE FROM auth_session WHERE user_id IN (SELECT id FROM app_user WHERE org_id = $1)`, [org]).catch(() => {});
+    await db.query(`DELETE FROM user_role WHERE user_id IN (SELECT id FROM app_user WHERE org_id = $1)`, [org]).catch(() => {});
+    await db.query(`DELETE FROM app_user WHERE org_id = $1`, [org]).catch(() => {});
+    await db.query(`DELETE FROM organisation WHERE id = $1`, [org]).catch(() => {});
   }
   await db.end();
 }

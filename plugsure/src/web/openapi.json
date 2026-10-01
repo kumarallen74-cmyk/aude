@@ -20427,7 +20427,7 @@
         ],
         "summary": "Create or change the console brand",
         "operationId": "createOrChangeConsoleBrand",
-        "description": "Fields left out keep their value; the product name is required when creating. Everyone who signs in to the organisation sees the brand. With a web address, the sign-in page on it shows the brand and only this operator’s accounts may sign in there; the address must also be added to the web server (deploy/Caddyfile). 409 when another operator’s console or any driver app uses the web address, or in a sandbox.\n\n**Permissions checked:** `org:write`.",
+        "description": "Fields left out keep their value; the product name is required when creating. Everyone who signs in to the organisation sees the brand. A web address takes effect once the platform operator approves it (and adds it to the web server, deploy/Caddyfile): then the sign-in page on it shows the brand and only this operator’s accounts may sign in there. Changing the address withdraws the approval. 409 when another operator’s console has the address approved, a driver app uses it, or in a sandbox; 422 for PlugSure’s own addresses.\n\n**Permissions checked:** `org:write`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -36635,6 +36635,8 @@
           "hasLogo",
           "logoSha256",
           "hostname",
+          "hostnameApproved",
+          "hostnameApprovedAt",
           "showPoweredBy",
           "updatedAt"
         ],
@@ -36685,6 +36687,17 @@
               "null"
             ],
             "description": "The console’s own web address, e.g. console.nusantaracharge.id."
+          },
+          "hostnameApproved": {
+            "type": "boolean",
+            "description": "The platform operator approved the web address. Only then does the sign-in page on it show the brand and admit only this operator’s accounts."
+          },
+          "hostnameApprovedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "showPoweredBy": {
             "type": "boolean",

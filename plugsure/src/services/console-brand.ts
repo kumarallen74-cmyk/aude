@@ -12,6 +12,11 @@ import { BrandError, HOST_RE, reservedHosts, contrast, mix, onFill } from './bra
  * address the sign-in page shows it too, and only the operator's own accounts
  * may sign in there. Without a brand the console is PlugSure's, unchanged.
  *
+ * The web address takes effect only once the platform operator approves it
+ * (platform:admin, when adding its Caddy site block). Otherwise an operator could
+ * claim the shared console's own name, or another operator's, and decide who may
+ * sign in there. Changing the address withdraws the approval.
+ *
  * The brand is read before anyone has signed in (the sign-in page, the logo), so
  * those lookups run unscoped; everything that changes it runs in the operator's
  * own request scope.
@@ -26,18 +31,23 @@ export interface ConsoleBrand {
   hasLogo: boolean;
   logoSha256: string | null;
   hostname: string | null;
+  /** The platform operator approved the web address: only then does it take effect. */
+  hostnameApproved: boolean;
+  hostnameApprovedAt: string | null;
   showPoweredBy: boolean;
   updatedAt: string;
 }
 
 interface Row {
   org_id: string; product_name: string; tagline: string | null; brand_color: string; accent_color: string;
-  logo_sha256: string | null; hostname: string | null; show_powered_by: boolean; updated_at: Date;
+  logo_sha256: string | null; hostname: string | null; hostname_approved_at: Date | null; show_powered_by: boolean; updated_at: Date;
 }
-const COLS = 'org_id, product_name, tagline, brand_color, accent_color, logo_sha256, hostname, show_powered_by, updated_at';
+const COLS = 'org_id, product_name, tagline, brand_color, accent_color, logo_sha256, hostname, hostname_approved_at, show_powered_by, updated_at';
 const toBrand = (r: Row): ConsoleBrand => ({
   orgId: r.org_id, productName: r.product_name, tagline: r.tagline, brandColor: r.brand_color, accentColor: r.accent_color,
-  hasLogo: !!r.logo_sha256, logoSha256: r.logo_sha256, hostname: r.hostname, showPoweredBy: r.show_powered_by,
+  hasLogo: !!r.logo_sha256, logoSha256: r.logo_sha256, hostname: r.hostname,
+  hostnameApproved: !!r.hostname_approved_at, hostnameApprovedAt: r.hostname_approved_at?.toISOString() ?? null,
+  showPoweredBy: r.show_powered_by,
   updatedAt: r.updated_at.toISOString(),
 });
 
@@ -61,11 +71,16 @@ async function cached(map: Map<string, { at: number; brand: ConsoleBrand | null 
 
 export const hostOf = (host: string | undefined) => String(host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
 
-/** The brand whose console web address this is (the sign-in page; unscoped: nobody has signed in yet). */
+/**
+ * The brand whose APPROVED console web address this is (the sign-in page and its
+ * sign-in restriction; unscoped: nobody has signed in yet). PlugSure's own
+ * addresses never match, even if a row somehow named one.
+ */
 export function consoleBrandForHost(host: string | undefined): Promise<ConsoleBrand | null> {
   const h = hostOf(host);
-  if (!h || !HOST_RE.test(h)) return Promise.resolve(null);
-  return cached(byHost, h, () => outsideRequestScope(() => one<Row>(`SELECT ${COLS} FROM console_brand WHERE hostname = $1`, [h])));
+  if (!h || !HOST_RE.test(h) || reservedHosts().has(h)) return Promise.resolve(null);
+  return cached(byHost, h, () => outsideRequestScope(() =>
+    one<Row>(`SELECT ${COLS} FROM console_brand WHERE hostname = $1 AND hostname_approved_at IS NOT NULL`, [h])));
 }
 
 /** The operator's console brand, or null for PlugSure's. */
@@ -138,10 +153,14 @@ export interface ConsoleBrandInput {
   productName?: unknown; tagline?: unknown; brandColor?: unknown; accentColor?: unknown; hostname?: unknown; showPoweredBy?: unknown;
 }
 
-/** Is this address in use by another operator's console, or by any driver app? (Unscoped: across operators.) */
+/**
+ * Is this address in use by another operator's approved console, or by any driver app?
+ * (Unscoped: across operators.) A claim still waiting for approval blocks nobody, so an
+ * operator cannot squat another's planned address.
+ */
 export async function hostnameTaken(hostname: string, orgId: string): Promise<'console' | 'driver_app' | null> {
   const r = await outsideRequestScope(() => one<{ what: string }>(
-    `SELECT 'console' AS what FROM console_brand WHERE hostname = $1 AND org_id <> $2
+    `SELECT 'console' AS what FROM console_brand WHERE hostname = $1 AND org_id <> $2 AND hostname_approved_at IS NOT NULL
      UNION ALL SELECT 'driver_app' FROM driver_app_brand WHERE hostname = $1
      LIMIT 1`,
     [hostname, orgId],
@@ -150,6 +169,7 @@ export async function hostnameTaken(hostname: string, orgId: string): Promise<'c
 }
 
 export async function saveConsoleBrand(orgId: string, input: ConsoleBrandInput): Promise<ConsoleBrand> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BrandError(422, 'Send the brand as a JSON object.');
   const cur = await consoleBrandForOrgFresh(orgId);
   const errors: Record<string, string> = {};
   const str = (k: keyof ConsoleBrandInput, fallback: string | null): string | null => {
@@ -196,19 +216,16 @@ export async function saveConsoleBrand(orgId: string, input: ConsoleBrandInput):
     if (taken) throw new BrandError(409, taken === 'console' ? 'Another operator’s console already uses this web address.' : 'A driver app already uses this web address; the console needs one of its own.', { hostname: 'taken' });
   }
 
-  try {
-    await query(
-      `INSERT INTO console_brand (org_id, product_name, tagline, brand_color, accent_color, hostname, show_powered_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (org_id) DO UPDATE SET product_name = $2, tagline = $3, brand_color = $4, accent_color = $5,
-         hostname = $6, show_powered_by = $7, updated_at = now()`,
-      [orgId, productName, tagline, brandColor, accentColor, hostname, showPoweredBy],
-    );
-  } catch (e) {
-    // Two operators claiming the same address at the same moment: the UNIQUE constraint decides.
-    if ((e as { code?: string }).code === '23505') throw new BrandError(409, 'Another operator’s console already uses this web address.', { hostname: 'taken' });
-    throw e;
-  }
+  // A new (or removed) address withdraws the platform operator's approval of the old one.
+  await query(
+    `INSERT INTO console_brand (org_id, product_name, tagline, brand_color, accent_color, hostname, show_powered_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (org_id) DO UPDATE SET product_name = $2, tagline = $3, brand_color = $4, accent_color = $5,
+       hostname = $6, show_powered_by = $7, updated_at = now(),
+       hostname_approved_at = CASE WHEN console_brand.hostname IS NOT DISTINCT FROM $6 THEN console_brand.hostname_approved_at END,
+       hostname_approved_by = CASE WHEN console_brand.hostname IS NOT DISTINCT FROM $6 THEN console_brand.hostname_approved_by END`,
+    [orgId, productName, tagline, brandColor, accentColor, hostname, showPoweredBy],
+  );
   forgetConsoleBrands();
   return (await consoleBrandForOrgFresh(orgId))!;
 }
@@ -216,6 +233,59 @@ export async function saveConsoleBrand(orgId: string, input: ConsoleBrandInput):
 async function consoleBrandForOrgFresh(orgId: string): Promise<ConsoleBrand | null> {
   const r = await one<Row>(`SELECT ${COLS} FROM console_brand WHERE org_id = $1`, [orgId]);
   return r ? toBrand(r) : null;
+}
+
+// ─────────────────────────────────────────────── the platform operator's approval of web addresses
+
+export interface HostnameClaim {
+  orgId: string; orgName: string; productName: string; hostname: string; approvedAt: string | null; updatedAt: string;
+}
+
+/** Every operator's console web address, approved or waiting (platform:admin; across operators). */
+export async function listHostnameClaims(): Promise<HostnameClaim[]> {
+  const rows = await outsideRequestScope(() => query<{ org_id: string; org_name: string; product_name: string; hostname: string; hostname_approved_at: Date | null; updated_at: Date }>(
+    `SELECT b.org_id, o.name AS org_name, b.product_name, b.hostname, b.hostname_approved_at, b.updated_at
+       FROM console_brand b JOIN organisation o ON o.id = b.org_id
+      WHERE b.hostname IS NOT NULL
+      ORDER BY (b.hostname_approved_at IS NOT NULL), b.updated_at DESC`,
+  ));
+  return rows.rows.map((r) => ({
+    orgId: r.org_id, orgName: r.org_name, productName: r.product_name, hostname: r.hostname,
+    approvedAt: r.hostname_approved_at?.toISOString() ?? null, updatedAt: r.updated_at.toISOString(),
+  }));
+}
+
+/**
+ * Approve an operator's console web address (platform:admin). `hostname` must be the
+ * address the operator has now, so an approval cannot land on one changed meanwhile.
+ */
+export async function approveHostname(orgId: string, hostname: unknown, approverId: string | null): Promise<HostnameClaim> {
+  const h = typeof hostname === 'string' ? hostOf(hostname) : '';
+  const cur = await outsideRequestScope(() => one<Row>(`SELECT ${COLS} FROM console_brand WHERE org_id = $1`, [orgId]));
+  if (!cur?.hostname) throw new BrandError(404, 'This operator has not entered a console web address.');
+  if (cur.hostname !== h) throw new BrandError(409, `The operator’s console web address is ${cur.hostname}, not ${h || 'that'}; approve the address it has now.`, { hostname: 'changed' });
+  if (reservedHosts().has(h)) throw new BrandError(409, 'This is one of PlugSure’s own addresses: it cannot belong to one operator.', { hostname: 'reserved' });
+  const taken = await hostnameTaken(h, orgId);
+  if (taken) throw new BrandError(409, taken === 'console' ? 'Another operator’s console already has this address approved.' : 'A driver app uses this address.', { hostname: 'taken' });
+  try {
+    await outsideRequestScope(() => query(
+      `UPDATE console_brand SET hostname_approved_at = now(), hostname_approved_by = $3 WHERE org_id = $1 AND hostname = $2`,
+      [orgId, h, approverId],
+    ));
+  } catch (e) {
+    if ((e as { code?: string }).code === '23505') throw new BrandError(409, 'Another operator’s console already has this address approved.', { hostname: 'taken' });
+    throw e;
+  }
+  forgetConsoleBrands();
+  return (await listHostnameClaims()).find((c) => c.orgId === orgId)!;
+}
+
+/** Withdraw the approval (platform:admin): the address stops taking effect; the operator keeps its brand. */
+export async function revokeHostname(orgId: string): Promise<boolean> {
+  const r = await outsideRequestScope(() => query(
+    `UPDATE console_brand SET hostname_approved_at = NULL, hostname_approved_by = NULL WHERE org_id = $1 AND hostname_approved_at IS NOT NULL`, [orgId]));
+  forgetConsoleBrands();
+  return (r.rowCount ?? 0) > 0;
 }
 
 // ─────────────────────────────────────────────── the logo

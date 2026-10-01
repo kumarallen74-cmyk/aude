@@ -155,7 +155,7 @@ export function normaliseFingerprint(v: string): string | null {
 
 export function reservedHosts(): Set<string> {
   const out = new Set<string>(['localhost']);
-  for (const v of [process.env.CONSOLE_PUBLIC_URL, process.env.DRIVER_PUBLIC_URL, process.env.OCPI_PUBLIC_URL, process.env.API_PUBLIC_URL]) {
+  for (const v of [process.env.CONSOLE_PUBLIC_URL, process.env.PUBLIC_BASE_URL, process.env.DRIVER_PUBLIC_URL, process.env.OCPI_PUBLIC_URL, process.env.API_PUBLIC_URL, process.env.OCPP_PUBLIC_URL]) {
     try { if (v) out.add(new URL(v).hostname.toLowerCase()); } catch { /* not a URL */ }
   }
   return out;
@@ -503,11 +503,11 @@ export async function saveBrand(orgId: string, input: BrandInput): Promise<Brand
   }
   // Across operators, so outside the request's org scope: inside it, row-level security
   // shows only this operator's rows and the check found nothing (the UNIQUE constraints
-  // then failed the write with a server error). A console's own web address counts too.
+  // then failed the write with a server error). A console's approved web address counts too.
   const clash = await outsideRequestScope(() => one<{ what: string }>(
     `SELECT CASE WHEN slug = $2 THEN 'slug' WHEN hostname = $3 THEN 'hostname' WHEN android_package = $4 THEN 'androidPackage' ELSE 'iosBundleId' END AS what
        FROM driver_app_brand WHERE org_id <> $1 AND (slug = $2 OR hostname = $3 OR android_package = $4 OR ios_bundle_id = $5)
-     UNION ALL SELECT 'consoleHostname' FROM console_brand WHERE hostname = $3
+     UNION ALL SELECT 'consoleHostname' FROM console_brand WHERE hostname = $3 AND hostname_approved_at IS NOT NULL
      LIMIT 1`,
     [orgId, v.slug, v.hostname, v.androidPackage, v.iosBundleId],
   ));

@@ -970,6 +970,9 @@ export interface ConsoleBrand {
   logoSha256: string | null;
   /** The console’s own web address, e.g. console.nusantaracharge.id. */
   hostname: string | null;
+  /** The platform operator approved the web address. Only then does the sign-in page on it show the brand and admit only this operator’s accounts. */
+  hostnameApproved: boolean;
+  hostnameApprovedAt: string | null;
   /** Show “Powered by PlugSure” in the sidebar. */
   showPoweredBy: boolean;
   updatedAt: string;
@@ -5950,7 +5953,7 @@ export class Operations {
   /**
    * Create or change the console brand
    *
-   * Fields left out keep their value; the product name is required when creating. Everyone who signs in to the organisation sees the brand. With a web address, the sign-in page on it shows the brand and only this operator’s accounts may sign in there; the address must also be added to the web server (deploy/Caddyfile). 409 when another operator’s console or any driver app uses the web address, or in a sandbox.
+   * Fields left out keep their value; the product name is required when creating. Everyone who signs in to the organisation sees the brand. A web address takes effect once the platform operator approves it (and adds it to the web server, deploy/Caddyfile): then the sign-in page on it shows the brand and only this operator’s accounts may sign in there. Changing the address withdraws the approval. 409 when another operator’s console has the address approved, a driver app uses it, or in a sandbox; 422 for PlugSure’s own addresses.
    *
    * `PUT /v1/console-brand` · needs `org:write`
    */

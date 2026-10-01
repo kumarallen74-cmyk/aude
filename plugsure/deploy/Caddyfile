@@ -333,7 +333,9 @@ console.example.id {
 #
 # Each such address needs a site block of its own: copy the template below once
 # per operator, replace the hostname and the allow-list (the operator's office or
-# VPN ranges), and reload Caddy. The operator points the name at this server
+# VPN ranges), and reload Caddy. Then approve the address as a platform
+# administrator (Governance → Console branding → Console web addresses): it has
+# no effect until approved. The operator points the name at this server
 # with a DNS A/AAAA or CNAME record before you reload, so the certificate can be
 # issued. It is deliberately NOT served by the on-demand catch-all at the end of
 # this file: that block serves only the driver app, and a console must keep its

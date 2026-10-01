@@ -7,7 +7,7 @@ import { decodePng, encodePng } from './png.js';
 import { contrast, saveBrand, forgetBrands } from './brand.js';
 import {
   consolePalette, saveConsoleBrand, saveConsoleLogo, removeConsoleLogo, deleteConsoleBrand, consoleBrandForHost, consoleBrandForOrg,
-  logoBySha, brandView, forgetConsoleBrands, hostOf,
+  logoBySha, brandView, forgetConsoleBrands, hostOf, listHostnameClaims, approveHostname, revokeHostname,
 } from './console-brand.js';
 
 /**
@@ -107,16 +107,68 @@ dbTest('save: validation, defaults, and fields left out keep their value', async
   });
 });
 
-dbTest('web address: another operator cannot take it, even though its request sees only its own rows', async () => {
+dbTest('web address: it takes effect only once the platform operator approves it; a waiting claim blocks nobody', async () => {
+  forgetConsoleBrands();
+  assert.equal(await consoleBrandForHost(HOST_A), null, 'not approved: no brand on the sign-in page, no restriction');
+  // Another operator may enter the same address while A's waits (no squatting by claiming first).
   await asOrg(orgB, async () => {
-    await assert.rejects(saveConsoleBrand(orgB, { productName: 'B', hostname: HOST_A }), (e: any) => e.status === 409 && /console already uses/.test(e.message));
-    assert.equal((await saveConsoleBrand(orgB, { productName: 'B' })).hostname, null);
+    const b = await saveConsoleBrand(orgB, { productName: 'B', hostname: HOST_A });
+    assert.equal(b.hostnameApproved, false);
   });
+  const claims = (await listHostnameClaims()).filter((c) => c.hostname === HOST_A);
+  assert.equal(claims.length, 2);
+  await assert.rejects(approveHostname(orgA, 'elsewhere.example', null), (e: any) => e.status === 409 && e.fields.hostname === 'changed');
+  const ok = await approveHostname(orgA, HOST_A.toUpperCase(), null);
+  assert.ok(ok.approvedAt);
+  assert.equal((await consoleBrandForHost(HOST_A))?.orgId, orgA);
+  // Now it is A's: B can neither have it approved nor enter it.
+  await assert.rejects(approveHostname(orgB, HOST_A, null), (e: any) => e.status === 409 && e.fields.hostname === 'taken');
+  await asOrg(orgB, async () => {
+    await assert.rejects(saveConsoleBrand(orgB, { hostname: HOST_A }), (e: any) => e.status === 409 && /console already uses/.test(e.message));
+  });
+});
+
+dbTest('web address: PlugSure’s own addresses can never be approved or matched', async () => {
+  const old = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = 'https://console.plugsure-shared.example';
+  try {
+    await asOrg(orgB, async () => {
+      await assert.rejects(saveConsoleBrand(orgB, { hostname: 'console.plugsure-shared.example' }), (e: any) => e.status === 422 && !!e.fields.hostname);
+    });
+    // Even a row that names one (written before the address was reserved) is never used.
+    await query(`UPDATE console_brand SET hostname = 'console.plugsure-shared.example' WHERE org_id = $1`, [orgB]);
+    await assert.rejects(approveHostname(orgB, 'console.plugsure-shared.example', null), (e: any) => e.status === 409 && e.fields.hostname === 'reserved');
+    await query(`UPDATE console_brand SET hostname_approved_at = now() WHERE org_id = $1`, [orgB]);
+    forgetConsoleBrands();
+    assert.equal(await consoleBrandForHost('console.plugsure-shared.example'), null);
+  } finally {
+    if (old === undefined) delete process.env.PUBLIC_BASE_URL; else process.env.PUBLIC_BASE_URL = old;
+    await query(`UPDATE console_brand SET hostname = NULL, hostname_approved_at = NULL WHERE org_id = $1`, [orgB]);
+    forgetConsoleBrands();
+  }
+});
+
+dbTest('web address: changing it withdraws the approval; the platform operator can withdraw it too', async () => {
+  await asOrg(orgA, async () => {
+    const moved = await saveConsoleBrand(orgA, { hostname: `new.${HOST_A}` });
+    assert.equal(moved.hostnameApproved, false);
+    const back = await saveConsoleBrand(orgA, { hostname: HOST_A });
+    assert.equal(back.hostnameApproved, false, 'moving back needs a new approval');
+    const same = await saveConsoleBrand(orgA, { tagline: 'Ops' });
+    assert.equal(same.hostnameApproved, false);
+  });
+  await approveHostname(orgA, HOST_A, null);
+  const kept = await asOrg(orgA, () => saveConsoleBrand(orgA, { tagline: 'Network operations' }));
+  assert.equal(kept.hostnameApproved, true, 'saving other fields keeps the approval');
+  assert.equal(await revokeHostname(orgA), true);
+  forgetConsoleBrands();
+  assert.equal(await consoleBrandForHost(HOST_A), null);
+  await approveHostname(orgA, HOST_A, null);
 });
 
 dbTest('web address: console and driver-app addresses are kept apart, both ways, across operators', async () => {
   await asOrg(orgC, async () => {
-    // A driver app may not take A's console address.
+    // A driver app may not take A's approved console address.
     await assert.rejects(saveBrand(orgC, { appName: 'C App', hostname: HOST_A }), (e: any) => e.status === 409 && /operator console already uses/.test(e.message));
     await saveBrand(orgC, { appName: 'C App', slug: 'brand-test-c', hostname: HOST_C });
   });
@@ -128,15 +180,20 @@ dbTest('web address: console and driver-app addresses are kept apart, both ways,
   });
 });
 
-dbTest('sign-in page lookup by web address works before anyone has signed in; a request sees only its own brand', async () => {
+dbTest('a request sees only its own brand; the sign-in lookup ignores case and port', async () => {
   forgetConsoleBrands();
-  const byHost = await consoleBrandForHost(`${HOST_A.toUpperCase()}:443`);
-  assert.equal(byHost?.orgId, orgA);
+  assert.equal((await consoleBrandForHost(`${HOST_A.toUpperCase()}:443`))?.orgId, orgA);
   assert.equal(await consoleBrandForHost('unknown.example'), null);
   forgetConsoleBrands();
   const seen = await asOrg(orgB, () => one<{ n: number }>(`SELECT count(*)::int AS n FROM console_brand WHERE org_id = $1`, [orgA]));
   assert.equal(seen?.n, 0, 'row-level security: B cannot read A’s brand');
   assert.equal((await asOrg(orgA, () => consoleBrandForOrg(orgA)))?.productName, 'NusaCharge Ops');
+});
+
+dbTest('save: a body that is not an object is refused (422), not a server error', async () => {
+  await asOrg(orgA, async () => {
+    for (const bad of ['x', 5, null, [1]]) await assert.rejects(saveConsoleBrand(orgA, bad as any), (e: any) => e.status === 422);
+  });
 });
 
 dbTest('logo: square PNG only, stored as 256 × 256, served by its hash, and removable', async () => {

@@ -141,24 +141,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
 
   app.post('/v1/auth/login', async (req, reply) => {
     const b = (req.body ?? {}) as any;
-    const r = await users.login(b.email, b.password, req.ip);
-    // On an operator's own console address only that operator's accounts sign in (v1.5.0).
-    // Exactly the answer to a wrong password: the address must not confirm a password is right.
+    // On an operator's own (approved) console address only that operator's accounts sign in
+    // (v1.5.0). Decided inside login(), so any other account fails exactly as a wrong password.
     const hostBrand = await consoleBrandForHost(req.headers.host).catch(() => null);
-    if (r.ok && r.token && hostBrand && r.user!.orgId !== hostBrand.orgId) {
-      await revokeSession(r.token);
-      await writeAudit({
-        orgId: hostBrand.orgId,
-        actorType: 'user',
-        actorId: null,
-        action: 'auth.login_wrong_console',
-        targetType: 'user',
-        targetId: String(b.email ?? '').slice(0, 200).toLowerCase(),
-        after: { host: hostBrand.hostname },
-        ip: req.ip,
-      }).catch(() => {});
-      return clientError(reply, 401, users.loginFailureMessage());
-    }
+    const r = await users.login(b.email, b.password, req.ip, hostBrand?.orgId ?? null);
     if (!r.ok || !r.token) {
       await writeAudit({
         orgId: null,

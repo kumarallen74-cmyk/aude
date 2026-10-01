@@ -23,19 +23,24 @@ An operator can now show its own brand in the operator console instead of PlugSu
 **Who sees it:** every user of the operator, once signed in, on any console address. That includes the operator's staff and its site owners and fleet customers in their portals. Other operators keep their own brand, or PlugSure's.
 
 **The console's own web address** (optional), for example `console.nusantaracharge.id`:
-- On that address the sign-in page shows the operator's brand before anyone signs in.
-- Only the operator's own accounts can sign in there. Any other account gets exactly the answer a wrong password gets, so the address cannot be used to find out whether a password is right. The attempt is audited as `auth.login_wrong_console`.
-- An address belongs to one operator: another operator's console, or any driver app, is refused it with 409. A developer sandbox cannot be branded (409).
-- **The server needs a Caddy site block for each address**, so that the console keeps its office or VPN allow-list. `deploy/Caddyfile` has a commented template, and `deploy/README.md` §2 has the steps.
+- **It takes effect only once a platform administrator approves it.** The operator enters it and it shows as *waiting for approval*. Until then the address shows PlugSure's sign-in page and restricts nobody. Without this step an operator could enter the shared console's own name, or another operator's, and decide who signs in there.
+- The platform administrator approves it on the same page, under *Console web addresses*, after adding the address's Caddy site block. A waiting claim blocks nobody, so an operator cannot squat another's planned address. Once approved, the address belongs to that operator alone: another operator's console or a driver app is refused it with 409.
+- Changing the address withdraws the approval, and the platform administrator can also withdraw it.
+- PlugSure's own addresses can never be entered or approved: `PUBLIC_BASE_URL`, `CONSOLE_PUBLIC_URL`, `API_PUBLIC_URL`, `DRIVER_PUBLIC_URL`, `OCPI_PUBLIC_URL` and `OCPP_PUBLIC_URL`.
+- Once approved, the sign-in page shows the operator's brand before anyone signs in, and only the operator's own accounts can sign in.
+- Any other account is refused exactly as a wrong password is: the same answer, counted as a failed attempt, no session, and nothing reset or recorded as a sign-in. The address therefore cannot be used to find out whether a password is right.
+- **The server needs a Caddy site block for each address**, so the console keeps its office or VPN allow-list. `deploy/Caddyfile` has a commented template, and `deploy/README.md` §2 has the steps.
+- A developer sandbox cannot be branded (409).
 
 **Back to PlugSure** removes the brand. Its web address then shows PlugSure's sign-in page and accepts any account again.
 
 **API:**
 - `GET`, `PUT` and `DELETE /v1/console-brand`.
+- Platform administrators: `GET /v1/platform/console-hostnames`, `POST /v1/platform/console-hostnames/:orgId/approve` and `/revoke`.
 - `PUT` and `DELETE /v1/console-brand/logo`.
 - `/v1/auth/me` returns `consoleBrand`.
 - Before sign-in, the console reads `GET /console-brand.json` (the brand of the requesting address), and logos are served at `/console-brand/<sha256>.png` (public, cached).
-- Every change is audited (`console_brand.*`).
+- Every change is audited (`console_brand.*`, including `console_brand.hostname_approved` and `console_brand.hostname_revoked`).
 
 **Not white-labelled:**
 - the API reference (`/api-docs.html`);
