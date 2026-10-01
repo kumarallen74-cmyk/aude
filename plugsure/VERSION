@@ -1,10 +1,15 @@
 PlugSure CSMS
-Version:   1.4.0
-Package:   plugsure-v1.4.0
-Prepared:  2026-10-02  (independent review fixes — see RELEASE-NOTES-v1.4.0.md)
+Version:   1.4.1
+Package:   plugsure-v1.4.1
+Prepared:  2026-10-02  (suspend/resume and the hardware acceptance checklist — see RELEASE-NOTES-v1.4.1.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP)
-API:       OpenAPI 3.1 at /openapi.json (269 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
-Status:    v1.4.0 = v1.3.0 + every finding of the independent review fixed (pilot blockers,
+API:       OpenAPI 3.1 at /openapi.json (271 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+Status:    v1.4.1 = v1.4.0 + suspend and resume a charge point (console and API) and
+           docs/ACCEPTANCE-v1.4.md. No migrations, no new settings. Typecheck clean;
+           816 unit and database tests passing.
+
+v1.4.0 (2026-10-02):
+           v1.3.0 + every finding of the independent review fixed (pilot blockers,
            public-launch blockers and hardening): typecheck and build clean; 816 unit and
            database tests passing; migrations 001-053 (045 unused) applied from an empty
            PostgreSQL 16 database; all 29 end-to-end suites passing as the restricted
