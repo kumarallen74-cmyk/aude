@@ -9,6 +9,12 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.4.0 — review fixes (2 October 2026).** Every finding of the independent review of v1.3.0 is
+fixed: billing correctness, payment idempotency, tenant isolation, roaming trust, driver sign-in
+limits, charger PKI and operations. Several settings are now required outside development
+(`SECRETS_KEY`, OCPP security profile ≥ 2 with auto-adopt off, `OCPI_PUBLIC_URL` for roaming). Read
+[`RELEASE-NOTES-v1.4.0.md`](RELEASE-NOTES-v1.4.0.md) before upgrading.
+
 **v1.3 — Enterprise operator console.** Sign in at the API root (`/`) to onboard chargers,
 manage sites and PLN capacity, run load management, build tariffs, issue RFID cards, tune OCPP
 configuration, roll out firmware and manage users — no scripts or SQL. Bootstrap the first admin

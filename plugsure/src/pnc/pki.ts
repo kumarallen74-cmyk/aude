@@ -186,7 +186,7 @@ export async function ocspFetch(h: CertificateHashData, responderURL: string): P
   const body = ocspRequest(h);
   const lib = u.protocol === 'https:' ? https : http;
   return new Promise<Buffer>((resolve, reject) => {
-    const req = lib.request(u, { method: 'POST', lookup: guardedLookup as any, headers: { 'content-type': 'application/ocsp-request', 'content-length': body.length, 'user-agent': 'PlugSure-PnC/1.3' } }, (res) => {
+    const req = lib.request(u, { method: 'POST', lookup: guardedLookup as any, headers: { 'content-type': 'application/ocsp-request', 'content-length': body.length, 'user-agent': 'PlugSure-PnC/1.4' } }, (res) => {
       if ((res.statusCode ?? 0) !== 200) { res.resume(); return reject(new PkiError(`the OCSP responder answered HTTP ${res.statusCode}`)); }
       const parts: Buffer[] = []; let n = 0;
       res.on('data', (c: Buffer) => { n += c.length; if (n > 65_536) { req.destroy(new PkiError('the OCSP response is too large')); return; } parts.push(c); });

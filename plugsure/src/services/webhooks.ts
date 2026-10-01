@@ -95,7 +95,7 @@ export function post(url: string, body: string, headers: Record<string, string>,
       u,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'user-agent': 'PlugSure-Webhooks/1.3', ...headers },
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'user-agent': 'PlugSure-Webhooks/1.4', ...headers },
         lookup: guardedLookup as any,
         timeout: TIMEOUT_MS,
       },

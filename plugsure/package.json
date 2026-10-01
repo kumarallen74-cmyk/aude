@@ -1,6 +1,6 @@
 {
   "name": "plugsure",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "PlugSure — multi-tenant EV charging management system (CSMS) for Indonesia",

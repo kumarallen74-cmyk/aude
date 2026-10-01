@@ -135,7 +135,7 @@ export function guardedHttpsGet(
       try { u = new URL(url); } catch { return reject(new Error('invalid URL')); }
       const why = refuseHttpsUrl(u);
       if (why) return reject(new Error(why));
-      const req = https.get(u, { lookup: guardedLookup as any, signal: opts.signal, headers: { 'user-agent': 'PlugSure-Firmware/1.3' } }, (res) => {
+      const req = https.get(u, { lookup: guardedLookup as any, signal: opts.signal, headers: { 'user-agent': 'PlugSure-Firmware/1.4' } }, (res) => {
         const s = res.statusCode ?? 0;
         if (s >= 300 && s < 400 && res.headers.location) {
           res.resume();

@@ -253,7 +253,7 @@ async function runTest(r: store.Resolved, b: any): Promise<{ ok: boolean; messag
     }
     case 'map_tiles': {
       const url = String(r.settings.tileUrl).replace('{s}', 'a').replace('{z}', '0').replace('{x}', '0').replace('{y}', '0').replace('{r}', '');
-      const res = await guardedFetch(url, { headers: { 'user-agent': 'PlugSure/1.3 (tile check)' }, timeoutMs: 10_000, maxBytes: 2 * 1024 * 1024 })
+      const res = await guardedFetch(url, { headers: { 'user-agent': 'PlugSure/1.4 (tile check)' }, timeoutMs: 10_000, maxBytes: 2 * 1024 * 1024 })
         .catch((e) => { throw new Error(`cannot reach the tile server: ${(e as Error).message}`); });
       const type = String(res.headers['content-type'] ?? '').slice(0, 100);
       return res.status >= 200 && res.status < 300 && type.startsWith('image/') ? { ok: true, message: `The tile server returned a ${type} tile.` } : { ok: false, message: `The tile server answered HTTP ${res.status} (${type || 'no content type'}).` };
