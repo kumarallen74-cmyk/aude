@@ -243,6 +243,17 @@ export const config = {
 
   /** Alert notifications by e-mail and WhatsApp (channels and rules live in the database). */
   alerts: {
+    /**
+     * SMTP hosts on loopback or a private network that alert e-mail may use
+     * outside development/test (comma-separated host names or addresses), e.g. a
+     * Postfix relay on this server: `127.0.0.1,localhost`. Tenants choose their SMTP
+     * host in the console, so internal hosts are refused unless the PLATFORM
+     * operator lists them here; nothing else on the internal network is reachable.
+     */
+    smtpAllowedInternalHosts: (process.env.SMTP_ALLOWED_INTERNAL_HOSTS ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase().replace(/\.$/, ''))
+      .filter(Boolean),
     /** Console origin put in notification links. Falls back to PUBLIC_BASE_URL. */
     consoleUrl: (process.env.CONSOLE_PUBLIC_URL ?? process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, ''),
     /** Time zone for quiet hours and times printed in messages. */

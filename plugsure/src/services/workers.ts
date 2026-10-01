@@ -118,6 +118,27 @@ export function startWorkers(): () => void {
 
   const once = (name: string, fn: () => Promise<unknown>) => guard(name, () => exclusive(name, fn));
 
+  /**
+   * Outbox passes (webhooks, roaming). A single-flight flag used to let ONE pass
+   * run at a time, and a pass waited for every call in its batch: one receiver
+   * trickling its answer stalled every tenant's deliveries. Each call now has a
+   * hard total deadline (webhooks.ts, ocpi/client.ts) and up to OUTBOX_PASSES
+   * passes may run at once, so a batch waiting on a slow receiver does not stop
+   * the next tick from sending what else is due. Overlap is safe: rows are
+   * leased (FOR UPDATE SKIP LOCKED, next_attempt_at pushed 2 minutes out — longer
+   * than any call's deadline), and roaming calls for one object stay in order
+   * because a leased row still blocks the later rows of its object.
+   */
+  const OUTBOX_PASSES = 3;
+  const outbox = (name: string, deliver: () => Promise<number>) => {
+    let running = 0;
+    return guard(name, async () => {
+      if (running >= OUTBOX_PASSES) return;
+      running++;
+      try { while ((await deliver()) === 50); } finally { running--; }
+    });
+  };
+
   const compliance = once('compliance', async () => {
     await runComplianceSweep();
     await keyRotationSweep();
@@ -140,12 +161,7 @@ export function startWorkers(): () => void {
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
-  let sending = false;
-  const webhooks = guard('webhooks', async () => {
-    if (sending) return;
-    sending = true;
-    try { while ((await deliverDue()) === 50); } finally { sending = false; }
-  });
+  const webhooks = outbox('webhooks', () => deliverDue());
   const prune = once('webhook-prune', () => pruneDeliveries());
   // Alert notifications (e-mail, WhatsApp): route new/resolved/escalated alerts, send what is due.
   let routing = false;
@@ -156,12 +172,7 @@ export function startWorkers(): () => void {
   });
 
   // Roaming (OCPI): send the outbox; re-publish changed locations and tariffs.
-  let roamingSending = false;
-  const roaming = guard('roaming', async () => {
-    if (roamingSending) return;
-    roamingSending = true;
-    try { while ((await deliverRoaming()) === 50); } finally { roamingSending = false; }
-  });
+  const roaming = outbox('roaming', () => deliverRoaming());
   const roamingSync = once('roaming-sync', () => syncAllRoaming());
   const roamingPrune = once('roaming-prune', () => pruneRoaming());
   // eMSP role: refresh CPO partners' networks (they also push changes as they happen).

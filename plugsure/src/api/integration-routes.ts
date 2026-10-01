@@ -4,7 +4,7 @@ import { assertCan, assertCanAny, can } from '../services/authz.js';
 import { writeAudit } from '../services/audit.js';
 import { config, isRelaxedEnv } from '../config.js';
 import { one, outsideRequestScope } from '../db/pool.js';
-import { kindDef, type Kind } from '../integrations/catalogue.js';
+import { kindDef, providerDef, type Kind } from '../integrations/catalogue.js';
 import * as store from '../integrations/store.js';
 import { testOtp } from '../integrations/otp.js';
 import { whatsappWebhookVerify, whatsappStatusWebhook } from '../services/alert-routing.js';
@@ -12,6 +12,7 @@ import { handleNotification, providerFor, sandboxCheckout, sandboxSettle, sandbo
 import { CHANNEL_LABEL, type Channel } from '../services/payments/provider.js';
 import { normalisePhone } from '../driver/identity.js';
 import { providerFetch } from '../services/payments/provider.js';
+import { enforcing, guardedFetch, isInternalHost } from '../services/net-guard.js';
 
 /**
  * Govern → Integrations: the third parties PlugSure talks to.
@@ -23,6 +24,13 @@ import { providerFetch } from '../services/payments/provider.js';
  * Secrets are write-only: the console gets a hint (last characters) and
  * sends a secret again only to change it. Every change is audited, without
  * secret values.
+ *
+ * Provider URLs (API base URLs, gateways, tile servers) are the operator's to
+ * set, so outside development/test they must be publicly reachable: refused
+ * here when saved, and every call to them goes through the SSRF guard
+ * (providerFetch / guardedFetch: checked at connect time, no redirects). A
+ * connection test reports the status and the provider's structured message,
+ * never the raw answer.
  *
  * Also the public payment webhook: POST /pay/notify/<key>, one URL per QRIS
  * account, verified with that account's secret. Expose /pay/* publicly
@@ -60,6 +68,8 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     const b = (req.body ?? {}) as any;
     try {
       const t = target(req, kind, b.scope);
+      const urlErr = internalUrlProblem(t.kind, b.provider, b.settings);
+      if (urlErr) return reply.status(422).send({ error: urlErr });
       const saved = await store.save(t.kind, t.orgId, { provider: b.provider, settings: b.settings ?? {}, secrets: b.secrets ?? {}, enabled: b.enabled }, req.principal.userId ?? null);
       await writeAudit({
         orgId: org(req), actorType: 'user', actorId: req.principal.userId, action: 'integration.updated', targetType: 'integration', targetId: `${t.kind}:${t.orgId ? 'org' : 'platform'}`, ip: req.ip,
@@ -243,10 +253,29 @@ async function runTest(r: store.Resolved, b: any): Promise<{ ok: boolean; messag
     }
     case 'map_tiles': {
       const url = String(r.settings.tileUrl).replace('{s}', 'a').replace('{z}', '0').replace('{x}', '0').replace('{y}', '0').replace('{r}', '');
-      const res = await fetch(url, { headers: { 'user-agent': 'PlugSure/1.3 (tile check)' }, signal: AbortSignal.timeout(10_000) }).catch((e) => { throw new Error(`cannot reach the tile server: ${(e as Error).message}`); });
-      const type = res.headers.get('content-type') ?? '';
-      await res.arrayBuffer().catch(() => null);
-      return res.ok && type.startsWith('image/') ? { ok: true, message: `The tile server returned a ${type} tile.` } : { ok: false, message: `The tile server answered HTTP ${res.status} (${type || 'no content type'}).` };
+      const res = await guardedFetch(url, { headers: { 'user-agent': 'PlugSure/1.3 (tile check)' }, timeoutMs: 10_000, maxBytes: 2 * 1024 * 1024 })
+        .catch((e) => { throw new Error(`cannot reach the tile server: ${(e as Error).message}`); });
+      const type = String(res.headers['content-type'] ?? '').slice(0, 100);
+      return res.status >= 200 && res.status < 300 && type.startsWith('image/') ? { ok: true, message: `The tile server returned a ${type} tile.` } : { ok: false, message: `The tile server answered HTTP ${res.status} (${type || 'no content type'}).` };
     }
   }
+}
+
+/**
+ * A URL setting that points inside the network (private, loopback, link-local,
+ * metadata, *.internal) — refused when saved outside development/test, where
+ * e2e suites point providers at local fakes. Returns the message, or null.
+ */
+function internalUrlProblem(kind: string, provider: unknown, settings: unknown): string | null {
+  if (!enforcing() || !settings || typeof settings !== 'object') return null;
+  const p = providerDef(kind, String(provider ?? ''));
+  for (const f of p?.fields ?? []) {
+    if (f.type !== 'url') continue;
+    const v = (settings as Record<string, unknown>)[f.key];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    let u: URL;
+    try { u = new URL(v.trim().replace('{s}', 'a')); } catch { continue; } // the store reports a malformed URL
+    if (isInternalHost(u.hostname)) return `${f.label} must be publicly reachable (no private, loopback or internal addresses).`;
+  }
+  return null;
 }
