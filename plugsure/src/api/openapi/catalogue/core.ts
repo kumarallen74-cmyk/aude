@@ -1219,6 +1219,36 @@ export const ops: Op[] = [
     },
     errors: [404],
   },
+  {
+    method: 'POST',
+    path: '/v1/charge-points/:identity/suspend',
+    tag: 'Onboarding',
+    summary: 'Suspend a charge point',
+    description:
+      'Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, ' +
+      'and new authorisations, starts and remote starts are refused. A session already running finishes normally and is billed. ' +
+      '409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.',
+    pathParams: identityParam,
+    body: {
+      required: false,
+      schema: { type: 'object', properties: { reason: { type: 'string', maxLength: 500 } } },
+      example: { reason: 'Site closed for electrical works' },
+    },
+    responses: { 200: { description: 'Suspended.', schema: obj({ ok: { type: 'boolean', const: true } }, ['ok']) } },
+    errors: [404, 409],
+  },
+  {
+    method: 'POST',
+    path: '/v1/charge-points/:identity/resume',
+    tag: 'Onboarding',
+    summary: 'Resume a suspended charge point',
+    description:
+      'Returns a suspended charge point to service; a connected unit is asked to boot again at once so it is Accepted without waiting. ' +
+      '409 when it is not suspended. Audited as charge_point.resumed.',
+    pathParams: identityParam,
+    responses: { 200: { description: 'Resumed.', schema: obj({ ok: { type: 'boolean', const: true } }, ['ok']) } },
+    errors: [404, 409],
+  },
 
   // ---------------------------------------------------------------- quirks
   {

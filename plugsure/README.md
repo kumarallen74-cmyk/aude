@@ -9,6 +9,11 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.4.1 — suspend and resume (2 October 2026).** Operators can suspend a charge point from the
+console or API (no new sessions, credentials kept) and resume it. Adds the hardware acceptance
+checklist [`docs/ACCEPTANCE-v1.4.md`](docs/ACCEPTANCE-v1.4.md). No migrations or new settings; see
+[`RELEASE-NOTES-v1.4.1.md`](RELEASE-NOTES-v1.4.1.md).
+
 **v1.4.0 — review fixes (2 October 2026).** Every finding of the independent review of v1.3.0 is
 fixed: billing correctness, payment idempotency, tenant isolation, roaming trust, driver sign-in
 limits, charger PKI and operations. Several settings are now required outside development

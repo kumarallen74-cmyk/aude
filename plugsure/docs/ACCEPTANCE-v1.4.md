@@ -120,6 +120,11 @@ Each scenario uses its own session.
 
 ## 7. Compliance states
 
+- [ ] **Suspend and resume.** In the console, open the charger and choose **Suspend…** with a reason. **Pass:**
+  - It stays connected and is shown as suspended.
+  - A registered card and a remote start are both refused.
+  - After a power cycle it boots `Pending`.
+  - **Resume** brings it back to `Accepted` within a minute without touching the charger, and both actions appear in the audit log with the reason.
 - [ ] **Tera ulang lapsed.** Set one connector's tera expiry date in the past. **Pass:** commercial sessions on that connector are blocked, and a critical alert is raised. Restore the date.
 - [ ] **Decommission and reinstate.** Do this last, after section 8, because decommissioning erases the charger's key. With no session running:
   1. Decommission the charger (`POST /v1/charge-points/<identity>/decommission`). **Pass:** it is refused at connect.
