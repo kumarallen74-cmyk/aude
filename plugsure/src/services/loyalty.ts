@@ -1,5 +1,10 @@
+import type { PoolClient } from 'pg';
 import { one, many, query, tx } from '../db/pool.js';
 import type { PriceAdjustment, CdrLine } from './tariff.js';
+
+/** A connection to run on: a transaction's client, or the context's default. */
+type Runner = Pick<PoolClient, 'query'>;
+const scoped: Runner = { query: (text: string, params?: unknown[]) => query(text, params) } as unknown as Runner;
 
 /**
  * Loyalty points (Commercial → Promotions & plans → Loyalty), per operator.
@@ -57,8 +62,8 @@ export const discountable = (lines: CdrLine[]) => lines.filter((l) => ['energy',
 
 // ─────────────────────────────────────────── program (console)
 
-export async function getProgram(orgId: string): Promise<LoyaltyProgram> {
-  const r = await one<any>(`SELECT * FROM loyalty_program WHERE org_id = $1`, [orgId]);
+export async function getProgram(orgId: string, c: Runner = scoped): Promise<LoyaltyProgram> {
+  const r = (await c.query<any>(`SELECT * FROM loyalty_program WHERE org_id = $1`, [orgId])).rows[0];
   return r
     ? { enabled: r.enabled, earnPer1000Idr: r.earn_per_1000_idr, pointValueIdr: r.point_value_idr, maxRedeemBps: r.max_redeem_bps, expiryMonths: r.expiry_months }
     : { ...DEFAULTS };
@@ -136,47 +141,70 @@ export async function adjustPoints(orgId: string, appDriverId: string, points: u
   const d = await one(`SELECT id FROM app_driver WHERE id = $1`, [appDriverId]);
   if (!d) throw new LoyaltyError(404, 'driver not found');
   const p = await getProgram(orgId);
-  return tx(async () => {
-    await lockDriver(orgId, appDriverId);
+  // Every statement on the transaction's own client: outside a request scope the
+  // plain `query` runs on another pooled connection, where the lock below would
+  // be released the moment it was taken.
+  return tx(async (c) => {
+    await lockDriver(orgId, appDriverId, c);
     if (n > 0) {
-      await query(
+      await c.query(
         `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, remaining, note, created_by, expires_at)
          VALUES ($1,$2,'adjust',$3,$3,$4,$5, now() + make_interval(months => $6::int))`,
         [orgId, appDriverId, n, why, actor, p.expiryMonths]);
     } else {
-      const bal = await balanceOf(orgId, appDriverId);
+      const bal = await balanceOf(orgId, appDriverId, c);
       if (bal < -n) throw new LoyaltyError(409, `The driver has only ${bal} points.`);
-      await consume(orgId, appDriverId, -n);
-      await query(`INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, note, created_by) VALUES ($1,$2,'adjust',$3,$4,$5)`, [orgId, appDriverId, n, why, actor]);
+      await consume(orgId, appDriverId, -n, c);
+      await c.query(`INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, note, created_by) VALUES ($1,$2,'adjust',$3,$4,$5)`, [orgId, appDriverId, n, why, actor]);
     }
-    return { balance: await balanceOf(orgId, appDriverId) };
+    return { balance: await balanceOf(orgId, appDriverId, c) };
   });
 }
 
 // ─────────────────────────────────────────── ledger
 
-const lockDriver = (orgId: string, appDriverId: string) =>
-  query(`SELECT pg_advisory_xact_lock(hashtextextended('loyalty:' || $1::text || ':' || $2::text, 0))`, [orgId, appDriverId]);
+/**
+ * The driver's points lock, transaction-scoped. Pass the transaction's client:
+ * an advisory XACT lock taken on any other connection is released at once.
+ */
+export const lockDriver = (orgId: string, appDriverId: string, c: Runner = scoped) =>
+  c.query(`SELECT pg_advisory_xact_lock(hashtextextended('loyalty:' || $1::text || ':' || $2::text, 0))`, [orgId, appDriverId]);
 
-export async function balanceOf(orgId: string, appDriverId: string): Promise<number> {
-  const r = await one<{ b: number }>(
+export async function balanceOf(orgId: string, appDriverId: string, c: Runner = scoped): Promise<number> {
+  const r = await c.query<{ b: number }>(
     `SELECT COALESCE(sum(remaining), 0)::int AS b FROM loyalty_entry
       WHERE org_id = $1 AND app_driver_id = $2 AND remaining > 0 AND (expires_at IS NULL OR expires_at > now())`,
     [orgId, appDriverId]);
-  return r?.b ?? 0;
+  return r.rows[0]?.b ?? 0;
+}
+
+/**
+ * The points the driver can spend, with the earnings that hold them row-locked
+ * (and the driver's lock taken). Inside one transaction `now()` is fixed, so
+ * what this counts is exactly what `consume` can take later in it: neither
+ * another session's spend (driver lock) nor the expiry worker (row locks) can
+ * move it in between.
+ */
+export async function lockedBalance(orgId: string, appDriverId: string, c: Runner): Promise<number> {
+  await lockDriver(orgId, appDriverId, c);
+  const r = await c.query<{ remaining: number }>(
+    `SELECT remaining FROM loyalty_entry WHERE org_id = $1 AND app_driver_id = $2 AND remaining > 0 AND (expires_at IS NULL OR expires_at > now())
+      FOR UPDATE`,
+    [orgId, appDriverId]);
+  return r.rows.reduce((a, e) => a + Number(e.remaining), 0);
 }
 
 /** Take points from the oldest earnings first. The caller holds the driver's lock. */
-async function consume(orgId: string, appDriverId: string, points: number) {
+async function consume(orgId: string, appDriverId: string, points: number, c: Runner = scoped) {
   let left = points;
-  const open = await many<{ id: string; remaining: number }>(
+  const open = (await c.query<{ id: string; remaining: number }>(
     `SELECT id, remaining FROM loyalty_entry WHERE org_id = $1 AND app_driver_id = $2 AND remaining > 0 AND (expires_at IS NULL OR expires_at > now())
       ORDER BY expires_at NULLS LAST, created_at FOR UPDATE`,
-    [orgId, appDriverId]);
+    [orgId, appDriverId])).rows;
   for (const e of open) {
     if (left <= 0) break;
     const take = Math.min(left, e.remaining);
-    await query(`UPDATE loyalty_entry SET remaining = remaining - $2 WHERE id = $1`, [e.id, take]);
+    await c.query(`UPDATE loyalty_entry SET remaining = remaining - $2 WHERE id = $1`, [e.id, take]);
     left -= take;
   }
   if (left > 0) throw new LoyaltyError(409, 'not enough points');
@@ -203,33 +231,46 @@ export const pointsAdjustment = (points: number, amountIdr: number): PriceAdjust
   ({ source: 'loyalty', id: 'loyalty', name: `${points.toLocaleString('id-ID')} points`, amountOffIdr: amountIdr });
 
 /**
- * After a CDR: spend the points the session used (oldest first) and credit the points
+ * With a CDR: spend the points the session used (oldest first) and credit the points
  * it earned on its total. Idempotent per session.
+ *
+ * Runs on the CDR's own transaction (`c`), after `lockedBalance` has confirmed,
+ * under the driver's lock, that the points are there. It used to run after the
+ * CDR was committed, with its error swallowed: two sessions of one driver rated
+ * together were both priced from the same balance, the second spend failed, and
+ * its CDR kept a discount nobody paid for. Now a shortfall cannot reach here
+ * (the session is re-priced with what the driver has, rateAndCreateCdr), and if
+ * it somehow did, the throw rolls the CDR back with it.
  */
-export async function recordLoyalty(orgId: string, sessionId: string, appDriverId: string | null | undefined, totalIdr: number, spent: { points: number; amountIdr: number } | null) {
+export async function recordLoyalty(
+  orgId: string,
+  sessionId: string,
+  appDriverId: string | null | undefined,
+  totalIdr: number,
+  spent: { points: number; amountIdr: number } | null,
+  c: Runner,
+) {
   if (!appDriverId) return;
-  const program = await getProgram(orgId);
+  const program = await getProgram(orgId, c);
   if (!program.enabled && !spent) return;
-  await tx(async () => {
-    await lockDriver(orgId, appDriverId);
-    if (spent && spent.points > 0) {
-      const done = await one(`SELECT 1 FROM loyalty_entry WHERE session_id = $1 AND kind = 'redeem'`, [sessionId]);
-      if (!done) {
-        await consume(orgId, appDriverId, spent.points);
-        await query(
-          `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, value_idr, session_id, note) VALUES ($1,$2,'redeem',$3,$4,$5,'Charging session')`,
-          [orgId, appDriverId, -spent.points, -spent.amountIdr, sessionId]);
-      }
+  await lockDriver(orgId, appDriverId, c);
+  if (spent && spent.points > 0) {
+    const done = await c.query(`SELECT 1 FROM loyalty_entry WHERE session_id = $1 AND kind = 'redeem'`, [sessionId]);
+    if (!done.rows[0]) {
+      await consume(orgId, appDriverId, spent.points, c);
+      await c.query(
+        `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, value_idr, session_id, note) VALUES ($1,$2,'redeem',$3,$4,$5,'Charging session')`,
+        [orgId, appDriverId, -spent.points, -spent.amountIdr, sessionId]);
     }
-    const earned = program.enabled ? pointsEarned(totalIdr, program) : 0;
-    if (earned > 0) {
-      await query(
-        `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, remaining, session_id, note, expires_at)
-         VALUES ($1,$2,'earn',$3,$3,$4,'Charging session', now() + make_interval(months => $5::int))
-         ON CONFLICT (session_id, kind) WHERE session_id IS NOT NULL DO NOTHING`,
-        [orgId, appDriverId, earned, sessionId, program.expiryMonths]);
-    }
-  });
+  }
+  const earned = program.enabled ? pointsEarned(totalIdr, program) : 0;
+  if (earned > 0) {
+    await c.query(
+      `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, remaining, session_id, note, expires_at)
+       VALUES ($1,$2,'earn',$3,$3,$4,'Charging session', now() + make_interval(months => $5::int))
+       ON CONFLICT (session_id, kind) WHERE session_id IS NOT NULL DO NOTHING`,
+      [orgId, appDriverId, earned, sessionId, program.expiryMonths]);
+  }
 }
 
 /** Worker: expire what is left of earnings past their date. */

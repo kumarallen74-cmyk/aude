@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { one, many, query } from '../db/pool.js';
 import { config } from '../config.js';
 import type { PriceAdjustment, CdrLine } from './tariff.js';
@@ -315,8 +316,26 @@ export function customerKeyOf(w: Who): string | null {
   return null;
 }
 
+/**
+ * Whether a customer key names a CUSTOMER — an app account or a card — rather
+ * than an install of the app.
+ *
+ * A guest (no account, paying by QRIS with a minted one-off token) is known
+ * only by `device:<id>`, and the device id is whatever the app generated at
+ * install: reinstalling, clearing app data or a second phone gives a new one.
+ * Keyed on that, "one per customer" reset on every reinstall and every guest
+ * was a "new driver" forever. So promotions that limit per customer, and those
+ * for new drivers, are not given to device-only identities at all — the
+ * conservative choice: the promotion is for people we can count, and a guest
+ * who signs in (or uses a card) qualifies normally. Everything else (open
+ * promotions, codes, happy hours) still applies to guests.
+ */
+export const isStableCustomer = (key: string | null | undefined): boolean =>
+  !!key && (key.startsWith('driver:') || key.startsWith('card:'));
+
 export async function benefitsFor(orgId: string, who: Who, where: Where, at: Date, tz = 'Asia/Jakarta'): Promise<Benefits> {
   const customerKey = customerKeyOf(who);
+  const stable = isStableCustomer(customerKey);
   let fleetAccountId = who.fleetAccountId ?? null;
   if (!fleetAccountId && who.tokenId) {
     fleetAccountId = (await one<{ f: string | null }>(`SELECT fleet_account_id AS f FROM token WHERE id = $1`, [who.tokenId]))?.f ?? null;
@@ -380,13 +399,13 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
   let isNew: boolean | null = null;
   const newDriver = async () => {
     if (isNew != null) return isNew;
+    // An app account by its own history, a card by the card's. A device-only
+    // guest is never "new" (isStableCustomer): a fresh install would make it so.
     const prior = who.appDriverId
       ? await one<{ n: number }>(`SELECT count(*)::int AS n FROM driver_charge dc JOIN cdr d ON d.session_id = dc.session_id WHERE dc.app_driver_id = $1 AND dc.session_id IS DISTINCT FROM $2`, [who.appDriverId, who.sessionId ?? null])
-      : who.tokenId && !who.deviceId
+      : who.tokenId
         ? await one<{ n: number }>(`SELECT count(*)::int AS n FROM charging_session cs JOIN cdr d ON d.session_id = cs.id WHERE cs.token_id = $1 AND cs.id IS DISTINCT FROM $2`, [who.tokenId, who.sessionId ?? null])
-        : who.deviceId
-          ? await one<{ n: number }>(`SELECT count(*)::int AS n FROM driver_charge dc JOIN cdr d ON d.session_id = dc.session_id WHERE dc.device_id = $1 AND dc.session_id IS DISTINCT FROM $2`, [who.deviceId, who.sessionId ?? null])
-          : { n: 1 };
+        : { n: 1 };
     isNew = (prior?.n ?? 1) === 0;
     return isNew;
   };
@@ -398,13 +417,16 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
     if (p.tf && p.tt && !(p.tf <= p.tt ? hhmm >= p.tf && hhmm < p.tt : hhmm >= p.tf || hhmm < p.tt)) continue;
     if (p.current_type && p.current_type !== where.currentType) continue;
     if (p.site_ids?.length && !p.site_ids.includes(where.siteId)) continue;
+    // A quick screen only: the limits are enforced when the session is billed,
+    // under the promotion's lock (reservePromotion).
     if (p.max_redemptions != null && p.used >= p.max_redemptions) continue;
-    if (p.max_per_customer != null && customerKey && p.used_by_me >= p.max_per_customer) continue;
+    // Per-customer limits need a customer to count against (isStableCustomer).
+    if (p.max_per_customer != null && (!stable || p.used_by_me >= p.max_per_customer)) continue;
     if (p.budget_idr != null && Number(p.spent) >= Number(p.budget_idr)) continue;
     if (p.audience === 'code' && !(code && p.code && p.code.toUpperCase() === code)) continue;
     if (p.audience === 'fleet_accounts' && !(fleetAccountId && p.fleet_account_ids?.includes(fleetAccountId))) continue;
     if (p.audience === 'plan_members' && !(membership && p.plan_ids?.includes(membership.planId))) continue;
-    if (p.audience === 'new_drivers' && !(await newDriver())) continue;
+    if (p.audience === 'new_drivers' && !(stable && (await newDriver()))) continue;
     const adj: PriceAdjustment = { source: 'promotion', id: p.id, name: p.name };
     if (p.kind === 'energy_percent') adj.energyPercentOffBps = Math.round(p.v * 100);
     else if (p.kind === 'energy_rate') adj.energyRateIdr = p.v;
@@ -448,28 +470,71 @@ export function pickCheapest<T>(options: PriceAdjustment[][], price: (o: PriceAd
   return best!;
 }
 
-/** After a CDR: remember which membership and promotion priced it. */
-export async function recordBenefits(orgId: string, sessionId: string, lines: CdrLine[], b: Benefits, energyKwh: number) {
+/**
+ * Claim a promotion's use for a session, or say it is no longer available.
+ *
+ * `max_redemptions`, `max_per_customer` and `budget_idr` were checked when the
+ * session was priced (benefitsFor) and the redemption written afterwards, with
+ * no lock in between, so sessions rated together all saw the last free slot —
+ * or the last of the budget — and all took it. The limits are now re-checked
+ * here, under a transaction-scoped lock on the promotion, and the redemption
+ * written in the same breath, on the CDR's own transaction (`c`): the next
+ * session to rate waits, then counts this one.
+ *
+ * The budget is never overshot: the discount must FIT what is left of it
+ * (benefitsFor's screen only asks whether anything is left). A promotion that
+ * no longer fits returns false and the caller re-prices the session without it.
+ */
+export async function reservePromotion(
+  c: Pick<PoolClient, 'query'>,
+  orgId: string,
+  sessionId: string,
+  promotionId: string,
+  customerKey: string | null,
+  discountIdr: number,
+): Promise<boolean> {
+  await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('promotion:' || $1::text, 0))`, [promotionId]);
+  const r = await c.query<{ max_redemptions: number | null; max_per_customer: number | null; budget_idr: number | null; used: number; used_by_me: number; spent: number }>(
+    `SELECT pr.max_redemptions, pr.max_per_customer, pr.budget_idr,
+            (SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id <> $2) AS used,
+            (SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.customer_key = $3 AND r.session_id <> $2) AS used_by_me,
+            (SELECT COALESCE(sum(r.discount_idr), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id <> $2) AS spent
+       FROM promotion pr WHERE pr.id = $1 AND pr.org_id = $4`,
+    [promotionId, sessionId, customerKey ?? '', orgId],
+  );
+  const p = r.rows[0];
+  if (!p) return false;
+  if (p.max_redemptions != null && p.used + 1 > p.max_redemptions) return false;
+  if (p.max_per_customer != null && (!isStableCustomer(customerKey) || p.used_by_me + 1 > p.max_per_customer)) return false;
+  if (p.budget_idr != null && Number(p.spent) + discountIdr > Number(p.budget_idr)) return false;
+  await c.query(
+    `INSERT INTO promotion_redemption (session_id, promotion_id, org_id, customer_key, discount_idr) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (session_id) DO UPDATE SET promotion_id = EXCLUDED.promotion_id, discount_idr = EXCLUDED.discount_idr`,
+    [sessionId, promotionId, orgId, customerKey ?? `session:${sessionId}`, discountIdr],
+  );
+  return true;
+}
+
+/**
+ * With a CDR: remember which membership priced it (its included kWh used this
+ * period). Promotions are recorded by reservePromotion, which also enforces
+ * their limits. Runs on the CDR's transaction.
+ */
+export async function recordBenefits(orgId: string, sessionId: string, lines: CdrLine[], b: Benefits, energyKwh: number, c: Pick<PoolClient, 'query'>) {
   const totals = adjustmentTotals(lines);
   for (const [id, t] of totals) {
-    if (t.source === 'promotion') {
-      await query(
-        `INSERT INTO promotion_redemption (session_id, promotion_id, org_id, customer_key, discount_idr) VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (session_id) DO UPDATE SET promotion_id = EXCLUDED.promotion_id, discount_idr = EXCLUDED.discount_idr`,
-        [sessionId, id, orgId, b.customerKey ?? `session:${sessionId}`, t.discountIdr],
-      );
-    } else if (b.membership && b.membership.subscriptionId === id) {
+    if (t.source === 'subscription' && b.membership && b.membership.subscriptionId === id) {
       const m = b.membership;
       const includedUsed = m.adjustment.freeKwh ? Math.min(m.adjustment.freeKwh, energyKwh) : 0;
-      const prev = await one<{ k: number }>(`SELECT included_kwh::float8 AS k FROM subscription_session WHERE session_id = $1`, [sessionId]);
-      await query(
+      const prev = (await c.query<{ k: number }>(`SELECT included_kwh::float8 AS k FROM subscription_session WHERE session_id = $1`, [sessionId])).rows[0];
+      await c.query(
         `INSERT INTO subscription_session (session_id, subscription_id, org_id, period_start, included_kwh, discount_idr) VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (session_id) DO UPDATE SET included_kwh = EXCLUDED.included_kwh, discount_idr = EXCLUDED.discount_idr`,
         [sessionId, id, orgId, m.periodStart, includedUsed, t.discountIdr],
       );
       const delta = includedUsed - (prev?.k ?? 0);
       if (delta) {
-        await query(
+        await c.query(
           `INSERT INTO subscription_usage (subscription_id, org_id, period_start, used_kwh) VALUES ($1,$2,$3,$4)
            ON CONFLICT (subscription_id, period_start) DO UPDATE SET used_kwh = subscription_usage.used_kwh + EXCLUDED.used_kwh`,
           [id, orgId, m.periodStart, delta],

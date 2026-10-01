@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { bus } from '../services/events.js';
 import * as assets from '../services/assets.js';
-import { handleTransactionEvent, sessionIdemKey, PREPAID_CLAIM_WINDOW_MIN } from '../services/sessions.js';
+import { handleTransactionEvent, sessionIdemKey, PREPAID_CLAIM_WINDOW_MIN, SessionStartRefused } from '../services/sessions.js';
 import { recordFinding } from './quirks.js';
 import { OcppCallError } from './rpc.js';
 import { onFirmwareStatus, onBootFirmware, logFirmwareHookError } from '../services/firmware.js';
@@ -282,7 +282,8 @@ async function onStartTransaction(ctx: AdapterContext, p: any) {
     });
   }
 
-  const info = await authorizeIdTag(ctx.chargePointId, idTag);
+  // With the connector: a prepaid claim token is valid only where its payment is.
+  const info = await authorizeIdTag(ctx.chargePointId, idTag, connectorNo);
   if (info.status !== 'Accepted') {
     return { transactionId: 0, idTagInfo: info };
   }
@@ -347,7 +348,20 @@ async function onStartTransaction(ctx: AdapterContext, p: any) {
     idemKey,
   };
 
-  const session = await handleTransactionEvent(ev, ctx.chargePointId);
+  let session;
+  try {
+    session = await handleTransactionEvent(ev, ctx.chargePointId);
+  } catch (e) {
+    // Session start's own, authoritative refusal (a prepaid token with no
+    // claimable payment on this connector, decided under the connector's lock).
+    // Answered exactly like a token the authoriser refused: transactionId 0 and
+    // a non-Accepted status, so the charger stops instead of charging.
+    if (e instanceof SessionStartRefused) {
+      logger.info({ cp: ctx.ocppIdentity, connectorNo, status: e.status }, 'StartTransaction refused');
+      return { transactionId: 0, idTagInfo: { status: e.status } };
+    }
+    throw e;
+  }
   if (!session) {
     throw new OcppCallError('InternalError', 'Could not open a charging session');
   }
@@ -535,9 +549,15 @@ export interface IdTagInfo {
  * can expire the entry by itself while offline — without it, an offline charger
  * honours a revoked token indefinitely.
  */
-export async function authorizeIdTag(chargePointId: string, idTag: string): Promise<IdTagInfo> {
+export async function authorizeIdTag(
+  chargePointId: string,
+  idTag: string,
+  /** The connector the token starts on, when the message says (not 1.6/2.0.1 Authorize). */
+  connectorNo?: number,
+): Promise<IdTagInfo> {
   const row = await one<{
     id: string;
+    org_id: string;
     kind: string;
     status: string;
     valid_to: Date | null;
@@ -547,7 +567,7 @@ export async function authorizeIdTag(chargePointId: string, idTag: string): Prom
   }>(
     // A Plug & Charge contract (kind 'emaid') is stored without separators; a
     // charger may present the eMAID with them (ID-PLS-C12345678).
-    `SELECT t.id, t.kind, t.status, t.valid_to, t.energy_limit_wh, t.spend_limit_idr,
+    `SELECT t.id, t.org_id, t.kind, t.status, t.valid_to, t.energy_limit_wh, t.spend_limit_idr,
             (o.pnc_settings->>'enabled')::boolean IS TRUE AS pnc_on
        FROM token t
        JOIN site s ON s.org_id = t.org_id
@@ -570,26 +590,69 @@ export async function authorizeIdTag(chargePointId: string, idTag: string): Prom
    * It stayed 'Accepted' forever, while the payment it unlocks can only be
    * claimed within the checkout window. Presented after that window, the token
    * started a session with no prepaid limit and no payer — unlimited energy
-   * billed to nobody — and left the driver's payment unclaimed. It is now valid
+   * billed to nobody — and left the driver's payment unclaimed. It is valid
    * only while its payment is claimable, or while its own session is running
    * (so a retried StartTransaction / reconnect keeps working).
+   *
+   * AND ONLY WHERE THE PAYMENT IS. The payment is for one connector. This check
+   * used to accept the token at any charger of the operator; on the wrong
+   * connector the claim found nothing and the session started as postpaid with
+   * no allowance and no payer, after which the unused-payment sweep refunded
+   * the payment in full — free charging, and it worked while the paid session
+   * itself was running too. When the connector is known (StartTransaction,
+   * TransactionEvent Started) the payment must be claimable on THAT connector,
+   * or its own session must be running there. 1.6 Authorize and 2.0.1
+   * Authorize carry no connector: there the token is accepted while its
+   * payment is claimable anywhere, or while its own session runs on this very
+   * charger (a reconnect, a stop); a session running on another charger is
+   * ConcurrentTx. Session start re-checks under the connector's lock
+   * (services/sessions.ts startSession) and refuses a prepaid token it cannot
+   * bind to a payment, so no path turns one into a postpaid session.
    */
   if (row.kind === 'prepaid') {
-    const usable = await one<{ ok: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM payment_intent pi
-          WHERE pi.claim_id_tag = $1 AND pi.mode IN ('prepurchase', 'preauth', 'postpay')
+    const u = await one<{
+      claimable_any: boolean;
+      claimable_here: boolean;
+      active_any: boolean;
+      active_here: boolean;
+      active_this_cp: boolean;
+    }>(
+      `WITH here AS (
+         SELECT c.id FROM connector c JOIN evse e ON e.id = c.evse_uuid
+          WHERE e.charge_point_id = $3 AND e.evse_id = $4::int
+       ), intents AS (
+         SELECT pi.connector_uuid,
+                -- exactly what session start can claim (sessions.claimPrepaidIntent)
+                (pi.session_id IS NULL AND pi.refund_state IS NULL
+                   AND pi.created_at > now() - make_interval(mins => $2::int)
+                   AND (pi.mode NOT IN ('preauth', 'postpay') OR pi.hold_state = 'held')) AS claimable,
+                cs.connector_uuid AS active_on, cs.charge_point_id AS active_cp
+           FROM payment_intent pi
+           LEFT JOIN charging_session cs ON cs.id = pi.session_id AND cs.state = 'active'
+          WHERE pi.claim_id_tag = $1 AND pi.org_id = $5
+            AND pi.mode IN ('prepurchase', 'preauth', 'postpay')
             AND pi.state IN ('captured', 'authorised')
             AND (pi.mode NOT IN ('preauth', 'postpay') OR pi.hold_state IN ('held', 'capturing', 'captured', 'capture_failed'))
-            AND (
-              (pi.session_id IS NULL AND pi.refund_state IS NULL
-                 AND pi.created_at > now() - make_interval(mins => $2::int))
-              OR pi.session_id IN (SELECT id FROM charging_session WHERE state = 'active')
-            )
-       ) AS ok`,
-      [idTag, PREPAID_CLAIM_WINDOW_MIN],
+       )
+       SELECT COALESCE(bool_or(claimable), false) AS claimable_any,
+              COALESCE(bool_or(claimable AND connector_uuid IN (SELECT id FROM here)), false) AS claimable_here,
+              COALESCE(bool_or(active_on IS NOT NULL), false) AS active_any,
+              COALESCE(bool_or(active_on IN (SELECT id FROM here)), false) AS active_here,
+              COALESCE(bool_or(active_cp = $3), false) AS active_this_cp
+         FROM intents`,
+      [idTag, PREPAID_CLAIM_WINDOW_MIN, chargePointId, connectorNo ?? null, row.org_id],
     );
-    if (!usable?.ok) return { status: 'Expired' };
+    const known = connectorNo != null;
+    const ok = known
+      ? u?.claimable_here || u?.active_here
+      : u?.claimable_any || u?.active_this_cp;
+    if (!ok) {
+      // Its payment is already running a session elsewhere: one payment, one session.
+      if (u?.active_any) return { status: 'ConcurrentTx' };
+      // Paid, but for another connector.
+      if (known && u?.claimable_any) return { status: 'Invalid' };
+      return { status: 'Expired' };
+    }
   }
 
   const allowed: IdTagInfo['status'][] = ['Accepted', 'Blocked', 'Expired', 'Invalid', 'ConcurrentTx'];

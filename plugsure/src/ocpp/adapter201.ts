@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { bus } from '../services/events.js';
 import * as assets from '../services/assets.js';
-import { handleTransactionEvent, sessionIdemKey } from '../services/sessions.js';
+import { handleTransactionEvent, sessionIdemKey, SessionStartRefused } from '../services/sessions.js';
 import { recordFinding } from './quirks.js';
 import { OcppCallError } from './rpc.js';
 import { authorizeIdTag, type AdapterContext, type IdTagInfo } from './adapter16.js';
@@ -429,10 +429,12 @@ async function onTransactionEvent(ctx: AdapterContext, p: any) {
   }
 
   // On Started, authorise the token BEFORE opening the session. If it is not
-  // accepted, tell the charger via idTokenInfo and do not start.
+  // accepted, tell the charger via idTokenInfo and do not start. Started
+  // carries the EVSE (Authorize does not), so a prepaid claim token is checked
+  // against the connector its payment is for (adapter16.authorizeIdTag).
   let authStatus: IdTagInfo['status'] = 'Accepted';
   if (eventType === 'Started' && idTokenValue) {
-    const info = await authorizeIdTag(ctx.chargePointId, idTokenValue);
+    const info = await authorizeIdTag(ctx.chargePointId, idTokenValue, ev.evse.evseId);
     authStatus = info.status;
     if (info.status !== 'Accepted') {
       logger.info({ cp: ctx.ocppIdentity, tx: ev.transactionId, status: info.status }, 'TransactionEvent Started rejected');
@@ -440,7 +442,19 @@ async function onTransactionEvent(ctx: AdapterContext, p: any) {
     }
   }
 
-  const session = await handleTransactionEvent(ev, ctx.chargePointId);
+  let session;
+  try {
+    session = await handleTransactionEvent(ev, ctx.chargePointId);
+  } catch (e) {
+    // Session start's own refusal, decided under the connector's lock (a prepaid
+    // token with no claimable payment here): answered like a refused token, and
+    // no session exists for the Ended the station will send.
+    if (e instanceof SessionStartRefused && eventType === 'Started') {
+      logger.info({ cp: ctx.ocppIdentity, tx: ev.transactionId, status: e.status }, 'TransactionEvent Started refused');
+      return { idTokenInfo: { status: to201Status(e.status) } };
+    }
+    throw e;
+  }
   if (eventType === 'Started' && !session) {
     throw new OcppCallError('InternalError', 'Could not open a charging session');
   }
