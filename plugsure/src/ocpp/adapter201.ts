@@ -3,10 +3,10 @@ import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { bus } from '../services/events.js';
 import * as assets from '../services/assets.js';
-import { handleTransactionEvent, sessionIdemKey, SessionStartRefused } from '../services/sessions.js';
+import { handleTransactionEvent, sessionIdemKey, SessionStartRefused, sessionAwaitsToken, attachLateToken, type UnauthorisedStart } from '../services/sessions.js';
 import { recordFinding } from './quirks.js';
 import { OcppCallError } from './rpc.js';
-import { authorizeIdTag, type AdapterContext, type IdTagInfo } from './adapter16.js';
+import { authorizeIdTag, stationRefusal, reportedAfterTheFact, type AdapterContext, type IdTagInfo } from './adapter16.js';
 import { onFirmwareStatus, onBootFirmware, logFirmwareHookError } from '../services/firmware.js';
 import { onDiagnosticsStatus } from '../services/diagnostics.js';
 import { resolveAlertsFor } from '../services/alerts.js';
@@ -247,6 +247,18 @@ async function onBoot(ctx: AdapterContext, p: any) {
     logger.info({ cp: ctx.ocppIdentity }, 'BootNotification (2.0.1) from a charge point awaiting adoption');
     return { status: 'Pending', currentTime: new Date().toISOString(), interval: 60 };
   }
+  // Suspended: Pending, decommissioned (socket opened before it was): Rejected —
+  // the reasoning is in adapter16.onBoot. In 2.0.1 Pending too lets the station
+  // deliver its queued TransactionEvents, which are accepted whatever the boot
+  // status; new authorisations and starts are refused (stationRefusal).
+  if (cp?.status === 'suspended') {
+    logger.warn({ cp: ctx.ocppIdentity }, 'BootNotification (2.0.1) from a suspended charge point — Pending');
+    return { status: 'Pending', currentTime: new Date().toISOString(), interval: 300 };
+  }
+  if (cp?.status === 'decommissioned') {
+    logger.warn({ cp: ctx.ocppIdentity }, 'BootNotification (2.0.1) from a decommissioned charge point — Rejected');
+    return { status: 'Rejected', currentTime: new Date().toISOString(), interval: 300 };
+  }
 
   logger.info(
     { cp: ctx.ocppIdentity, vendor: cs.vendorName, model: cs.model, fw: cs.firmwareVersion, reason: p.reason },
@@ -337,6 +349,13 @@ async function onStatusNotification(ctx: AdapterContext, p: any) {
 }
 
 async function onAuthorize(ctx: AdapterContext, p: any) {
+  // A station out of service (suspended, awaiting adoption) authorises nothing,
+  // Plug & Charge included. NotAtThisLocation: the token is fine, the place is not.
+  const refused = await stationRefusal(ctx.chargePointId);
+  if (refused) {
+    logger.info({ cp: ctx.ocppIdentity, station: refused.stationStatus }, 'Authorize (2.0.1) refused: station not in service');
+    return { idTokenInfo: { status: 'NotAtThisLocation' } };
+  }
   // Plug & Charge: an eMAID, or a contract certificate / its hash data, is checked as a contract.
   if (p.idToken?.type === 'eMAID' || p.certificate || Array.isArray(p.iso15118CertificateHashData)) return handlePncCall(ctx, 'Authorize', p);
   const idToken: string = p.idToken?.idToken ?? '';
@@ -428,39 +447,102 @@ async function onTransactionEvent(ctx: AdapterContext, p: any) {
     }
   }
 
-  // On Started, authorise the token BEFORE opening the session. If it is not
-  // accepted, tell the charger via idTokenInfo and do not start. Started
-  // carries the EVSE (Authorize does not), so a prepaid claim token is checked
-  // against the connector its payment is for (adapter16.authorizeIdTag).
-  let authStatus: IdTagInfo['status'] = 'Accepted';
+  /**
+   * AUTHORISATION ON TransactionEvent.
+   *
+   * Started with a token: authorised BEFORE the session opens. Started carries
+   * the EVSE (Authorize does not), so a prepaid claim token is checked against
+   * the connector its payment is for (adapter16.authorizeIdTag). A station out
+   * of service authorises nothing (NotAtThisLocation).
+   *
+   * A refused Started that is LIVE opens nothing, as before: the station is
+   * told the status and ends the transaction. One reported AFTER THE FACT —
+   * `offline: true` (the station ran it while disconnected and is uploading it
+   * now) or a timestamp well in the past — happened whatever we answer now:
+   * it is recorded as an unauthorised session, parked for review and never
+   * billed automatically, so its Updated and Ended events land and the energy
+   * is not lost (services/sessions.ts UnauthorisedStart).
+   */
+  const afterTheFact = p.offline === true || (eventType === 'Started' && reportedAfterTheFact(ev.timestamp));
+  let authStatus: string = 'Accepted';
+  let unauthorised: UnauthorisedStart | undefined;
   if (eventType === 'Started' && idTokenValue) {
-    const info = await authorizeIdTag(ctx.chargePointId, idTokenValue, ev.evse.evseId);
-    authStatus = info.status;
-    if (info.status !== 'Accepted') {
-      logger.info({ cp: ctx.ocppIdentity, tx: ev.transactionId, status: info.status }, 'TransactionEvent Started rejected');
-      return { idTokenInfo: { status: to201Status(info.status) } };
+    const refused = await stationRefusal(ctx.chargePointId);
+    const status = refused ? 'NotAtThisLocation' : to201Status((await authorizeIdTag(ctx.chargePointId, idTokenValue, ev.evse.evseId)).status);
+    authStatus = status;
+    if (status !== 'Accepted') {
+      if (!afterTheFact) {
+        logger.info({ cp: ctx.ocppIdentity, tx: ev.transactionId, status }, 'TransactionEvent Started rejected');
+        return { idTokenInfo: { status } };
+      }
+      unauthorised = unauthorisedStart(status, refused?.stationStatus ?? null);
+    }
+  } else if (eventType === 'Started') {
+    // No token yet (TxStartPoint EVConnected / PowerPathClosed): the transaction
+    // is recorded and authorised when its token arrives. At a station out of
+    // service it is still recorded — the cable is in, the energy may follow —
+    // but parked, like any start that was not authorised.
+    const refused = await stationRefusal(ctx.chargePointId);
+    if (refused) unauthorised = unauthorisedStart('NotAtThisLocation', refused.stationStatus);
+  }
+
+  /**
+   * A TOKEN PRESENTED AFTER THE START (TxStartPoint EVConnected and similar):
+   * the idToken arrives on an Updated (triggerReason Authorized) or even only
+   * on the Ended event of a session that has none. It used to be ignored —
+   * the session ran with no token, no payer, no prepaid allowance and no
+   * roaming link, and the station was never told whether the token was valid.
+   * The first one is authorised exactly as at the start and bound to the
+   * session BEFORE this event's meter values are recorded (an Ended event is
+   * rated as it is processed). A refused token is answered with its status
+   * (the station should stop) and the session is parked for review.
+   */
+  let lateAuth: string | null = null;
+  if (eventType !== 'Started' && idTokenValue && (await sessionAwaitsToken(ctx.chargePointId, ev.transactionId, idTokenValue))) {
+    const refused = await stationRefusal(ctx.chargePointId);
+    const status = refused ? 'NotAtThisLocation' : to201Status((await authorizeIdTag(ctx.chargePointId, idTokenValue, ev.evse.evseId)).status);
+    const r = await attachLateToken(ev, ctx.chargePointId, refused
+      ? { status, code: 'STATION_NOT_IN_SERVICE', message: `A token was presented while the station was ${refused.stationStatus}.` }
+      : { status });
+    if (r) {
+      lateAuth = r.status;
+      logger.info({ cp: ctx.ocppIdentity, tx: ev.transactionId, status: r.status }, 'token presented during the transaction');
     }
   }
 
   let session;
   try {
-    session = await handleTransactionEvent(ev, ctx.chargePointId);
+    session = await handleTransactionEvent(ev, ctx.chargePointId, unauthorised ? { unauthorised } : {});
   } catch (e) {
     // Session start's own refusal, decided under the connector's lock (a prepaid
-    // token with no claimable payment here): answered like a refused token, and
-    // no session exists for the Ended the station will send.
+    // token with no claimable payment here): answered like a refused token. Live,
+    // no session exists for the Ended the station will send; after the fact,
+    // the transaction is recorded as unauthorised.
     if (e instanceof SessionStartRefused && eventType === 'Started') {
       logger.info({ cp: ctx.ocppIdentity, tx: ev.transactionId, status: e.status }, 'TransactionEvent Started refused');
-      return { idTokenInfo: { status: to201Status(e.status) } };
+      if (!afterTheFact) return { idTokenInfo: { status: to201Status(e.status) } };
+      authStatus = to201Status(e.status);
+      session = await handleTransactionEvent(ev, ctx.chargePointId, { unauthorised: unauthorisedStart(authStatus, null) });
+    } else {
+      throw e;
     }
-    throw e;
   }
   if (eventType === 'Started' && !session) {
     throw new OcppCallError('InternalError', 'Could not open a charging session');
   }
 
-  // Started echoes the authorisation back; Updated/Ended acknowledge with {}.
-  return eventType === 'Started' ? { idTokenInfo: { status: to201Status(authStatus) } } : {};
+  // Started echoes the authorisation back (when there was a token to
+  // authorise); so does the event that carried a late token. Otherwise {}.
+  if (eventType === 'Started' && idTokenValue) return { idTokenInfo: { status: authStatus } };
+  if (lateAuth) return { idTokenInfo: { status: lateAuth } };
+  return {};
+}
+
+/** The parked-session record of a start that was not authorised (sessions.UnauthorisedStart). */
+function unauthorisedStart(status: string, stationStatus: string | null): UnauthorisedStart {
+  return stationStatus
+    ? { code: 'STATION_NOT_IN_SERVICE', status, message: `The station is ${stationStatus}; it reported a transaction it was not allowed to start.` }
+    : { code: 'UNAUTHORISED_TOKEN', status, message: `The station reported a transaction started offline with a token that is not accepted (${status}).` };
 }
 
 /**

@@ -2,6 +2,7 @@ import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
 import { REQUEST_SCHEMAS, RESPONSE_SCHEMAS } from './schemas16.js';
 import { REQUEST_SCHEMAS_201, RESPONSE_SCHEMAS_201 } from './schemas201.js';
 import { REQUEST_SCHEMAS_21, RESPONSE_SCHEMAS_21 } from './schemas21.js';
+import { OUTBOUND_RESPONSE_SCHEMAS_16, OUTBOUND_RESPONSE_SCHEMAS_201, OUTBOUND_RESPONSE_SCHEMAS_21 } from './schemas-outbound.js';
 import type { OcppVersion } from '../domain/canonical.js';
 
 /**
@@ -148,6 +149,9 @@ const requestValidators201 = compileAll(REQUEST_SCHEMAS_201);
 const responseValidators201 = compileAll(RESPONSE_SCHEMAS_201);
 const requestValidators21 = compileAll(REQUEST_SCHEMAS_21);
 const responseValidators21 = compileAll(RESPONSE_SCHEMAS_21);
+const outboundValidators16 = compileAll(OUTBOUND_RESPONSE_SCHEMAS_16);
+const outboundValidators201 = compileAll(OUTBOUND_RESPONSE_SCHEMAS_201);
+const outboundValidators21 = compileAll(OUTBOUND_RESPONSE_SCHEMAS_21);
 
 /**
  * Pick the schema set for a negotiated OCPP version. Version-scoping matters
@@ -496,6 +500,25 @@ export function validateCallResult(
   version: OcppVersion = 'ocpp1.6',
 ): ValidationFailure | null {
   const validate = resValidators(version).get(action);
+  if (validate === undefined) return null;
+  if (!isPlainObject(payload)) return notAnObject(action, payload);
+  if (validate(payload)) return null;
+  return failureFrom(action, validate.errors);
+}
+
+/**
+ * Validate the CHARGER'S CALLRESULT to one of OUR calls (schemas-outbound.ts),
+ * keyed by the action we sent. Returns null when valid — or when there is no
+ * schema for that action: like validateCallResult this is a check on what a
+ * known answer must look like, not a gate on commands that have no schema yet.
+ */
+export function validateOutboundResult(
+  action: string,
+  payload: unknown,
+  version: OcppVersion = 'ocpp1.6',
+): ValidationFailure | null {
+  const set = version === 'ocpp2.1' ? outboundValidators21 : version === 'ocpp2.0.1' ? outboundValidators201 : outboundValidators16;
+  const validate = set.get(action);
   if (validate === undefined) return null;
   if (!isPlainObject(payload)) return notAnObject(action, payload);
   if (validate(payload)) return null;

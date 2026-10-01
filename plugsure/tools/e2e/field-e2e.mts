@@ -592,7 +592,8 @@ try {
     await db.connect();
     try {
       const pi = (await db.query(`SELECT pi.id, pi.claim_id_tag FROM driver_charge dc JOIN payment_intent pi ON pi.id = dc.payment_intent_id WHERE dc.id = $1`, [unused.chargeId])).rows[0];
-      await db.query(`UPDATE payment_intent SET created_at = now() - interval '40 minutes' WHERE id = $1`, [pi.id]);
+      // The claim window runs from payment (paid_at, migration 049), not from checkout: age both.
+      await db.query(`UPDATE payment_intent SET created_at = now() - interval '40 minutes', paid_at = now() - interval '40 minutes' WHERE id = $1`, [pi.id]);
       const late = await c.call('Authorize', { idTag: pi.claim_id_tag });
       const lateStart = await c.start(2, pi.claim_id_tag, 4_000_000);
       check('22. a prepaid claim token past its 30-min window no longer authorises a free session', late.idTagInfo?.status !== 'Accepted' && lateStart.idTagInfo?.status !== 'Accepted', { late, lateStart });

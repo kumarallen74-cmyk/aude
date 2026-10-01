@@ -75,6 +75,8 @@ export interface SessionRow {
   prepaid_energy_wh: number | null;
   payment_mode: string | null;
   flags: unknown[];
+  token_id?: string | null;
+  ocpi_token_id?: string | null;
 }
 
 /**
@@ -88,11 +90,41 @@ export interface SessionFlag {
   code: string;
   severity: 'info' | 'warning' | 'violation';
   message: string;
+  /** UNAUTHORISED_TOKEN: the token that was refused (the session binds none). */
+  idToken?: string;
+}
+
+/**
+ * A transaction the charger reports as ALREADY RUNNING although its token (or
+ * the station itself) was not authorised: an offline start with a card that has
+ * since been blocked, a 2.0.1 `offline: true` upload, a start replayed long after
+ * the fact. The energy was delivered whatever the CSMS answers now, so refusing
+ * to record it loses it — and in 1.6 every refused transaction used to share
+ * transactionId 0, so its MeterValues and StopTransaction went nowhere.
+ *
+ * Such a start is RECORDED, never billed: no payer (no token bound, no prepaid
+ * intent claimed — someone else's payment must never cover it, and no roaming
+ * partner is told about a session it never approved), and parked with a
+ * violation flag so no CDR is issued until an operator has looked at it.
+ */
+export interface UnauthorisedStart {
+  /** Flag / review code: UNAUTHORISED_TOKEN, or STATION_NOT_IN_SERVICE for a suspended unit. */
+  code: string;
+  /** What the authoriser said (Blocked, Invalid, Expired, ConcurrentTx, …). */
+  status: string;
+  /** The operator-facing explanation. */
+  message: string;
+}
+
+export interface TransactionEventOptions {
+  /** Started only: record the start as unauthorised (see UnauthorisedStart). */
+  unauthorised?: UnauthorisedStart;
 }
 
 export async function handleTransactionEvent(
   ev: TransactionEvent,
   chargePointId: string,
+  opts: TransactionEventOptions = {},
 ): Promise<SessionRow | null> {
   const connector = await getConnector(chargePointId, ev.evse.evseId);
   if (!connector) {
@@ -102,7 +134,7 @@ export async function handleTransactionEvent(
 
   switch (ev.eventType) {
     case 'Started':
-      return startSession(ev, connector);
+      return startSession(ev, connector, opts.unauthorised ?? null);
     case 'Updated':
       return updateSession(ev, connector);
     case 'Ended':
@@ -125,7 +157,7 @@ export class SessionStartRefused extends Error {
   }
 }
 
-async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<SessionRow | null> {
+async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised: UnauthorisedStart | null): Promise<SessionRow | null> {
   /**
    * An ABSENT start register is not a zero one. OCPP 2.0.1 makes meterValue on
    * TransactionEvent(Started) optional, and `?? 0` here made the first Updated
@@ -135,9 +167,14 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
    */
   const observedStartWh = energyWhFrom(ev.meterValue);
   const startWh = observedStartWh ?? 0;
-  const token = ev.idToken ? await resolveToken(c.org_id, ev.idToken.idToken) : null;
+  // An unauthorised start binds no token: the session has no payer until an
+  // operator decides who (if anyone) it is billed to. The presented token is
+  // kept in the flag for that review.
+  const token = ev.idToken && !unauthorised ? await resolveToken(c.org_id, ev.idToken.idToken) : null;
   const tokenId = token?.id ?? null;
   const flags: SessionFlag[] = [];
+
+  if (unauthorised) flags.push(unauthorisedFlag(unauthorised, ev.idToken?.idToken ?? null));
 
   const skewFlag = clockSkewFlag(ev.timestamp);
   if (skewFlag) flags.push(skewFlag);
@@ -177,8 +214,10 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
     // A prepaid intent parked on this connector claims the session it starts —
     // but only the intent whose PAYER is the token starting it. Claimed under
     // the lock, so a duplicate start cannot claim a second intent.
+    // An unauthorised start claims nothing: a payment is never spent on energy
+    // nobody authorised.
     const prepaidToken = token?.kind === 'prepaid';
-    const prepaid = await claimPrepaidIntent(c.id, ev.idToken?.idToken ?? null, client, prepaidToken);
+    const prepaid = unauthorised ? null : await claimPrepaidIntent(c.id, ev.idToken?.idToken ?? null, client, prepaidToken);
 
     /**
      * A PREPAID CLAIM TOKEN STARTS ONLY THE SESSION IT PAID FOR.
@@ -210,8 +249,8 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
       `INSERT INTO charging_session
           (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
            token_id, state, started_at, meter_start_wh, meter_start_unknown, energy_wh, payment_mode,
-           prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16)
+           prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review, review_reason)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16,$17)
        ON CONFLICT (idem_key) DO UPDATE
           SET ocpp_transaction_id = COALESCE(charging_session.ocpp_transaction_id, EXCLUDED.ocpp_transaction_id)
        RETURNING *, (xmax = 0) AS inserted`,
@@ -232,6 +271,8 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
         prepaid?.id ?? null,
         JSON.stringify(flags),
         flags.some((f) => f.severity === 'violation'),
+        // The reason the review queue shows: the first violation, decided at the start.
+        flags.find((f) => f.severity === 'violation')?.code ?? null,
       ],
     );
     const { inserted, ...row } = ins.rows[0]!;
@@ -280,7 +321,21 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
     }
     // Not one of the operator's own cards: a roaming partner's driver is linked
     // here, before session.started, so the partner is told about the session.
-    if (!tokenId && ev.idToken) await linkRoamingSession(row.id, c.org_id, ev.idToken.idToken);
+    // Never for an unauthorised start: the partner did not approve it.
+    if (!tokenId && ev.idToken && !unauthorised) await linkRoamingSession(row.id, c.org_id, ev.idToken.idToken);
+    if (unauthorised) {
+      logger.warn(
+        { sessionId: row.id, cp: ev.evse.ocppIdentity, tx: ev.transactionId, status: unauthorised.status, code: unauthorised.code },
+        'unauthorised transaction reported by the charger — recorded and parked for review, not billed',
+      );
+      bus.emit('alert.raised', {
+        orgId: row.org_id,
+        kind: 'session.unauthorised',
+        severity: 'warning',
+        message: `${ev.evse.ocppIdentity} reported a transaction that was not authorised (${unauthorised.status}). ` +
+          `Session ${row.id} is recorded for review and will not be billed automatically.`,
+      });
+    }
     bus.emit('session.started', {
       orgId: row.org_id,
       sessionId: row.id,
@@ -390,6 +445,135 @@ async function updateSession(ev: TransactionEvent, c: ConnectorRow): Promise<Ses
   });
   if (replan) replanSite(replan);
   return out;
+}
+
+// ------------------------------------------------------------------ late token
+
+/**
+ * The session for this transaction is still waiting for its token: running,
+ * no own token and no roaming token bound, and this token not already refused
+ * on it. Read-only: the adapter asks before authorising, so a station that
+ * repeats the idToken on every Updated event is authorised once, not per frame.
+ */
+export async function sessionAwaitsToken(chargePointId: string, transactionId: string, idTag: string): Promise<boolean> {
+  const r = await one<{ waiting: boolean }>(
+    `SELECT (token_id IS NULL AND ocpi_token_id IS NULL
+             AND NOT flags @> jsonb_build_array(jsonb_build_object('idToken', $3::text))) AS waiting
+       FROM charging_session
+      WHERE charge_point_id = $1 AND ocpp_transaction_id = $2 AND state = 'active'
+      ORDER BY started_at DESC LIMIT 1`,
+    [chargePointId, transactionId, idTag],
+  );
+  return r?.waiting === true;
+}
+
+/**
+ * A token presented AFTER the transaction started (OCPP 2.0.1).
+ *
+ * With TxStartPoint=EVConnected (or PowerPathClosed) the station starts the
+ * transaction at plug-in, before anyone has authorised, and the idToken arrives
+ * on a later Updated event (triggerReason Authorized). It used to be ignored:
+ * the session ran — and was billed — with no token, no payer, no prepaid
+ * allowance and no roaming link, and the station was never told whether the
+ * token was any good.
+ *
+ * Now the first token seen on a session that has none goes through what a token
+ * at the start goes through. `auth` is the authoriser's verdict (adapter16.
+ * authorizeIdTag, with the EVSE, so a prepaid claim token is checked against the
+ * connector its payment is for). Under the connector's session-start lock — the
+ * same lock that serialises prepaid claims at start, so one payment can never be
+ * claimed by two sessions — the session row is locked and:
+ *
+ *   - Accepted: the token is bound; a prepaid claim token must claim ITS payment
+ *     on this connector (or the verdict becomes the start-time refusal status);
+ *     a token that is not one of the operator's own is linked to its roaming
+ *     partner after the commit.
+ *   - anything else: nothing is bound, and the session is flagged
+ *     UNAUTHORISED_TOKEN and parked for review — the station is told the status
+ *     and should stop, but what it already delivered is recorded, not billed.
+ *
+ * Returns the final status for the station's idTokenInfo, or null when there is
+ * nothing to do (unknown transaction, session no longer running, or already
+ * carrying a token).
+ */
+export async function attachLateToken(
+  ev: TransactionEvent,
+  chargePointId: string,
+  auth: { status: string; code?: string; message?: string },
+): Promise<{ status: string; sessionId: string } | null> {
+  const idTag = ev.idToken?.idToken;
+  if (!idTag) return null;
+  const c = await getConnector(chargePointId, ev.evse.evseId);
+  if (!c) return null;
+  const token = await resolveToken(c.org_id, idTag);
+
+  const out = await tx(async (client) => {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended('session-start:' || $1::text || ':' || $2::text, 0))`,
+      [c.charge_point_id, ev.evse.evseId],
+    );
+    const cur = await client.query<SessionRow>(
+      `SELECT * FROM charging_session
+        WHERE charge_point_id = $1 AND ocpp_transaction_id = $2
+        ORDER BY started_at DESC LIMIT 1
+        FOR UPDATE`,
+      [c.charge_point_id, ev.transactionId],
+    );
+    const row = cur.rows[0];
+    if (!row || row.state !== 'active' || row.token_id || row.ocpi_token_id) return null;
+
+    let status = auth.status;
+    let prepaid: Awaited<ReturnType<typeof claimPrepaidIntent>> = null;
+    if (status === 'Accepted' && token?.kind === 'prepaid') {
+      prepaid = await claimPrepaidIntent(c.id, idTag, client, true);
+      if (!prepaid) status = await prepaidRefusalStatus(client, c.org_id, idTag);
+    }
+
+    if (status !== 'Accepted') {
+      const flag = unauthorisedFlag(
+        { code: auth.code ?? 'UNAUTHORISED_TOKEN', status, message: auth.message ?? `The token presented during the transaction was refused (${status}).` },
+        idTag,
+      );
+      await client.query(
+        `UPDATE charging_session
+            SET flags = flags || $2::jsonb, needs_review = true, review_reason = COALESCE(review_reason, $3)
+          WHERE id = $1`,
+        [row.id, JSON.stringify([flag]), flag.code],
+      );
+      return { status, sessionId: row.id, orgId: row.org_id, refused: true, roaming: false };
+    }
+
+    await client.query(
+      `UPDATE charging_session
+          SET token_id = $2,
+              payment_mode = CASE WHEN $3::uuid IS NOT NULL THEN 'prepurchase' ELSE payment_mode END,
+              payment_intent_id = COALESCE($3, payment_intent_id),
+              prepaid_amount_idr = COALESCE($4, prepaid_amount_idr),
+              prepaid_energy_wh = COALESCE($5, prepaid_energy_wh)
+        WHERE id = $1`,
+      [row.id, token?.id ?? null, prepaid?.id ?? null, prepaid?.amount_authorised_idr ?? null, prepaid?.allowance_wh ?? null],
+    );
+    if (prepaid) await client.query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
+    return { status, sessionId: row.id, orgId: row.org_id, refused: false, roaming: !token };
+  });
+  if (!out) return null;
+
+  if (out.refused) {
+    logger.warn({ sessionId: out.sessionId, cp: ev.evse.ocppIdentity, tx: ev.transactionId, status: out.status }, 'token presented during the transaction was refused — session parked for review');
+    bus.emit('alert.raised', {
+      orgId: out.orgId,
+      kind: 'session.unauthorised',
+      severity: 'warning',
+      message: `${ev.evse.ocppIdentity}: the token presented during session ${out.sessionId} was refused (${out.status}). ` +
+        'The session is recorded for review and will not be billed automatically.',
+    });
+  } else {
+    // A roaming partner's driver: linked now, as it would have been at the start.
+    if (out.roaming) await linkRoamingSession(out.sessionId, out.orgId, idTag).catch((e) =>
+      logger.warn({ sessionId: out.sessionId, err: String(e) }, 'roaming link for a late token failed'));
+    logger.info({ sessionId: out.sessionId, cp: ev.evse.ocppIdentity, tx: ev.transactionId }, 'token bound to a running session');
+  }
+  return { status: out.status, sessionId: out.sessionId };
 }
 
 // ------------------------------------------------------------------ end
@@ -505,6 +689,11 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
      * is noise; a material divergence means one of the charger's two registers
      * is wrong and a human has to decide which before anyone is billed.
      */
+    // The 1.6 adapter only reports a divergence that is a real disagreement
+    // (adapter16.onStopTransaction): a Transaction.End register that differs
+    // from meterStop, or a sampled register ABOVE meterStop. A last periodic
+    // sample below meterStop is the normal lag of StopTxnSampledData and is not
+    // one — reporting it parked nearly every DC session.
     const divergence = ev.divergenceWh ?? 0;
     if (divergence > 1) {
       const share = energy > 0 ? divergence / energy : 1;
@@ -514,7 +703,8 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
         severity: material ? 'violation' : 'warning',
         message:
           `transactionData and meterStop differ by ${divergence} Wh ` +
-          `(${(share * 100).toFixed(1)}% of the billed energy); billed transactionData.` +
+          `(${(share * 100).toFixed(1)}% of the billed energy); billed the Transaction.End register, ` +
+          `or the higher of the two when there is none.` +
           (material ? ' Parked for review — one of the charger\'s registers is wrong.' : ''),
       });
     }
@@ -1199,6 +1389,20 @@ export async function clearReviewAndRate(sessionId: string, orgId?: string, forc
 
 // ------------------------------------------------------------------ helpers
 
+/**
+ * The violation that parks an unauthorised session. It carries the refused token
+ * (the session binds none), so the reviewer sees whose card it was and a station
+ * repeating the same token is not re-authorised on every frame.
+ */
+function unauthorisedFlag(u: UnauthorisedStart, idTag: string | null): SessionFlag {
+  return {
+    code: u.code,
+    severity: 'violation',
+    message: `${u.message}${idTag ? ` Token ${idTag}.` : ''} Recorded, not billed: parked until an operator decides who pays.`,
+    ...(idTag ? { idToken: idTag } : {}),
+  };
+}
+
 /** The session's start register was taken from its first observation, not the start event. */
 function startInferredFlag(startWh: number, at: string): SessionFlag {
   return {
@@ -1503,12 +1707,26 @@ async function addFlag(sessionId: string, flag: SessionFlag, client?: any) {
  * shape and the caller flags the session so it is visible.
  */
 /**
- * How long after checkout a paid prepurchase can start a session. One constant,
+ * How long after PAYMENT a paid prepurchase can start a session. One constant,
  * shared by the claim below, the claim-token check in authorizeIdTag, the token
  * expiry at checkout and the unused-payment refund sweep — they must agree, or
  * a token outlives its payment (the unlimited-free-session defect).
+ *
+ * The window runs from the moment the money was authorised or captured
+ * (`payment_intent.paid_at`, stamped by a trigger in migration 049), not from
+ * checkout. It ran from `created_at`: a driver who took 25 minutes to finish a
+ * QRIS or e-wallet payment had 5 minutes left to plug in, and one who paid
+ * after 30 minutes had paid for a session that could never start.
+ * `PREPAID_PAID_AT_SQL` is the expression every one of those checks uses.
  */
 export const PREPAID_CLAIM_WINDOW_MIN = 30;
+
+/**
+ * When a payment intent became claimable. `created_at` only for a row that
+ * somehow carries no paid_at (it is backfilled and trigger-maintained), so the
+ * check never fails open on a NULL.
+ */
+export const PREPAID_PAID_AT_SQL = (alias = 'payment_intent') => `COALESCE(${alias}.paid_at, ${alias}.created_at)`;
 
 async function claimPrepaidIntent(
   connectorUuid: string,
@@ -1537,7 +1755,8 @@ async function claimPrepaidIntent(
            AND (mode NOT IN ('preauth', 'postpay') OR hold_state = 'held')
            AND state IN ('captured', 'authorised') AND session_id IS NULL
            AND refund_state IS NULL   -- a payment being refunded cannot also buy energy
-           AND created_at > now() - make_interval(mins => ${PREPAID_CLAIM_WINDOW_MIN})
+           -- the claim window runs from payment, not from checkout
+           AND ${PREPAID_PAID_AT_SQL()} > now() - make_interval(mins => ${PREPAID_CLAIM_WINDOW_MIN})
            AND (
              -- the payer is starting this session...
              ($2::text IS NOT NULL AND claim_id_tag = $2)

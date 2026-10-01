@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { MessageBudget } from './throttle.js';
-import { validateCallDetailed, validateCallResult, isKnownAction, type ValidationFailure } from './validate.js';
+import { validateCallDetailed, validateCallResult, validateOutboundResult, isKnownAction, type ValidationFailure } from './validate.js';
 import type { OcppVersion } from '../domain/canonical.js';
 
 /**
@@ -66,6 +66,21 @@ export class OcppCallError extends Error {
   ) {
     super(message);
     this.name = 'OcppCallError';
+  }
+}
+
+/**
+ * The charger answered one of our calls with a CALLRESULT whose payload does
+ * not fit that action's response schema. The call fails with this rather than
+ * resolving with a payload no caller can rely on; `failure` says what was wrong.
+ */
+export class OcppReplyValidationError extends Error {
+  constructor(
+    public action: string,
+    public failure: ValidationFailure,
+  ) {
+    super(`The charger's answer to ${action} failed validation: ${failure.message}`);
+    this.name = 'OcppReplyValidationError';
   }
 }
 
@@ -533,7 +548,26 @@ export class OcppRpcConnection {
     clearTimeout(p.timer);
 
     if (messageType === MessageType.CALLRESULT) {
-      p.resolve(frame[2]);
+      /**
+       * Answers are checked like requests are.
+       *
+       * The payload went to the caller unchecked: a misspelt or mistyped status
+       * was taken for an answer (a RemoteStop "acepted" was neither Accepted nor
+       * Rejected to the console), and a GetLocalListVersion without listVersion
+       * read as version 0. It is now validated against the response schema of
+       * the action we sent (schemas-outbound.ts) when there is one. A bad answer
+       * fails the call with a clear error — the connection and the queue carry
+       * on — and is recorded as the charger's spec deviation, as an inbound one
+       * would be.
+       */
+      const bad = validateOutboundResult(p.action, frame[2], this.opts.version ?? 'ocpp1.6');
+      if (bad) {
+        logger.warn({ cp: this.id, action: p.action, uniqueId, msg: bad.message }, 'charger answered with an invalid CALLRESULT');
+        this.opts.deviationSink?.(`${p.action}.conf`, [bad]);
+        p.reject(new OcppReplyValidationError(p.action, bad));
+      } else {
+        p.resolve(frame[2]);
+      }
     } else {
       const rawCode = frame[2];
       const code: OcppErrorCode =

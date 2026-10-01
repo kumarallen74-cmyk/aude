@@ -99,7 +99,9 @@ const sessionsOn = (connectorUuid: string) =>
 dbDescribe('a prepaid claim token starts only the session it paid for', () => {
   test('OCPP 1.6: StartTransaction on another connector is refused, and opens nothing', async () => {
     const r = await handle16Call(ctx(), 'StartTransaction', { connectorId: 2, idTag: TAG, meterStart: 1_000, timestamp: iso(Date.now() - 60_000) });
-    assert.equal(r.transactionId, 0, 'the refused-start convention: transactionId 0');
+    // A refused live start opens nothing but gets a real, unique transactionId
+    // (adapter16.onStartTransaction), so its StopTransaction can be attributed.
+    assert.ok(r.transactionId > 0, 'a unique transactionId, not the shared 0');
     assert.equal(r.idTagInfo.status, 'Invalid');
     assert.equal((await sessionsOn(conn[2]!)).length, 0, 'no postpaid session for a prepaid token');
     const pi = await one<any>(`SELECT session_id FROM payment_intent WHERE id = $1`, [intentId]);
@@ -154,7 +156,7 @@ dbDescribe('a prepaid claim token starts only the session it paid for', () => {
 
   test('while that session runs, a second session with the token is ConcurrentTx (1.6 and 2.0.1)', async () => {
     const r = await handle16Call(ctx(), 'StartTransaction', { connectorId: 2, idTag: TAG, meterStart: 1_000, timestamp: iso(Date.now() - 20_000) });
-    assert.equal(r.transactionId, 0);
+    assert.ok(r.transactionId > 0 && r.transactionId !== paidTx);
     assert.equal(r.idTagInfo.status, 'ConcurrentTx');
     const r201 = await handle201Call(ctx(), 'TransactionEvent', {
       eventType: 'Started', timestamp: iso(Date.now() - 15_000), triggerReason: 'Authorized', seqNo: 0,
@@ -166,7 +168,7 @@ dbDescribe('a prepaid claim token starts only the session it paid for', () => {
 
     // A new transaction on the paid connector itself (a missed stop) cannot reuse the payment either.
     const same = await handle16Call(ctx(), 'StartTransaction', { connectorId: 1, idTag: TAG, meterStart: 9_000, timestamp: iso(Date.now() - 10_000) });
-    assert.equal(same.transactionId, 0);
+    assert.ok(same.transactionId > 0 && same.transactionId !== paidTx);
     assert.equal(same.idTagInfo.status, 'ConcurrentTx');
     const rows = await sessionsOn(conn[1]!);
     assert.equal(rows.length, 1);
@@ -177,7 +179,7 @@ dbDescribe('a prepaid claim token starts only the session it paid for', () => {
     assert.equal((await handle16Call(ctx(), 'Authorize', { idTag: TAG })).idTagInfo.status, 'Accepted');
     assert.equal((await handle16Call(ctx2(), 'Authorize', { idTag: TAG })).idTagInfo.status, 'ConcurrentTx');
     const r = await handle16Call(ctx2(), 'StartTransaction', { connectorId: 1, idTag: TAG, meterStart: 1, timestamp: iso(Date.now() - 5_000) });
-    assert.equal(r.transactionId, 0);
+    assert.ok(r.transactionId > 0 && r.transactionId !== paidTx);
     assert.equal(r.idTagInfo.status, 'ConcurrentTx');
   });
 });

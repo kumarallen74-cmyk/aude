@@ -179,7 +179,7 @@ export async function startGateway(): Promise<GatewayHandle> {
         } catch {}
         continue;
       }
-      registry.markPingSent(r.ocppIdentity);
+      registry.markPingSent(r.ocppIdentity, r.token);
       try {
         r.ws.ping();
       } catch {}
@@ -297,6 +297,28 @@ async function handleUpgrade(
     return finish('rejected_unknown_cp', 404, 'Unknown charge point', { ocppIdentity: identity, chargePointId: cp.id, negotiated: version });
   }
 
+  /**
+   * A DECOMMISSIONED unit is no longer part of the fleet: refused here, at the
+   * upgrade, before any credential is looked at. It used to connect (its
+   * credentials are cleared at decommissioning, but at security profile 0 there
+   * are none to clear), boot Accepted and open billable sessions. Refusing the
+   * socket rather than answering BootNotification Rejected is deliberate: a
+   * Rejected unit stays connected and re-boots for ever, while the 403 is what
+   * an unknown unit gets and is recorded in its connection log. Reinstating
+   * the unit (→ pending_adoption) lets it back in through the adoption gate.
+   *
+   * A SUSPENDED unit is let in and answered Pending at BootNotification
+   * (adapter16.onBoot): it must still be able to deliver the stop of a
+   * transaction that was running when it was suspended.
+   */
+  if (cp.status === 'decommissioned') {
+    return finish('rejected_auth', 403, 'Charge point is decommissioned', {
+      ocppIdentity: identity,
+      chargePointId: cp.id,
+      negotiated: version,
+    });
+  }
+
   // --- transport security ---------------------------------------------
   const required = Math.max(config.gateway.minSecurityProfile, cp.security_profile ?? 0);
   if (required >= 2 && !tls) {
@@ -368,12 +390,17 @@ async function handleUpgrade(
       httpStatus: 101,
       detail: pending
         ? 'Upgrade accepted, but the charge point is awaiting operator adoption; BootNotification will answer Pending.'
-        : null,
+        : cp.status === 'suspended'
+          ? 'Upgrade accepted, but the charge point is suspended; BootNotification will answer Pending and new sessions are refused.'
+          : null,
     }).catch((e) => logger.error({ err: e }, 'failed to record connection attempt'));
 
     // A rejection here used to take the whole process down and with it every
     // other charger's socket — see the note on setChargePointStatus below.
-    void onConnection(ws, identity!, cp.id, cp.org_id, version).catch((e) =>
+    // What the handshake actually proved: the enforced profile, with Basic auth counted as Profile 2
+    // only when the connection is TLS (directly or via a trusted proxy).
+    const authenticatedProfile = required >= 3 ? 3 : required >= 1 ? (tls ? 2 : 1) : 0;
+    void onConnection(ws, identity!, cp.id, cp.org_id, version, authenticatedProfile).catch((e) =>
       logger.error({ err: e, cp: identity }, 'connection setup failed'),
     );
   });
@@ -394,7 +421,8 @@ export async function attachVirtualCharger(identity: string, version: OcppVersio
     authScheme: null, tls: false, userAgent: 'PlugSure sandbox', ocppIdentity: identity, chargePointId: cp.id, negotiated: version,
     outcome: cp.status === 'pending_adoption' ? 'accepted_pending_adoption' : 'accepted', httpStatus: 101, detail: 'sandbox virtual charger',
   }).catch(() => {});
-  await onConnection(server as unknown as WebSocket, identity, cp.id, cp.org_id, version);
+  // In-process only (no network path), and the sandbox needs certificate signing: Profile 2.
+  await onConnection(server as unknown as WebSocket, identity, cp.id, cp.org_id, version, 2);
   return client;
 }
 
@@ -550,7 +578,7 @@ async function markStaleOffline() {
 
 // ------------------------------------------------------------------ connection
 
-async function onConnection(ws: WebSocket, identity: string, chargePointId: string, orgId: string, version: OcppVersion) {
+async function onConnection(ws: WebSocket, identity: string, chargePointId: string, orgId: string, version: OcppVersion, securityProfile = 0) {
   logger.info({ cp: identity, version }, 'charge point connected');
 
   // A previous socket for this identity must be closed, not merely displaced.
@@ -565,7 +593,7 @@ async function onConnection(ws: WebSocket, identity: string, chargePointId: stri
     } catch {}
   }
 
-  const ctx: AdapterContext = { ocppIdentity: identity, chargePointId, orgId, version };
+  const ctx: AdapterContext = { ocppIdentity: identity, chargePointId, orgId, version, securityProfile };
 
   /**
    * Deviations observed before the quirk profile is known.
@@ -655,7 +683,9 @@ async function onConnection(ws: WebSocket, identity: string, chargePointId: stri
   // the status write is never observed and the row stays 'online' forever.
   const token = registry.register({ ocppIdentity: identity, chargePointId, version, rpc, ws, connectedAt: new Date() });
 
-  ws.on('pong', () => registry.markPong(identity));
+  // Keyed by THIS registration: a late pong from a superseded socket must not
+  // mark the connection that replaced it alive.
+  ws.on('pong', () => registry.markPong(identity, token));
   ws.on('close', () => {
     const wasCurrent = registry.unregister(identity, token);
     if (!wasCurrent) {

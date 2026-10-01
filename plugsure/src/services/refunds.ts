@@ -74,8 +74,10 @@ export async function sweepUnusedPayments(): Promise<number> {
        FROM payment_intent
       WHERE mode = 'prepurchase' AND state = 'captured' AND session_id IS NULL
         AND refund_state IS NULL
-        AND created_at < now() - make_interval(mins => $1::int)
-      ORDER BY created_at
+        -- The claim window runs from PAYMENT (049 paid_at), as the claim itself does: a QR paid late in
+        -- checkout must not be swept for refund while the driver can still start with it.
+        AND COALESCE(paid_at, created_at) < now() - make_interval(mins => $1::int)
+      ORDER BY COALESCE(paid_at, created_at)
       LIMIT 200`,
     [PREPAID_CLAIM_WINDOW_MIN + UNUSED_GRACE_MIN],
   );
@@ -286,7 +288,7 @@ export async function listRefunds(orgId: string, state?: string) {
   return many(
     `SELECT pi.id, pi.refund_state, pi.refund_due_idr, pi.refunded_idr, pi.refund_reason, pi.refund_method,
             pi.refund_ref, pi.refund_error, pi.refund_requested_at, pi.refunded_at,
-            pi.provider, pi.provider_ref, pi.method, pi.channel, pi.amount_captured_idr, pi.created_at AS paid_at,
+            pi.provider, pi.provider_ref, pi.method, pi.channel, pi.amount_captured_idr, COALESCE(pi.paid_at, pi.created_at) AS paid_at,
             pi.session_id, s.name AS site_name, cp.ocpp_identity, e.evse_id AS connector_no,
             ad.phone AS driver_phone, u.name AS refunded_by_name
        FROM payment_intent pi

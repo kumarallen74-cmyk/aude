@@ -110,10 +110,12 @@ export interface Assessment {
 export async function assessSession(sessionId: string, billedWh: number, client?: Runner): Promise<Assessment | null> {
   const run: Runner = client ?? { query };
   const s = (await run.query(
-    `SELECT s.signed_meter_policy AS policy, c.meter_public_key, c.meter_serial
-       FROM charging_session cs JOIN site s ON s.id = cs.site_id JOIN connector c ON c.id = cs.connector_uuid WHERE cs.id = $1`,
+    `SELECT s.signed_meter_policy AS policy, c.meter_public_key, c.meter_serial, t.uid AS token_uid
+       FROM charging_session cs JOIN site s ON s.id = cs.site_id JOIN connector c ON c.id = cs.connector_uuid
+       LEFT JOIN token t ON t.id = cs.token_id
+      WHERE cs.id = $1`,
     [sessionId],
-  )).rows[0] as { policy: Policy; meter_public_key: string | null; meter_serial: string | null } | undefined;
+  )).rows[0] as { policy: Policy; meter_public_key: string | null; meter_serial: string | null; token_uid: string | null } | undefined;
   if (!s || s.policy === 'off') return null;
   const rows = (await run.query(
     `SELECT id, data, encoding, public_key FROM signed_meter_value WHERE session_id = $1 ORDER BY id`, [sessionId],
@@ -150,17 +152,33 @@ export async function assessSession(sessionId: string, billedWh: number, client?
     return out('invalid', null, `the signed readings are from meter ${serials[0]}, but this connector's meter is ${s.meter_serial}.`);
   }
 
-  // The import register at the start and at the end.
-  const readings = checked.flatMap((c) => readingsOf(c.parsed)).filter((r) => r.register === 'import' && r.wh !== null);
+  // The import register at the start and at the end — OF ONE TRANSACTION.
+  const readings = checked.flatMap((c, row) => readingsOf(c.parsed).map((r, idx) => ({
+    ...r, row, idx, pg: parsePagination(c.parsed?.payload.PG), id: idOf(c.parsed), it: c.parsed?.payload.IT ?? null,
+  }))).filter((r) => r.register === 'import' && r.wh !== null);
   const notOk = readings.find((r) => !r.ok);
   if (notOk) return out('invalid', null, `the meter marked a reading as not valid (status ${notOk.st}${notOk.ef ? `, error ${notOk.ef}` : ''}).`);
-  const byTime = (a: { tm: string }, b: { tm: string }) => (parseOcmfTime(a.tm)?.getTime() ?? 0) - (parseOcmfTime(b.tm)?.getTime() ?? 0);
-  const begin = readings.filter((r) => r.tx === 'B').sort(byTime)[0] ?? null;
-  const end = readings.filter((r) => r.tx === 'E').sort(byTime).at(-1) ?? null;
-  if (!begin || !end) {
-    return out('incomplete', null, `${!begin && !end ? 'neither the start nor the end' : !begin ? 'the start' : 'the end'} reading of the transaction is not among the signed data.`);
-  }
+  const pair = transactionPair(readings);
+  if ('missing' in pair) return out('incomplete', null, pair.missing);
+  const { begin, end } = pair;
   const signedWh = end.wh! - begin.wh!;
+
+  /**
+   * Whose transaction. The OCMF `ID` is the identification the meter recorded
+   * for the transaction. Start and end must carry the same one, and where it is
+   * a token identifier (RFID UID, eMAID, a central or local id) it must be this
+   * session's token: otherwise these are signed readings of somebody else's
+   * charge, however well their energy matches.
+   */
+  if (begin.id && end.id && normId(begin.id) !== normId(end.id)) {
+    return out('mismatch', signedWh, `the signed start and end readings identify different transactions (ID ${begin.id} and ${end.id}).`);
+  }
+  const txId = end.id ?? begin.id;
+  const txIt = String(end.id ? end.it ?? '' : begin.it ?? '').toUpperCase();
+  if (txId && s.token_uid && TOKEN_ID_TYPES.has(txIt) && normId(txId) !== normId(s.token_uid)) {
+    return out('mismatch', signedWh, `the signed readings belong to identification ${txId}, but this session was started with token ${s.token_uid}.`);
+  }
+
   if (Math.abs(signedWh - billedWh) > MATCH_TOLERANCE_WH) {
     return out('mismatch', signedWh, `the signed readings show ${signedWh} Wh (${begin.wh} → ${end.wh} Wh), the session is billed for ${billedWh} Wh.`);
   }
@@ -173,6 +191,87 @@ export async function assessSession(sessionId: string, billedWh: number, client?
         : 'the readings match the bill and their signatures hold, but only against the key the charger sent; register the meter key to verify them.');
   }
   return out('verified', signedWh, `verified: ${signedWh} Wh between the signed start and end readings of meter ${serials[0] ?? '(no serial)'}, as billed.`);
+}
+
+// ─────────────────────────────────────────────── one transaction
+
+/** OCMF identification types that name a token this CSMS can compare with the session's. */
+const TOKEN_ID_TYPES = new Set(['ISO14443', 'ISO15693', 'EMAID', 'EVCOID', 'CENTRAL', 'CENTRAL_1', 'CENTRAL_2', 'LOCAL', 'LOCAL_1', 'LOCAL_2']);
+
+const normId = (x: string) => x.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+
+function idOf(p: ParsedOcmf | null): string | null {
+  const id = p?.payload.ID;
+  return typeof id === 'string' && id.trim() ? id.trim() : null;
+}
+
+/** OCMF pagination: "T12" (transaction counter) or "F3" (fiscal counter). */
+export function parsePagination(pg: unknown): { kind: string; n: number } | null {
+  const m = /^\s*([A-Za-z])\s*(\d+)\s*$/.exec(String(pg ?? ''));
+  return m ? { kind: m[1]!.toUpperCase(), n: Number(m[2]) } : null;
+}
+
+export interface PairReading {
+  tx: string | null;
+  tm: string;
+  wh: number | null;
+  /** Which stored signed value the reading came from, and where in its RD list. */
+  row: number;
+  idx: number;
+  pg: { kind: string; n: number } | null;
+  id: string | null;
+  it: string | null;
+}
+
+/**
+ * Meter order: within one data set, the order of its readings; between data
+ * sets, the meter's pagination counter when both carry one of the same kind
+ * (OCMF increments it for every data set it signs, so it orders them even when
+ * clocks do not); otherwise the readings' own times, then arrival.
+ */
+function meterOrder(a: PairReading, b: PairReading): number {
+  if (a.row === b.row) return a.idx - b.idx;
+  if (a.pg && b.pg && a.pg.kind === b.pg.kind && a.pg.n !== b.pg.n) return a.pg.n - b.pg.n;
+  const ta = parseOcmfTime(a.tm)?.getTime();
+  const tb = parseOcmfTime(b.tm)?.getTime();
+  if (ta != null && tb != null && ta !== tb) return ta - tb;
+  return a.row - b.row;
+}
+
+/**
+ * The begin ("B") and end ("E") readings of ONE transaction.
+ *
+ * They used to be picked across every signed value stored for the session —
+ * the earliest B and the latest E, by time alone — so a B of one transaction
+ * and an E of another (a replayed data set, a charger that keeps the previous
+ * transaction's start in its buffer, two transactions under one session after
+ * a missed stop) were billed against each other and could even come out
+ * "verified".
+ *
+ * Now the end is the last E in meter order and the begin is the B that
+ * immediately precedes it: no other B or E may lie between them. When there is
+ * no such B (none at all, or only after the end) the pair is incomplete. The
+ * same-identification check is the caller's (assessSession).
+ */
+export function transactionPair<R extends PairReading>(readings: R[]): { begin: R; end: R } | { missing: string } {
+  const sorted = [...readings].sort(meterOrder);
+  const hasB = sorted.some((r) => r.tx === 'B');
+  const endAt = sorted.map((r) => r.tx).lastIndexOf('E');
+  if (endAt < 0) {
+    return { missing: `${!hasB ? 'neither the start nor the end' : 'the end'} reading of the transaction is not among the signed data.` };
+  }
+  for (let i = endAt - 1; i >= 0; i--) {
+    const r = sorted[i]!;
+    if (r.tx === 'B') return { begin: r, end: sorted[endAt]! };
+    if (r.tx === 'E') {
+      return { missing: 'the start reading of the transaction is not among the signed data: the signed end reading follows another transaction\'s end, not a start.' };
+    }
+  }
+  return {
+    missing: hasB
+      ? 'the start reading of the transaction is not among the signed data: the only signed start reading comes after the end reading, so they are not one transaction.'
+      : 'the start reading of the transaction is not among the signed data.',
+  };
 }
 
 /** What the console, the receipt and the API show for a session. */
