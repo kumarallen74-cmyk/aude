@@ -302,6 +302,7 @@ try {
   // Suspending releases a live reservation: CancelReservation, no lapse into a no-show (v1.4.4)
   mark = cp.calls.length;
   const rs = await a.post('/v1/reservations', { connectorId: conn1 });
+  const tS = Date.now();
   const suspR = await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended with a live reservation' });
   try {
     const crs = await cp.waitNew('CancelReservation', mark);
@@ -309,6 +310,10 @@ try {
     check('suspend: a live reservation is released (CancelReservation sent), not left to lapse as a no-show',
       rs.status === 200 && suspR.status === 200 && suspR.data.reservationsReleased === 1 && !!crs && curS.data.reservation === null,
       { rs: rs.status, susp: suspR.data, cancel: !!crs, cur: curS.data.reservation });
+    // The driver is told (sent after the response; wait for it so it is not mistaken for a later notice).
+    const rel = await until(async () => pushesTo('/push/a', tS), (l) => l.length >= 1, 20_000);
+    let relMsg: any = null; try { relMsg = rel[0] && decrypt(rel[0].body, subA); } catch (e) { relMsg = { error: (e as Error).message }; }
+    check('suspend: the driver gets a "Reservasi dibatalkan" push', rel.length === 1 && relMsg?.title === 'Reservasi dibatalkan', relMsg);
   } finally {
     await ops('POST', `/v1/charge-points/${ID}/resume`);
   }
