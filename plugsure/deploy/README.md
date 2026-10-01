@@ -243,8 +243,11 @@ only the operator's own accounts can sign in. Any other account is refused
 exactly like a wrong password: the same answer, counted as a failed attempt,
 and no session. PlugSure's own addresses (`PUBLIC_BASE_URL`,
 `CONSOLE_PUBLIC_URL`, `API_PUBLIC_URL`, `DRIVER_PUBLIC_URL`, `OCPI_PUBLIC_URL`,
-`OCPP_PUBLIC_URL`) can never be entered or approved, so set `PUBLIC_BASE_URL`
-to the shared console's address.
+`OCPP_PUBLIC_URL`) can never be entered or approved, so set `CONSOLE_PUBLIC_URL`
+to the shared console's address. Keep `PUBLIC_BASE_URL` on the OCPP hostname:
+chargers fetch firmware and upload logs through it. Any other shared hostname
+(a second one for portal users, for example) is protected by the approval
+itself: never approve it for an operator.
 Console addresses are deliberately not served by the on-demand catch-all
 block, which serves only driver apps, because a console keeps an allow-list.
 
