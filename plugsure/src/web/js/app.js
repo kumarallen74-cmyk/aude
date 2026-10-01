@@ -1,6 +1,7 @@
 import {
   $, $$, esc, el, api, state, icon, toast, views, parseHash, navigate, setUnauthorizedHandler, setPasswordChangeHandler,
   startLive, stopLive, onLive, modal, formValues, fieldErrors, field, debounce, fmt, closeOverlays,
+  applyBrand, brandLogo, productName, productTagline, titleSuffix,
 } from './core.js';
 
 // Views register themselves on import.
@@ -34,6 +35,7 @@ import './views/pnc.js';
 import './views/compliance.js';
 import './views/logs.js';
 import './views/users.js';
+import './views/console-brand.js';
 
 /**
  * Application shell: sign-in, the collapsible sidebar (built from the views the
@@ -42,7 +44,6 @@ import './views/users.js';
  */
 
 const root = $('#app');
-const LOGO = `<svg viewBox="0 0 120 120" aria-hidden="true"><rect width="120" height="120" rx="28" fill="#1b4d8c"/><rect x="40" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><rect x="70" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><path d="M32 68 56 92 92 46" stroke="#2fd6a7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
 
 const GROUPS = [
   ['operate', 'Operate'],
@@ -69,13 +70,29 @@ try { applyTheme(localStorage.getItem('ps-theme')); } catch {}
 
 // ------------------------------------------------------------------ sign in
 
+/**
+ * The brand of this web address (v1.5.0): an operator's own console address shows
+ * its brand on the sign-in page. Null on PlugSure's own addresses. Fetched once.
+ */
+let hostBrand;
+async function loadHostBrand() {
+  if (hostBrand !== undefined) return hostBrand;
+  try {
+    const r = await fetch('/console-brand.json', { credentials: 'same-origin' });
+    hostBrand = r.ok ? (await r.json()).brand ?? null : null;
+  } catch { hostBrand = null; }
+  return hostBrand;
+}
+
 function renderLogin(message = '') {
   stopLive();
+  applyBrand(hostBrand ?? null);
+  document.title = `Sign in — ${titleSuffix()}`;
   root.innerHTML = `
   <div class="login-wrap">
     <section class="login-art">
-      <div class="row" style="gap:12px"><span style="width:40px;height:40px;display:block">${LOGO}</span>
-        <div><b style="font-size:18px;color:#fff">PlugSure</b><div style="font-size:12px;opacity:.8">Enterprise CSMS</div></div></div>
+      <div class="row login-brand" style="gap:12px"><span style="width:40px;height:40px;display:block">${brandLogo()}</span>
+        <div><b style="font-size:18px;color:#fff">${esc(productName())}</b>${productTagline() ? `<div style="font-size:12px;opacity:.8">${esc(productTagline())}</div>` : ''}</div></div>
       <div>
         <h1>Run your charging network from one console.</h1>
         <p>Onboard chargers, set PLN capacity limits, price sessions under Permen ESDM, and resolve faults remotely — without a terminal or a SQL prompt.</p>
@@ -188,7 +205,7 @@ function renderShell() {
   root.innerHTML = `
   <div class="shell${collapsed ? ' collapsed' : ''}">
     <aside class="sidebar">
-      <div class="brand">${LOGO}<b>PlugSure<small>Enterprise CSMS</small></b></div>
+      <div class="brand">${brandLogo()}<b>${esc(productName())}${productTagline() ? `<small>${esc(productTagline())}</small>` : ''}</b></div>
       <nav class="nav" aria-label="Main">${GROUPS.map(([g, label]) => {
         const items = visibleViews().filter((v) => v.group === g);
         if (!items.length) return '';
@@ -196,7 +213,7 @@ function renderShell() {
           .map((v) => `<a href="#/${esc(v.id)}" data-view="${esc(v.id)}" title="${esc(v.title)}">${icon(v.icon)}<span>${esc(v.title)}</span>${v.id === 'dashboard' ? '<b class="count hidden" data-alerts></b>' : ''}</a>`)
           .join('')}</div>`;
       }).join('')}</nav>
-      <div class="sidebar-foot"><div>${esc(portalMode() ? `${me.owners[0].name} · operated by ${me.org?.name ?? ''}` : fleetMode() ? `${me.fleets[0].name} · billed by ${me.org?.name ?? ''}` : me.org?.name ?? '')}</div><div class="mono">${me.features?.version ? `v${esc(me.features.version)} · ` : ''}${esc(me.features?.env ?? '')}</div></div>
+      <div class="sidebar-foot"><div>${esc(portalMode() ? `${me.owners[0].name} · operated by ${me.org?.name ?? ''}` : fleetMode() ? `${me.fleets[0].name} · billed by ${me.org?.name ?? ''}` : me.org?.name ?? '')}</div><div class="mono">${me.features?.version ? `v${esc(me.features.version)} · ` : ''}${esc(me.features?.env ?? '')}</div>${me.consoleBrand && me.consoleBrand.showPoweredBy !== false ? '<div class="powered-by">Powered by PlugSure</div>' : ''}</div>
     </aside>
     <div class="nav-scrim" data-scrim></div>
     <div class="main">
@@ -362,7 +379,7 @@ async function route() {
   }
   $$('.nav a', root).forEach((a) => a.setAttribute('aria-current', a.dataset.view === (def.navAs ?? def.id) ? 'page' : 'false'));
   $('[data-crumbs]', root).innerHTML = `${esc(def.title)}${def.subtitle ? ` <span class="sub">· ${esc(def.subtitle)}</span>` : ''}`;
-  document.title = `${def.title} — PlugSure CSMS`;
+  document.title = `${def.title} — ${titleSuffix()}`;
   try { cleanupView?.(); } catch {}
   cleanupView = null;
   const target = $('#view');
@@ -375,17 +392,27 @@ async function route() {
   }
 }
 window.addEventListener('hashchange', route);
+// Console branding saved (Governance → Console branding): repaint the shell with it.
+window.addEventListener('ps-brand-changed', (e) => {
+  if (!state.me) return;
+  state.me.consoleBrand = e.detail ?? null;
+  applyBrand(state.me.consoleBrand);
+  renderShell();
+  void route();
+});
 
 // ------------------------------------------------------------------ boot
 
 async function boot(mustChangePassword = false) {
+  await loadHostBrand();
   try {
     const [me, meta] = await Promise.all([api('/v1/auth/me'), api('/v1/meta')]);
     state.me = me;
     state.meta = meta;
+    applyBrand(me.consoleBrand ?? null);
   } catch (e) {
     if (e.status === 401) return renderLogin();
-    root.innerHTML = `<div class="content"><div class="callout crit">${icon('warn')}<div><b>Cannot reach the PlugSure API.</b><br>${esc(e.message)}</div></div></div>`;
+    root.innerHTML = `<div class="content"><div class="callout crit">${icon('warn')}<div><b>Cannot reach the server.</b><br>${esc(e.message)}</div></div></div>`;
     return;
   }
   const start = async () => { renderShell(); await route(); };

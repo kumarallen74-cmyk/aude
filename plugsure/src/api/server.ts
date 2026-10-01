@@ -66,6 +66,7 @@ import { registerPncRoutes } from './pnc-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
 import { registerBrandRoutes } from './brand-routes.js';
+import { registerConsoleBrandRoutes } from './console-brand-routes.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
 import { isSandboxOrg } from '../sandbox/provision.js';
 import { sandboxCall } from '../ocpp/bridge.js';
@@ -1840,6 +1841,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerOnboardingRoutes(app);
   await registerIntegrationRoutes(app);
   await registerBrandRoutes(app);
+  await registerConsoleBrandRoutes(app);
 
   return app;
 }

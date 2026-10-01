@@ -90,6 +90,7 @@ export const TAGS = [
   'Reference data',
   'Sandbox',
   'Driver app',
+  'Console branding',
   'Console session',
   'Platform administration',
 ] as const;

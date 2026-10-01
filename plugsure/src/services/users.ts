@@ -103,16 +103,24 @@ async function checkPassword(pw: string, stored: string | null): Promise<boolean
   return verifyPassword(pw, stored);
 }
 
-export async function login(emailRaw: unknown, password: unknown, ip?: string): Promise<LoginResult> {
+/**
+ * ONE answer for every failed sign-in: unknown address, wrong password, locked account, and
+ * (v1.5.0) another operator's account on an operator's own console address. A distinct answer
+ * would confirm the address had an account, or that the password was right. It names the
+ * pause, so a person who really is locked out knows to wait.
+ */
+export const loginFailureMessage = () =>
+  `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`;
+
+/**
+ * `onlyOrgId` (v1.5.0): the sign-in came to an operator's own console web address, where
+ * only that operator's accounts may sign in. Any other account is refused exactly like a
+ * wrong password: counted as a failed attempt, no session, nothing reset, the same answer.
+ */
+export async function login(emailRaw: unknown, password: unknown, ip?: string, onlyOrgId?: string | null): Promise<LoginResult> {
   const email = String(emailRaw ?? '').trim().toLowerCase();
   const pw = String(password ?? '');
-  // ONE answer for every failure: unknown address, wrong password, locked account. A distinct
-  // "locked" message confirmed the address had an account. It names the pause, so a person who
-  // really is locked out knows to wait.
-  const generic = {
-    ok: false,
-    error: `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`,
-  };
+  const generic = { ok: false, error: loginFailureMessage() };
   if (!email || !pw) return generic;
 
   const u = await one<{
@@ -164,7 +172,7 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
   const good = await checkPassword(pw, u.password_hash);
   // An expired one-time password is refused with the same answer, after the same work: a
   // distinct message would confirm the address and that the password was right.
-  if (!good || u.status !== 'active' || u.temp_expired) {
+  if (!good || u.status !== 'active' || u.temp_expired || (onlyOrgId && u.org_id !== onlyOrgId)) {
     if (claimed.locked_now) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
     return generic;
   }

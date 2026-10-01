@@ -193,6 +193,62 @@ export const state = {
   },
 };
 
+// ------------------------------------------------------------------ white-label console (v1.5.0)
+
+/** PlugSure's own mark: the console's logo when the operator has no brand. */
+export const PLUGSURE_LOGO = `<svg viewBox="0 0 120 120" aria-hidden="true"><rect width="120" height="120" rx="28" fill="#1b4d8c"/><rect x="40" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><rect x="70" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><path d="M32 68 56 92 92 46" stroke="#2fd6a7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
+
+/** The brand the console is painted with: the operator's (from the server), or null for PlugSure's. */
+export const brand = { view: null };
+export const productName = () => brand.view?.productName ?? 'PlugSure';
+export const productTagline = () => (brand.view ? brand.view.tagline ?? '' : 'Enterprise CSMS');
+/** The window title suffix: "PlugSure CSMS", or the operator's product name. */
+export const titleSuffix = () => (brand.view ? brand.view.productName : 'PlugSure CSMS');
+
+const HEX = /^#[0-9a-f]{6}$/;
+const initialsOf = (name) => String(name ?? '').split(/\s+/).filter(Boolean).map((w) => [...w][0]).slice(0, 2).join('').toUpperCase() || '?';
+
+/** The logo as markup: the uploaded one, else the operator's initials on its colour, else PlugSure's mark. */
+export function brandLogo() {
+  const v = brand.view;
+  if (!v) return PLUGSURE_LOGO;
+  if (v.logoUrl && /^\/console-brand\/[0-9a-f]{64}\.png$/.test(v.logoUrl)) return `<img class="brand-logo" src="${esc(v.logoUrl)}" alt="">`;
+  return `<span class="brand-logo brand-tile" aria-hidden="true">${esc(initialsOf(v.productName))}</span>`;
+}
+
+/**
+ * Paint the console with a brand (or back to PlugSure with null): the colour
+ * tokens for both themes, the favicon, and the window title's suffix. The colours
+ * come from the server already adjusted for contrast (services/console-brand.ts).
+ */
+export function applyBrand(view) {
+  brand.view = view && typeof view === 'object' && view.productName ? view : null;
+  document.getElementById('ps-brand-style')?.remove();
+  document.getElementById('ps-brand-icon')?.remove();
+  const p = brand.view?.palette;
+  const ok = p && [p.brand, p.brandDeep, p.light?.accent, p.light?.ink, p.light?.soft, p.dark?.accent, p.dark?.ink, p.dark?.soft].every((c) => HEX.test(c ?? ''));
+  if (ok) {
+    const darkVars = `--accent:${p.dark.accent};--accent-ink:${p.dark.ink};--accent-soft:${p.dark.soft};`;
+    const style = document.createElement('style');
+    style.id = 'ps-brand-style';
+    style.textContent =
+      `:root{--brand:${p.brand};--accent:${p.light.accent};--accent-ink:${p.light.ink};--accent-soft:${p.light.soft};}` +
+      `@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${darkVars}}}` +
+      `:root[data-theme="dark"]{${darkVars}}` +
+      `.login-art{background:linear-gradient(145deg,${p.brandDeep},${p.brand});}` +
+      `.brand-tile{background:${p.brand};}`;
+    document.head.appendChild(style);
+  }
+  if (brand.view?.logoUrl && /^\/console-brand\/[0-9a-f]{64}\.png$/.test(brand.view.logoUrl)) {
+    const link = document.createElement('link');
+    link.id = 'ps-brand-icon';
+    link.rel = 'icon';
+    link.type = 'image/png';
+    link.href = brand.view.logoUrl;
+    document.head.appendChild(link);
+  }
+}
+
 /** Site Owner portal: the signed-in user acts for a site owner (read-only, its own sites). */
 export const inPortal = () => (state.me?.owners?.length ?? 0) > 0;
 
@@ -222,6 +278,7 @@ export function toast(msg, kind = '') {
 // ------------------------------------------------------------------ icons
 
 const P = {
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.8-1.9 0-.5-.2-.9-.5-1.3-.3-.3-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/>',
   dashboard: '<path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z"/>',
   charger: '<path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M3 21h14M15 9h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0V8l-3-3M10 7l-2 4h4l-2 4"/>',
   site: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',

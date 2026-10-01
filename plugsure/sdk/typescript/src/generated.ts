@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.4.4";
+export const API_VERSION = "1.5.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -312,6 +312,8 @@ export interface AuthMe {
     /** The installed PlugSure release (package.json version). */
     version: string;
   };
+  /** The organisation’s own console brand (v1.5.0); null for the PlugSure console. */
+  consoleBrand?: ConsoleBrandView | null;
 }
 
 export interface AvailabilityReport {
@@ -950,6 +952,72 @@ export interface ConnectionAttemptStats {
   pending_adoption: number;
   rejected: number;
   identities: number;
+}
+
+/** The operator’s own console brand. */
+export interface ConsoleBrand {
+  orgId: string;
+  /** Replaces “PlugSure” in the console. */
+  productName: string;
+  /** Under the name in the sidebar. */
+  tagline: string | null;
+  /** The sign-in panel, avatars and the logo tile. */
+  brandColor: string;
+  /** Buttons, links and highlights. */
+  accentColor: string;
+  hasLogo: boolean;
+  /** The logo’s hash; it is served at /console-brand/<hash>.png. */
+  logoSha256: string | null;
+  /** The console’s own web address, e.g. console.nusantaracharge.id. */
+  hostname: string | null;
+  /** The platform operator approved the web address. Only then does the sign-in page on it show the brand and admit only this operator’s accounts. */
+  hostnameApproved: boolean;
+  hostnameApprovedAt: string | null;
+  /** Show “Powered by PlugSure” in the sidebar. */
+  showPoweredBy: boolean;
+  updatedAt: string;
+}
+
+export interface ConsoleBrandResult {
+  /** Null: the console uses the PlugSure brand. */
+  brand: ConsoleBrand | null;
+  view: ConsoleBrandView | null;
+}
+
+/** What the console paints with. */
+export interface ConsoleBrandView {
+  productName: string;
+  tagline: string | null;
+  /** A 256 × 256 PNG, public and cacheable (content-addressed). */
+  logoUrl: string | null;
+  palette: {
+    light: {
+      /** The accent as used: nudged darker (light theme) or lighter (dark theme) until text in it reads at 4.5:1 or more on every surface and on its own tint. */
+      accent: string;
+      /** Text on a solid accent fill (buttons). */
+      ink: string;
+      /** The accent’s tint behind tags and highlights. */
+      soft: string;
+      /** Lowest contrast of the accent against the theme’s surfaces and its tint. */
+      contrast: number;
+    };
+    dark: {
+      /** The accent as used: nudged darker (light theme) or lighter (dark theme) until text in it reads at 4.5:1 or more on every surface and on its own tint. */
+      accent: string;
+      /** Text on a solid accent fill (buttons). */
+      ink: string;
+      /** The accent’s tint behind tags and highlights. */
+      soft: string;
+      /** Lowest contrast of the accent against the theme’s surfaces and its tint. */
+      contrast: number;
+    };
+    /** The brand colour as used: darkened if needed so white text on it reads at 4.5:1 or more. */
+    brand: string;
+    brandDeep: string;
+    /** A colour was changed to stay readable. */
+    adjusted: boolean;
+  };
+  showPoweredBy: boolean;
 }
 
 export interface CpDetail {
@@ -4058,6 +4126,15 @@ export type CreateOnCallRotaResponse = {
   };
 };
 
+export type CreateOrChangeConsoleBrandBody = {
+  productName?: string;
+  tagline?: string | null;
+  brandColor?: string;
+  accentColor?: string;
+  hostname?: string | null;
+  showPoweredBy?: boolean;
+};
+
 export type CreateOrChangeDriverAppBody = {
   appName?: string;
   shortName?: string;
@@ -4663,6 +4740,10 @@ export type RejectHeldPartnerChargeRecordResponse = {
   status: "rejected";
 };
 
+export type RemoveConsoleBrandResponse = {
+  ok: true;
+};
+
 export type RemoveDriverAppResponse = {
   ok: true;
 };
@@ -5188,6 +5269,20 @@ export type UploadAppIconResponse = DriverAppView & {
     bytes: number;
     sha256: string;
     warnings: string[];
+  };
+};
+
+export type UploadConsoleLogoBody = {
+  /** Base64 PNG (a data: URL is accepted). */
+  png: string;
+};
+
+export type UploadConsoleLogoResponse = ConsoleBrandResult & {
+  logo: {
+    width: number;
+    height: number;
+    bytes: number;
+    sha256: string;
   };
 };
 
@@ -5853,6 +5948,19 @@ export class Operations {
     body: AlertRotaInput;
   }, options?: RequestOptions): Promise<CreateOnCallRotaResponse> {
     return this.transport.request<CreateOnCallRotaResponse>({ method: "POST", path: "/v1/alert-routing/rotas", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Create or change the console brand
+   *
+   * Fields left out keep their value; the product name is required when creating. Everyone who signs in to the organisation sees the brand. A web address takes effect once the platform operator approves it (and adds it to the web server, deploy/Caddyfile): then the sign-in page on it shows the brand and only this operator’s accounts may sign in there. Changing the address withdraws the approval. 409 when another operator’s console has the address approved, a driver app uses it, or in a sandbox; 422 for PlugSure’s own addresses.
+   *
+   * `PUT /v1/console-brand` · needs `org:write`
+   */
+  createOrChangeConsoleBrand(params: {
+    body: CreateOrChangeConsoleBrandBody;
+  }, options?: RequestOptions): Promise<ConsoleBrandResult> {
+    return this.transport.request<ConsoleBrandResult>({ method: "PUT", path: "/v1/console-brand", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -7584,6 +7692,17 @@ export class Operations {
   }
 
   /**
+   * The operator’s console brand
+   *
+   * The name, tagline, colours, logo and web address the operator’s console uses instead of PlugSure’s, and the colours as the console applies them in both themes.
+   *
+   * `GET /v1/console-brand` · needs `org:read`
+   */
+  operatorConsoleBrand(options?: RequestOptions): Promise<ConsoleBrandResult> {
+    return this.transport.request<ConsoleBrandResult>({ method: "GET", path: "/v1/console-brand", accept: "json" }, options);
+  }
+
+  /**
    * The operator’s own driver app
    *
    * The white-label driver app: its brand, the colours as they are used in both themes, what is still missing to go live and to publish in the stores, and its preview and live addresses.
@@ -7946,6 +8065,28 @@ export class Operations {
     body?: RejectHeldPartnerChargeRecordBody;
   }, options?: RequestOptions): Promise<RejectHeldPartnerChargeRecordResponse> {
     return this.transport.request<RejectHeldPartnerChargeRecordResponse>({ method: "POST", path: "/v1/roaming/cdrs/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Remove the console brand
+   *
+   * The console goes back to the PlugSure brand. Its web address, if any, then shows the PlugSure sign-in page and accepts any account again.
+   *
+   * `DELETE /v1/console-brand` · needs `org:write`
+   */
+  removeConsoleBrand(options?: RequestOptions): Promise<RemoveConsoleBrandResponse> {
+    return this.transport.request<RemoveConsoleBrandResponse>({ method: "DELETE", path: "/v1/console-brand", accept: "json" }, options);
+  }
+
+  /**
+   * Remove the console logo
+   *
+   * The console shows the product name’s initials on the brand colour instead.
+   *
+   * `DELETE /v1/console-brand/logo` · needs `org:write`
+   */
+  removeConsoleLogo(options?: RequestOptions): Promise<ConsoleBrandResult> {
+    return this.transport.request<ConsoleBrandResult>({ method: "DELETE", path: "/v1/console-brand/logo", accept: "json" }, options);
   }
 
   /**
@@ -9022,6 +9163,19 @@ export class Operations {
     body: UploadAppIconBody;
   }, options?: RequestOptions): Promise<UploadAppIconResponse> {
     return this.transport.request<UploadAppIconResponse>({ method: "PUT", path: "/v1/driver-app/icon", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Upload the console logo
+   *
+   * A square PNG, 64 to 2048 pixels (256 or more is best), up to 1 MB, as base64. It is stored as 256 × 256. Needs the brand first (404).
+   *
+   * `PUT /v1/console-brand/logo` · needs `org:write`
+   */
+  uploadConsoleLogo(params: {
+    body: UploadConsoleLogoBody;
+  }, options?: RequestOptions): Promise<UploadConsoleLogoResponse> {
+    return this.transport.request<UploadConsoleLogoResponse>({ method: "PUT", path: "/v1/console-brand/logo", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

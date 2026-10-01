@@ -1,10 +1,18 @@
 PlugSure CSMS
-Version:   1.4.4
-Package:   plugsure-v1.4.4
-Prepared:  2026-10-02  (pre-deployment review fixes — see RELEASE-NOTES-v1.4.4.md)
+Version:   1.5.0
+Package:   plugsure-v1.5.0
+Prepared:  2026-10-02  (white-label operator console — see RELEASE-NOTES-v1.5.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP)
-API:       OpenAPI 3.1 at /openapi.json (271 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
-Status:    v1.4.4 = v1.4.3 + the driver app refuses suspended chargers (no payment,
+API:       OpenAPI 3.1 at /openapi.json (276 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+Status:    v1.5.0 = v1.4.4 + white-label operator console: each operator's own product
+           name, tagline, colours (kept readable in both themes) and logo in the console,
+           and optionally its own console web address, where the sign-in page shows the
+           brand and only its accounts sign in. Fixes the driver-app check for addresses
+           and identifiers used by another operator (it answered a server error, not 409).
+           Migration 054 (additive), no new settings (RELEASE-NOTES-v1.5.0.md).
+
+v1.4.4 (2026-10-02):
+           v1.4.3 + the driver app refuses suspended chargers (no payment,
            reservation or queue offer), resume no longer backdates outages, the systemd
            path keeps the database owner credential out of the running apps
            (plugsure-migrate.service + root-only migrate.env), roaming cards left out of

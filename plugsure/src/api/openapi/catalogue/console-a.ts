@@ -107,6 +107,7 @@ export const schemas: Record<string, Schema> = {
         },
         ['vault', 'bridge', 'supportedVersions', 'minSecurityProfile', 'effectivePpnPct', 'wbp', 'env', 'version'],
       ),
+      consoleBrand: { anyOf: [ref('ConsoleBrandView'), { type: 'null' }], description: 'The organisation’s own console brand (v1.5.0); null for the PlugSure console.' },
     },
     ['user', 'org', 'roles', 'permissions', 'visibleSites', 'owners', 'features'],
   ),
@@ -841,7 +842,8 @@ export const ops: Op[] = [
     summary: 'Sign in to the console',
     description:
       'Checks an operator e-mail and password and, on success, sets the HttpOnly `ps_session` cookie (12 hours).' +
-      'Every attempt is audited. A wrong email or password answers 401 with a generic message; repeated failures lock the account for a while.',
+      'Every attempt is audited. A wrong email or password answers 401 with a generic message; repeated failures lock the account for a while. ' +
+      'On an operator’s own console web address (Console branding, once approved by the platform operator) only that operator’s accounts sign in; any other is refused exactly as a wrong password.',
     body: {
       required: true,
       schema: obj({ email: { type: 'string' }, password: { type: 'string' } }, ['email', 'password']),

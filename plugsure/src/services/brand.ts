@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { many, one, query } from '../db/pool.js';
+import { many, one, query, outsideRequestScope } from '../db/pool.js';
 import { decodePng, encodePng, onBackground, pngSize, resize, transparentShare, PngError, type Rgba } from './png.js';
 import { buildZip, type ZipEntry } from './zip.js';
 import { seal, unseal } from './secrets.js';
@@ -134,7 +134,7 @@ export async function hostnameKnown(host: string): Promise<boolean> {
 
 const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} .\-]*$/u;
 const TEXT_RE = /^[\p{L}\p{N} .,!?:;()%/+\-–]*$/u;
-const HOST_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+export const HOST_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const COLOR_RE = /^#[0-9a-f]{6}$/;
 const PKG_RE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
 const BUNDLE_RE = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -153,9 +153,9 @@ export function normaliseFingerprint(v: string): string | null {
   return /^[0-9A-F]{64}$/.test(hex) ? hex.match(/../g)!.join(':') : null;
 }
 
-function reservedHosts(): Set<string> {
+export function reservedHosts(): Set<string> {
   const out = new Set<string>(['localhost']);
-  for (const v of [process.env.CONSOLE_PUBLIC_URL, process.env.DRIVER_PUBLIC_URL, process.env.OCPI_PUBLIC_URL, process.env.API_PUBLIC_URL]) {
+  for (const v of [process.env.CONSOLE_PUBLIC_URL, process.env.PUBLIC_BASE_URL, process.env.DRIVER_PUBLIC_URL, process.env.OCPI_PUBLIC_URL, process.env.API_PUBLIC_URL, process.env.OCPP_PUBLIC_URL]) {
     try { if (v) out.add(new URL(v).hostname.toLowerCase()); } catch { /* not a URL */ }
   }
   return out;
@@ -281,7 +281,7 @@ const lum = (c: RGB) => {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
 export const contrast = (a: string, b: string) => { const [x, y] = [lum(rgb(a)), lum(rgb(b))].sort((p, q) => q - p) as [number, number]; return (x + 0.05) / (y + 0.05); };
-const mix = (a: string, b: string, t: number) => { const [p, q] = [rgb(a), rgb(b)]; return hexOf([0, 1, 2].map((i) => p[i]! + (q[i]! - p[i]!) * t) as RGB); };
+export const mix = (a: string, b: string, t: number) => { const [p, q] = [rgb(a), rgb(b)]; return hexOf([0, 1, 2].map((i) => p[i]! + (q[i]! - p[i]!) * t) as RGB); };
 
 /** The app's own backgrounds the accent must stand out on (text and icons in the accent colour). */
 export const DARK_SURFACES = ['#0a1417', '#0f1e22', '#15282d'];
@@ -296,7 +296,7 @@ function readableOn(accent: string, surfaces: string[], toward: string): string 
   return toward;
 }
 /** Text on a solid fill: black-ish or white, whichever reads better (always ≥ 4.58:1). */
-const onFill = (fill: string) => (contrast(fill, '#ffffff') >= contrast(fill, '#08130f') ? '#ffffff' : '#08130f');
+export const onFill = (fill: string) => (contrast(fill, '#ffffff') >= contrast(fill, '#08130f') ? '#ffffff' : '#08130f');
 
 export interface Palette {
   dark: { accent: string; deep: string; on: string; glow: string; contrast: number };
@@ -501,11 +501,17 @@ export async function saveBrand(orgId: string, input: BrandInput): Promise<Brand
     const missing = [!cur?.hasIcon && 'an icon', !v.hostname && 'a web address'].filter(Boolean);
     if (missing.length) throw new BrandError(409, `To go live the app needs ${missing.join(' and ')}.`, { status: 'missing' });
   }
-  const clash = await one<{ what: string }>(
+  // Across operators, so outside the request's org scope: inside it, row-level security
+  // shows only this operator's rows and the check found nothing (the UNIQUE constraints
+  // then failed the write with a server error). A console's approved web address counts too.
+  const clash = await outsideRequestScope(() => one<{ what: string }>(
     `SELECT CASE WHEN slug = $2 THEN 'slug' WHEN hostname = $3 THEN 'hostname' WHEN android_package = $4 THEN 'androidPackage' ELSE 'iosBundleId' END AS what
-       FROM driver_app_brand WHERE org_id <> $1 AND (slug = $2 OR hostname = $3 OR android_package = $4 OR ios_bundle_id = $5) LIMIT 1`,
+       FROM driver_app_brand WHERE org_id <> $1 AND (slug = $2 OR hostname = $3 OR android_package = $4 OR ios_bundle_id = $5)
+     UNION ALL SELECT 'consoleHostname' FROM console_brand WHERE hostname = $3 AND hostname_approved_at IS NOT NULL
+     LIMIT 1`,
     [orgId, v.slug, v.hostname, v.androidPackage, v.iosBundleId],
-  );
+  ));
+  if (clash?.what === 'consoleHostname') throw new BrandError(409, 'An operator console already uses this web address; the driver app needs one of its own.', { hostname: 'taken' });
   if (clash) throw new BrandError(409, `Another operator already uses this ${({ slug: 'short name in the address', hostname: 'web address', androidPackage: 'Android package name', iosBundleId: 'iOS bundle identifier' } as Record<string, string>)[clash.what]}.`, { [clash.what]: 'taken' });
   // Not an upsert: PostgreSQL checks the table's CHECK (live needs an icon) on the
   // proposed INSERT row, which has no icon, even when the existing row does.

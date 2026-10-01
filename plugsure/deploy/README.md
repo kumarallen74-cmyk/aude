@@ -214,6 +214,43 @@ curl -s http://ocpp.example.id/.well-known/acme-challenge/ping   # must reach th
 point's Central System URL. Changing it later means a site visit per unit. Agree
 it with the vendor before commissioning.
 
+### White-label console addresses (v1.5.0, optional)
+
+An operator can brand its console (**Governance → Console branding**: name,
+tagline, colours, logo) and give it an address of its own, such as
+`console.nusantaracharge.id`. Branding alone needs no server change: every user
+of that operator sees it once signed in, on any console address. The operator's
+**own address** needs these steps:
+
+1. The operator enters the name under **Console web address** and saves. It
+   shows as *waiting for approval*. Until it is approved, the address has no
+   effect, so an operator cannot claim the shared console's name or another
+   operator's.
+2. The operator creates a DNS record for the name pointing at this server
+   (`A <ELASTIC_IP>`, or a `CNAME` to `console.example.id`).
+3. Copy the commented *White-label consoles* template in `deploy/Caddyfile`
+   once for that name. Set the hostname and the operator's office or VPN ranges
+   in its allow-list, then run `caddy validate` and `systemctl reload caddy`.
+   Caddy obtains the certificate on reload.
+4. A **platform administrator** (`create-admin --platform-admin`) approves the
+   address on the same page, under *Console web addresses*, or with
+   `POST /v1/platform/console-hostnames/<orgId>/approve`. Only one operator can
+   have a given address approved. If the operator later changes the address,
+   the approval is withdrawn.
+
+Once approved, the sign-in page on that address shows the operator's brand, and
+only the operator's own accounts can sign in. Any other account is refused
+exactly like a wrong password: the same answer, counted as a failed attempt,
+and no session. PlugSure's own addresses (`PUBLIC_BASE_URL`,
+`CONSOLE_PUBLIC_URL`, `API_PUBLIC_URL`, `DRIVER_PUBLIC_URL`, `OCPI_PUBLIC_URL`,
+`OCPP_PUBLIC_URL`) can never be entered or approved, so set `CONSOLE_PUBLIC_URL`
+to the shared console's address. Keep `PUBLIC_BASE_URL` on the OCPP hostname:
+chargers fetch firmware and upload logs through it. Any other shared hostname
+(a second one for portal users, for example) is protected by the approval
+itself: never approve it for an operator.
+Console addresses are deliberately not served by the on-demand catch-all
+block, which serves only driver apps, because a console keeps an allow-list.
+
 ---
 
 ## 3. Certificate
