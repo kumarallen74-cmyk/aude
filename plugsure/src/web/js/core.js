@@ -110,6 +110,7 @@ const TERA_LABEL = { verified: 'tera verified', due_soon: 'tera due soon', lapse
 export const teraTag = (t) => tag(TERA_CLS[t] ?? 't-mute', TERA_LABEL[t] ?? `tera ${t ?? 'unknown'}`);
 export const onlineTag = (online, status) =>
   status === 'decommissioned' ? tag('t-mute', 'decommissioned')
+  : status === 'suspended' ? tag('t-warn', online ? 'connected · suspended' : 'suspended')
   : status === 'pending_adoption' ? tag('t-warn', online ? 'connected · pending' : 'pending adoption')
   : status === 'faulted' && online ? tag('t-crit', 'faulted')
   : tag(online ? 't-ok' : 't-mute', online ? 'online' : 'offline');

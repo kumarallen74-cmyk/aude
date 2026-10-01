@@ -4,11 +4,13 @@
  *   - authentication is decided on the matched route, so a percent-encoded or
  *     absolute-form request target cannot skip it (/v1, /d/v1, /ocpi);
  *   - user management only grants, or takes over, authority the caller holds;
- *   - the generic charger command route needs what each dedicated route needs.
+ *   - the generic charger command route needs what each dedicated route needs;
+ *   - an operator can suspend a charger (no new sessions) and resume it.
  *
  * Prerequisites: the stack running (API at E2E_API), the seeded operator
  * (ops@plugsure.com) and the seeded charger AUTEL-AC22-SMB-001. Creates two
- * API keys (revoked afterwards) and a few invited users.
+ * API keys (revoked afterwards) and a few invited users, and suspends and
+ * resumes the charger.
  */
 const API = process.env.E2E_API ?? 'http://127.0.0.1:9200';
 const PASSWORD = process.env.E2E_PASSWORD ?? 'Console-Test-2026!';
@@ -84,6 +86,31 @@ try {
   check('firmware from a non-https / internal URL is refused', insecureFw.s === 400, insecureFw);
   const ceiling = await call('POST', `/v1/charge-points/${CP}/commands/clear-charging-profile`, { chargingProfilePurpose: 'ChargePointMaxProfile' });
   check('the station ceiling cannot be cleared through the raw command', ceiling.s === 400, ceiling);
+
+  // ── 4. Suspending a charger takes it out of service and back
+  const susNoPerm = await call('POST', `/v1/charge-points/${CP}/suspend`, {}, k);
+  check('charge_point:command alone cannot suspend a charger (needs charge_point:write)', susNoPerm.s === 403, susNoPerm.s);
+  const reason = `e2e suspension ${tag}`;
+  const sus = await call('POST', `/v1/charge-points/${CP}/suspend`, { reason });
+  try {
+    check('an operator suspends a charger', sus.s === 200, sus);
+    const after = await call('GET', `/v1/charge-points/${CP}`);
+    check('the charger reads as suspended', after.d?.status === 'suspended', after.d?.status);
+    const again = await call('POST', `/v1/charge-points/${CP}/suspend`, {});
+    check('suspending it again answers 409', again.s === 409, again);
+    const rs = await call('POST', `/v1/charge-points/${CP}/remote-start`, { connectorId: 1, idTag: 'E2E-ANY' });
+    check('a suspended charger refuses a remote start with 409', rs.s === 409 && /suspended/.test(rs.d?.error ?? ''), rs);
+    const audit = await call('GET', '/v1/audit');
+    const entry = (audit.d?.entries ?? []).find((e: any) => e.action === 'charge_point.suspended' && e.target_id === CP);
+    check('the suspension and its reason are audited', entry?.after_state?.reason === reason, entry);
+  } finally {
+    const res = await call('POST', `/v1/charge-points/${CP}/resume`);
+    check('an operator resumes the charger', res.s === 200, res);
+  }
+  const resumed = await call('GET', `/v1/charge-points/${CP}`);
+  check('the resumed charger is back in service', !['suspended', 'pending_adoption', 'decommissioned'].includes(resumed.d?.status), resumed.d?.status);
+  const res2 = await call('POST', `/v1/charge-points/${CP}/resume`);
+  check('resuming a charger that is not suspended answers 409', res2.s === 409, res2);
 } finally {
   for (const id of keys) if (id) await call('DELETE', `/v1/api-keys/${id}`).catch(() => undefined);
 }

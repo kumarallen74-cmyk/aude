@@ -4747,6 +4747,10 @@ export type ResolveAlertResponse = {
   ok: true;
 };
 
+export type ResumeSuspendedChargePointResponse = {
+  ok: true;
+};
+
 export type RetryCardHoldCaptureOrReleaseNowResponse = {
   ok: boolean;
   state: string | null;
@@ -5089,6 +5093,14 @@ export type StartSessionRemotelyBody = {
 export type StopSessionRemotelyBody = {
   /** The OCPP transaction id of the running session. */
   transactionId: number | string;
+};
+
+export type SuspendChargePointBody = {
+  reason?: string;
+};
+
+export type SuspendChargePointResponse = {
+  ok: true;
 };
 
 export type SwitchPlugChargeOnOrOffAtChargerBody = {
@@ -8225,6 +8237,20 @@ export class Operations {
   }
 
   /**
+   * Resume a suspended charge point
+   *
+   * Returns a suspended charge point to service; a connected unit is asked to boot again at once so it is Accepted without waiting. 409 when it is not suspended. Audited as charge_point.resumed.
+   *
+   * `POST /v1/charge-points/{identity}/resume` · needs `charge_point:write`
+   */
+  resumeSuspendedChargePoint(params: {
+    /** OCPP identity of the charge point (the last path segment of its WebSocket URL), e.g. `AUTEL-DC60-SMB-002`. */
+    identity: string;
+  }, options?: RequestOptions): Promise<ResumeSuspendedChargePointResponse> {
+    return this.transport.request<ResumeSuspendedChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/resume", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
    * Retry a card hold capture or release now
    *
    * Runs a failed (or pending) capture or release again at the acquirer, without waiting for the automatic retry. 409 with `error` and `state` when the acquirer refuses again. Audited.
@@ -8741,6 +8767,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<ConnectionAttemptStats> {
     return this.transport.request<ConnectionAttemptStats>({ method: "GET", path: "/v1/connection-attempts/stats", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Suspend a charge point
+   *
+   * Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, and new authorisations, starts and remote starts are refused. A session already running finishes normally and is billed. 409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.
+   *
+   * `POST /v1/charge-points/{identity}/suspend` · needs `charge_point:write`
+   */
+  suspendChargePoint(params: {
+    /** OCPP identity of the charge point (the last path segment of its WebSocket URL), e.g. `AUTEL-DC60-SMB-002`. */
+    identity: string;
+    body?: SuspendChargePointBody;
+  }, options?: RequestOptions): Promise<SuspendChargePointResponse> {
+    return this.transport.request<SuspendChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/suspend", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

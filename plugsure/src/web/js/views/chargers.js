@@ -227,6 +227,7 @@ function overviewTab(identity) {
     const canWrite = state.can('charge_point:write');
     body.innerHTML = `
       ${d.status === 'pending_adoption' ? callout('warn', `<b>Pending adoption.</b> This charger is registered but not yet allowed to transact. ${canWrite ? '<button class="btn sm primary" data-activate style="margin-left:8px">Activate now</button>' : ''}`) : ''}
+      ${d.status === 'suspended' ? callout('warn', `<b>Suspended.</b> It keeps its credentials and stays connected, but new sessions are refused until it is resumed. ${canWrite ? '<button class="btn sm primary" data-resume style="margin-left:8px">Resume</button>' : ''}`) : ''}
       ${d.status === 'decommissioned' ? callout('crit', `<b>Decommissioned</b> ${esc(fmt.date(d.decommissioned_at))}. Its credentials were revoked. ${canWrite ? '<button class="btn sm" data-reinstate style="margin-left:8px">Reinstate</button>' : ''}`) : ''}
       <div class="grid k3" style="margin-top:12px" data-conns></div>
       <div class="grid two section">
@@ -244,7 +245,8 @@ function overviewTab(identity) {
       </div>
       <div class="row section">
         ${canSeeFrames() ? `<a class="btn sm" href="#/logs/${esc(enc(identity))}">${icon('terminal')} OCPP frames</a>` : ''}
-        ${canWrite && d.status !== 'decommissioned' ? `<button class="btn sm ghost right" data-decom style="color:var(--crit)">Decommission…</button>` : ''}
+        ${canWrite && !['decommissioned', 'suspended', 'pending_adoption'].includes(d.status) ? `<button class="btn sm ghost right" data-suspend>Suspend…</button>` : ''}
+        ${canWrite && d.status !== 'decommissioned' ? `<button class="btn sm ghost${['suspended', 'pending_adoption'].includes(d.status) ? ' right' : ''}" data-decom style="color:var(--crit)">Decommission…</button>` : ''}
       </div>`;
     const hw = $('[data-hw]', body);
     const rows = [['Vendor', d.vendor], ['Model', d.model], ['Serial', d.serial], ['Firmware', d.firmware], ['Protocol', d.ocpp_version], ['Site', d.site_name]];
@@ -266,6 +268,29 @@ function overviewTab(identity) {
     });
     $('[data-reinstate]', body)?.addEventListener('click', async () => {
       if (await attempt(() => api(`/v1/charge-points/${enc(identity)}/reinstate`, { method: 'POST' }), { success: 'Reinstated as pending adoption — issue new credentials' })) ctx.refresh();
+    });
+    $('[data-resume]', body)?.addEventListener('click', async () => {
+      if (await attempt(() => api(`/v1/charge-points/${enc(identity)}/resume`, { method: 'POST' }), { success: 'Resumed' })) ctx.refresh();
+    });
+    $('[data-suspend]', body)?.addEventListener('click', () => {
+      modal({
+        title: 'Suspend this charge point?',
+        body: `<p style="margin:0 0 10px">New sessions are refused until you resume it. A session already running finishes and is billed normally. Its credentials are kept, so resuming needs nothing on the charger.</p>
+          <div class="form one">${field('Reason', '<input data-reason maxlength="500" autocomplete="off" placeholder="Site closed for electrical works">', { opt: true, help: 'Recorded in the audit log.' })}</div>`,
+        actions: [
+          { label: 'Cancel' },
+          {
+            label: 'Suspend',
+            kind: 'danger',
+            async onClick(m) {
+              const reason = $('[data-reason]', m.body).value.trim();
+              const r = await attempt(() => api(`/v1/charge-points/${enc(identity)}/suspend`, { method: 'POST', body: reason ? { reason } : {} }), { success: 'Suspended' });
+              if (!r) return false;
+              ctx.refresh();
+            },
+          },
+        ],
+      });
     });
     $('[data-decom]', body)?.addEventListener('click', async () => {
       const ok = await confirmDialog({
@@ -796,7 +821,7 @@ registerView('chargers', {
       <div class="filters section">
         ${field('Search', '<input type="search" data-f="q" placeholder="Identity, name, model…">')}
         ${field('Site', '<select data-f="site"><option value="">All sites</option></select>')}
-        ${field('State', `<select data-f="state">${options([{ value: '', label: 'Any' }, { value: 'online', label: 'Online' }, { value: 'offline', label: 'Offline' }, { value: 'charging', label: 'Charging' }, { value: 'faulted', label: 'Faulted' }, { value: 'pending', label: 'Pending adoption' }, { value: 'decommissioned', label: 'Decommissioned' }], preset)}</select>`)}
+        ${field('State', `<select data-f="state">${options([{ value: '', label: 'Any' }, { value: 'online', label: 'Online' }, { value: 'offline', label: 'Offline' }, { value: 'charging', label: 'Charging' }, { value: 'faulted', label: 'Faulted' }, { value: 'pending', label: 'Pending adoption' }, { value: 'suspended', label: 'Suspended' }, { value: 'decommissioned', label: 'Decommissioned' }], preset)}</select>`)}
       </div>
       <div class="card" data-list></div>`;
     const siteSel = $('[data-f=site]', root);
@@ -813,6 +838,7 @@ registerView('chargers', {
         (st !== 'decommissioned' ? c.status !== 'decommissioned' : true) &&
         (!st || (st === 'online' && c.online) || (st === 'offline' && !c.online) || (st === 'pending' && c.status === 'pending_adoption') ||
           (st === 'decommissioned' && c.status === 'decommissioned') ||
+          (st === 'suspended' && c.status === 'suspended') ||
           (st === 'charging' && c.connectors.some((k) => k.status === 'Charging')) ||
           (st === 'faulted' && (c.status === 'faulted' || c.connectors.some((k) => k.status === 'Faulted')))));
       const active = rows.filter((c) => c.status !== 'decommissioned');

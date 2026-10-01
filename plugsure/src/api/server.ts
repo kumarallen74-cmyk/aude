@@ -112,6 +112,9 @@ class NotFoundError extends Error {
 class BadRequestError extends Error {
   statusCode = 400;
 }
+class ConflictError extends Error {
+  statusCode = 409;
+}
 
 export const registeredRoutes: Array<{ method: string; url: string }> = [];
 
@@ -597,6 +600,11 @@ export async function buildApi(): Promise<FastifyInstance> {
         const connectorNo = Number(body.connectorId ?? 1);
         const idTag = String(body.idTag ?? '').trim();
         if (!idTag) throw new BadRequestError('choose an RFID tag or driver account to start the session for');
+        // The gateway would refuse the start anyway (stationRefusal); say why here.
+        const cpState = await one<{ status: string }>(`SELECT status FROM charge_point WHERE id = $1`, [owner.chargePointId]);
+        if (cpState && assets.ADMINISTRATIVE_STATES.includes(cpState.status)) {
+          return reply.status(409).send({ error: `this charge point is ${cpState.status === 'pending_adoption' ? 'awaiting adoption' : cpState.status} and cannot start sessions` });
+        }
         // Compliance gate: a connector whose meter verification has lapsed (or is
         // awaiting calibration) may not sell energy. Enforcement, not a flag.
         const c = await assets.getConnector(owner.chargePointId, connectorNo);
@@ -998,6 +1006,67 @@ export async function buildApi(): Promise<FastifyInstance> {
       }
     }
     return { ok: true, activated: (r.rowCount ?? 0) > 0 };
+  });
+
+  /**
+   * Suspend: take a unit out of service without revoking its credentials. The
+   * gateway answers its BootNotification Pending and refuses new authorisations
+   * and starts (adapter16 stationRefusal); a session already running is left to
+   * finish, and its MeterValues and stop are still accepted. Resume reverses it.
+   */
+  app.post('/v1/charge-points/:identity/suspend', async (req) => {
+    const { identity } = req.params as { identity: string };
+    const owner = await ownedChargePoint(req, identity, 'charge_point:write');
+    const reason = String((req.body as any)?.reason ?? '').trim().slice(0, 500) || null;
+    const r = await query(
+      `UPDATE charge_point SET status = 'suspended'
+        WHERE id = $1 AND status <> ALL($2::text[])`,
+      [owner.chargePointId, assets.ADMINISTRATIVE_STATES],
+    );
+    if ((r.rowCount ?? 0) === 0) {
+      const cur = await one<{ status: string }>(`SELECT status FROM charge_point WHERE id = $1`, [owner.chargePointId]);
+      throw new ConflictError(
+        cur?.status === 'suspended' ? 'this charge point is already suspended'
+          : `a charge point that is ${cur?.status === 'pending_adoption' ? 'awaiting adoption' : cur?.status} cannot be suspended`,
+      );
+    }
+    await writeAudit({
+      orgId: owner.orgId,
+      actorType: 'user',
+      actorId: req.principal.userId,
+      action: 'charge_point.suspended',
+      targetType: 'charge_point',
+      targetId: identity,
+      after: { reason },
+      ip: req.ip,
+    });
+    return { ok: true };
+  });
+
+  app.post('/v1/charge-points/:identity/resume', async (req, reply) => {
+    const { identity } = req.params as { identity: string };
+    const owner = await ownedChargePoint(req, identity, 'charge_point:write');
+    // 'offline' as activation does; the next BootNotification marks it online.
+    const r = await query(
+      `UPDATE charge_point SET status = 'offline' WHERE id = $1 AND status = 'suspended'`,
+      [owner.chargePointId],
+    );
+    if ((r.rowCount ?? 0) === 0) throw new ConflictError('this charge point is not suspended');
+    await writeAudit({
+      orgId: owner.orgId,
+      actorType: 'user',
+      actorId: req.principal.userId,
+      action: 'charge_point.resumed',
+      targetType: 'charge_point',
+      targetId: identity,
+      ip: req.ip,
+    });
+    // A suspended unit re-asks at its Pending interval; ask it to boot now.
+    if (registry.isOnline(identity)) {
+      const actor = actorOf(req);
+      afterResponse(reply.raw, () => commands.triggerMessage(identity, 'BootNotification', undefined, actor));
+    }
+    return { ok: true };
   });
 
   // ---------------------------------------------------------------- quirks

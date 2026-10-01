@@ -362,7 +362,7 @@ const cellCls = (v) =>
 const COL_PERMS = [
   ['Fleet Monitoring', 'site:read, charge_point:read — live status, connection log, OCPP log, quirks.'],
   ['Remote Commands', 'charge_point:command — remote start/stop, unlock, reset, availability, trigger message.'],
-  ['Add/Edit Hardware', 'charge_point:write (register, adopt, decommission), charge_point:config (OCPP configuration keys, diagnostics), firmware:write.'],
+  ['Add/Edit Hardware', 'charge_point:write (register, adopt, suspend, decommission), charge_point:config (OCPP configuration keys, diagnostics), firmware:write.'],
   ['Tariffs & Billing', 'tariff:read/write, session:read/write, session:export, payment:*, invoice:*.'],
   ['DLM Power Ceilings', 'smartcharging:read to view site ceilings and curtailment; smartcharging:write to change them.'],
   ['User Management', 'user:read to view users; user:write to invite, change roles, disable and reset passwords.'],
@@ -374,7 +374,7 @@ const LEVELS = [
   ['Site Only', 't-info', 'Same permissions as a read role, but the grant is scoped to the assigned sites (scope type "site"). Every list, export and API call is filtered to those sites; other sites do not exist for this user.'],
   ['View Revenue', 't-info', 'session:read, payment:read and invoice:read at the hosted sites — their revenue share — with tariff:read but never tariff:write.'],
   ['Full (Test Only)', 't-warn', 'Holds charge_point:command but not session:write. Diagnostic commands (reset, unlock, availability, trigger) work normally; a remote start is accepted only with a Maintenance Technician or VIP/test card, so a technician can prove a charger works without starting a billable session for a customer.'],
-  ['Edit Config', 't-warn', 'Holds charge_point:config: read and change OCPP configuration keys and pull diagnostics. Cannot register, adopt or decommission hardware (charge_point:write).'],
+  ['Edit Config', 't-warn', 'Holds charge_point:config: read and change OCPP configuration keys and pull diagnostics. Cannot register, adopt, suspend or decommission hardware (charge_point:write).'],
   ['Full Export', 't-ok', 'session:export on top of read access: bulk CSV export of sessions and invoices, plus the audit log.'],
   ['None', 't-mute', 'No permission for the area. The module is hidden from navigation and the API answers 403.'],
 ];
