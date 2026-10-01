@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.4.4",
+    "version": "1.5.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Money is in rupiah (IDR). Energy is in Wh unless a field says kWh.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -141,6 +141,10 @@
     {
       "name": "Driver app",
       "description": "The operator’s own white-label driver app: name, colours, icon, web address, and the build kit for the Play Store and App Store."
+    },
+    {
+      "name": "Console branding",
+      "description": "The operator’s own name, colours and logo in the operator console, and optionally the console’s own web address (v1.5.0)."
     }
   ],
   "paths": {
@@ -20380,6 +20384,321 @@
           "org:write"
         ]
       }
+    },
+    "/v1/console-brand": {
+      "get": {
+        "tags": [
+          "Console branding"
+        ],
+        "summary": "The operator’s console brand",
+        "operationId": "operatorConsoleBrand",
+        "description": "The name, tagline, colours, logo and web address the operator’s console uses instead of PlugSure’s, and the colours as the console applies them in both themes.\n\n**Permissions checked:** `org:read`.",
+        "responses": {
+          "200": {
+            "description": "The brand (null when none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleBrandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "org:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Console branding"
+        ],
+        "summary": "Create or change the console brand",
+        "operationId": "createOrChangeConsoleBrand",
+        "description": "Fields left out keep their value; the product name is required when creating. Everyone who signs in to the organisation sees the brand. With a web address, the sign-in page on it shows the brand and only this operator’s accounts may sign in there; the address must also be added to the web server (deploy/Caddyfile). 409 when another operator’s console or any driver app uses the web address, or in a sandbox.\n\n**Permissions checked:** `org:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "productName": {
+                    "type": "string",
+                    "maxLength": 30
+                  },
+                  "tagline": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 30
+                  },
+                  "brandColor": {
+                    "type": "string"
+                  },
+                  "accentColor": {
+                    "type": "string"
+                  },
+                  "hostname": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "showPoweredBy": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "example": {
+                "productName": "NusaCharge Ops",
+                "tagline": "Network operations",
+                "brandColor": "#12305a",
+                "accentColor": "#ff8a00",
+                "hostname": "console.nusantaracharge.id",
+                "showPoweredBy": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The brand as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleBrandResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "org:write"
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Console branding"
+        ],
+        "summary": "Remove the console brand",
+        "operationId": "removeConsoleBrand",
+        "description": "The console goes back to the PlugSure brand. Its web address, if any, then shows the PlugSure sign-in page and accepts any account again.\n\n**Permissions checked:** `org:write`.",
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "org:write"
+        ]
+      }
+    },
+    "/v1/console-brand/logo": {
+      "put": {
+        "tags": [
+          "Console branding"
+        ],
+        "summary": "Upload the console logo",
+        "operationId": "uploadConsoleLogo",
+        "description": "A square PNG, 64 to 2048 pixels (256 or more is best), up to 1 MB, as base64. It is stored as 256 × 256. Needs the brand first (404).\n\n**Permissions checked:** `org:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "png"
+                ],
+                "properties": {
+                  "png": {
+                    "type": "string",
+                    "description": "Base64 PNG (a data: URL is accepted)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The brand, with what was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ConsoleBrandResult"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "logo"
+                      ],
+                      "properties": {
+                        "logo": {
+                          "type": "object",
+                          "required": [
+                            "width",
+                            "height",
+                            "bytes",
+                            "sha256"
+                          ],
+                          "properties": {
+                            "width": {
+                              "type": "integer"
+                            },
+                            "height": {
+                              "type": "integer"
+                            },
+                            "bytes": {
+                              "type": "integer"
+                            },
+                            "sha256": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "org:write"
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Console branding"
+        ],
+        "summary": "Remove the console logo",
+        "operationId": "removeConsoleLogo",
+        "description": "The console shows the product name’s initials on the brand colour instead.\n\n**Permissions checked:** `org:write`.",
+        "responses": {
+          "200": {
+            "description": "The brand without its logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleBrandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "org:write"
+        ]
+      }
     }
   },
   "webhooks": {
@@ -26033,6 +26352,17 @@
               "env",
               "version"
             ]
+          },
+          "consoleBrand": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleBrandView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The organisation’s own console brand (v1.5.0); null for the PlugSure console."
           }
         },
         "required": [
@@ -36290,6 +36620,218 @@
                 "type": "integer"
               }
             }
+          }
+        }
+      },
+      "ConsoleBrand": {
+        "type": "object",
+        "description": "The operator’s own console brand.",
+        "required": [
+          "orgId",
+          "productName",
+          "tagline",
+          "brandColor",
+          "accentColor",
+          "hasLogo",
+          "logoSha256",
+          "hostname",
+          "showPoweredBy",
+          "updatedAt"
+        ],
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "productName": {
+            "type": "string",
+            "maxLength": 30,
+            "description": "Replaces “PlugSure” in the console.",
+            "examples": [
+              "NusaCharge Ops"
+            ]
+          },
+          "tagline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 30,
+            "description": "Under the name in the sidebar."
+          },
+          "brandColor": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "The sign-in panel, avatars and the logo tile."
+          },
+          "accentColor": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Buttons, links and highlights."
+          },
+          "hasLogo": {
+            "type": "boolean"
+          },
+          "logoSha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The logo’s hash; it is served at /console-brand/<hash>.png."
+          },
+          "hostname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The console’s own web address, e.g. console.nusantaracharge.id."
+          },
+          "showPoweredBy": {
+            "type": "boolean",
+            "description": "Show “Powered by PlugSure” in the sidebar."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConsoleBrandView": {
+        "type": "object",
+        "description": "What the console paints with.",
+        "required": [
+          "productName",
+          "tagline",
+          "logoUrl",
+          "palette",
+          "showPoweredBy"
+        ],
+        "properties": {
+          "productName": {
+            "type": "string"
+          },
+          "tagline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A 256 × 256 PNG, public and cacheable (content-addressed)."
+          },
+          "palette": {
+            "type": "object",
+            "required": [
+              "light",
+              "dark",
+              "brand",
+              "brandDeep",
+              "adjusted"
+            ],
+            "properties": {
+              "light": {
+                "type": "object",
+                "required": [
+                  "accent",
+                  "ink",
+                  "soft",
+                  "contrast"
+                ],
+                "properties": {
+                  "accent": {
+                    "type": "string",
+                    "description": "The accent as used: nudged darker (light theme) or lighter (dark theme) until text in it reads at 4.5:1 or more on every surface and on its own tint."
+                  },
+                  "ink": {
+                    "type": "string",
+                    "description": "Text on a solid accent fill (buttons)."
+                  },
+                  "soft": {
+                    "type": "string",
+                    "description": "The accent’s tint behind tags and highlights."
+                  },
+                  "contrast": {
+                    "type": "number",
+                    "description": "Lowest contrast of the accent against the theme’s surfaces and its tint."
+                  }
+                }
+              },
+              "dark": {
+                "type": "object",
+                "required": [
+                  "accent",
+                  "ink",
+                  "soft",
+                  "contrast"
+                ],
+                "properties": {
+                  "accent": {
+                    "type": "string",
+                    "description": "The accent as used: nudged darker (light theme) or lighter (dark theme) until text in it reads at 4.5:1 or more on every surface and on its own tint."
+                  },
+                  "ink": {
+                    "type": "string",
+                    "description": "Text on a solid accent fill (buttons)."
+                  },
+                  "soft": {
+                    "type": "string",
+                    "description": "The accent’s tint behind tags and highlights."
+                  },
+                  "contrast": {
+                    "type": "number",
+                    "description": "Lowest contrast of the accent against the theme’s surfaces and its tint."
+                  }
+                }
+              },
+              "brand": {
+                "type": "string",
+                "description": "The brand colour as used: darkened if needed so white text on it reads at 4.5:1 or more."
+              },
+              "brandDeep": {
+                "type": "string"
+              },
+              "adjusted": {
+                "type": "boolean",
+                "description": "A colour was changed to stay readable."
+              }
+            }
+          },
+          "showPoweredBy": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConsoleBrandResult": {
+        "type": "object",
+        "required": [
+          "brand",
+          "view"
+        ],
+        "properties": {
+          "brand": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleBrand"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: the console uses the PlugSure brand."
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleBrandView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       }

@@ -10,6 +10,7 @@ import * as pncCat from './catalogue/pnc.js';
 import * as onboardingCat from './catalogue/onboarding.js';
 import * as integrationsCat from './catalogue/integrations.js';
 import * as driverAppCat from './catalogue/driver-app.js';
+import * as consoleBrandCat from './catalogue/console-brand.js';
 
 /**
  * Builds the published OpenAPI 3.1 document from the catalogue.
@@ -18,7 +19,7 @@ import * as driverAppCat from './catalogue/driver-app.js';
  * when the committed file, the catalogue and the registered routes disagree.
  */
 
-const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
+const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
 
 export function allOps(): Op[] {
   return CATALOGUES.flatMap((c) => c.ops);
@@ -54,6 +55,7 @@ const TAG_TEXT: Record<string, string> = {
   'Live events': 'Server-sent event streams.',
   'Reference data': 'Lists and settings the console and integrations use.',
   'Driver app': 'The operator’s own white-label driver app: name, colours, icon, web address, and the build kit for the Play Store and App Store.',
+  'Console branding': 'The operator’s own name, colours and logo in the operator console, and optionally the console’s own web address (v1.5.0).',
   Sandbox: 'Developer sandboxes: separate tenants with virtual chargers. Create one with a production key; use the sandbox key it returns for everything else.',
 };
 

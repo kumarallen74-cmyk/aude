@@ -168,7 +168,7 @@ Nothing to set up: the push key is generated and stored on first use. Busy deplo
   The kit's README covers the two Xcode steps (the categories file, the Notification Service Extension). The picture is fetched by iPhones from `/d/n/…` on the app's web address, which Caddy already serves (`/d/*`).
 - **Caddy:** update from deploy/Caddyfile. It adds the `on_demand_tls` ask and the catch-all block for driver-app addresses, and makes the console host's `X-Frame-Options` a default so the console can frame the preview. Run `caddy validate`.
 
-Run `npm run migrate` (migrations 001–053; 045 is unused; all additive). **Set `INTERNAL_API_TOKEN`**, then
+Run `npm run migrate` (migrations 001–054; 045 is unused; all additive). **Set `INTERNAL_API_TOKEN`**, then
 bootstrap the first admin with `create-admin`. See `RELEASE-NOTES-v1.3.0.md` and
 `docs/ACCEPTANCE-v1.3.md`. Typecheck clean; unit tests passing (see CI for the current count). Verified on PostgreSQL 16:
 - migrations

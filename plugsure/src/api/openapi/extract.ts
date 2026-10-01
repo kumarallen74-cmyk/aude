@@ -12,7 +12,7 @@ import { routeKey } from './build.js';
  * returned as a pattern that the catalogue's concrete paths are matched against.
  */
 
-export const ROUTE_FILES = ['api/server.ts', 'api/console-routes.ts', 'api/roaming-routes.ts', 'api/sandbox-routes.ts', 'api/fleet-routes.ts', 'api/fleet-portal-routes.ts', 'api/pricing-routes.ts', 'api/pnc-routes.ts', 'api/onboarding-routes.ts', 'api/integration-routes.ts', 'api/brand-routes.ts'];
+export const ROUTE_FILES = ['api/server.ts', 'api/console-routes.ts', 'api/roaming-routes.ts', 'api/sandbox-routes.ts', 'api/fleet-routes.ts', 'api/fleet-portal-routes.ts', 'api/pricing-routes.ts', 'api/pnc-routes.ts', 'api/onboarding-routes.ts', 'api/integration-routes.ts', 'api/brand-routes.ts', 'api/console-brand-routes.ts'];
 
 export interface FoundRoute { method: string; path: string; template: boolean; permissions: string[]; file: string }
 

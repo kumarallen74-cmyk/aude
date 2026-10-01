@@ -247,6 +247,8 @@ jobs:
         run: npm run e2e:field
       - name: e2e — operator console
         run: npm run e2e:console
+      - name: e2e — white-label console
+        run: npm run e2e:console-brand
 
       - name: Stack logs
         if: always()

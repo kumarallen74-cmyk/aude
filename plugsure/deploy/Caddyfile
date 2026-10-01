@@ -324,6 +324,53 @@ console.example.id {
 }
 
 # =============================================================================
+# White-label consoles (v1.5.0, optional) — an operator's own console address
+# =============================================================================
+#
+# An operator can brand its console (Governance → Console branding) and give it
+# a web address of its own, e.g. console.nusantaracharge.id. On that address the
+# sign-in page shows the operator's brand and only its accounts can sign in.
+#
+# Each such address needs a site block of its own: copy the template below once
+# per operator, replace the hostname and the allow-list (the operator's office or
+# VPN ranges), and reload Caddy. The operator points the name at this server
+# with a DNS A/AAAA or CNAME record before you reload, so the certificate can be
+# issued. It is deliberately NOT served by the on-demand catch-all at the end of
+# this file: that block serves only the driver app, and a console must keep its
+# allow-list. The API recognises the operator from the Host header, which
+# reverse_proxy passes through unchanged.
+#
+# console.nusantaracharge.id {
+# 	@notoffice not remote_ip 198.51.100.0/24
+# 	respond @notoffice "forbidden" 403
+# 	request_body {
+# 		max_size 512MB
+# 	}
+# 	reverse_proxy 127.0.0.1:9200 {
+# 		header_up X-Forwarded-Proto {http.request.scheme}
+# 		header_up X-Forwarded-Host {http.request.host}
+# 		header_up X-Forwarded-For {http.request.remote.host}
+# 		header_up -X-Forwarded-Ssl
+# 		transport http {
+# 			read_timeout 15m
+# 			dial_timeout 5s
+# 		}
+# 		flush_interval -1
+# 	}
+# 	header {
+# 		Strict-Transport-Security "max-age=31536000"
+# 		?X-Frame-Options "DENY"
+# 		X-Content-Type-Options "nosniff"
+# 		Referrer-Policy "no-referrer"
+# 		-Server
+# 	}
+# 	log {
+# 		output file /var/log/caddy/console-access.log
+# 		format json
+# 	}
+# }
+
+# =============================================================================
 # Integration API (optional) — /v1 for your own systems and integrators' sandboxes
 # =============================================================================
 #

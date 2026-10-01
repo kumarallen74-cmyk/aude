@@ -1,6 +1,6 @@
 {
   "name": "plugsure",
-  "version": "1.4.4",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "description": "PlugSure — multi-tenant EV charging management system (CSMS) for Indonesia",
@@ -40,6 +40,7 @@
     "e2e:ocmf": "tsx tools/e2e/ocmf-e2e.mts",
     "e2e:sandbox-2x": "tsx tools/e2e/sandbox-2x-e2e.mts",
     "e2e:brand": "tsx tools/e2e/brand-e2e.mts",
+    "e2e:console-brand": "tsx tools/e2e/console-brand-e2e.mts",
     "e2e:apns": "tsx tools/e2e/apns-e2e.mts",
     "e2e:live-activity": "tsx tools/e2e/live-activity-e2e.mts",
     "gateway": "tsx src/apps/gateway.ts",

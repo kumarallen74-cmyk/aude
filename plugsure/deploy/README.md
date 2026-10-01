@@ -214,6 +214,28 @@ curl -s http://ocpp.example.id/.well-known/acme-challenge/ping   # must reach th
 point's Central System URL. Changing it later means a site visit per unit. Agree
 it with the vendor before commissioning.
 
+### White-label console addresses (v1.5.0, optional)
+
+An operator can brand its console (**Governance → Console branding**: name,
+tagline, colours, logo) and give it an address of its own, such as
+`console.nusantaracharge.id`. Branding alone needs no server change: every user
+of that operator sees it once signed in, on any console address. The operator's
+**own address** needs three steps from you:
+
+1. The operator creates a DNS record for the name pointing at this server
+   (`A <ELASTIC_IP>`, or a `CNAME` to `console.example.id`).
+2. Copy the commented *White-label consoles* template in `deploy/Caddyfile`
+   once for that name. Set the hostname and the operator's office or VPN ranges
+   in its allow-list, then run `caddy validate` and `systemctl reload caddy`.
+   Caddy obtains the certificate on reload.
+3. The operator enters the same name under **Console web address** and saves.
+
+On that address the sign-in page shows the operator's brand, and only the
+operator's own accounts can sign in. Any other account gets the same answer as
+a wrong password, and the attempt is audited as `auth.login_wrong_console`.
+Console addresses are deliberately not served by the on-demand catch-all
+block, which serves only driver apps, because a console keeps an allow-list.
+
 ---
 
 ## 3. Certificate

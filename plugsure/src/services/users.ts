@@ -103,16 +103,19 @@ async function checkPassword(pw: string, stored: string | null): Promise<boolean
   return verifyPassword(pw, stored);
 }
 
+/**
+ * ONE answer for every failed sign-in: unknown address, wrong password, locked account, and
+ * (v1.5.0) another operator's account on an operator's own console address. A distinct answer
+ * would confirm the address had an account, or that the password was right. It names the
+ * pause, so a person who really is locked out knows to wait.
+ */
+export const loginFailureMessage = () =>
+  `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`;
+
 export async function login(emailRaw: unknown, password: unknown, ip?: string): Promise<LoginResult> {
   const email = String(emailRaw ?? '').trim().toLowerCase();
   const pw = String(password ?? '');
-  // ONE answer for every failure: unknown address, wrong password, locked account. A distinct
-  // "locked" message confirmed the address had an account. It names the pause, so a person who
-  // really is locked out knows to wait.
-  const generic = {
-    ok: false,
-    error: `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`,
-  };
+  const generic = { ok: false, error: loginFailureMessage() };
   if (!email || !pw) return generic;
 
   const u = await one<{

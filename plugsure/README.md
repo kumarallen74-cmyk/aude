@@ -9,6 +9,12 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.5.0 — white-label operator console (2 October 2026).** Each operator can show its own
+product name, tagline, colours and logo in the console (Governance → Console branding), and give
+the console its own web address, where the sign-in page shows the brand and only that operator's
+accounts can sign in. Migration 054 (additive), no new settings; see
+[`RELEASE-NOTES-v1.5.0.md`](RELEASE-NOTES-v1.5.0.md).
+
 **v1.4.4 — pre-deployment review fixes (2 October 2026).** The driver app no longer sells,
 reserves or queues on a suspended charger; resume no longer backdates an outage; on systemd the
 database owner credential moves to a root-only `migrate.env` read only by the new
