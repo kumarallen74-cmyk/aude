@@ -1,6 +1,6 @@
 {
   "name": "@plugsure/csms-sdk",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "TypeScript client for the PlugSure CSMS operator API, generated from its OpenAPI document. No dependencies.",
   "license": "UNLICENSED",
   "type": "module",
