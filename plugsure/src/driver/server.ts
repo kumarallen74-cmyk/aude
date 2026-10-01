@@ -34,7 +34,7 @@ import {
   history,
 } from './charge.js';
 import { listRoamingStations, startRoaming, roamingStatus, stopRoaming, roamingReceipt, roamingHistory, reserveRoaming, roamingReservation, cancelRoamingReservation, currentRoamingReservation } from './roaming.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { vapid } from '../services/webpush.js';
 import { listFavourites, addFavourite, removeFavourite } from './favourites.js';
 import { subscribe, unsubscribe, pushStatus, subscribeApns, unsubscribeApns } from './notify.js';
@@ -295,17 +295,20 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     };
   });
 
+  // Sign-in steps anyone can call: limited per number, per client address (req.ip —
+  // X-Forwarded-For only from API_TRUSTED_PROXIES), per device and installation-wide
+  // (identity.ts authLimits). A refusal for a limit is 429, any other 400.
   app.post('/d/v1/otp/send', async (req, reply) => {
     const b = (req.body ?? {}) as any;
-    const r = await sendOtp(String(b.phone ?? ''), req.brand?.appName);
-    if (!r.ok) return reply.status(400).send({ error: r.error });
+    const r = await sendOtp(String(b.phone ?? ''), req.brand?.appName, { ip: req.ip, deviceId: driver(req).deviceId });
+    if (!r.ok) return reply.status(r.limited ? 429 : 400).send({ error: r.error });
     return r;
   });
 
   app.post('/d/v1/otp/verify', async (req, reply) => {
     const b = (req.body ?? {}) as any;
     const r = await verifyOtp(driver(req).deviceId, String(b.phone ?? ''), String(b.code ?? ''));
-    if (!r.ok) return reply.status(400).send({ error: r.error });
+    if (!r.ok) return reply.status(r.limited ? 429 : 400).send({ error: r.error });
     return r;
   });
 
@@ -318,8 +321,8 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   app.post('/d/v1/fleet/login', async (req, reply) => {
     const b = (req.body ?? {}) as any;
-    const r = await fleetLogin(driver(req).deviceId, String(b.orgSlug ?? ''), String(b.rfidUid ?? ''), String(b.pin ?? ''));
-    if (!r.ok) return reply.status(400).send({ error: r.error });
+    const r = await fleetLogin(driver(req).deviceId, String(b.orgSlug ?? ''), String(b.rfidUid ?? ''), String(b.pin ?? ''), req.ip);
+    if (!r.ok) return reply.status(r.limited ? 429 : 400).send({ error: r.error });
     return r;
   });
 
@@ -661,8 +664,22 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   // ───────────────────────────────────────────────────────── roaming (fleet cards on partner networks)
 
-  const ocpiBase = (req: FastifyRequest) =>
-    config.ocpi.publicUrl || `${req.protocol}://${String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '127.0.0.1')}`;
+  /**
+   * Our OCPI address, from which the command `response_url` handed to the partner
+   * CPO is built: the CPO POSTs the command result there with OUR credentials token.
+   *
+   * It used to fall back to the request's Host / X-Forwarded-Host (the latter
+   * believed from any peer): a driver sending `Host: evil.example` had the partner
+   * deliver our token to evil.example. Now it is OCPI_PUBLIC_URL (or PUBLIC_BASE_URL)
+   * only; the request's own origin is used on a development/test bench alone, and
+   * elsewhere the roaming command is refused until the address is configured.
+   */
+  const ocpiBase = (req: FastifyRequest): string | null =>
+    config.ocpi.publicUrl || (isRelaxedEnv() ? `${req.protocol}://${String(req.headers.host ?? '127.0.0.1')}` : null);
+  const noOcpiBase = (reply: import('fastify').FastifyReply) => {
+    logger.error('driver roaming command refused: OCPI_PUBLIC_URL (or PUBLIC_BASE_URL) is not configured');
+    return reply.status(503).send({ ok: false, error: 'Pengisian di jaringan mitra belum tersedia. Hubungi operator.', code: 'ocpi_url_not_configured' });
+  };
 
   app.get('/d/v1/roaming/stations', async (req) => {
     const q = (req.query ?? {}) as Record<string, string>;
@@ -672,25 +689,29 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/d/v1/roaming/charge', async (req, reply) => {
+    const base = ocpiBase(req);
+    if (!base) return noOcpiBase(reply);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const s = (k: string) => (typeof b[k] === 'string' ? (b[k] as string).slice(0, 64) : '');
     if (!s('partnerId') || !s('locationId') || !s('evseUid')) return reply.status(400).send({ error: 'Pilih charger terlebih dahulu.' });
     const r = await startRoaming(driver(req), {
       partnerId: s('partnerId'), countryCode: s('countryCode'), partyId: s('partyId'), locationId: s('locationId'),
       evseUid: s('evseUid'), connectorId: s('connectorId') || undefined,
-    }, ocpiBase(req));
+    }, base);
     if (!r.ok) return reply.status(422).send(r);
     return r;
   });
 
   // Reserving a partner operator's charger (OCPI RESERVE_NOW / CANCEL_RESERVATION).
   app.post('/d/v1/roaming/reservations', async (req, reply) => {
+    const base = ocpiBase(req);
+    if (!base) return noOcpiBase(reply);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const s = (k: string) => (typeof b[k] === 'string' ? (b[k] as string).slice(0, 64) : '');
     if (!s('partnerId') || !s('locationId') || !s('evseUid')) return reply.status(400).send({ error: 'Pilih charger terlebih dahulu.' });
     const r = await reserveRoaming(driver(req), {
       partnerId: s('partnerId'), countryCode: s('countryCode'), partyId: s('partyId'), locationId: s('locationId'), evseUid: s('evseUid'),
-    }, ocpiBase(req));
+    }, base);
     if (!r.ok) return reply.status(422).send(r);
     return r;
   });
@@ -701,7 +722,9 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   });
   app.post('/d/v1/roaming/reservations/:id/cancel', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const r = await cancelRoamingReservation(driver(req), id, ocpiBase(req));
+    const base = ocpiBase(req);
+    if (!base) return noOcpiBase(reply);
+    const r = await cancelRoamingReservation(driver(req), id, base);
     if (!r.ok) return reply.status(404).send(r);
     return r;
   });
@@ -714,7 +737,9 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   app.post('/d/v1/roaming/charge/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const r = await stopRoaming(driver(req), id, ocpiBase(req));
+    const base = ocpiBase(req);
+    if (!base) return noOcpiBase(reply);
+    const r = await stopRoaming(driver(req), id, base);
     if (!r.ok) return reply.status(400).send(r);
     return r;
   });
