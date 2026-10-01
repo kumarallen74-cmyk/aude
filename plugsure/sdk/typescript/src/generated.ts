@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.4.2";
+export const API_VERSION = "1.4.3";
 
 // ─────────────────────────────────────────────── schemas
 

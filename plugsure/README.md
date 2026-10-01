@@ -9,6 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.4.3 — user menu icons (2 October 2026).** The user menu's icons are drawn at their intended
+size. Style only; no migrations or new settings; see [`RELEASE-NOTES-v1.4.3.md`](RELEASE-NOTES-v1.4.3.md).
+
 **v1.4.2 — fixes (2 October 2026).** Scan from live charger finds tapped cards again, the sidebar
 shows the installed version, suspended chargers no longer offer Start, and the deployment docs are
 corrected (acceptance health check; systemd database roles). No migrations or new settings; see

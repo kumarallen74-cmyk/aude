@@ -151,6 +151,7 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 }
 .menu button, .menu a { display: flex; width: 100%; gap: 8px; align-items: center; text-align: left; padding: 7px 10px; border: 0; background: none; color: var(--ink); border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
 .menu button:hover, .menu a:hover { background: var(--bg-2); text-decoration: none; }
+.menu svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
 .content { padding: 20px 24px 48px; max-width: 1600px; width: 100%; }
 
