@@ -47,6 +47,7 @@ async function main() {
     clearTimeout(waiting);
     try {
       await migrateAll(lockTimeout);
+      await enforceAppendOnlyAudit();
     } finally {
       await lock.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [MIGRATION_LOCK_KEY]).catch(() => { lockHealthy = false; });
     }
@@ -118,6 +119,29 @@ async function migrateAll(lockTimeout: string) {
  * Skipped silently when POSTGRES_APP_PASSWORD is unset — a developer running
  * against a local superuser DSN does not need it.
  */
+/**
+ * The audit log is append-only for the runtime role (048). Many migrations end with
+ * `GRANT … ON ALL TABLES IN SCHEMA public TO plugsure_app`, and any later one written that way hands
+ * UPDATE/DELETE on audit_log back. The revokes are re-asserted after every run, so the invariant does
+ * not depend on each future migration remembering it. Idempotent; a no-op before 048 created the trigger.
+ */
+async function enforceAppendOnlyAudit() {
+  const role = process.env.POSTGRES_APP_USER ?? 'plugsure_app';
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) return;
+  const exists = await one<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
+        AND to_regclass('public.audit_log') IS NOT NULL
+        AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_log_append_only') AS ok`,
+    [role],
+  );
+  if (!exists?.ok) return;
+  for (const who of [role, 'PUBLIC']) {
+    const target = who === 'PUBLIC' ? 'PUBLIC' : `"${who}"`;
+    await query(`REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM ${target}`);
+    await query(`REVOKE DELETE, TRUNCATE ON audit_head FROM ${target}`);
+  }
+}
+
 async function provisionRuntimeRole() {
   const role = process.env.POSTGRES_APP_USER ?? 'plugsure_app';
   const password = process.env.POSTGRES_APP_PASSWORD;

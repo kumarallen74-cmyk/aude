@@ -48,5 +48,5 @@ COMMENT ON COLUMN payment_intent.paid_at IS
   'When the payment became usable (first authorised or captured); trigger-maintained. '
   'The prepaid claim window and the unused-payment refund sweep run from here, not from created_at.';
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO plugsure_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO plugsure_app;
+-- No GRANT: this migration adds a column and a trigger, covered by the runtime role's existing table grants.
+-- A blanket `GRANT … ON ALL TABLES` would hand UPDATE/DELETE on audit_log back to plugsure_app (see 048).
