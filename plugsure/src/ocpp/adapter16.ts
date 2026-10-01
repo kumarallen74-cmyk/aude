@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { bus } from '../services/events.js';
 import * as assets from '../services/assets.js';
-import { handleTransactionEvent, sessionIdemKey, closeOrphanedSession, PREPAID_CLAIM_WINDOW_MIN } from '../services/sessions.js';
+import { handleTransactionEvent, sessionIdemKey, PREPAID_CLAIM_WINDOW_MIN, PREPAID_PAID_AT_SQL, SessionStartRefused } from '../services/sessions.js';
 import { recordFinding } from './quirks.js';
 import { OcppCallError } from './rpc.js';
 import { onFirmwareStatus, onBootFirmware, logFirmwareHookError } from '../services/firmware.js';
@@ -52,6 +52,12 @@ export interface AdapterContext {
   orgId: string;
   /** The protocol negotiated on this connection. */
   version?: import('../domain/canonical.js').OcppVersion;
+  /**
+   * The OCPP security profile this connection was AUTHENTICATED at (0 = none, 1 = Basic over plain
+   * ws, 2 = Basic over TLS, 3 = client certificate). Certificate signing (station and V2G) needs 2+;
+   * unknown counts as 0.
+   */
+  securityProfile?: number;
   quirkProfileId?: string | null;
   /**
    * Measurand fingerprint already written for this connection, so the quirk
@@ -153,6 +159,29 @@ async function onBoot(ctx: AdapterContext, p: any) {
   if (cp?.status === 'pending_adoption') {
     logger.info({ cp: ctx.ocppIdentity }, 'BootNotification from a charge point awaiting adoption');
     return { status: 'Pending', currentTime: new Date().toISOString(), interval: 60 };
+  }
+  /**
+   * A SUSPENDED unit is known and will be allowed back: Pending, exactly like a
+   * unit awaiting adoption. It was answered Accepted and went on opening
+   * billable sessions. Pending rather than Rejected because a charger told
+   * Rejected may send nothing but BootNotification until the interval expires,
+   * and a suspended unit must still be able to deliver what it already owes us
+   * — the StatusNotification, MeterValues and StopTransaction of a transaction
+   * that was running when it was suspended (transaction messages are queued by
+   * the charger and accepted here whatever the boot status). It is re-asked at
+   * the interval and Accepted once the operator lifts the suspension. New
+   * authorisations and starts are refused meanwhile (stationRefusal).
+   *
+   * DECOMMISSIONED units are refused at the WebSocket upgrade (server.ts); one
+   * whose socket was already open when it was decommissioned is Rejected here.
+   */
+  if (cp?.status === 'suspended') {
+    logger.warn({ cp: ctx.ocppIdentity }, 'BootNotification from a suspended charge point — Pending');
+    return { status: 'Pending', currentTime: new Date().toISOString(), interval: SUSPENDED_RETRY_S };
+  }
+  if (cp?.status === 'decommissioned') {
+    logger.warn({ cp: ctx.ocppIdentity }, 'BootNotification from a decommissioned charge point — Rejected');
+    return { status: 'Rejected', currentTime: new Date().toISOString(), interval: SUSPENDED_RETRY_S };
   }
 
   logger.info(
@@ -264,6 +293,11 @@ async function onStatusNotification(ctx: AdapterContext, p: any) {
 }
 
 async function onAuthorize(ctx: AdapterContext, p: any) {
+  const refused = await stationRefusal(ctx.chargePointId);
+  if (refused) {
+    logger.info({ cp: ctx.ocppIdentity, idTag: p.idTag, station: refused.stationStatus }, 'Authorize refused: station not in service');
+    return { idTagInfo: { status: refused.status } };
+  }
   const info = await authorizeIdTag(ctx.chargePointId, p.idTag);
   logger.info({ cp: ctx.ocppIdentity, idTag: p.idTag, status: info.status }, 'Authorize');
   return { idTagInfo: info };
@@ -282,9 +316,47 @@ async function onStartTransaction(ctx: AdapterContext, p: any) {
     });
   }
 
-  const info = await authorizeIdTag(ctx.chargePointId, idTag);
-  if (info.status !== 'Accepted') {
-    return { transactionId: 0, idTagInfo: info };
+  /**
+   * WHO MAY START, AND WHAT A REFUSAL MEANS (OCPP 1.6 §4.8, §5.x).
+   *
+   * StartTransaction.req is not a request to start: the charger has ALREADY
+   * started (it authorised locally, from its cache or local list, or while
+   * offline) and is telling us. The CSMS cannot undo that; it can only answer
+   * idTagInfo, and a charger told anything but Accepted SHOULD stop
+   * (StopTransactionOnInvalidId, which provisioning sets) and then sends a
+   * StopTransaction for that transaction. transactionId is mandatory in the
+   * answer whatever the status.
+   *
+   * Previously every refusal answered transactionId 0 and recorded nothing:
+   * all refused transactions shared id 0, their MeterValues and StopTransaction
+   * matched nothing, and the energy of an offline transaction started with a
+   * card blocked since — delivered, and possibly hours of it — was simply lost.
+   *
+   *  - A LIVE start (its timestamp is now) with a refused token or at a station
+   *    out of service is still refused and opens no session — the charger is
+   *    expected to stop at once — but it gets a real, unique transactionId from
+   *    the sequence, so a charger that stops sends a StopTransaction we can
+   *    attribute (and that is answered normally), and one that charges on
+   *    anyway is identifiable in the frame log and the warnings below instead
+   *    of hiding behind a shared 0.
+   *  - A start reported AFTER THE FACT (timestamp more than AFTER_THE_FACT_S in
+   *    the past: an offline transaction uploaded on reconnect) is RECORDED:
+   *    a session with no payer, flagged UNAUTHORISED_TOKEN (or
+   *    STATION_NOT_IN_SERVICE) and parked for review, so its MeterValues and
+   *    StopTransaction land and nothing is lost — and nothing is billed to
+   *    anyone until an operator decides. The answer still carries the refused
+   *    status, so a charger still running it stops.
+   *
+   * A prepaid claim token on the wrong connector stays refused either way: a
+   * live start opens nothing, and an after-the-fact one is an unauthorised
+   * session that claims no payment.
+   */
+  const refused = await stationRefusal(ctx.chargePointId);
+  // With the connector: a prepaid claim token is valid only where its payment is.
+  const info: IdTagInfo = refused ? { status: refused.status } : await authorizeIdTag(ctx.chargePointId, idTag, connectorNo);
+  const afterTheFact = reportedAfterTheFact(timestamp);
+  if (info.status !== 'Accepted' && !afterTheFact) {
+    return refuseLiveStart(ctx, connectorNo, info, refused ? 'station not in service' : 'token refused');
   }
 
   await assets.ensureConnector(ctx.chargePointId, connectorNo);
@@ -313,11 +385,13 @@ async function onStartTransaction(ctx: AdapterContext, p: any) {
   }
 
   // A new transaction on a connector we still believe is busy means we missed a
-  // stop. Close the stale one for review rather than losing either session.
-  await closeOrphanedSession(ctx.chargePointId, connectorNo, 'superseded by a new transaction');
+  // stop; the stale one is closed for review rather than losing either session.
+  // That close happens INSIDE session start, under its per-connector lock
+  // (services/sessions.ts startSession). Done here, before the insert and
+  // outside any lock, a duplicate of this very request arriving alongside it
+  // closed the session its twin had just opened as "superseded".
 
-  const seq = await one<{ id: number }>(`SELECT nextval('ocpp_tx_seq')::int AS id`);
-  const transactionId = seq?.id ?? Math.floor(Date.now() / 1000);
+  const transactionId = await nextTransactionId();
 
   const ev: TransactionEvent = {
     eventType: 'Started',
@@ -344,11 +418,50 @@ async function onStartTransaction(ctx: AdapterContext, p: any) {
     idemKey,
   };
 
-  const session = await handleTransactionEvent(ev, ctx.chargePointId);
+  const unauthorised = (status: string) =>
+    refused
+      ? { code: 'STATION_NOT_IN_SERVICE', status, message: `The charge point is ${refused.stationStatus}; it reported a transaction it started offline.` }
+      : { code: 'UNAUTHORISED_TOKEN', status, message: `The charger reported a transaction started offline with a token that is not accepted (${status}).` };
+
+  let session;
+  let answer: IdTagInfo = info;
+  try {
+    session = await handleTransactionEvent(ev, ctx.chargePointId, info.status === 'Accepted' ? {} : { unauthorised: unauthorised(info.status) });
+  } catch (e) {
+    if (!(e instanceof SessionStartRefused)) throw e;
+    // Session start's own, authoritative refusal (a prepaid token with no
+    // claimable payment on this connector, decided under the connector's
+    // lock): answered like a token the authoriser refused — a live start opens
+    // nothing, one reported after the fact is recorded as unauthorised.
+    logger.info({ cp: ctx.ocppIdentity, connectorNo, status: e.status }, 'StartTransaction refused');
+    answer = { status: e.status };
+    if (!afterTheFact) return refuseLiveStart(ctx, connectorNo, answer, 'prepaid token has no claimable payment here', transactionId);
+    session = await handleTransactionEvent(ev, ctx.chargePointId, { unauthorised: unauthorised(e.status) });
+  }
   if (!session) {
     throw new OcppCallError('InternalError', 'Could not open a charging session');
   }
-  return { transactionId: Number(session.ocpp_transaction_id ?? transactionId), idTagInfo: info };
+  return { transactionId: Number(session.ocpp_transaction_id ?? transactionId), idTagInfo: answer };
+}
+
+/** A fresh transaction id from the sequence (migration 006). */
+async function nextTransactionId(): Promise<number> {
+  const seq = await one<{ id: number }>(`SELECT nextval('ocpp_tx_seq')::int AS id`);
+  return seq?.id ?? Math.floor(Date.now() / 1000);
+}
+
+/**
+ * Refuse a live start: no session, but a real transactionId (see
+ * onStartTransaction). The charger should stop; its StopTransaction for this id
+ * is answered Accepted and matches no session, which is logged.
+ */
+async function refuseLiveStart(ctx: AdapterContext, connectorNo: number, info: IdTagInfo, why: string, id?: number) {
+  const transactionId = id ?? (await nextTransactionId());
+  logger.warn(
+    { cp: ctx.ocppIdentity, connectorNo, tx: transactionId, status: info.status, why },
+    'StartTransaction refused — no session opened; the charger should stop this transaction',
+  );
+  return { transactionId, idTagInfo: info };
 }
 
 async function onMeterValues(ctx: AdapterContext, p: any) {
@@ -412,21 +525,44 @@ async function onStopTransaction(ctx: AdapterContext, p: any) {
   /**
    * METER AUTHORITY.
    *
-   * transactionData carries the sampled register series and, on Eichrecht-class
-   * hardware, the signed values. It is preferred over the scalar meterStop, which
-   * is what the code always used despite a comment claiming the opposite —
-   * 50 kWh went unbilled in the audit's reproduction.
-   *
    * meterStop is distinguished from ABSENT rather than coerced to 0. A `?? 0`
    * made the running-total fallback unreachable and billed a fully metered
    * session at zero.
+   *
+   * Which register is billed:
+   *
+   *  1. A register in transactionData with context Transaction.End is the
+   *     charger's own reading AT the stop — the same instant meterStop
+   *     describes, taken from the series the meter produced. It is billed.
+   *  2. Otherwise transactionData holds only SAMPLES (StopTxnSampledData /
+   *     StopTxnAlignedData: Sample.Periodic, Sample.Clock). The last of them is
+   *     up to a sample interval OLD, so it is behind meterStop by whatever
+   *     flowed since — billing it (which this code did: `txDataWh ?? meterStop`)
+   *     silently under-billed up to an interval's energy on every session,
+   *     500 Wh / 2% and more on DC. The higher of the two is billed: the
+   *     register only moves forward, so the higher one is the later reading.
+   *  3. Neither: endSession bills the running total and flags it.
+   *
+   * Signed values (OCMF) in transactionData are not billed from here: they are
+   * kept and compared with what is billed (services/signed-metering.ts), and a
+   * disagreement is flagged or, under a site's "require" policy, parked. Billing
+   * the signed reading would hide exactly the discrepancy that check exists for.
+   *
+   * DIVERGENCE (for review) is reported only where the two accounts genuinely
+   * disagree: a Transaction.End register different from meterStop, or a sampled
+   * register ABOVE meterStop (meterStop is then stale or wrong — the register
+   * cannot go back). A sample below meterStop is the expected lag, not a
+   * disagreement: reporting it, as before, parked nearly every DC session.
    */
   const txData = toCanonicalMeterValues(p.transactionData ?? []);
   const txDataWh = energyWhFrom(txData);
+  const endWh = energyWhFrom(
+    txData.map((m) => ({ ...m, sampledValue: m.sampledValue.filter((sv) => sv.context === 'Transaction.End') })),
+  );
   const meterStopWh = typeof p.meterStop === 'number' ? Math.round(p.meterStop) : null;
 
+  const { authoritative, divergenceWh } = stopRegister(txDataWh, endWh, meterStopWh);
   const mv = [...txData];
-  const authoritative = txDataWh ?? meterStopWh;
   if (authoritative !== null) {
     mv.push({
       timestamp,
@@ -441,12 +577,10 @@ async function onStopTransaction(ctx: AdapterContext, p: any) {
     });
   }
 
-  const divergenceWh =
-    txDataWh !== null && meterStopWh !== null ? Math.abs(txDataWh - meterStopWh) : 0;
   if (divergenceWh > 1) {
     logger.warn(
-      { cp: ctx.ocppIdentity, tx: txId, txDataWh, meterStopWh, divergenceWh },
-      'transactionData and meterStop disagree — billing transactionData and flagging for review',
+      { cp: ctx.ocppIdentity, tx: txId, txDataWh, endWh, meterStopWh, divergenceWh, billedWh: authoritative },
+      'transactionData and meterStop disagree — flagging for review',
     );
   }
 
@@ -519,6 +653,41 @@ async function onDataTransfer(ctx: AdapterContext, p: any) {
 
 // ------------------------------------------------------------------ helpers
 
+/** Retry-after, in seconds, for a suspended or decommissioned unit's BootNotification. */
+const SUSPENDED_RETRY_S = 300;
+
+/**
+ * A start whose timestamp is more than this far in the past was reported after
+ * the fact — an offline transaction uploaded on reconnect — rather than live.
+ * Generous on purpose: a live StartTransaction is sent within seconds, and a
+ * retried one within a minute or two. Misjudging a live start as after the fact
+ * costs nothing (the start is still refused; it is only also recorded, unbilled).
+ */
+export const AFTER_THE_FACT_S = 120;
+
+export function reportedAfterTheFact(timestamp: string, now = Date.now()): boolean {
+  const t = new Date(timestamp).getTime();
+  return Number.isFinite(t) && now - t > AFTER_THE_FACT_S * 1000;
+}
+
+/**
+ * Administrative states in which a unit may not authorise or start anything
+ * new. A suspended unit (and one awaiting adoption, or decommissioned with its
+ * socket still open) was answered exactly like an active one: Authorize and
+ * StartTransaction were Accepted and opened billable sessions. Heartbeat,
+ * StatusNotification, MeterValues and the stop of a transaction already
+ * running are untouched — they are what the unit owes us.
+ */
+const NOT_IN_SERVICE = new Set(['pending_adoption', 'suspended', 'decommissioned']);
+
+export async function stationRefusal(chargePointId: string): Promise<{ status: 'Invalid'; stationStatus: string } | null> {
+  const cp = await one<{ status: string }>(`SELECT status FROM charge_point WHERE id = $1`, [chargePointId]);
+  if (!cp || !NOT_IN_SERVICE.has(cp.status)) return null;
+  // Invalid, not Blocked: the card is fine, it is this station that may not be
+  // used. (2.0.1 answers NotAtThisLocation, which says exactly that.)
+  return { status: 'Invalid', stationStatus: cp.status };
+}
+
 export interface IdTagInfo {
   status: 'Accepted' | 'Blocked' | 'Expired' | 'Invalid' | 'ConcurrentTx';
   expiryDate?: string;
@@ -532,9 +701,15 @@ export interface IdTagInfo {
  * can expire the entry by itself while offline — without it, an offline charger
  * honours a revoked token indefinitely.
  */
-export async function authorizeIdTag(chargePointId: string, idTag: string): Promise<IdTagInfo> {
+export async function authorizeIdTag(
+  chargePointId: string,
+  idTag: string,
+  /** The connector the token starts on, when the message says (not 1.6/2.0.1 Authorize). */
+  connectorNo?: number,
+): Promise<IdTagInfo> {
   const row = await one<{
     id: string;
+    org_id: string;
     kind: string;
     status: string;
     valid_to: Date | null;
@@ -544,7 +719,7 @@ export async function authorizeIdTag(chargePointId: string, idTag: string): Prom
   }>(
     // A Plug & Charge contract (kind 'emaid') is stored without separators; a
     // charger may present the eMAID with them (ID-PLS-C12345678).
-    `SELECT t.id, t.kind, t.status, t.valid_to, t.energy_limit_wh, t.spend_limit_idr,
+    `SELECT t.id, t.org_id, t.kind, t.status, t.valid_to, t.energy_limit_wh, t.spend_limit_idr,
             (o.pnc_settings->>'enabled')::boolean IS TRUE AS pnc_on
        FROM token t
        JOIN site s ON s.org_id = t.org_id
@@ -559,7 +734,15 @@ export async function authorizeIdTag(chargePointId: string, idTag: string): Prom
   if (!row) return (await authorizeRoaming(chargePointId, idTag)) ?? { status: 'Invalid' };
   // Contracts work only while the operator has Plug & Charge switched on.
   if (row.kind === 'emaid' && !row.pnc_on) return { status: 'Invalid' };
-  if (row.valid_to && new Date(row.valid_to) < new Date()) return { status: 'Expired' };
+  /**
+   * A prepaid claim token's valid_to is stamped at CHECKOUT (driver/charge.ts),
+   * but its claim window runs from PAYMENT (sessions.PREPAID_CLAIM_WINDOW_MIN):
+   * a payment completed late in the checkout window would otherwise be refused
+   * here as Expired while the payment it unlocks is still claimable. For a
+   * prepaid token the payment check below is the authority; every other token
+   * expires at its valid_to.
+   */
+  if (row.kind !== 'prepaid' && row.valid_to && new Date(row.valid_to) < new Date()) return { status: 'Expired' };
 
   /**
    * A prepaid claim token is only a key to ITS payment.
@@ -567,26 +750,76 @@ export async function authorizeIdTag(chargePointId: string, idTag: string): Prom
    * It stayed 'Accepted' forever, while the payment it unlocks can only be
    * claimed within the checkout window. Presented after that window, the token
    * started a session with no prepaid limit and no payer — unlimited energy
-   * billed to nobody — and left the driver's payment unclaimed. It is now valid
+   * billed to nobody — and left the driver's payment unclaimed. It is valid
    * only while its payment is claimable, or while its own session is running
    * (so a retried StartTransaction / reconnect keeps working).
+   *
+   * AND ONLY WHERE THE PAYMENT IS. The payment is for one connector. This check
+   * used to accept the token at any charger of the operator; on the wrong
+   * connector the claim found nothing and the session started as postpaid with
+   * no allowance and no payer, after which the unused-payment sweep refunded
+   * the payment in full — free charging, and it worked while the paid session
+   * itself was running too. When the connector is known (StartTransaction,
+   * TransactionEvent Started) the payment must be claimable on THAT connector,
+   * or its own session must be running there. 1.6 Authorize and 2.0.1
+   * Authorize carry no connector: there the token is accepted while its
+   * payment is claimable anywhere, or while its own session runs on this very
+   * charger (a reconnect, a stop); a session running on another charger is
+   * ConcurrentTx. Session start re-checks under the connector's lock
+   * (services/sessions.ts startSession) and refuses a prepaid token it cannot
+   * bind to a payment, so no path turns one into a postpaid session.
    */
+  let prepaidUntil: Date | null = null;
   if (row.kind === 'prepaid') {
-    const usable = await one<{ ok: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM payment_intent pi
-          WHERE pi.claim_id_tag = $1 AND pi.mode IN ('prepurchase', 'preauth', 'postpay')
+    const u = await one<{
+      claimable_any: boolean;
+      claimable_here: boolean;
+      active_any: boolean;
+      active_here: boolean;
+      active_this_cp: boolean;
+      claim_until: Date | null;
+    }>(
+      `WITH here AS (
+         SELECT c.id FROM connector c JOIN evse e ON e.id = c.evse_uuid
+          WHERE e.charge_point_id = $3 AND e.evse_id = $4::int
+       ), intents AS (
+         SELECT pi.connector_uuid,
+                -- exactly what session start can claim (sessions.claimPrepaidIntent)
+                (pi.session_id IS NULL AND pi.refund_state IS NULL
+                   AND ${PREPAID_PAID_AT_SQL('pi')} > now() - make_interval(mins => $2::int)
+                   AND (pi.mode NOT IN ('preauth', 'postpay') OR pi.hold_state = 'held')) AS claimable,
+                ${PREPAID_PAID_AT_SQL('pi')} + make_interval(mins => $2::int) AS claim_until,
+                cs.connector_uuid AS active_on, cs.charge_point_id AS active_cp
+           FROM payment_intent pi
+           LEFT JOIN charging_session cs ON cs.id = pi.session_id AND cs.state = 'active'
+          WHERE pi.claim_id_tag = $1 AND pi.org_id = $5
+            AND pi.mode IN ('prepurchase', 'preauth', 'postpay')
             AND pi.state IN ('captured', 'authorised')
             AND (pi.mode NOT IN ('preauth', 'postpay') OR pi.hold_state IN ('held', 'capturing', 'captured', 'capture_failed'))
-            AND (
-              (pi.session_id IS NULL AND pi.refund_state IS NULL
-                 AND pi.created_at > now() - make_interval(mins => $2::int))
-              OR pi.session_id IN (SELECT id FROM charging_session WHERE state = 'active')
-            )
-       ) AS ok`,
-      [idTag, PREPAID_CLAIM_WINDOW_MIN],
+       )
+       SELECT COALESCE(bool_or(claimable), false) AS claimable_any,
+              COALESCE(bool_or(claimable AND connector_uuid IN (SELECT id FROM here)), false) AS claimable_here,
+              COALESCE(bool_or(active_on IS NOT NULL), false) AS active_any,
+              COALESCE(bool_or(active_on IN (SELECT id FROM here)), false) AS active_here,
+              COALESCE(bool_or(active_cp = $3), false) AS active_this_cp,
+              max(claim_until) FILTER (WHERE claimable) AS claim_until
+         FROM intents`,
+      [idTag, PREPAID_CLAIM_WINDOW_MIN, chargePointId, connectorNo ?? null, row.org_id],
     );
-    if (!usable?.ok) return { status: 'Expired' };
+    const known = connectorNo != null;
+    const ok = known
+      ? u?.claimable_here || u?.active_here
+      : u?.claimable_any || u?.active_this_cp;
+    if (!ok) {
+      // Its payment is already running a session elsewhere: one payment, one session.
+      if (u?.active_any) return { status: 'ConcurrentTx' };
+      // Paid, but for another connector.
+      if (known && u?.claimable_any) return { status: 'Invalid' };
+      return { status: 'Expired' };
+    }
+    // The charger's cache may keep the token until its payment can no longer be
+    // claimed (from payment, not checkout), and no longer.
+    if (u?.claim_until) prepaidUntil = new Date(u.claim_until);
   }
 
   const allowed: IdTagInfo['status'][] = ['Accepted', 'Blocked', 'Expired', 'Invalid', 'ConcurrentTx'];
@@ -603,9 +836,35 @@ export async function authorizeIdTag(chargePointId: string, idTag: string): Prom
   // Usage includes the card's roaming charges on other networks (OCPI CDRs).
   if (status === 'Accepted' && (await overLimit(row))) status = 'Blocked';
 
+  const expiry = prepaidUntil ?? (row.valid_to ? new Date(row.valid_to) : null);
   return {
     status,
-    ...(row.valid_to ? { expiryDate: new Date(row.valid_to).toISOString() } : {}),
+    ...(expiry ? { expiryDate: expiry.toISOString() } : {}),
+  };
+}
+
+/**
+ * The register a 1.6 StopTransaction bills, and the divergence worth a review
+ * (onStopTransaction explains the rule). Pure, for unit tests.
+ *
+ *   txDataWh     highest register anywhere in transactionData
+ *   endWh        highest Transaction.End register in transactionData
+ *   meterStopWh  meterStop, or null when absent
+ */
+export function stopRegister(
+  txDataWh: number | null,
+  endWh: number | null,
+  meterStopWh: number | null,
+): { authoritative: number | null; divergenceWh: number } {
+  if (endWh !== null) {
+    // The charger's own final reading. A sample above it is impossible for a
+    // forward-only register; endSession's monotonic guard handles that case.
+    return { authoritative: endWh, divergenceWh: meterStopWh !== null ? Math.abs(endWh - meterStopWh) : 0 };
+  }
+  if (txDataWh === null || meterStopWh === null) return { authoritative: txDataWh ?? meterStopWh, divergenceWh: 0 };
+  return {
+    authoritative: Math.max(txDataWh, meterStopWh),
+    divergenceWh: txDataWh > meterStopWh ? txDataWh - meterStopWh : 0,
   };
 }
 

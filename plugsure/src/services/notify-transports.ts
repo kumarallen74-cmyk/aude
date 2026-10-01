@@ -1,7 +1,11 @@
 import nodemailer from 'nodemailer';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { config } from '../config.js';
+import { isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
+import { config, isRelaxedEnv } from '../config.js';
+import { logger } from '../logger.js';
 import { isEmail } from './alert-format.js';
+import { guardedFetch, guardedLookup, isInternalHost, type GuardedResponse } from './net-guard.js';
 
 /**
  * How alert messages leave the building.
@@ -15,6 +19,14 @@ import { isEmail } from './alert-format.js';
  *            template; free text only works inside a 24-hour customer window.
  *  SMS       Twilio, Zenziva (Indonesia) or your own HTTP gateway, the same
  *            providers as the driver sign-in codes. Plain text, no template.
+ *
+ * Every host here is set by the tenant, so every call goes through the SSRF
+ * guard (net-guard.ts): outside development/test no private, loopback,
+ * link-local or metadata address — checked when connecting, so DNS rebinding
+ * is covered — and HTTP redirects are not followed. What a provider or SMTP
+ * server answers is logged server-side and never echoed to the operator beyond
+ * the status / SMTP code and the provider's structured error fields: otherwise
+ * the "test" button is a port scanner with banner grabbing.
  */
 
 export interface SendResult {
@@ -58,8 +70,11 @@ export const WHATSAPP_DEFAULTS = {
   templateLang: 'id',
 };
 
-const production = () => config.env === 'production';
+const production = () => !isRelaxedEnv();
+/** An internal SMTP host the platform operator allowed (SMTP_ALLOWED_INTERNAL_HOSTS), e.g. a relay on this server. */
+const smtpHostAllowed = (host: string) => config.alerts.smtpAllowedInternalHosts.includes(host.trim().toLowerCase().replace(/\.$/, ''));
 const localHost = (h: string) => /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\])$/i.test(h);
+const INTERNAL = 'must be publicly reachable (no private, loopback or internal addresses)';
 
 /** Returns an error message, or null when the settings are usable. */
 export function checkChannelConfig(kind: 'email' | 'whatsapp' | 'sms', c: any): string | null {
@@ -75,6 +90,7 @@ export function checkChannelConfig(kind: 'email' | 'whatsapp' | 'sms', c: any): 
       let parsed: URL;
       try { parsed = new URL(String(u ?? '')); } catch { return c.provider === 'http' ? 'Enter your gateway URL.' : 'The provider URL is not valid.'; }
       if (production() && parsed.protocol !== 'https:') return 'The SMS provider URL must use https.';
+      if (production() && isInternalHost(parsed.hostname)) return `The SMS provider URL ${INTERNAL}.`;
     }
     return null;
   }
@@ -83,8 +99,12 @@ export function checkChannelConfig(kind: 'email' | 'whatsapp' | 'sms', c: any): 
     const port = Number(c.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) return 'Enter the SMTP port (usually 587 or 465).';
     if (!['tls', 'starttls', 'none'].includes(c.security)) return 'Choose the connection security.';
+    if (production() && isInternalHost(String(c.host)) && !smtpHostAllowed(String(c.host))) {
+      return `The SMTP server ${INTERNAL} (a relay on this server must be listed in SMTP_ALLOWED_INTERNAL_HOSTS by the platform operator).`;
+    }
+    // (Unencrypted SMTP is allowed only to a relay on this server, which must also be listed there.)
     if (c.security === 'none' && production() && !localHost(String(c.host))) {
-      return 'An unencrypted SMTP connection is only allowed to a relay on this server (localhost). Use STARTTLS or TLS.';
+      return 'An unencrypted SMTP connection is not allowed. Use STARTTLS or TLS.';
     }
     if (!isEmail(c.fromAddress)) return 'Enter the sender address, e.g. alerts@yourcompany.co.id.';
     if (c.fromName && /[\r\n<>"]/.test(String(c.fromName))) return 'The sender name cannot contain quotes, < > or line breaks.';
@@ -94,6 +114,7 @@ export function checkChannelConfig(kind: 'email' | 'whatsapp' | 'sms', c: any): 
   try { u = new URL(String(c?.apiBase ?? '')); } catch { return 'Enter the API base URL, e.g. https://graph.facebook.com/v21.0'; }
   if (production() && u.protocol !== 'https:') return 'The WhatsApp API URL must use https.';
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'The WhatsApp API URL must be http(s).';
+  if (production() && isInternalHost(u.hostname)) return `The WhatsApp API URL ${INTERNAL}.`;
   if (!/^\d{5,30}$/.test(String(c?.phoneNumberId ?? ''))) return 'Enter the WhatsApp phone number ID (digits, from WhatsApp Manager → API setup).';
   if (!/^[a-z0-9_]{1,512}$/.test(String(c?.templateName ?? ''))) return 'Template names use lower-case letters, digits and underscores.';
   if (!/^[a-z]{2,3}(_[A-Z]{2})?$/.test(String(c?.templateLang ?? ''))) return 'Enter the template language code, e.g. id or en_US.';
@@ -106,9 +127,22 @@ export async function sendEmail(
   c: EmailConfig, password: string | null, to: string,
   content: { subject: string; text: string; html: string; attachments?: EmailAttachment[]; kind?: string },
 ): Promise<SendResult> {
+  // Resolve once through the guard and connect to THAT address (the name stays the
+  // TLS server name, so the certificate is still checked against it): the address
+  // checked is the address used, whatever the DNS answers next.
+  let address: string;
+  try {
+    address = await resolveSmtpHost(String(c.host));
+  } catch (e) {
+    logger.warn({ host: c.host, err: (e as Error).message }, 'SMTP host refused or not resolvable');
+    return { ok: false, error: (e as any)?.code === 'EPRIVATE' || (e as any)?.code === 'EINTERNAL'
+      ? `SMTP server ${c.host} ${INTERNAL}.` : `Cannot resolve the SMTP server ${c.host}.` };
+  }
+  const named = isIP(String(c.host)) === 0;
   const transport = nodemailer.createTransport({
-    host: c.host,
+    host: address,
     port: Number(c.port),
+    ...(named ? { tls: { servername: String(c.host) } } : {}),
     secure: c.security === 'tls',
     requireTLS: c.security === 'starttls',
     ignoreTLS: c.security === 'none',
@@ -131,27 +165,59 @@ export async function sendEmail(
     return rejected ? { ok: false, error: `recipient rejected: ${to}`, permanent: true } : { ok: true, ref: info.messageId };
   } catch (e: any) {
     const code = Number(e?.responseCode);
-    const msg = String(e?.response ?? e?.message ?? e).slice(0, 300);
+    // The server's own words (its banner, its reply) stay in the server log.
+    logger.warn({ host: c.host, port: c.port, code: e?.code, responseCode: e?.responseCode, err: String(e?.response ?? e?.message ?? e).slice(0, 500) }, 'SMTP send failed');
     // 5xx is a permanent SMTP answer (bad mailbox, relay denied, auth failed).
-    return { ok: false, error: msg, permanent: code >= 500 && code < 600 };
+    return { ok: false, error: smtpError(e, c), permanent: code >= 500 && code < 600 };
   } finally {
     transport.close();
   }
+}
+
+/** The address to connect to for an SMTP host, refused (code EPRIVATE / EINTERNAL) when internal outside development/test. */
+function resolveSmtpHost(host: string): Promise<string> {
+  const allowed = smtpHostAllowed(host);
+  if (production() && isInternalHost(host) && !allowed) return Promise.reject(Object.assign(new Error('internal host'), { code: 'EINTERNAL' }));
+  if (isIP(host)) return Promise.resolve(host);
+  // A listed relay may resolve to loopback/private addresses: plain resolution, not the guard.
+  if (allowed) return lookup(host).then((r) => r.address);
+  return new Promise((resolve, reject) => {
+    guardedLookup(host, { all: true }, (err: Error | null, list: { address: string }[]) => {
+      if (err) return reject(err);
+      if (!list?.length) return reject(new Error('no address'));
+      resolve(list[0]!.address);
+    });
+  });
+}
+
+/** A generic, operator-facing SMTP failure: the stage and the SMTP code, never the server's text. */
+function smtpError(e: any, c: EmailConfig): string {
+  const code = Number(e?.responseCode);
+  const where = `${c.host}:${c.port}`;
+  if (e?.code === 'EAUTH') return `The SMTP server ${where} did not accept the user name and password${code ? ` (SMTP ${code})` : ''}.`;
+  if (code) return `The SMTP server ${where} refused the message (SMTP ${code}).`;
+  if (e?.code === 'ETLS') return `Could not set up TLS with the SMTP server ${where}. Check the connection security setting.`;
+  if (e?.code === 'ETIMEDOUT') return `The SMTP server ${where} did not answer in time.`;
+  return `Could not connect to the SMTP server ${where}.`;
+}
+
+/** A guarded call to a tenant-configured provider URL (see net-guard.ts guardedFetch). */
+async function providerCall(url: string, init: { method: string; headers: Record<string, string>; body: string }) {
+  const r: GuardedResponse = await guardedFetch(url, { ...init, timeoutMs: 15_000, maxBytes: 256 * 1024 });
+  let body: any = null; try { body = JSON.parse(r.text); } catch { /* not JSON */ }
+  if (r.status >= 300) logger.warn({ host: new URL(url).host, status: r.status, body: r.text.slice(0, 2000) }, 'notification provider answered with an error');
+  return { status: r.status, body };
 }
 
 /** One SMS through the configured provider. */
 export async function sendSms(c: SmsConfig, secret: string | null, toDigits: string, text: string): Promise<SendResult> {
   if (!secret) return { ok: false, error: 'No SMS provider credential saved.', permanent: true };
   const to = `+${toDigits.replace(/^\+/, '')}`;
-  const call = async (url: string, init: RequestInit) => {
-    const r = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(15_000) });
-    const text = await r.text();
-    let body: any = null; try { body = JSON.parse(text); } catch { /* not JSON */ }
-    return { status: r.status, body, text };
-  };
-  const fail = (who: string, r: { status: number; body: any; text: string }): SendResult => ({
+  const call = (url: string, init: { method: string; headers: Record<string, string>; body: string }) => providerCall(url, init);
+  // The provider's structured error message (JSON) only — never its raw answer.
+  const fail = (who: string, r: { status: number; body: any }): SendResult => ({
     ok: false,
-    error: `${who}: ${r.status} ${r.body?.message ?? r.body?.error?.message ?? r.body?.text ?? r.text.slice(0, 160)}`.trim().slice(0, 300),
+    error: `${who}: HTTP ${r.status} ${strField(r.body?.message ?? r.body?.error?.message ?? r.body?.text)}`.trim().slice(0, 300),
     // 4xx other than rate limiting will fail again: bad number, bad credentials.
     permanent: r.status >= 400 && r.status < 500 && r.status !== 429,
   });
@@ -193,10 +259,8 @@ export async function sendWhatsApp(c: WhatsAppConfig, token: string | null, to: 
   if (!token) return { ok: false, error: 'No WhatsApp access token saved.', permanent: true };
   const url = `${String(c.apiBase).replace(/\/+$/, '')}/${encodeURIComponent(c.phoneNumberId)}/messages`;
   try {
-    const r = await fetch(url, {
+    const r = await providerCall(url, {
       method: 'POST',
-      redirect: 'error',
-      signal: AbortSignal.timeout(15_000),
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         messaging_product: 'whatsapp',
@@ -210,13 +274,22 @@ export async function sendWhatsApp(c: WhatsAppConfig, token: string | null, to: 
         },
       }),
     });
-    const body: any = await r.json().catch(() => ({}));
-    if (r.ok && body?.messages?.[0]?.id) return { ok: true, ref: String(body.messages[0].id) };
+    const body: any = r.body ?? {};
+    if (r.status >= 200 && r.status < 300 && body?.messages?.[0]?.id) return { ok: true, ref: String(body.messages[0].id) };
+    // Meta's structured error (message, code, details) — never the raw answer.
     const err = body?.error;
-    const msg = err ? `${err.message ?? 'error'}${err.code ? ` (code ${err.code})` : ''}${err.error_data?.details ? `: ${err.error_data.details}` : ''}` : `HTTP ${r.status}`;
+    const msg = err && typeof err === 'object'
+      ? `${strField(err.message) || 'error'}${err.code ? ` (code ${strField(err.code)})` : ''}${err.error_data?.details ? `: ${strField(err.error_data.details)}` : ''}`
+      : `HTTP ${r.status}`;
     // 4xx other than rate limiting will fail again: bad number, template missing, token invalid.
     return { ok: false, error: msg.slice(0, 300), permanent: r.status >= 400 && r.status < 500 && r.status !== 429 };
   } catch (e) {
     return { ok: false, error: `WhatsApp API unreachable: ${(e as Error).message}`.slice(0, 300) };
   }
+}
+
+/** A provider's error field, if it is a short scalar (an object or a page of text is not shown). */
+function strField(v: unknown): string {
+  if (typeof v !== 'string' && typeof v !== 'number') return '';
+  return String(v).replace(/\s+/g, ' ').slice(0, 200);
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { one, outsideRequestScope, query } from '../../db/pool.js';
+import { one, outsideRequestScope, query, tx } from '../../db/pool.js';
 import { logger } from '../../logger.js';
 import { bus } from '../events.js';
 import { byId, byWebhookKey, logEvent, resolve, type Resolved } from '../../integrations/store.js';
@@ -17,6 +17,36 @@ import { CHANNELS, CHANNEL_LABEL, methodOf, WalletLinkEnded, type Channel, type 
  */
 
 export class PaymentsUnavailable extends Error {}
+
+/** Where a payment stands at the acquirer (an adapter's paymentStatus). */
+export interface PaymentStatus {
+  status: 'captured' | 'authorised' | 'pending' | 'failed';
+  /** The acquirer's own status word, for the log. */
+  acquirerStatus: string;
+  amountIdr: number | null;
+  providerPaymentId?: string;
+  raw?: unknown;
+}
+
+export interface RefundStatusArgs { providerRef: string; providerPaymentId: string | null; channel: string | null; refundRef: string | null; idempotencyKey: string }
+
+/**
+ * What some adapters offer beyond PaymentProvider (provider.ts), used where present:
+ *   orderRef        the acquirer's reference for a payment, derived from PlugSure's reference: known BEFORE the
+ *                   acquirer is asked (so it is recorded first), and the same when a request is repeated.
+ *   paymentStatus   where a payment stands (null: the acquirer has no such payment).
+ *   refundStatus    where a refund stands (null: no such refund).
+ *   parseRefundEvent  a refund callback, verified.
+ *   notificationFresh  whether a notification's signed timestamp is recent (a replay otherwise).
+ */
+export interface ProviderExtras {
+  orderRef?(referenceId: string): string;
+  paymentStatus?(providerRef: string): Promise<PaymentStatus | null>;
+  refundStatus?(a: RefundStatusArgs): Promise<'refunded' | 'pending' | 'failed' | null>;
+  parseRefundEvent?(rawBody: string, headers: Record<string, string | string[] | undefined>): { refundRef: string; status: 'refunded' | 'pending' | 'failed'; event: string } | null;
+  notificationFresh?(headers: Record<string, string | string[] | undefined>): boolean;
+}
+export const extras = (p: PaymentProvider | null | undefined): ProviderExtras => (p ?? {}) as ProviderExtras;
 
 const mock = new MockPaymentProvider();
 const instances = new Map<string, { sig: string; p: PaymentProvider }>();
@@ -169,6 +199,17 @@ export interface StartedPayment {
   saveCard: boolean;
 }
 
+/** What startPayment is about to ask the acquirer for (see its prepare option). */
+export interface PreparedPayment {
+  /** The acquirer's reference the payment will have; null when it is only known from the answer (the sandbox). */
+  providerRef: string | null;
+  mode: StartedPayment['mode'];
+  method: StartedPayment['method'];
+  channel: Channel;
+  savedCardId: string | null;
+  saveCard: boolean;
+}
+
 /** Start a payment through the operator's acquirer, by the method the driver chose. */
 export async function startPayment(
   acq: { provider: PaymentProvider; resolved: Resolved },
@@ -184,11 +225,20 @@ export async function startPayment(
     allowHold?: boolean;
     /** Pay with this linked e-wallet (one tap). */
     walletId?: string | null;
+    /**
+     * Called just BEFORE the acquirer is asked (and, for post-pay, before the decision is released): record the payment
+     * with its acquirer reference (null where the adapter cannot tell it in advance: the sandbox), so a charge whose answer
+     * is lost — a timeout after the e-wallet or card was charged — still has a record its notification settles. The
+     * reference is derived from referenceId, so referenceId must name this payment (e.g. its payment_intent id).
+     */
+    prepare?: (p: PreparedPayment) => Promise<void>;
   },
 ): Promise<StartedPayment> {
   const channel = String(a.savedCardId ? 'CARD' : a.channel || 'QRIS').toUpperCase() as Channel;
   if (!availableMethods(acq.resolved, acq.provider).includes(channel)) throw new MethodUnavailable(`${CHANNEL_LABEL[channel] ?? channel} tidak tersedia di operator ini.`);
   const base = { immediate: null, savedCardId: null, saveCard: false, mode: 'prepurchase' as 'prepurchase' | 'preauth' | 'postpay' };
+  const ref = extras(acq.provider).orderRef?.(a.referenceId) ?? null;
+  const prepare = (p: Omit<PreparedPayment, 'providerRef'> & { providerRef?: string | null }) => a.prepare?.({ ...p, providerRef: p.providerRef ?? ref }) ?? Promise.resolve();
   if (a.walletId) {
     // A linked e-wallet: charged in one tap for the chosen amount; unused balance is refunded automatically.
     if (!a.appDriverId || !acq.provider.chargeWallet) throw new MethodUnavailable('E-wallet terhubung tidak bisa dipakai di operator ini.');
@@ -201,22 +251,41 @@ export async function startPayment(
     const post = postpayOptions(acq.resolved, acq.provider);
     // Post-pay: nothing is charged now. The amount is the session's spending limit; the actual total is charged when it ends.
     // Above the operator's limit, or while an earlier post-pay session is unpaid, the e-wallet is charged up front instead.
-    const { outstandingPostpay } = await import('./holds.js');
-    if (post.on && a.allowHold === true && a.amountIdr <= post.limitIdr && !(await outstandingPostpay(a.appDriverId))) {
-      let balance: number | null = null;
-      try { balance = acq.provider.walletBalance ? await acq.provider.walletBalance(t.token, ch) : null; } catch (e) {
-        if (e instanceof WalletLinkEnded) throw await linkEnded(a.walletId, ch);
-      }
-      // Unknown balance while the operator requires a checked one: charged up front below instead.
-      if (balance != null || !post.needsBalance) {
-        if (balance != null && balance < a.amountIdr) throw new MethodUnavailable(`Saldo ${CHANNEL_LABEL[ch]} Anda (Rp ${balance.toLocaleString('id-ID')}) kurang dari batas yang dipilih. Pilih jumlah lebih kecil atau isi saldo.`);
+    // The limit covers ALL the driver's post-pay sessions not yet charged (held, or being decided), and the balance all
+    // those on this e-wallet, not this one alone: otherwise any number of sessions started at once each passed the same
+    // limit and balance. One decision at a time per driver (an advisory lock), and this payment is recorded as post-pay
+    // before the lock is released.
+    if (post.on && a.allowHold === true && a.amountIdr <= post.limitIdr) {
+      const { postpayExposure } = await import('./holds.js');
+      const driverId = a.appDriverId, walletId = a.walletId;
+      const postpayRef = `postpay-${randomUUID()}`;
+      const decided = await tx(async (c) => {
+        await c.query(`SELECT pg_advisory_xact_lock(hashtext('postpay:' || $1::text))`, [driverId]);
+        const x = await postpayExposure(driverId, ch, c);
+        if (x.unpaid || x.heldIdr + a.amountIdr > post.limitIdr) return false;
+        let balance: number | null = null;
+        try { balance = acq.provider.walletBalance ? await acq.provider.walletBalance(t.token, ch) : null; } catch (e) {
+          if (e instanceof WalletLinkEnded) throw await linkEnded(walletId, ch);
+        }
+        // Unknown balance while the operator requires a checked one: charged up front below instead.
+        if (balance == null && post.needsBalance) return false;
+        if (balance != null && balance < x.heldOnWalletIdr + a.amountIdr) {
+          throw new MethodUnavailable(x.heldOnWalletIdr > 0
+            ? `Saldo ${CHANNEL_LABEL[ch]} Anda (Rp ${balance.toLocaleString('id-ID')}) kurang dari batas yang dipilih ditambah sesi bayar-setelah-selesai Anda yang masih berjalan (Rp ${x.heldOnWalletIdr.toLocaleString('id-ID')}). Pilih jumlah lebih kecil atau isi saldo.`
+            : `Saldo ${CHANNEL_LABEL[ch]} Anda (Rp ${balance.toLocaleString('id-ID')}) kurang dari batas yang dipilih. Pilih jumlah lebih kecil atau isi saldo.`);
+        }
+        await prepare({ providerRef: postpayRef, mode: 'postpay', method: 'ewallet', channel: ch, savedCardId: walletId, saveCard: false });
+        return true;
+      });
+      if (decided) {
         await markUsed(a.walletId);
         return {
-          ...base, mode: 'postpay', providerRef: `postpay-${randomUUID()}`, channel: ch, method: 'ewallet', action: 'done', qrString: null, checkoutUrl: null,
+          ...base, mode: 'postpay', providerRef: postpayRef, channel: ch, method: 'ewallet', action: 'done', qrString: null, checkoutUrl: null,
           expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), providerPaymentId: null, immediate: 'authorised', savedCardId: a.walletId,
         };
       }
     }
+    await prepare({ mode: 'prepurchase', method: 'ewallet', channel: ch, savedCardId: a.walletId, saveCard: false });
     const c = await acq.provider.chargeWallet({ referenceId: a.referenceId, amountIdr: a.amountIdr, channel: ch, token: t.token, returnUrl: a.returnUrl, customerId: a.appDriverId, description: a.description });
     if (c.status === 'failed' && c.linkEnded) throw await linkEnded(a.walletId, ch);
     if (c.status === 'failed') throw new MethodUnavailable(`Pembayaran ${CHANNEL_LABEL[ch]} ditolak${c.message ? ` (${c.message})` : ''}. Periksa saldo, atau pilih metode lain.`);
@@ -228,6 +297,7 @@ export async function startPayment(
     };
   }
   if (channel === 'QRIS') {
+    await prepare({ mode: 'prepurchase', method: 'qris', channel, savedCardId: null, saveCard: false });
     const q = await acq.provider.createQrisCharge({ referenceId: a.referenceId, amountIdr: a.amountIdr, description: a.description });
     return { ...base, providerRef: q.providerRef, channel, method: 'qris', action: 'qr', qrString: q.qrString, checkoutUrl: null, expiresAt: q.expiresAt, providerPaymentId: null };
   }
@@ -240,6 +310,7 @@ export async function startPayment(
       const { cardToken, markUsed, endCard } = await import('./cards.js');
       const t = await cardToken(a.appDriverId, a.savedCardId, { provider: acq.resolved.provider, integrationId: acq.resolved.integrationId });
       if ('error' in t) throw t.ended ? new MethodUnavailable(cardEndedMessage(t.ended, t.ended.expired), 'saved_card_ended') : new MethodUnavailable(t.error);
+      await prepare({ mode, method: 'card', channel, savedCardId: a.savedCardId, saveCard: false });
       const c = await acq.provider.chargeSavedCard({ referenceId: a.referenceId, amountIdr: a.amountIdr, token: t.token, preauth, returnUrl: a.returnUrl, customerId: a.appDriverId, description: a.description });
       // The acquirer no longer accepts the saved token: stop offering the card, and say what to do.
       if (c.status === 'failed' && c.linkEnded) { await endCard(a.savedCardId); throw new MethodUnavailable(cardEndedMessage(t, false), 'saved_card_ended'); }
@@ -252,6 +323,7 @@ export async function startPayment(
       };
     }
     const saveCard = a.saveCard === true && opts.saveCards && !!a.appDriverId;
+    await prepare({ mode, method: 'card', channel, savedCardId: null, saveCard });
     const c = await acq.provider.createCheckout!({ referenceId: a.referenceId, amountIdr: a.amountIdr, channel, returnUrl: a.returnUrl, description: a.description, preauth, saveCard, ...(a.appDriverId ? { customerId: a.appDriverId } : {}) });
     return { ...base, mode, saveCard, providerRef: c.providerRef, channel, method: 'card', action: c.action, qrString: null, checkoutUrl: c.checkoutUrl, expiresAt: c.expiresAt, providerPaymentId: c.providerPaymentId ?? null };
   }
@@ -260,6 +332,7 @@ export async function startPayment(
   const digits = String(a.customerPhone ?? '').replace(/[^\d]/g, '').replace(/^0/, '62');
   const phone = /^628\d{7,12}$/.test(digits) ? `+${digits}` : undefined;
   if (channel === 'OVO' && !phone) throw new MethodUnavailable('Masukkan nomor HP yang terdaftar di OVO (+62…).');
+  await prepare({ mode: 'prepurchase', method: methodOf(channel), channel, savedCardId: null, saveCard: false });
   const c = await acq.provider.createCheckout({ referenceId: a.referenceId, amountIdr: a.amountIdr, channel, returnUrl: a.returnUrl, description: a.description, customerPhone: phone });
   return { ...base, providerRef: c.providerRef, channel, method: methodOf(channel), action: c.action, qrString: null, checkoutUrl: c.checkoutUrl, expiresAt: c.expiresAt, providerPaymentId: c.providerPaymentId ?? null };
 }
@@ -273,14 +346,28 @@ export async function handleNotification(key: string, rawBody: string, headers: 
   const r = await byWebhookKey(key);
   if (!r) return { status: 404, body: { error: 'unknown notification URL' } };
   const provider = providerFor(r);
-  const n = provider.parseNotification?.(rawBody, headers, path) ?? null;
   const ack = (ok: boolean) => provider.notificationAck?.(ok) ?? { status: ok ? 200 : 401, body: ok ? { ok: true } : { error: 'invalid signature' } };
+  // A signed timestamp too far from now (BI-SNAP X-TIMESTAMP, ±5 minutes): a replayed notification, refused unread.
+  const fresh = extras(provider).notificationFresh;
+  if (fresh && !fresh.call(provider, headers)) {
+    await logEvent(r, r.orgId, 'notification', 'rejected', { reason: 'timestamp outside the allowed window (replay?)' });
+    return ack(false);
+  }
+  const n = provider.parseNotification?.(rawBody, headers, path) ?? null;
   if (!n) {
     // Not a payment: perhaps a linked e-wallet's status change (activated, ended, linking failed).
     const ev = provider.parseLinkEvent?.(rawBody, headers) ?? null;
     if (ev) {
       const outcome = await outsideRequestScope(() => applyLinkEvent(r, ev));
       await logEvent(r, r.orgId, 'notification', outcome, { linkEvent: ev.event, status: ev.status });
+      return ack(true);
+    }
+    // ...or a refund the acquirer completed (or refused) after answering "pending".
+    const rf = extras(provider).parseRefundEvent?.call(provider, rawBody, headers) ?? null;
+    if (rf) {
+      const { refundSettled } = await import('../refunds.js');
+      const outcome = await outsideRequestScope(() => refundSettled({ provider: r.provider, integrationId: r.integrationId }, rf.refundRef, rf.status));
+      await logEvent(r, r.orgId, 'notification', outcome, { refundEvent: rf.event, refundRef: rf.refundRef, status: rf.status });
       return ack(true);
     }
     await logEvent(r, r.orgId, 'notification', 'rejected', { reason: 'signature or body not valid' });
@@ -391,8 +478,32 @@ async function applyNotification(r: Resolved, n: NonNullable<ReturnType<NonNulla
         return { outcome: 'authorised', orgId: intent.org_id };
       }
       if (n.paid && intent.state !== 'pending') {
-        // The acquirer confirming the capture PlugSure asked for.
-        await query(`UPDATE payment_intent SET raw_events = raw_events || $2::jsonb WHERE id = $1`, [intent.id, JSON.stringify([{ at: new Date(), status: n.status, amountIdr: n.amountIdr }])]);
+        // The acquirer confirming the capture PlugSure asked for. When PlugSure did not see that capture succeed (its answer
+        // was lost, or a retry was refused because it had already gone through), the hold is still capturing or
+        // capture_failed: this confirmation settles it, for what PlugSure asked to capture, never above the hold.
+        const event = JSON.stringify([{ at: new Date(), status: n.status, amountIdr: n.amountIdr }]);
+        if (n.amountIdr != null && intent.amount_authorised_idr != null && n.amountIdr > intent.amount_authorised_idr) {
+          logger.error({ intent: intent.id, captured: n.amountIdr, authorised: intent.amount_authorised_idr }, 'capture confirmation above the hold; not reconciled');
+          await query(`UPDATE payment_intent SET raw_events = raw_events || $2::jsonb WHERE id = $1`, [intent.id, event]);
+          return { outcome: 'amount_mismatch', orgId: intent.org_id, detail: { authorised: intent.amount_authorised_idr } };
+        }
+        const settled = await one<{ id: string; captured: number; authorised: number | null }>(
+          `UPDATE payment_intent SET state = 'captured', amount_captured_idr = hold_capture_idr, captured_at = COALESCE(captured_at, now()), hold_state = 'captured',
+                  hold_error = NULL, hold_next_attempt_at = NULL, released_at = COALESCE(released_at, now()), updated_at = now(),
+                  provider_payment_id = COALESCE(provider_payment_id, $3), raw_events = raw_events || $2::jsonb
+            WHERE id = $1 AND hold_state IN ('capturing', 'capture_failed') AND hold_capture_idr IS NOT NULL
+              AND (amount_authorised_idr IS NULL OR hold_capture_idr <= amount_authorised_idr)
+            RETURNING id, hold_capture_idr AS captured, amount_authorised_idr AS authorised`,
+          [intent.id, event, n.paymentId ?? null],
+        );
+        if (settled) {
+          logger.warn({ intent: intent.id, capturedIdr: settled.captured }, 'card hold capture confirmed by the acquirer after PlugSure recorded it as not captured; reconciled');
+          const { resolveAlertsFor } = await import('../alerts.js');
+          for (const kind of ['payment.hold_capture_failed', 'payment.hold_expired']) await resolveAlertsFor(intent.org_id, kind, 'payment_intent', intent.id);
+          bus.emit('payment.hold_captured', { orgId: intent.org_id, paymentIntentId: intent.id, capturedIdr: Number(settled.captured), releasedIdr: Number(settled.authorised ?? 0) - Number(settled.captured) });
+          return { outcome: 'capture_reconciled', orgId: intent.org_id };
+        }
+        await query(`UPDATE payment_intent SET raw_events = raw_events || $2::jsonb WHERE id = $1`, [intent.id, event]);
         return { outcome: 'capture_confirmed', orgId: intent.org_id };
       }
       if (!n.paid && /expire/i.test(n.status) && intent.state === 'authorised') {
@@ -439,8 +550,11 @@ async function applyNotification(r: Resolved, n: NonNullable<ReturnType<NonNulla
     return { outcome: 'captured', orgId: intent.org_id };
   }
   // A 30-day app pass bought in the driver app.
-  const pass = await one<{ id: string; org_id: string; state: string }>(`SELECT id, org_id, state FROM subscription_charge WHERE provider_ref = $1 AND (provider = $2 OR provider IS NULL)`, [n.providerRef, r.provider]);
+  const pass = await one<{ id: string; org_id: string; state: string; integration_id: string | null; total_idr: number }>(
+    `SELECT id, org_id, state, integration_id, total_idr FROM subscription_charge WHERE provider_ref = $1 AND (provider = $2 OR provider IS NULL)`, [n.providerRef, r.provider]);
   if (pass) {
+    // As for payments: a notification from one operator's account cannot settle (or fail) another's pass.
+    if (pass.integration_id && r.integrationId && pass.integration_id !== r.integrationId) return { outcome: 'wrong_account', orgId: pass.org_id };
     if (!n.paid) {
       // An automatic renewal that will not complete (expired PIN, refused, cancelled) is retried by the renewal worker.
       if (/expire|deny|cancel|fail|DID_NOT_AUTHORIZE|declin/i.test(n.status)) {
@@ -451,8 +565,18 @@ async function applyNotification(r: Resolved, n: NonNullable<ReturnType<NonNulla
       return { outcome: 'not_paid', orgId: pass.org_id };
     }
     if (pass.state === 'paid') return { outcome: 'duplicate', orgId: pass.org_id };
-    const { markPassPaid } = await import('../../driver/membership.js');
-    await markPassPaid(pass.id);
+    // Never for less than the pass costs (as for payments).
+    if (n.amountIdr != null && n.amountIdr < Number(pass.total_idr)) {
+      logger.error({ pass: pass.id, paid: n.amountIdr, expected: pass.total_idr }, 'pass payment notification for less than the pass costs; not marked paid');
+      return { outcome: 'amount_mismatch', orgId: pass.org_id, detail: { expected: Number(pass.total_idr) } };
+    }
+    const { markPassPaid, passPaidAfterVoid } = await import('../../driver/membership.js');
+    if (!(await markPassPaid(pass.id))) {
+      // Paid after its checkout was replaced or cancelled (void): the money arrived, the pass will not come from it. Kept
+      // as a payment owed back in full (Refunds), never silently.
+      const owed = await passPaidAfterVoid(pass.id, { provider: r.provider, integrationId: r.integrationId }, { amountIdr: n.amountIdr, paymentId: n.paymentId ?? null, status: n.status });
+      return { outcome: owed ? 'pass_paid_after_void_refund_due' : 'pass_not_payable', orgId: pass.org_id };
+    }
     if (n.savedCard) {
       const sc = await one<{ save_card: boolean; app_driver_id: string | null; integration_id: string | null }>(
         `SELECT c.save_card, s.app_driver_id, c.integration_id FROM subscription_charge c JOIN subscription s ON s.id = c.subscription_id WHERE c.id = $1`, [pass.id]);

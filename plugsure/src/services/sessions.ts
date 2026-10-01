@@ -6,11 +6,11 @@ import { config } from '../config.js';
 import { bus } from './events.js';
 import { getConnector, type ConnectorRow } from './assets.js';
 import { rateSession, adjustmentTotals, type Tariff, type PriceAdjustment, type RatingResult } from './tariff.js';
-import { redemptionFor, pointsToRedeem, pointsAdjustment, discountable, recordLoyalty } from './loyalty.js';
-import { benefitsFor, adjustmentOptions, pickCheapest, recordBenefits, type Who, type Benefits } from './benefits.js';
+import { redemptionFor, pointsToRedeem, pointsAdjustment, discountable, recordLoyalty, lockedBalance } from './loyalty.js';
+import { benefitsFor, adjustmentOptions, pickCheapest, recordBenefits, reservePromotion, type Who, type Benefits } from './benefits.js';
 import { loadTariffForConnector } from './tariff-store.js';
 import type { CanonicalMeterValue, TransactionEvent } from '../domain/canonical.js';
-import { energyWhFrom, powerWFrom } from '../domain/canonical.js';
+import { energyWhFrom, energySeriesFrom, powerWFrom } from '../domain/canonical.js';
 import { markRefundDue } from './refunds.js';
 import { linkRoamingSession } from '../ocpi/authorize.js';
 import { normaliseEmaid } from '../pnc/emaid.js';
@@ -65,6 +65,8 @@ export interface SessionRow {
   started_at: Date;
   ended_at: Date | null;
   meter_start_wh: number;
+  /** True while the start register has not been observed (migration 043). */
+  meter_start_unknown: boolean;
   meter_stop_wh: number | null;
   energy_wh: number;
   idle_minutes: number;
@@ -73,6 +75,8 @@ export interface SessionRow {
   prepaid_energy_wh: number | null;
   payment_mode: string | null;
   flags: unknown[];
+  token_id?: string | null;
+  ocpi_token_id?: string | null;
 }
 
 /**
@@ -86,11 +90,41 @@ export interface SessionFlag {
   code: string;
   severity: 'info' | 'warning' | 'violation';
   message: string;
+  /** UNAUTHORISED_TOKEN: the token that was refused (the session binds none). */
+  idToken?: string;
+}
+
+/**
+ * A transaction the charger reports as ALREADY RUNNING although its token (or
+ * the station itself) was not authorised: an offline start with a card that has
+ * since been blocked, a 2.0.1 `offline: true` upload, a start replayed long after
+ * the fact. The energy was delivered whatever the CSMS answers now, so refusing
+ * to record it loses it — and in 1.6 every refused transaction used to share
+ * transactionId 0, so its MeterValues and StopTransaction went nowhere.
+ *
+ * Such a start is RECORDED, never billed: no payer (no token bound, no prepaid
+ * intent claimed — someone else's payment must never cover it, and no roaming
+ * partner is told about a session it never approved), and parked with a
+ * violation flag so no CDR is issued until an operator has looked at it.
+ */
+export interface UnauthorisedStart {
+  /** Flag / review code: UNAUTHORISED_TOKEN, or STATION_NOT_IN_SERVICE for a suspended unit. */
+  code: string;
+  /** What the authoriser said (Blocked, Invalid, Expired, ConcurrentTx, …). */
+  status: string;
+  /** The operator-facing explanation. */
+  message: string;
+}
+
+export interface TransactionEventOptions {
+  /** Started only: record the start as unauthorised (see UnauthorisedStart). */
+  unauthorised?: UnauthorisedStart;
 }
 
 export async function handleTransactionEvent(
   ev: TransactionEvent,
   chargePointId: string,
+  opts: TransactionEventOptions = {},
 ): Promise<SessionRow | null> {
   const connector = await getConnector(chargePointId, ev.evse.evseId);
   if (!connector) {
@@ -100,7 +134,7 @@ export async function handleTransactionEvent(
 
   switch (ev.eventType) {
     case 'Started':
-      return startSession(ev, connector);
+      return startSession(ev, connector, opts.unauthorised ?? null);
     case 'Updated':
       return updateSession(ev, connector);
     case 'Ended':
@@ -110,45 +144,158 @@ export async function handleTransactionEvent(
 
 // ------------------------------------------------------------------ start
 
-async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<SessionRow | null> {
-  const startWh = energyWhFrom(ev.meterValue) ?? 0;
-  const tokenId = ev.idToken ? await resolveTokenId(c.org_id, ev.idToken.idToken) : null;
+/**
+ * A start the CSMS will not record. Thrown by handleTransactionEvent(Started);
+ * the adapters answer it the way they answer a token the authoriser refused
+ * (1.6: transactionId 0 with idTagInfo.status; 2.0.1: idTokenInfo.status), so
+ * the charger stops instead of charging against a session that does not exist.
+ */
+export class SessionStartRefused extends Error {
+  constructor(public status: 'Invalid' | 'ConcurrentTx', message: string) {
+    super(message);
+    this.name = 'SessionStartRefused';
+  }
+}
+
+async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised: UnauthorisedStart | null): Promise<SessionRow | null> {
+  /**
+   * An ABSENT start register is not a zero one. OCPP 2.0.1 makes meterValue on
+   * TransactionEvent(Started) optional, and `?? 0` here made the first Updated
+   * sample — the charger's lifetime register, 8,450,000 Wh in the reproduction —
+   * the session's energy. The start is recorded as unknown instead and taken
+   * from the first register the session observes (updateSession / endSession).
+   */
+  const observedStartWh = energyWhFrom(ev.meterValue);
+  const startWh = observedStartWh ?? 0;
+  // An unauthorised start binds no token: the session has no payer until an
+  // operator decides who (if anyone) it is billed to. The presented token is
+  // kept in the flag for that review.
+  const token = ev.idToken && !unauthorised ? await resolveToken(c.org_id, ev.idToken.idToken) : null;
+  const tokenId = token?.id ?? null;
   const flags: SessionFlag[] = [];
+
+  if (unauthorised) flags.push(unauthorisedFlag(unauthorised, ev.idToken?.idToken ?? null));
 
   const skewFlag = clockSkewFlag(ev.timestamp);
   if (skewFlag) flags.push(skewFlag);
 
-  // A prepaid intent parked on this connector claims the session it starts —
-  // but only the intent whose PAYER is the token starting it.
-  const prepaid = await claimPrepaidIntent(c.id, ev.idToken?.idToken ?? null);
+  /**
+   * START IS ATOMIC PER CONNECTOR.
+   *
+   * A retried StartTransaction (or TransactionEvent Started) arriving alongside
+   * the original — across a reconnect, typically — used to pass the "existing
+   * session" check in both requests; the second then closed the session the
+   * first had just created as "superseded", and its own INSERT hit ON CONFLICT
+   * and handed back that CLOSED row. The charger went on charging against a
+   * session that was already ended and parked.
+   *
+   * Everything that decides what a start means — is this the same start again,
+   * is another session still open here, which prepaid intent does it claim —
+   * now runs under one transaction-scoped advisory lock on (charge point,
+   * connector). A duplicate waits, then finds the original by its idempotency
+   * key and changes nothing; only a genuinely new start closes an orphan, and
+   * never the row carrying its own key.
+   */
+  const started = await tx(async (client) => {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended('session-start:' || $1::text || ':' || $2::text, 0))`,
+      [c.charge_point_id, ev.evse.evseId],
+    );
 
-  const row = await one<SessionRow>(
-    `INSERT INTO charging_session
-        (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
-         token_id, state, started_at, meter_start_wh, energy_wh, payment_mode,
-         prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,0,$10,$11,$12,$13,$14,$15)
-     ON CONFLICT (idem_key) DO UPDATE
-        SET ocpp_transaction_id = COALESCE(charging_session.ocpp_transaction_id, EXCLUDED.ocpp_transaction_id)
-     RETURNING *`,
-    [
-      c.org_id,
-      c.site_id,
-      c.id,
-      c.charge_point_id,
-      ev.idemKey,
-      ev.transactionId,
-      tokenId,
-      ev.timestamp,
-      startWh,
-      prepaid ? 'prepurchase' : 'postpaid',
-      prepaid?.amount_authorised_idr ?? null,
-      prepaid?.allowance_wh ?? null,
-      prepaid?.id ?? null,
-      JSON.stringify(flags),
-      flags.some((f) => f.severity === 'violation'),
-    ],
-  );
+    const same = await client.query<SessionRow>(
+      `UPDATE charging_session
+          SET ocpp_transaction_id = COALESCE(ocpp_transaction_id, $2)
+        WHERE idem_key = $1
+        RETURNING *`,
+      [ev.idemKey, ev.transactionId],
+    );
+    if (same.rows[0]) return { row: same.rows[0], created: false, prepaid: null, orphans: [] as Orphan[], refused: null };
+
+    // A prepaid intent parked on this connector claims the session it starts —
+    // but only the intent whose PAYER is the token starting it. Claimed under
+    // the lock, so a duplicate start cannot claim a second intent.
+    // An unauthorised start claims nothing: a payment is never spent on energy
+    // nobody authorised.
+    const prepaidToken = token?.kind === 'prepaid';
+    const prepaid = unauthorised ? null : await claimPrepaidIntent(c.id, ev.idToken?.idToken ?? null, client, prepaidToken);
+
+    /**
+     * A PREPAID CLAIM TOKEN STARTS ONLY THE SESSION IT PAID FOR.
+     *
+     * The token is nothing but a key to its payment, and the payment is for ONE
+     * connector. Presented anywhere else — another connector, another charger
+     * at the operator's sites, or while its own session is still running — the
+     * claim above finds nothing, and the session used to start anyway as
+     * `postpaid`: no allowance, and no payer (whoForSession drops a prepaid
+     * token as a customer). The driver charged without limit, billed to nobody,
+     * and the refund sweep then returned the untouched payment in full.
+     *
+     * The authoriser (adapter16.authorizeIdTag) already refuses these when it
+     * knows the connector; this is the authoritative check, under the
+     * connector's lock, so no path can turn a prepaid token into a postpaid
+     * session. Refused BEFORE any orphan is closed: a refused start changes
+     * nothing on the connector.
+     */
+    if (prepaidToken && !prepaid) {
+      const status = await prepaidRefusalStatus(client, c.org_id, ev.idToken!.idToken);
+      return { row: null, created: false, prepaid: null, orphans: [] as Orphan[], refused: status };
+    }
+
+    // A new transaction on a connector we still believe is busy means we missed
+    // a stop. Close the stale one for review rather than losing either session.
+    const orphans = await closeOrphansLocked(client, c.charge_point_id, ev.evse.evseId, ev.idemKey, 'superseded by a new transaction');
+
+    const ins = await client.query<SessionRow & { inserted: boolean }>(
+      `INSERT INTO charging_session
+          (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
+           token_id, state, started_at, meter_start_wh, meter_start_unknown, energy_wh, payment_mode,
+           prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review, review_reason)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16,$17)
+       ON CONFLICT (idem_key) DO UPDATE
+          SET ocpp_transaction_id = COALESCE(charging_session.ocpp_transaction_id, EXCLUDED.ocpp_transaction_id)
+       RETURNING *, (xmax = 0) AS inserted`,
+      [
+        c.org_id,
+        c.site_id,
+        c.id,
+        c.charge_point_id,
+        ev.idemKey,
+        ev.transactionId,
+        tokenId,
+        ev.timestamp,
+        startWh,
+        observedStartWh === null,
+        prepaid ? 'prepurchase' : 'postpaid',
+        prepaid?.amount_authorised_idr ?? null,
+        prepaid?.allowance_wh ?? null,
+        prepaid?.id ?? null,
+        JSON.stringify(flags),
+        flags.some((f) => f.severity === 'violation'),
+        // The reason the review queue shows: the first violation, decided at the start.
+        flags.find((f) => f.severity === 'violation')?.code ?? null,
+      ],
+    );
+    const { inserted, ...row } = ins.rows[0]!;
+    // Bound inside the lock too: an intent claimed but not yet pointed at its
+    // session is still claimable by the next start on this connector.
+    if (prepaid && inserted) {
+      await client.query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
+    }
+    return { row: row as SessionRow, created: inserted, prepaid, orphans, refused: null };
+  });
+
+  if (started.refused) {
+    logger.warn(
+      { cp: ev.evse.ocppIdentity, evseId: ev.evse.evseId, tx: ev.transactionId, status: started.refused },
+      'prepaid claim token presented where it has no claimable payment — start refused',
+    );
+    throw new SessionStartRefused(started.refused, 'This prepaid token has no claimable payment on this connector.');
+  }
+  for (const o of started.orphans) announceOrphan(o, 'superseded by a new transaction');
+  // A repeat of a start already recorded: the original row, with none of the
+  // start's side effects (meter values, prepaid binding, session.started) run twice.
+  if (!started.created) return started.row;
+  const { row, prepaid } = started;
 
   if (row) {
     await insertMeterValues(row.id, ev.meterValue);
@@ -158,7 +305,6 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
     await applyFleetConsent(row.id).catch(() => false);
     await trackMeter(row.id, ev.meterValue, ev.operationMode).catch(() => null);
     if (prepaid) {
-      await query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
       if (prepaid.claim_id_tag == null) {
         await addFlag(row.id, {
           code: 'PREPAID_UNBOUND_INTENT',
@@ -175,7 +321,21 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sess
     }
     // Not one of the operator's own cards: a roaming partner's driver is linked
     // here, before session.started, so the partner is told about the session.
-    if (!tokenId && ev.idToken) await linkRoamingSession(row.id, c.org_id, ev.idToken.idToken);
+    // Never for an unauthorised start: the partner did not approve it.
+    if (!tokenId && ev.idToken && !unauthorised) await linkRoamingSession(row.id, c.org_id, ev.idToken.idToken);
+    if (unauthorised) {
+      logger.warn(
+        { sessionId: row.id, cp: ev.evse.ocppIdentity, tx: ev.transactionId, status: unauthorised.status, code: unauthorised.code },
+        'unauthorised transaction reported by the charger — recorded and parked for review, not billed',
+      );
+      bus.emit('alert.raised', {
+        orgId: row.org_id,
+        kind: 'session.unauthorised',
+        severity: 'warning',
+        message: `${ev.evse.ocppIdentity} reported a transaction that was not authorised (${unauthorised.status}). ` +
+          `Session ${row.id} is recorded for review and will not be billed automatically.`,
+      });
+    }
     bus.emit('session.started', {
       orgId: row.org_id,
       sessionId: row.id,
@@ -211,6 +371,24 @@ async function updateSession(ev: TransactionEvent, c: ConnectorRow): Promise<Ses
     replan = (await trackMeter(row.id, ev.meterValue, ev.operationMode, client)).replanSiteId;
 
     if (observedWh === null) return row;
+
+    // The start register was never reported (a 2.0.1 Started without meterValue).
+    // The FIRST register observed is the start: energy 0 at that point, not the
+    // charger's lifetime total. The lowest register in the batch, so a batch of
+    // several samples still counts what flowed between them.
+    if (row.meter_start_unknown) {
+      if (row.state !== 'active') return row; // closed with no start: nothing to measure from
+      const startWh = Math.min(...energySeriesFrom(ev.meterValue));
+      await client.query(
+        `UPDATE charging_session
+            SET meter_start_wh = $2, meter_start_unknown = false, last_meter_at = $3,
+                flags = flags || $4::jsonb
+          WHERE id = $1 AND meter_start_unknown`,
+        [row.id, startWh, ev.timestamp, JSON.stringify([startInferredFlag(startWh, ev.timestamp)])],
+      );
+      row.meter_start_wh = startWh;
+      row.meter_start_unknown = false;
+    }
 
     const candidate = observedWh - row.meter_start_wh;
 
@@ -269,6 +447,135 @@ async function updateSession(ev: TransactionEvent, c: ConnectorRow): Promise<Ses
   return out;
 }
 
+// ------------------------------------------------------------------ late token
+
+/**
+ * The session for this transaction is still waiting for its token: running,
+ * no own token and no roaming token bound, and this token not already refused
+ * on it. Read-only: the adapter asks before authorising, so a station that
+ * repeats the idToken on every Updated event is authorised once, not per frame.
+ */
+export async function sessionAwaitsToken(chargePointId: string, transactionId: string, idTag: string): Promise<boolean> {
+  const r = await one<{ waiting: boolean }>(
+    `SELECT (token_id IS NULL AND ocpi_token_id IS NULL
+             AND NOT flags @> jsonb_build_array(jsonb_build_object('idToken', $3::text))) AS waiting
+       FROM charging_session
+      WHERE charge_point_id = $1 AND ocpp_transaction_id = $2 AND state = 'active'
+      ORDER BY started_at DESC LIMIT 1`,
+    [chargePointId, transactionId, idTag],
+  );
+  return r?.waiting === true;
+}
+
+/**
+ * A token presented AFTER the transaction started (OCPP 2.0.1).
+ *
+ * With TxStartPoint=EVConnected (or PowerPathClosed) the station starts the
+ * transaction at plug-in, before anyone has authorised, and the idToken arrives
+ * on a later Updated event (triggerReason Authorized). It used to be ignored:
+ * the session ran — and was billed — with no token, no payer, no prepaid
+ * allowance and no roaming link, and the station was never told whether the
+ * token was any good.
+ *
+ * Now the first token seen on a session that has none goes through what a token
+ * at the start goes through. `auth` is the authoriser's verdict (adapter16.
+ * authorizeIdTag, with the EVSE, so a prepaid claim token is checked against the
+ * connector its payment is for). Under the connector's session-start lock — the
+ * same lock that serialises prepaid claims at start, so one payment can never be
+ * claimed by two sessions — the session row is locked and:
+ *
+ *   - Accepted: the token is bound; a prepaid claim token must claim ITS payment
+ *     on this connector (or the verdict becomes the start-time refusal status);
+ *     a token that is not one of the operator's own is linked to its roaming
+ *     partner after the commit.
+ *   - anything else: nothing is bound, and the session is flagged
+ *     UNAUTHORISED_TOKEN and parked for review — the station is told the status
+ *     and should stop, but what it already delivered is recorded, not billed.
+ *
+ * Returns the final status for the station's idTokenInfo, or null when there is
+ * nothing to do (unknown transaction, session no longer running, or already
+ * carrying a token).
+ */
+export async function attachLateToken(
+  ev: TransactionEvent,
+  chargePointId: string,
+  auth: { status: string; code?: string; message?: string },
+): Promise<{ status: string; sessionId: string } | null> {
+  const idTag = ev.idToken?.idToken;
+  if (!idTag) return null;
+  const c = await getConnector(chargePointId, ev.evse.evseId);
+  if (!c) return null;
+  const token = await resolveToken(c.org_id, idTag);
+
+  const out = await tx(async (client) => {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended('session-start:' || $1::text || ':' || $2::text, 0))`,
+      [c.charge_point_id, ev.evse.evseId],
+    );
+    const cur = await client.query<SessionRow>(
+      `SELECT * FROM charging_session
+        WHERE charge_point_id = $1 AND ocpp_transaction_id = $2
+        ORDER BY started_at DESC LIMIT 1
+        FOR UPDATE`,
+      [c.charge_point_id, ev.transactionId],
+    );
+    const row = cur.rows[0];
+    if (!row || row.state !== 'active' || row.token_id || row.ocpi_token_id) return null;
+
+    let status = auth.status;
+    let prepaid: Awaited<ReturnType<typeof claimPrepaidIntent>> = null;
+    if (status === 'Accepted' && token?.kind === 'prepaid') {
+      prepaid = await claimPrepaidIntent(c.id, idTag, client, true);
+      if (!prepaid) status = await prepaidRefusalStatus(client, c.org_id, idTag);
+    }
+
+    if (status !== 'Accepted') {
+      const flag = unauthorisedFlag(
+        { code: auth.code ?? 'UNAUTHORISED_TOKEN', status, message: auth.message ?? `The token presented during the transaction was refused (${status}).` },
+        idTag,
+      );
+      await client.query(
+        `UPDATE charging_session
+            SET flags = flags || $2::jsonb, needs_review = true, review_reason = COALESCE(review_reason, $3)
+          WHERE id = $1`,
+        [row.id, JSON.stringify([flag]), flag.code],
+      );
+      return { status, sessionId: row.id, orgId: row.org_id, refused: true, roaming: false };
+    }
+
+    await client.query(
+      `UPDATE charging_session
+          SET token_id = $2,
+              payment_mode = CASE WHEN $3::uuid IS NOT NULL THEN 'prepurchase' ELSE payment_mode END,
+              payment_intent_id = COALESCE($3, payment_intent_id),
+              prepaid_amount_idr = COALESCE($4, prepaid_amount_idr),
+              prepaid_energy_wh = COALESCE($5, prepaid_energy_wh)
+        WHERE id = $1`,
+      [row.id, token?.id ?? null, prepaid?.id ?? null, prepaid?.amount_authorised_idr ?? null, prepaid?.allowance_wh ?? null],
+    );
+    if (prepaid) await client.query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
+    return { status, sessionId: row.id, orgId: row.org_id, refused: false, roaming: !token };
+  });
+  if (!out) return null;
+
+  if (out.refused) {
+    logger.warn({ sessionId: out.sessionId, cp: ev.evse.ocppIdentity, tx: ev.transactionId, status: out.status }, 'token presented during the transaction was refused — session parked for review');
+    bus.emit('alert.raised', {
+      orgId: out.orgId,
+      kind: 'session.unauthorised',
+      severity: 'warning',
+      message: `${ev.evse.ocppIdentity}: the token presented during session ${out.sessionId} was refused (${out.status}). ` +
+        'The session is recorded for review and will not be billed automatically.',
+    });
+  } else {
+    // A roaming partner's driver: linked now, as it would have been at the start.
+    if (out.roaming) await linkRoamingSession(out.sessionId, out.orgId, idTag).catch((e) =>
+      logger.warn({ sessionId: out.sessionId, err: String(e) }, 'roaming link for a late token failed'));
+    logger.info({ sessionId: out.sessionId, cp: ev.evse.ocppIdentity, tx: ev.transactionId }, 'token bound to a running session');
+  }
+  return { status: out.status, sessionId: out.sessionId };
+}
+
 // ------------------------------------------------------------------ end
 
 async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<SessionRow | null> {
@@ -292,10 +599,28 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
 
     const flags: SessionFlag[] = [];
     const observedWh = energyWhFrom(ev.meterValue);
-    let stopWh: number;
+    let stopWh: number | null;
     let energy: number;
 
-    if (ev.meterStopAbsent || observedWh === null) {
+    // No start register was ever reported. If this stop carries one it is the
+    // first observation and the start (updateSession explains why); if it does
+    // not, nothing was ever measured and nothing is billed — a start of "0"
+    // would bill the lifetime register.
+    const startUnknown = row.meter_start_unknown && observedWh === null;
+    if (row.meter_start_unknown && observedWh !== null) {
+      row.meter_start_wh = Math.min(...energySeriesFrom(ev.meterValue));
+      flags.push(startInferredFlag(row.meter_start_wh, ev.timestamp));
+    }
+
+    if (startUnknown) {
+      stopWh = null;
+      energy = 0;
+      flags.push({
+        code: 'METER_REGISTER_ABSENT',
+        severity: 'warning',
+        message: 'The charger reported no energy register at any point in the session; billed 0 Wh.',
+      });
+    } else if (ev.meterStopAbsent || observedWh === null) {
       // Fall back to the running total rather than billing zero. The previous
       // `?? 0` made this path unreachable and lost a fully metered 45 kWh session.
       stopWh = row.meter_start_wh + row.energy_wh;
@@ -364,6 +689,11 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
      * is noise; a material divergence means one of the charger's two registers
      * is wrong and a human has to decide which before anyone is billed.
      */
+    // The 1.6 adapter only reports a divergence that is a real disagreement
+    // (adapter16.onStopTransaction): a Transaction.End register that differs
+    // from meterStop, or a sampled register ABOVE meterStop. A last periodic
+    // sample below meterStop is the normal lag of StopTxnSampledData and is not
+    // one — reporting it parked nearly every DC session.
     const divergence = ev.divergenceWh ?? 0;
     if (divergence > 1) {
       const share = energy > 0 ? divergence / energy : 1;
@@ -373,7 +703,8 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
         severity: material ? 'violation' : 'warning',
         message:
           `transactionData and meterStop differ by ${divergence} Wh ` +
-          `(${(share * 100).toFixed(1)}% of the billed energy); billed transactionData.` +
+          `(${(share * 100).toFixed(1)}% of the billed energy); billed the Transaction.End register, ` +
+          `or the higher of the two when there is none.` +
           (material ? ' Parked for review — one of the charger\'s registers is wrong.' : ''),
       });
     }
@@ -414,11 +745,17 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
     // tariffs are allowed to define could never actually be charged.
     const idleMinutes = await computeIdleMinutes(client, row.id, endedAt);
 
+    // More energy than the connector could physically have delivered in the
+    // time: a wrong start register, a unit mix-up or a meter fault. Parked.
+    const implausible = implausibleEnergyFlag(energy, durationS, c.max_power_w);
+    if (implausible) flags.push(implausible);
+
     const violation = flags.some((f) => f.severity === 'violation');
 
     const upd = await client.query<SessionRow>(
       `UPDATE charging_session
           SET state = 'ended', ended_at = $2, meter_stop_wh = $3, energy_wh = $4,
+              meter_start_wh = $14, meter_start_unknown = $15,
               duration_s = $5, stop_reason = $6, idle_minutes = $7, v2x_discharging = false,
               flags = flags || $8::jsonb, needs_review = needs_review OR $9,
               review_reason = COALESCE(review_reason, $10),
@@ -439,6 +776,8 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
         signed?.status ?? null,
         signed?.signedWh ?? null,
         signed?.detail ?? null,
+        row.meter_start_wh,
+        startUnknown,
       ],
     );
     return upd.rows[0] ?? row;
@@ -508,10 +847,11 @@ async function whoForSession(s: { id: string; token_id: string | null; connector
 }
 
 /** The session columns pricing needs (rateAndCreateCdr's and runningCost's SELECT). */
-const PRICING_SELECT = `SELECT cs.*, c.max_power_w, c.current_type, si.pbjt_rate_bps, si.timezone
+const PRICING_SELECT = `SELECT cs.*, c.max_power_w, c.current_type, si.pbjt_rate_bps, si.timezone, pi.mode AS intent_mode
        FROM charging_session cs
        JOIN connector c ON c.id = cs.connector_uuid
        JOIN site si ON si.id = cs.site_id
+       LEFT JOIN payment_intent pi ON pi.id = cs.payment_intent_id
       WHERE cs.id = $1`;
 
 interface Priced {
@@ -524,13 +864,40 @@ interface Priced {
 }
 
 /**
+ * What a re-price may no longer use: the points the driver turned out to have,
+ * and promotions whose limits ran out (rateAndCreateCdr).
+ */
+interface PricingLimits {
+  maxPoints?: number;
+  excludePromotions?: Set<string>;
+  /** No promotion at all (the last attempt). */
+  noPromotions?: boolean;
+}
+
+/**
+ * Loyalty points never pay for a PRE-PURCHASE (a QRIS / e-wallet payment taken
+ * up front for a fixed allowance).
+ *
+ * The allowance is fixed at checkout from the amount paid. A points discount at
+ * rating only lowered the invoice below what was collected, and settlePrepaid
+ * then queued the difference as a cash refund: points turned into money, which
+ * no loyalty program allows. A card hold (preauth / postpay) captures what the
+ * session costs, so points lower what is taken and are kept there.
+ */
+function pointsAllowed(s: { intent_mode?: string | null; payment_mode?: string | null }): boolean {
+  if (s.intent_mode) return s.intent_mode !== 'prepurchase';
+  // No intent row: decide on the session's own mode (a legacy pre-purchase).
+  return s.payment_mode !== 'prepurchase';
+}
+
+/**
  * Price a session: the ONE pricing path, shared by the final charge record and the
  * running cost a driver sees during the charge. Reads only; writes nothing.
  *
  * Keeping it one function is the point: a running cost computed differently from the
  * bill would show the driver one number and charge another.
  */
-async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleMinutes: number }): Promise<Priced> {
+async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleMinutes: number }, limits: PricingLimits = {}): Promise<Priced> {
   /**
    * TARIFF AS OF SESSION START — never "the current one".
    *
@@ -560,8 +927,12 @@ async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleM
   // Memberships and promotions: every allowed combination is rated and the
   // cheapest for the customer is billed.
   const who = await whoForSession(s);
-  const benefits = await benefitsFor(s.org_id, who, { siteId: s.site_id, currentType: s.current_type }, startedAt, s.timezone ?? 'Asia/Jakarta')
+  const found = await benefitsFor(s.org_id, who, { siteId: s.site_id, currentType: s.current_type }, startedAt, s.timezone ?? 'Asia/Jakarta')
     .catch((e) => { logger.warn({ sessionId: s.id, err: (e as Error).message }, 'benefits lookup failed — rated without them'); return null; });
+  const excluded = limits.excludePromotions;
+  const benefits = found && (limits.noPromotions || excluded?.size)
+    ? { ...found, promotions: limits.noPromotions ? [] : found.promotions.filter((p) => !excluded!.has(p.id)) }
+    : found;
   let chosen: PriceAdjustment[] = [];
   let result = benefits
     ? (() => {
@@ -575,10 +946,13 @@ async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleM
     : rateSession(tariff, { ...baseCtx, adjustments: v2xAdj });
   // Loyalty points, for a driver who chose to use them: on top of the cheapest combination, before PBJT-TL and PPN.
   let spent: { points: number; amountIdr: number } | null = null;
-  const points = await redemptionFor(s.org_id, who.appDriverId)
-    .catch((e) => { logger.warn({ sessionId: s.id, err: (e as Error).message }, 'loyalty lookup failed — rated without points'); return null; });
+  const points = pointsAllowed(s) && limits.maxPoints !== 0
+    ? await redemptionFor(s.org_id, who.appDriverId)
+      .catch((e) => { logger.warn({ sessionId: s.id, err: (e as Error).message }, 'loyalty lookup failed — rated without points'); return null; })
+    : null;
   if (points) {
-    const r = pointsToRedeem(points.balance, discountable(result.lines), points.program);
+    const balance = limits.maxPoints != null ? Math.min(points.balance, limits.maxPoints) : points.balance;
+    const r = pointsToRedeem(balance, discountable(result.lines), points.program);
     if (r.points > 0) {
       result = rateSession(tariff, { ...baseCtx, adjustments: [...chosen, ...v2xAdj, pointsAdjustment(r.points, r.amountIdr)] });
       spent = r;
@@ -610,81 +984,156 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
   }
 
   const energyWh = Number(s.energy_wh);
-  const { result, spent, benefits, who, fallback } = await priceSession(s, {
+  const at = {
     endedAt: new Date(s.ended_at ?? s.started_at),
     energyWh,
     idleMinutes: Number(s.idle_minutes ?? 0),
-  });
+  };
 
-  const flags = [...result.flags];
-  if (fallback) {
-    // Silently dropping to the built-in default lost the service and admin fees.
-    flags.push({
-      code: 'TARIFF_FALLBACK',
-      severity: 'warning',
-      message:
-        'No tariff was assigned and effective at session start; billed with the regulated default. ' +
-        'Fees defined by the operator tariff were not applied.',
-    });
-  }
+  /**
+   * PRICE, THEN CLAIM WHAT THE PRICE SPENT — IN THE CDR'S OWN TRANSACTION.
+   *
+   * Loyalty points and limited promotions are shared, finite things. They were
+   * priced from an unlocked read and recorded after the CDR was committed, with
+   * the recording's errors only logged: two sessions of one driver rated
+   * together both spent the same points (the second CDR kept its discount
+   * while the spend failed), and concurrent sessions ran a promotion past its
+   * max_redemptions, max_per_customer and budget.
+   *
+   * Now the CDR is written in one transaction that first takes the session's
+   * row lock, then the driver's points lock and the promotion's lock, re-checks
+   * the balance and the promotion's limits there, and records the spend and the
+   * redemption together with the CDR. When what was priced is no longer
+   * available, nothing is written: the session is re-priced with the points the
+   * driver actually has, or without the exhausted promotion, and claimed again.
+   * Each retry only removes something, so it settles; the last attempt prices
+   * with neither points nor promotions, which cannot fail.
+   */
+  const limits: PricingLimits & { excludePromotions: Set<string> } = { excludePromotions: new Set() };
+  const MAX_ATTEMPTS = 5;
+  let outcome: { cdr: { id: string } | null; priced: Priced } | null = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS && !outcome; attempt++) {
+    if (attempt === MAX_ATTEMPTS) {
+      limits.maxPoints = 0;
+      limits.noPromotions = true;
+    }
+    const priced = await priceSession(s, at, limits);
+    const { result, spent, benefits, who, fallback } = priced;
 
-  const violation = flags.some((f) => f.severity === 'violation');
-  if (violation && !opts.force) {
-    await query(
-      `UPDATE charging_session
-          SET needs_review = true, review_reason = COALESCE(review_reason, $2), flags = flags || $3::jsonb
-        WHERE id = $1`,
-      [sessionId, flags.find((f) => f.severity === 'violation')!.code, JSON.stringify(flags)],
+    const flags = [...result.flags];
+    // Checked again here, not only at the stop: every path to a CDR comes through
+    // this function, including sessions closed by reconciliation.
+    const implausible = implausibleEnergyFlag(
+      energyWh,
+      Math.round((new Date(s.ended_at ?? s.started_at).getTime() - new Date(s.started_at).getTime()) / 1000),
+      s.max_power_w,
     );
-    logger.error(
-      { sessionId, flags: flags.filter((f) => f.severity === 'violation') },
-      'rating produced a regulatory violation — session parked, no CDR issued',
-    );
-    for (const f of flags.filter((f) => f.severity === 'violation')) {
-      bus.emit('alert.raised', {
-        orgId: s.org_id,
-        kind: `regulatory.${f.code}`,
-        severity: 'critical',
-        message: f.message,
+    if (implausible) flags.push(implausible);
+    if (fallback) {
+      // Silently dropping to the built-in default lost the service and admin fees.
+      flags.push({
+        code: 'TARIFF_FALLBACK',
+        severity: 'warning',
+        message:
+          'No tariff was assigned and effective at session start; billed with the regulated default. ' +
+          'Fees defined by the operator tariff were not applied.',
       });
     }
+
+    const violation = flags.some((f) => f.severity === 'violation');
+    if (violation && !opts.force) {
+      await query(
+        `UPDATE charging_session
+            SET needs_review = true, review_reason = COALESCE(review_reason, $2), flags = flags || $3::jsonb
+          WHERE id = $1`,
+        [sessionId, flags.find((f) => f.severity === 'violation')!.code, JSON.stringify(flags)],
+      );
+      logger.error(
+        { sessionId, flags: flags.filter((f) => f.severity === 'violation') },
+        'rating produced a regulatory violation — session parked, no CDR issued',
+      );
+      for (const f of flags.filter((f) => f.severity === 'violation')) {
+        bus.emit('alert.raised', {
+          orgId: s.org_id,
+          kind: `regulatory.${f.code}`,
+          severity: 'critical',
+          message: f.message,
+        });
+      }
+      return null;
+    }
+
+    const written = await tx(async (client) => {
+      // One rating per session at a time; a second waits, then finds the CDR.
+      await client.query(`SELECT id FROM charging_session WHERE id = $1 FOR UPDATE`, [sessionId]);
+      if ((await client.query(`SELECT id FROM cdr WHERE session_id = $1`, [sessionId])).rows[0]) {
+        return { done: true as const, cdr: null };
+      }
+
+      // The points: spend no more than the driver has, under their lock.
+      if (spent && spent.points > 0 && who.appDriverId) {
+        const have = await lockedBalance(s.org_id, who.appDriverId, client);
+        if (have < spent.points) {
+          logger.info({ sessionId, priced: spent.points, have }, 'loyalty points spent elsewhere meanwhile — re-pricing with what is left');
+          limits.maxPoints = have;
+          return { done: false as const, cdr: null };
+        }
+      }
+      // The promotion: still within its limits, counted under its lock.
+      for (const [id, t] of adjustmentTotals(result.lines)) {
+        if (t.source !== 'promotion') continue;
+        const ok = await reservePromotion(client, s.org_id, sessionId, id, benefits?.customerKey ?? null, t.discountIdr);
+        if (!ok) {
+          logger.info({ sessionId, promotion: id }, 'promotion limit reached meanwhile — re-pricing without it');
+          limits.excludePromotions.add(id);
+          return { done: false as const, cdr: null };
+        }
+      }
+
+      const ins = await client.query<{ id: string }>(
+        `INSERT INTO cdr (session_id, org_id, lines, subtotal_idr, pbjt_rate_bps, pbjt_idr,
+                          ppn_dpp_idr, ppn_rate_bps, ppn_idr, total_idr, tariff_snapshot, regulatory_flags)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (session_id) DO NOTHING
+         RETURNING id`,
+        [
+          sessionId,
+          s.org_id,
+          JSON.stringify(result.lines),
+          result.tax.subtotalIdr,
+          result.tax.pbjtRateBps,
+          result.tax.pbjtIdr,
+          result.tax.ppnDppIdr,
+          result.tax.ppnRateBps,
+          result.tax.ppnIdr,
+          result.tax.totalIdr,
+          JSON.stringify(result.tariffSnapshot),
+          JSON.stringify(flags),
+        ],
+      );
+      const cdr = ins.rows[0] ?? null;
+      if (cdr) {
+        if (benefits) await recordBenefits(s.org_id, sessionId, result.lines, benefits, energyWh / 1000, client);
+        // Points spent on this session, and earned on what it cost. A failure here
+        // rolls the CDR back with it: no CDR keeps a discount nobody paid for.
+        await recordLoyalty(s.org_id, sessionId, who.appDriverId, result.tax.totalIdr, spent, client);
+        await client.query(`UPDATE charging_session SET state = 'rated', rated_at = now() WHERE id = $1`, [sessionId]);
+      }
+      return { done: true as const, cdr };
+    });
+    if (written.done) outcome = { cdr: written.cdr, priced };
+  }
+  if (!outcome) {
+    // Unreachable in practice: the last attempt uses neither points nor promotions.
+    logger.error({ sessionId }, 'could not settle a price for the session — left for reconciliation');
     return null;
   }
 
-  const cdr = await one<{ id: string }>(
-    `INSERT INTO cdr (session_id, org_id, lines, subtotal_idr, pbjt_rate_bps, pbjt_idr,
-                      ppn_dpp_idr, ppn_rate_bps, ppn_idr, total_idr, tariff_snapshot, regulatory_flags)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (session_id) DO NOTHING
-     RETURNING id`,
-    [
-      sessionId,
-      s.org_id,
-      JSON.stringify(result.lines),
-      result.tax.subtotalIdr,
-      result.tax.pbjtRateBps,
-      result.tax.pbjtIdr,
-      result.tax.ppnDppIdr,
-      result.tax.ppnRateBps,
-      result.tax.ppnIdr,
-      result.tax.totalIdr,
-      JSON.stringify(result.tariffSnapshot),
-      JSON.stringify(flags),
-    ],
-  );
-
+  const { cdr, priced } = outcome;
   if (cdr) {
-    if (benefits) {
-      await recordBenefits(s.org_id, sessionId, result.lines, benefits, energyWh / 1000)
-        .catch((e) => logger.warn({ sessionId, err: (e as Error).message }, 'could not record membership / promotion use'));
-    }
-    // Points spent on this session, and earned on what it cost.
-    await recordLoyalty(s.org_id, sessionId, who.appDriverId, result.tax.totalIdr, spent)
-      .catch((e) => logger.warn({ sessionId, err: (e as Error).message }, 'could not record loyalty points'));
-    await query(`UPDATE charging_session SET state = 'rated', rated_at = now() WHERE id = $1`, [sessionId]);
-    bus.emit('cdr.created', { orgId: s.org_id, cdrId: cdr.id, sessionId, totalIdr: result.tax.totalIdr });
-    logger.info({ sessionId, cdrId: cdr.id, totalIdr: result.tax.totalIdr }, 'CDR created');
-    await settlePrepaid(sessionId, s.org_id, result.tax.totalIdr);
+    bus.emit('cdr.created', { orgId: s.org_id, cdrId: cdr.id, sessionId, totalIdr: priced.result.tax.totalIdr });
+    logger.info({ sessionId, cdrId: cdr.id, totalIdr: priced.result.tax.totalIdr }, 'CDR created');
+    await settlePrepaid(sessionId, s.org_id, priced.result.tax.totalIdr);
   }
   return cdr;
 }
@@ -787,31 +1236,65 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedIdr: numb
  * Close a session left active on a connector that has started a new transaction.
  * Without this the unique index would reject the new session outright, and the
  * revenue from both would be lost.
+ *
+ * Session start does this itself, under its per-connector lock (startSession):
+ * closing from OUTSIDE that lock is what let a duplicate StartTransaction close
+ * the session its twin had just opened. This entry point takes the same lock.
  */
 export async function closeOrphanedSession(chargePointId: string, connectorNo: number, reason: string) {
-  const orphan = await one<{ id: string; org_id: string }>(
-    `SELECT cs.id, cs.org_id
-       FROM charging_session cs
-       JOIN connector c ON c.id = cs.connector_uuid
-       JOIN evse e ON e.id = c.evse_uuid
-      WHERE e.charge_point_id = $1 AND e.evse_id = $2 AND cs.state = 'active'`,
-    [chargePointId, connectorNo],
-  );
-  if (!orphan) return;
+  const orphans = await tx(async (client) => {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended('session-start:' || $1::text || ':' || $2::text, 0))`,
+      [chargePointId, connectorNo],
+    );
+    return closeOrphansLocked(client, chargePointId, connectorNo, null, reason);
+  });
+  for (const o of orphans) announceOrphan(o, reason);
+}
 
-  await query(
+interface Orphan { id: string; org_id: string }
+
+/**
+ * The close itself. The caller holds the connector's session-start lock.
+ * `keepIdemKey` is the start being recorded: its own row is never an orphan,
+ * whatever state a concurrent retry left it in.
+ */
+async function closeOrphansLocked(
+  client: Pick<PoolClient, 'query'>,
+  chargePointId: string,
+  connectorNo: number,
+  keepIdemKey: string | null,
+  reason: string,
+): Promise<Orphan[]> {
+  const r = await client.query<Orphan>(
     `UPDATE charging_session
         SET state = 'ended', ended_at = now(), stop_reason = 'Other',
             needs_review = true, review_reason = 'ORPHANED_SESSION',
-            flags = flags || $2::jsonb
-      WHERE id = $1 AND state = 'active'`,
+            flags = flags || $4::jsonb
+      WHERE id IN (
+              SELECT cs.id
+                FROM charging_session cs
+                JOIN connector c ON c.id = cs.connector_uuid
+                JOIN evse e ON e.id = c.evse_uuid
+               WHERE e.charge_point_id = $1 AND e.evse_id = $2 AND cs.state = 'active'
+                 AND ($3::text IS NULL OR cs.idem_key <> $3)
+            )
+        AND state = 'active'
+      RETURNING id, org_id`,
     [
-      orphan.id,
+      chargePointId,
+      connectorNo,
+      keepIdemKey,
       JSON.stringify([
         { code: 'ORPHANED_SESSION', severity: 'violation', message: `Closed without a StopTransaction: ${reason}.` },
       ]),
     ],
   );
+  return r.rows;
+}
+
+/** After the closing transaction has committed: log and alert. */
+function announceOrphan(orphan: Orphan, reason: string) {
   logger.warn({ sessionId: orphan.id, reason }, 'closed an orphaned session');
   bus.emit('alert.raised', {
     orgId: orphan.org_id,
@@ -905,6 +1388,63 @@ export async function clearReviewAndRate(sessionId: string, orgId?: string, forc
 }
 
 // ------------------------------------------------------------------ helpers
+
+/**
+ * The violation that parks an unauthorised session. It carries the refused token
+ * (the session binds none), so the reviewer sees whose card it was and a station
+ * repeating the same token is not re-authorised on every frame.
+ */
+function unauthorisedFlag(u: UnauthorisedStart, idTag: string | null): SessionFlag {
+  return {
+    code: u.code,
+    severity: 'violation',
+    message: `${u.message}${idTag ? ` Token ${idTag}.` : ''} Recorded, not billed: parked until an operator decides who pays.`,
+    ...(idTag ? { idToken: idTag } : {}),
+  };
+}
+
+/** The session's start register was taken from its first observation, not the start event. */
+function startInferredFlag(startWh: number, at: string): SessionFlag {
+  return {
+    code: 'METER_START_INFERRED',
+    severity: 'info',
+    message:
+      `The start event carried no energy register; the first register observed ` +
+      `(${startWh} Wh at ${at}) was taken as the start.`,
+  };
+}
+
+/**
+ * Energy the connector could not physically have delivered in the time.
+ *
+ * Nameplate power × duration, with 25 % headroom for a nameplate that
+ * understates the hardware and 1 kWh for clock granularity and registers that
+ * tick in whole kWh. Above that the number is suspect and the session says so
+ * (a warning on the receipt and in the explorer). It is PARKED (a violation)
+ * only when the excess is gross, over IMPLAUSIBLE_PARK_EXCESS_WH: a lifetime
+ * register taken as a start of zero (8,450 kWh in a 40-minute session) or a
+ * kWh/Wh mix-up is thousands of kWh out, while a charger clock that stepped
+ * mid-session (an NTP correction) can shorten the reported duration by a few
+ * minutes, and parking every such session would make the review queue noise.
+ * Only asserted when both the nameplate and the duration are known; neither is
+ * ever guessed.
+ */
+export const IMPLAUSIBLE_PARK_EXCESS_WH = 20_000;
+
+export function implausibleEnergyFlag(energyWh: number, durationS: number, maxPowerW: number | null | undefined): SessionFlag | null {
+  const w = Number(maxPowerW);
+  if (!Number.isFinite(w) || w <= 0 || !(durationS > 0)) return null;
+  const limitWh = w * (durationS / 3600) * 1.25 + 1000;
+  if (!(energyWh > limitWh)) return null;
+  const gross = energyWh - limitWh > IMPLAUSIBLE_PARK_EXCESS_WH;
+  return {
+    code: 'IMPLAUSIBLE_ENERGY',
+    severity: gross ? 'violation' : 'warning',
+    message:
+      `${energyWh} Wh in ${Math.round(durationS / 60)} min exceeds what a ${w} W connector can ` +
+      `deliver (${Math.round(limitWh)} Wh with headroom).${gross ? ' Parked for review.' : ' Check the meter and the charger clock.'}`,
+  };
+}
 
 function clockSkewFlag(timestamp: string): SessionFlag | null {
   const t = new Date(timestamp).getTime();
@@ -1001,19 +1541,40 @@ export function detectRollover(
  *
  * IDLE_THRESHOLD_WH is what separates "still charging slowly" from "parked":
  * below it, the vehicle is drawing maintenance current, not taking a charge.
+ *
+ * The comparison is in Wh OF THE REGISTER, and it was not: `value - prev` ran on
+ * raw meter_value rows whatever their unit or phase. A charger reporting kWh
+ * never moved 50 "units" between samples, so idle was the whole session; one
+ * reporting per phase interleaved L1/L2/L3 rows at the same timestamp, so every
+ * phase-to-phase step looked like a delivery (or a regression) and idle was
+ * never. The register is rebuilt per timestamp exactly as canonical.ts reads
+ * one (registerFromEntry): kWh normalised to Wh, the untagged total when there
+ * is one, otherwise the sum of the per-phase registers. One row per timestamp
+ * also makes the lag order total — meter_value has no id to break ts ties with,
+ * and duplicate (replayed) rows collapse instead of reading as zero-deltas.
  */
 const IDLE_THRESHOLD_WH = 50;
 
 async function computeIdleMinutes(client: Pick<PoolClient, 'query'>, sessionId: string, endedAt: Date): Promise<number> {
   const r = await client.query<{ ts: Date }>(
-    `WITH series AS (
-       SELECT ts, value,
-              lag(value) OVER (ORDER BY ts) AS prev
+    `WITH per_phase AS (
+       SELECT ts, phase,
+              max(CASE WHEN lower(COALESCE(unit, 'Wh')) = 'kwh' THEN value * 1000 ELSE value END) AS wh
          FROM meter_value
         WHERE session_id = $1 AND measurand = 'Energy.Active.Import.Register'
+          AND (phase IS NULL OR phase IN ('L1', 'L2', 'L3', 'L1-N', 'L2-N', 'L3-N'))
+        GROUP BY ts, phase
+     ), register AS (
+       SELECT ts,
+              COALESCE(max(wh) FILTER (WHERE phase IS NULL), sum(wh) FILTER (WHERE phase IS NOT NULL)) AS wh
+         FROM per_phase
+        GROUP BY ts
+     ), series AS (
+       SELECT ts, wh, lag(wh) OVER (ORDER BY ts) AS prev
+         FROM register
      )
      SELECT ts FROM series
-      WHERE prev IS NULL OR value - prev >= $2
+      WHERE prev IS NULL OR wh - prev >= $2
       ORDER BY ts DESC
       LIMIT 1`,
     [sessionId, IDLE_THRESHOLD_WH],
@@ -1146,15 +1707,39 @@ async function addFlag(sessionId: string, flag: SessionFlag, client?: any) {
  * shape and the caller flags the session so it is visible.
  */
 /**
- * How long after checkout a paid prepurchase can start a session. One constant,
+ * How long after PAYMENT a paid prepurchase can start a session. One constant,
  * shared by the claim below, the claim-token check in authorizeIdTag, the token
  * expiry at checkout and the unused-payment refund sweep — they must agree, or
  * a token outlives its payment (the unlimited-free-session defect).
+ *
+ * The window runs from the moment the money was authorised or captured
+ * (`payment_intent.paid_at`, stamped by a trigger in migration 049), not from
+ * checkout. It ran from `created_at`: a driver who took 25 minutes to finish a
+ * QRIS or e-wallet payment had 5 minutes left to plug in, and one who paid
+ * after 30 minutes had paid for a session that could never start.
+ * `PREPAID_PAID_AT_SQL` is the expression every one of those checks uses.
  */
 export const PREPAID_CLAIM_WINDOW_MIN = 30;
 
-async function claimPrepaidIntent(connectorUuid: string, idTag: string | null) {
-  return one<{
+/**
+ * When a payment intent became claimable. `created_at` only for a row that
+ * somehow carries no paid_at (it is backfilled and trigger-maintained), so the
+ * check never fails open on a NULL.
+ */
+export const PREPAID_PAID_AT_SQL = (alias = 'payment_intent') => `COALESCE(${alias}.paid_at, ${alias}.created_at)`;
+
+async function claimPrepaidIntent(
+  connectorUuid: string,
+  idTag: string | null,
+  client: Pick<PoolClient, 'query'>,
+  /**
+   * The presented token is a prepaid claim token: it may claim only the
+   * payment it was minted for, never a legacy unbound intent that happens to
+   * be parked on this connector (that would be someone else's money).
+   */
+  payerOnly = false,
+) {
+  const r = await client.query<{
     id: string;
     amount_authorised_idr: number;
     allowance_wh: number;
@@ -1170,12 +1755,13 @@ async function claimPrepaidIntent(connectorUuid: string, idTag: string | null) {
            AND (mode NOT IN ('preauth', 'postpay') OR hold_state = 'held')
            AND state IN ('captured', 'authorised') AND session_id IS NULL
            AND refund_state IS NULL   -- a payment being refunded cannot also buy energy
-           AND created_at > now() - make_interval(mins => ${PREPAID_CLAIM_WINDOW_MIN})
+           -- the claim window runs from payment, not from checkout
+           AND ${PREPAID_PAID_AT_SQL()} > now() - make_interval(mins => ${PREPAID_CLAIM_WINDOW_MIN})
            AND (
              -- the payer is starting this session...
              ($2::text IS NOT NULL AND claim_id_tag = $2)
              -- ...or the intent predates payer binding entirely
-             OR claim_id_tag IS NULL
+             OR (claim_id_tag IS NULL AND NOT $3::boolean)
            )
          -- Prefer an exact payer match over a legacy unbound intent, and take
          -- the OLDEST match so a queue is served in the order it paid.
@@ -1183,8 +1769,9 @@ async function claimPrepaidIntent(connectorUuid: string, idTag: string | null) {
          LIMIT 1
       )
       RETURNING id, amount_authorised_idr, allowance_wh, claim_id_tag`,
-    [connectorUuid, idTag],
+    [connectorUuid, idTag, payerOnly],
   );
+  return r.rows[0] ?? null;
 }
 
 async function insertMeterValues(sessionId: string, mv: CanonicalMeterValue[], client?: any) {
@@ -1204,13 +1791,28 @@ async function insertMeterValues(sessionId: string, mv: CanonicalMeterValue[], c
   await storeSigned(sessionId, mv, runner).catch((e) => logger.warn({ sessionId, err: String(e) }, 'signed meter values not stored'));
 }
 
-async function resolveTokenId(orgId: string, uid: string): Promise<string | null> {
+async function resolveToken(orgId: string, uid: string): Promise<{ id: string; kind: string } | null> {
   // A Plug & Charge contract may arrive as the eMAID with separators.
-  const t = await one<{ id: string }>(
-    `SELECT id FROM token WHERE org_id = $1 AND (uid = $2 OR (kind = 'emaid' AND uid = $3)) ORDER BY (uid = $2) DESC LIMIT 1`,
+  return one<{ id: string; kind: string }>(
+    `SELECT id, kind FROM token WHERE org_id = $1 AND (uid = $2 OR (kind = 'emaid' AND uid = $3)) ORDER BY (uid = $2) DESC LIMIT 1`,
     [orgId, uid, normaliseEmaid(uid)],
   );
-  return t?.id ?? null;
+}
+
+/**
+ * Why a prepaid claim token cannot start here: its payment is already running
+ * a session (ConcurrentTx — one payment, one session at a time), or it has no
+ * payment claimable on this connector (Invalid).
+ */
+async function prepaidRefusalStatus(client: Pick<PoolClient, 'query'>, orgId: string, idTag: string): Promise<'Invalid' | 'ConcurrentTx'> {
+  const r = await client.query<{ busy: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM payment_intent pi JOIN charging_session cs ON cs.id = pi.session_id
+        WHERE pi.org_id = $1 AND pi.claim_id_tag = $2 AND cs.state = 'active'
+     ) AS busy`,
+    [orgId, idTag],
+  );
+  return r.rows[0]?.busy ? 'ConcurrentTx' : 'Invalid';
 }
 
 export async function activeSessionOnConnector(connectorUuid: string) {

@@ -11,6 +11,7 @@
 //     npx tsx tools/e2e/sdk-e2e.mts
 // NEVER point this at production.
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import { PlugSure, PlugSureError, parseWebhook, verifyWebhookSignature, API_VERSION } from '../../sdk/typescript/dist/index.js';
 
 const API = process.env.E2E_API ?? 'http://127.0.0.1:9200';
@@ -126,7 +127,9 @@ try {
   const tampered = got ? await verifyWebhookSignature({ secret, signature: got.signature, body: got.body.replace(/"/, '" ') }) : true;
   const event = got ? await parseWebhook({ secret, signature: got.signature, body: got.body }).catch(() => null) : null;
   check('webhooks: a real delivery verifies with the SDK; a changed body does not', valid && !tampered && !!event?.id, { valid, tampered, got: got?.body?.slice(0, 120) });
-  check('sdk: carries the API version it was generated from', API_VERSION === '1.3.0', API_VERSION);
+  // The SDK is generated from the published document, whose version is the package version.
+  const pkgVersion = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+  check('sdk: carries the API version it was generated from', API_VERSION === pkgVersion, { API_VERSION, pkgVersion });
 } catch (e) {
   check('no unexpected exception', false, (e as Error).stack);
 } finally {

@@ -1,0 +1,14 @@
+# Nightly PlugSure backup at 02:15 local time (TZ of the host; Asia/Jakarta on the
+# reference VM), off-peak for charging. Persistent=true runs a missed backup at the
+# next boot. Install with plugsure-backup.service (see the notes there).
+
+[Unit]
+Description=Nightly PlugSure backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

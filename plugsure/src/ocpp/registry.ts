@@ -54,17 +54,25 @@ export function register(r: Omit<Registered, 'token' | 'awaitingPong' | 'lastPon
   return token;
 }
 
-export function markPingSent(ocppIdentity: string): void {
+/**
+ * Ping / pong bookkeeping is per REGISTRATION, not per identity (rule 1 above
+ * again). Keyed by identity alone, a pong arriving late on a socket that a
+ * reconnect had already superseded cleared `awaitingPong` on the NEW
+ * registration: a half-open replacement socket then survived the next sweep
+ * on the strength of its dead predecessor's pong. `token` is the generation
+ * register() returned; a mismatch is a stale socket and changes nothing.
+ */
+export function markPingSent(ocppIdentity: string, token?: number): void {
   const r = conns.get(ocppIdentity);
-  if (r) r.awaitingPong = true;
+  if (r && (token === undefined || r.token === token)) r.awaitingPong = true;
 }
 
-export function markPong(ocppIdentity: string): void {
+export function markPong(ocppIdentity: string, token: number): boolean {
   const r = conns.get(ocppIdentity);
-  if (r) {
-    r.awaitingPong = false;
-    r.lastPongAt = new Date();
-  }
+  if (!r || r.token !== token) return false;
+  r.awaitingPong = false;
+  r.lastPongAt = new Date();
+  return true;
 }
 
 /** Only removes the entry if it is the generation the caller registered. */

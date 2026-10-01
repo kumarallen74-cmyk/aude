@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Money is in rupiah (IDR). Energy is in Wh unless a field says kWh.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -5610,6 +5610,330 @@
         },
         "x-permissions": [
           "roaming:read"
+        ]
+      }
+    },
+    "/v1/roaming/cdrs/held": {
+      "get": {
+        "tags": [
+          "Roaming"
+        ],
+        "summary": "List partner charge records held for review",
+        "operationId": "listPartnerChargeRecordsHeldForReview",
+        "description": "Charge records (CDRs) a partner CPO sent for our fleet cards that could not be linked to a session that partner reported or an authorisation we issued, or that failed the plausibility checks (energy, price per kWh, VAT, duration). Held records are not invoiced and do not count against card limits until accepted. Newest first (up to 500).\n\n**Permissions checked:** `roaming:read`.",
+        "responses": {
+          "200": {
+            "description": "Held charge records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "cdr_id": {
+                        "type": "string"
+                      },
+                      "session_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "start_date_time": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end_date_time": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "total_energy": {
+                        "type": "string",
+                        "description": "Decimal number as a string (Postgres NUMERIC)."
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "total_excl_vat": {
+                        "type": "string",
+                        "description": "Decimal number as a string (Postgres NUMERIC)."
+                      },
+                      "total_incl_vat": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Decimal number as a string (Postgres NUMERIC), or null."
+                      },
+                      "received_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "country_code": {
+                        "type": "string"
+                      },
+                      "party_id": {
+                        "type": "string"
+                      },
+                      "hold_reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "partner_name": {
+                        "type": "string"
+                      },
+                      "uid": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "contract_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "holder_name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "fleet_name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "location_name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "authorization_reference": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "cdr_id",
+                      "currency",
+                      "total_excl_vat",
+                      "received_at",
+                      "partner_name"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "roaming:read"
+        ]
+      }
+    },
+    "/v1/roaming/cdrs/{id}/accept": {
+      "post": {
+        "tags": [
+          "Roaming"
+        ],
+        "summary": "Accept a held partner charge record",
+        "operationId": "acceptHeldPartnerChargeRecord",
+        "description": "Accepts a held (or rejected) record: it is invoiced in the month it was reviewed and counts against the card limits, and the driver gets the receipt. Audited as roaming.cdr_accepted.\n\n**Permissions checked:** `roaming:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Charge record id (UUID).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "Why, for the audit log."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "accepted"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "roaming:write"
+        ]
+      }
+    },
+    "/v1/roaming/cdrs/{id}/reject": {
+      "post": {
+        "tags": [
+          "Roaming"
+        ],
+        "summary": "Reject a held partner charge record",
+        "operationId": "rejectHeldPartnerChargeRecord",
+        "description": "Rejects a held record: it is never invoiced. A record already accepted cannot be rejected (409). Audited as roaming.cdr_rejected.\n\n**Permissions checked:** `roaming:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Charge record id (UUID).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "Why, for the audit log."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "rejected"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "roaming:write"
         ]
       }
     },

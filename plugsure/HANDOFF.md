@@ -168,9 +168,9 @@ Nothing to set up: the push key is generated and stored on first use. Busy deplo
   The kit's README covers the two Xcode steps (the categories file, the Notification Service Extension). The picture is fetched by iPhones from `/d/n/…` on the app's web address, which Caddy already serves (`/d/*`).
 - **Caddy:** update from deploy/Caddyfile. It adds the `on_demand_tls` ask and the catch-all block for driver-app addresses, and makes the console host's `X-Frame-Options` a default so the console can frame the preview. Run `caddy validate`.
 
-Run `npm run migrate` (migrations 009 to 042, all additive). **Set `INTERNAL_API_TOKEN`**, then
+Run `npm run migrate` (migrations 001–053; 045 is unused; all additive). **Set `INTERNAL_API_TOKEN`**, then
 bootstrap the first admin with `create-admin`. See `RELEASE-NOTES-v1.3.0.md` and
-`docs/ACCEPTANCE-v1.3.md`. Typecheck clean; 541 tests passing. Verified on PostgreSQL:
+`docs/ACCEPTANCE-v1.3.md`. Typecheck clean; unit tests passing (see CI for the current count). Verified on PostgreSQL 16:
 - migrations
 - a 96-check console e2e
 - a 48-check driver-app e2e (OCPP 1.6 and 2.0.1)
@@ -260,7 +260,7 @@ no `node_modules`, no build output. Build per `deploy/README.md`.
 - `db/migrations/`   schema migrations (`007_driver_app.sql` = driver app)
 - `deploy/`          runbook (`README.md`), `Caddyfile`, systemd units, `DRIVER-APP-PILOT.md`, Autel handout
 - `tools/simulator/` Autel OCPP simulator (`autel-sim.ts`) for charger QA
-- `.github/workflows/ci.yml`  CI: typecheck, tests, docker image build
+- `../.github/workflows/ci.yml` (repository root)  CI: typecheck, DB-backed unit tests, e2e as plugsure_app, docker image
 - `Dockerfile`, `docker-compose.yml`, `.env.example`
 
 ## Build & run (see deploy/README.md)
@@ -276,7 +276,7 @@ no `node_modules`, no build output. Build per `deploy/README.md`.
 
 ## Verify
 - `npm run typecheck` → clean
-- `npm test` → 516 tests passing (set DATABASE_URL to a `plugsure_audit_fix` database to include the database-backed suites; 463 without). A new database-backed test file must take `databaseTestLock('shared', DB_OK)` from `src/db/test-lock.ts` (the audit-chain suite takes it exclusive), or it will collide with the audit suite when files run in parallel
+- `npm test` → all passing; CI prints the current count (set DATABASE_URL to a `plugsure_audit_fix` database to include the database-backed suites — without it they are skipped, not failed). A new database-backed test file must take `databaseTestLock('shared', DB_OK)` from `src/db/test-lock.ts` (the audit-chain suite takes it exclusive), or it will collide with the audit suite when files run in parallel
 - `npm run openapi -- --check` → the committed `src/web/openapi.json` matches the code
 - `npm run e2e:console` / `e2e:driver` / `e2e:driver-plus` / `e2e:queue` / `e2e:field` / `e2e:ocpi` / `e2e:ocpi-emsp` / `e2e:api-sandbox` / `e2e:fleet-billing` / `e2e:pricing` / `e2e:pnc` / `e2e:onboarding` / `e2e:integrations` / `e2e:payment-methods` / `e2e:card-holds` / `e2e:linked-wallets` / `e2e:postpay` against a running test stack (never production). Keep the test machine awake for a full back-to-back run (about 10 minutes). A laptop lid closed or Modern Standby suspends the stack and the tests together, and the timing checks then fail. The gateway logs `gateway paused` when that happens.
   `e2e:driver-plus` needs `E2E_DATABASE_URL` for the reservation reminder / expiry checks; `e2e:fleet-billing` and `e2e:pricing` need it to move sessions into last month. `e2e:onboarding` needs the API and the gateway started with `OCPP_TRUST_PROXY_PROTO=true` (the full suite passes that way).

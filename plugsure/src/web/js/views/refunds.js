@@ -89,7 +89,7 @@ registerView('refunds', {
         const r = rows.find((x) => x.id === pay.dataset.pay);
         const ok = await confirmDialog({
           title: 'Refund via the payment provider',
-          message: `Send ${esc(fmt.idr(r?.refund_due_idr))} back to the payer's original payment method?`,
+          message: `Send ${fmt.idr(r?.refund_due_idr)} back to the payer's original payment method?`,
           confirmLabel: 'Refund',
         });
         if (!ok) return;

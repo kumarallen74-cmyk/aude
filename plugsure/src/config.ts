@@ -11,6 +11,18 @@ export const config = {
 
   gateway: {
     port: num(process.env.OCPP_PORT, 9220),
+    /**
+     * Interface the OCPP listener binds. It used to bind every interface with no
+     * way to say otherwise, so on the systemd path :9220 — plain ws, and the
+     * gateway's /internal bridge endpoints — was reachable from the network beside
+     * Caddy. In every documented production setup chargers arrive through Caddy on
+     * the same host, so outside development the default is loopback. Development
+     * keeps 0.0.0.0 so a bench charger on the LAN can dial in directly; docker
+     * compose sets 0.0.0.0 inside the container (the host port mapping decides
+     * exposure). Set OCPP_HOST=0.0.0.0 only for a gateway that chargers or a
+     * remote API host reach without a local proxy.
+     */
+    host: process.env.OCPP_HOST ?? ((process.env.NODE_ENV ?? 'development') === 'development' ? '0.0.0.0' : '127.0.0.1'),
     /** Path prefix. The charge point ID is ALWAYS the final path segment. */
     path: process.env.OCPP_PATH ?? '/ocpp',
     /**
@@ -51,6 +63,19 @@ export const config = {
      * certificate is read from the socket and this header is not used.
      */
     clientCertHeader: (process.env.OCPP_CLIENT_CERT_HEADER ?? 'x-client-cert-fingerprint').toLowerCase(),
+    /**
+     * Peers whose X-Forwarded-Proto and client-certificate header are believed:
+     * addresses or CIDRs, comma-separated. Those headers used to be taken from
+     * ANY peer once OCPP_TRUST_PROXY_PROTO was on, and the gateway listened on
+     * every interface (see OCPP_HOST), so a client reaching :9220 directly could claim TLS and
+     * present a Profile 3 charger's (non-secret) certificate fingerprint. Default:
+     * the loopback proxy (Caddy on the same host). Docker Compose adds the
+     * bridge networks, which is where a host Caddy's connections come from.
+     */
+    trustedProxies: (process.env.OCPP_TRUSTED_PROXIES ?? '127.0.0.1,::1')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
     /** Seconds without a heartbeat or frame before a charger is marked offline. */
     offlineAfterS: num(process.env.OCPP_OFFLINE_AFTER_S, 900),
     /**
@@ -73,8 +98,18 @@ export const config = {
     // Defaults ON only in development. Elsewhere an unknown identity must be adopted by
     // an operator: auto-adoption enrols any stranger into the first site ever created.
     autoAdopt: bool(process.env.OCPP_AUTO_ADOPT, (process.env.NODE_ENV ?? 'development') === 'development'),
-    /** Default site used for auto-adoption in dev. */
-    autoAdoptSiteSlug: process.env.OCPP_AUTO_ADOPT_SITE ?? 'demo-site',
+    /**
+     * The site auto-adopted chargers join: a site id, or a site name. Unset, only a
+     * development or test gateway falls back to the oldest site; anywhere else an
+     * unknown charger is parked, because "the oldest site" can be any tenant's.
+     */
+    autoAdoptSite: (process.env.OCPP_AUTO_ADOPT_SITE ?? '').trim(),
+    /**
+     * Outside development and test the gateway refuses to start with a security
+     * profile below 2 or with auto-adoption on, unless this is set: an explicit
+     * acknowledgement for a supervised bench, never a default.
+     */
+    allowInsecure: bool(process.env.ALLOW_INSECURE_OCPP, false),
     callTimeoutMs: num(process.env.OCPP_CALL_TIMEOUT_MS, 30_000),
     heartbeatIntervalS: num(process.env.OCPP_HEARTBEAT_S, 300),
     /** Grace window during which both old and new AuthorizationKey are accepted. */
@@ -83,7 +118,14 @@ export const config = {
 
   api: {
     port: num(process.env.API_PORT, 9200),
-    host: process.env.API_HOST ?? '0.0.0.0',
+    /**
+     * Loopback by default, as deploy/README.md always said: the console and /v1
+     * are published only through Caddy (TLS, IP allow-list). The default used to
+     * be 0.0.0.0, which on the systemd path exposed the API on every interface.
+     * docker compose sets API_HOST=0.0.0.0 inside the container, where the port
+     * mapping (API_BIND, loopback by default) decides exposure.
+     */
+    host: process.env.API_HOST ?? '127.0.0.1',
     /**
      * Development bypass for authentication. NEVER true outside a workstation.
      * The server refuses to start with this on unless NODE_ENV is development.
@@ -95,6 +137,18 @@ export const config = {
     keyRateLimitPerMin: num(process.env.API_KEY_RATE_LIMIT_PER_MIN, 600),
     /** Requests per IP per minute with an API key that does not authenticate. */
     keyAuthFailuresPerMin: num(process.env.API_KEY_AUTH_FAILURES_PER_MIN, 30),
+    /**
+     * Keep each API key's token bucket in Postgres (api_key_rate_bucket), shared
+     * by every API process. The in-process buckets gave each key its limit PER
+     * PROCESS, so behind N API processes a key got N times its limit. Costs one
+     * small UPDATE per API-key request. If the database call fails the request is
+     * limited by the in-process bucket instead (fail open, logged) — availability
+     * over exactness. Defaults on outside development and test.
+     */
+    keyRateLimitShared: bool(
+      process.env.API_RATE_LIMIT_SHARED,
+      !['development', 'test'].includes(process.env.NODE_ENV ?? 'development'),
+    ),
     /**
      * Trusted reverse proxies, as a comma-separated list of IPs or CIDRs.
      *
@@ -220,6 +274,17 @@ export const config = {
 
   /** Alert notifications by e-mail and WhatsApp (channels and rules live in the database). */
   alerts: {
+    /**
+     * SMTP hosts on loopback or a private network that alert e-mail may use
+     * outside development/test (comma-separated host names or addresses), e.g. a
+     * Postfix relay on this server: `127.0.0.1,localhost`. Tenants choose their SMTP
+     * host in the console, so internal hosts are refused unless the PLATFORM
+     * operator lists them here; nothing else on the internal network is reachable.
+     */
+    smtpAllowedInternalHosts: (process.env.SMTP_ALLOWED_INTERNAL_HOSTS ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase().replace(/\.$/, ''))
+      .filter(Boolean),
     /** Console origin put in notification links. Falls back to PUBLIC_BASE_URL. */
     consoleUrl: (process.env.CONSOLE_PUBLIC_URL ?? process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, ''),
     /** Time zone for quiet hours and times printed in messages. */
@@ -298,6 +363,18 @@ export const config = {
   workers: {
     /** In the split deployment the GATEWAY runs them, because it owns the sockets. */
     enabled: bool(process.env.RUN_WORKERS, true),
+  },
+
+  /**
+   * Retention of the high-volume diagnostic logs (services/retention.ts, an
+   * hourly worker pass). ocpp_frame (every OCPP message, with idTags) and
+   * connection_attempt grew without limit: tens of GB a year on a few hundred
+   * chargers. Days; 0 keeps rows forever. Nothing billing- or audit-relevant
+   * lives in these tables — sessions, CDRs and the audit log are not touched.
+   */
+  retention: {
+    ocppFrameDays: num(process.env.OCPP_FRAME_RETENTION_DAYS, 90),
+    connectionAttemptDays: num(process.env.CONNECTION_ATTEMPT_RETENTION_DAYS, 30),
   },
 
   security: {
@@ -403,3 +480,19 @@ export const config = {
 };
 
 export type Config = typeof config;
+
+/**
+ * May this environment relax a security control?
+ *
+ * Only an explicit `development` or `test` may. Every relaxation used to be
+ * written as `env === 'production'` (strict) or `env !== 'production'` (lenient),
+ * so NODE_ENV=staging, prod or a typo silently ran with development behaviour:
+ * the driver sign-in code returned to the caller, the SSRF guard off, the
+ * sandbox payment pages live, a superuser database role accepted. The rule is
+ * now inverted: anything that is not explicitly development or test is treated
+ * as production.
+ */
+export function isRelaxedEnv(env: string = config.env): boolean {
+  return env === 'development' || env === 'test';
+}
+

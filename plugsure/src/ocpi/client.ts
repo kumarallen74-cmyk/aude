@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { guardedLookup, isInternalHost } from '../services/net-guard.js';
 import { authHeaderFor, type Party } from './mapping.js';
 import { logMessage } from './store.js';
@@ -13,6 +13,13 @@ import { logMessage } from './store.js';
  * call goes through the same SSRF guard as webhooks: https only in production,
  * no private or internal addresses (checked when connecting, so DNS rebinding
  * is covered), and redirects are not followed.
+ *
+ * `timeoutMs` (default OCPI_REQUEST_TIMEOUT_MS; OCPI_REALTIME_AUTH_TIMEOUT_MS for
+ * real-time authorisation) is a hard TOTAL deadline for the call — connect,
+ * send, and the partner's whole answer. It used to be only the socket idle
+ * timeout, which every byte resets: a partner trickling its answer held the
+ * call (and a driver's authorisation, or the roaming outbox pass) for as long
+ * as it liked.
  */
 
 export interface OcpiCallResult {
@@ -25,11 +32,13 @@ export interface OcpiCallResult {
   error: string | null;
 }
 
+const MAX_DEADLINE_MS = 90_000;
+
 export function partnerUrlProblem(raw: string): string | null {
   let u: URL;
   try { u = new URL(raw); } catch { return 'not a valid URL'; }
   if (u.username || u.password) return 'the URL must not contain credentials';
-  if (config.env === 'production') {
+  if (!isRelaxedEnv()) {
     if (u.protocol !== 'https:') return 'partner URLs must use https';
     if (isInternalHost(u.hostname)) return 'partner URLs must be publicly reachable';
   } else if (u.protocol !== 'https:' && u.protocol !== 'http:') {
@@ -82,9 +91,15 @@ export async function ocpiCall(o: {
     headers['ocpi-to-country-code'] = o.to.country_code;
     headers['ocpi-to-party-id'] = o.to.party_id;
   }
-  const timeout = o.timeoutMs ?? config.ocpi.requestTimeoutMs;
+  // Capped below the roaming outbox lease (2 minutes): a call must end before its
+  // row can be picked again by another pass.
+  const timeout = Math.min(o.timeoutMs ?? config.ocpi.requestTimeoutMs, MAX_DEADLINE_MS);
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (r: Omit<OcpiCallResult, 'ms'>) => { if (!settled) { settled = true; clearTimeout(deadline); resolve(done(r)); } };
+    // Set when WE cut the call, so the result says why rather than "aborted".
+    let cut: string | null = null;
     const mod = u.protocol === 'https:' ? https : http;
     const req = mod.request(u, { method: o.method, headers, lookup: guardedLookup as any, timeout }, (res) => {
       const chunks: Buffer[] = [];
@@ -101,19 +116,25 @@ export async function ocpiCall(o: {
         const s = res.statusCode ?? 0;
         const ocpiStatus = json && typeof json.status_code === 'number' ? json.status_code : null;
         const ok = s >= 200 && s < 300 && (ocpiStatus == null || (ocpiStatus >= 1000 && ocpiStatus < 2000));
-        resolve(done({
+        finish({
           ok,
           httpStatus: s,
           ocpiStatus,
           data: json && 'data' in json ? json.data : json,
           headers: res.headers,
           error: ok ? null : (json?.status_message ? `${ocpiStatus ?? s}: ${json.status_message}` : `HTTP ${s}${ocpiStatus ? ` / OCPI ${ocpiStatus}` : ''}`),
-        }));
+        });
       });
-      res.on('error', (e) => resolve(done({ ok: false, httpStatus: res.statusCode ?? null, ocpiStatus: null, data: null, headers: res.headers, error: e.message })));
+      const aborted = (e?: Error) => finish({ ok: false, httpStatus: res.statusCode ?? null, ocpiStatus: null, data: null, headers: res.headers, error: (cut ?? e?.message ?? 'response aborted').slice(0, 300) });
+      res.on('error', aborted);
+      res.on('close', () => aborted());
     });
+    const deadline = setTimeout(() => {
+      cut = `no complete answer within ${Math.round(timeout / 100) / 10} s`;
+      req.destroy(new Error(cut));
+    }, timeout);
     req.on('timeout', () => req.destroy(new Error(`no answer within ${Math.round(timeout / 1000)} s`)));
-    req.on('error', (e) => resolve(done({ ok: false, httpStatus: null, ocpiStatus: null, data: null, headers: {}, error: e.message.slice(0, 300) })));
+    req.on('error', (e) => finish({ ok: false, httpStatus: null, ocpiStatus: null, data: null, headers: {}, error: (cut ?? e.message).slice(0, 300) }));
     req.end(payload);
   });
 }

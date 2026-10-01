@@ -228,7 +228,7 @@ function openPartner(p, canWrite, done) {
     await attempt(() => api(`/v1/roaming/partners/${p.id}/import`, { method: 'POST' }), { success: (x) => `Imported ${x.locations} ${x.locations === 1 ? 'location' : 'locations'} and ${x.tariffs} ${x.tariffs === 1 ? 'tariff' : 'tariffs'}` });
   });
   $('[data-suspend]', d.el)?.addEventListener('click', async () => {
-    const ok = await confirmDialog({ title: `Suspend ${esc(p.name)}?`, message: 'The partner can no longer call PlugSure and receives no updates. Its drivers cannot start new sessions. Resume at any time.', confirmLabel: 'Suspend', danger: true });
+    const ok = await confirmDialog({ title: `Suspend ${p.name}?`, message: 'The partner can no longer call PlugSure and receives no updates. Its drivers cannot start new sessions. Resume at any time.', confirmLabel: 'Suspend', danger: true });
     if (ok && await attempt(() => api(`/v1/roaming/partners/${p.id}`, { method: 'PATCH', body: { state: 'suspended' } }), { success: 'Suspended' })) d.close();
   });
   $('[data-resume]', d.el)?.addEventListener('click', async () => {
@@ -236,7 +236,7 @@ function openPartner(p, canWrite, done) {
   });
   $('[data-connect]', d.el)?.addEventListener('click', () => connectExisting(p, () => d.close()));
   $('[data-del]', d.el)?.addEventListener('click', async () => {
-    const ok = await confirmDialog({ title: `Disconnect ${esc(p.name)}?`, message: 'The partner is told, its tokens stop working, and nothing more is sent. Reconnecting needs a new registration.', confirmLabel: 'Disconnect', danger: true, requireText: 'DISCONNECT' });
+    const ok = await confirmDialog({ title: `Disconnect ${p.name}?`, message: 'The partner is told, its tokens stop working, and nothing more is sent. Reconnecting needs a new registration.', confirmLabel: 'Disconnect', danger: true, requireText: 'DISCONNECT' });
     if (ok && await attempt(() => api(`/v1/roaming/partners/${p.id}`, { method: 'DELETE' }), { success: 'Disconnected' })) d.close();
   });
 }

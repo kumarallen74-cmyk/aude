@@ -1,6 +1,6 @@
 import { pool, one, query } from './pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { SYSTEM_ROLES } from '../services/authz.js';
 import { seedQuirks } from '../ocpp/quirks.js';
 import { issueApiKey } from '../services/auth.js';
@@ -241,7 +241,7 @@ async function main() {
     `INSERT INTO tariff_assignment (tariff_id, scope_type, scope_id, priority)
      SELECT $1, 'org', $2, 0
       WHERE NOT EXISTS (SELECT 1 FROM tariff_assignment
-                         WHERE tariff_id = $1 AND scope_type = 'org' AND scope_id = $2 AND current_type IS NULL)`,
+                         WHERE tariff_id = $1 AND scope_type = 'org' AND scope_id = $2 AND current_type IS NULL AND valid_to IS NULL)`,
     [tariff!.id, orgId],
   );
 
@@ -256,7 +256,7 @@ async function main() {
   const seedPassword = process.env.SEED_ADMIN_PASSWORD ?? generateTemporaryPassword();
   // A generated password is printed to the log below; in production it must be
   // rotated at first sign-in rather than living on in retained container logs.
-  const mustChange = config.env === 'production' && process.env.SEED_ADMIN_PASSWORD === undefined;
+  const mustChange = !isRelaxedEnv() && process.env.SEED_ADMIN_PASSWORD === undefined;
   if (user) {
     await query(`UPDATE app_user SET password_hash = $2, must_change_password = $3, status = 'active' WHERE id = $1`, [
       user.id,

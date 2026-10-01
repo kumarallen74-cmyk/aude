@@ -46,7 +46,13 @@ Environment=NODE_OPTIONS=--enable-source-maps
 Environment=TZ=Asia/Jakarta
 
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/gateway.js
-ExecReload=/bin/kill -HUP $MAINPID
+# Deliberately NO ExecReload. The gateway installs no SIGHUP handler, and node's
+# default action for SIGHUP is to terminate: an `ExecReload=/bin/kill -HUP` here made
+# `systemctl reload plugsure-gateway` kill the process, dropping every charger
+# socket and cutting transactions in flight. There is nothing to reload — config is
+# read from the environment at start — and logs go to journald, so no file needs
+# re-opening. `systemctl reload` now fails with "Job type reload is not applicable";
+# use `systemctl restart` (a full graceful drain) when configuration changes.
 
 Restart=always
 RestartSec=5

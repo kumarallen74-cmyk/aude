@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, el, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog,
+  $, $$, esc, el, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, html,
   field, options, formValues, fieldErrors, toast, callout, kpi, navigate, onLive, debounce, connectorTag, teraTag,
   onlineTag, inPortal, sites as loadSites,
 } from '../core.js';
@@ -111,7 +111,7 @@ export async function remoteStopDialog(cp, k) {
   const tx = k.transactionId ?? k.ocpp_transaction_id;
   const ok = await confirmDialog({
     title: 'Stop charging session?',
-    message: `Transaction <b class="mono">${esc(tx)}</b> on gun ${esc(k.evseNo ?? k.evse_id)} — running ${esc(fmt.dur((Date.now() - new Date(since).getTime()) / 1000))}, ${esc(fmt.kwh(k.sessionEnergyWh ?? k.session_energy_wh, 2))} delivered. The driver is billed for energy delivered so far.`,
+    message: html`Transaction <b class="mono">${tx}</b> on gun ${k.evseNo ?? k.evse_id} — running ${fmt.dur((Date.now() - new Date(since).getTime()) / 1000)}, ${fmt.kwh(k.sessionEnergyWh ?? k.session_energy_wh, 2)} delivered. The driver is billed for energy delivered so far.`,
     confirmLabel: 'Stop session',
     danger: true,
   });
@@ -168,7 +168,7 @@ export function resetDialog(cp) {
         async onClick() {
           const ok = await confirmDialog({
             title: `Confirm ${kind.toLowerCase()} reset`,
-            message: `Step 2 of 2 — the charger <b class="mono">${esc(cp.ocpp_identity)}</b> will go offline while it restarts${kind === 'Hard' ? ' and any active session will be cut' : ''}.`,
+            message: html`Step 2 of 2 — the charger <b class="mono">${cp.ocpp_identity}</b> will go offline while it restarts${kind === 'Hard' ? ' and any active session will be cut' : ''}.`,
             confirmLabel: `${kind} reset now`,
             danger: true,
             requireText: kind === 'Hard' ? 'REBOOT' : null,
@@ -651,6 +651,8 @@ function securityTab(identity) {
           ${field('Key', '<input name="key" class="mono" placeholder="Leave empty to auto-generate" autocomplete="off">', { help: 'Optional: 16–40 letters and digits.' })}
           ${field('Rotation reminder', `<select name="rotationDays">${options([{ value: '', label: 'Keep current' }, { value: 30, label: '30 days' }, { value: 90, label: '90 days' }, { value: 180, label: '180 days' }, { value: 365, label: '365 days' }], '')}</select>`)}
         </div>
+        ${d.has_auth_key ? `<label class="check" style="margin-top:10px"><input type="checkbox" name="compromised"> <span>Old key is compromised — revoke it immediately</span></label>
+        <p class="small muted" style="margin:4px 0 0">No grace window: the old key stops working at once, and the charger cannot connect until the new key is set on it.</p>` : ''}
         <div class="row" style="margin-top:12px"><button class="btn primary" data-issue>${icon('key')} ${d.has_auth_key ? 'Rotate key' : 'Issue key'}</button>
           <button class="btn" data-export>${icon('download')} Commissioning export (without key)</button></div>
         <div data-issued></div></div></div>
@@ -669,10 +671,19 @@ function securityTab(identity) {
     if (!canWrite) return;
     $('[data-issue]', body).addEventListener('click', async () => {
       const v = formValues(body);
-      const r = await attempt(() => api(`/v1/charge-points/${enc(identity)}/keys`, { method: 'POST', body: { profile: Math.max(1, Math.min(2, p || 2)), key: v.key || undefined, rotationDays: v.rotationDays || undefined } }));
+      // A compromised key is revoked with no grace window (the server records the reason in
+      // the audit log), which takes the charger offline until it has the new key: confirm.
+      const compromised = v.compromised === true;
+      if (compromised && !(await confirmDialog({
+        title: 'Revoke the old key immediately?',
+        message: 'The current key stops working now, with no grace window. The charger is refused until the new key is configured on it.',
+        confirmLabel: 'Rotate and revoke',
+        danger: true,
+      }))) return;
+      const r = await attempt(() => api(`/v1/charge-points/${enc(identity)}/keys`, { method: 'POST', body: { profile: Math.max(1, Math.min(2, p || 2)), key: v.key || undefined, rotationDays: v.rotationDays || undefined, ...(compromised ? { reason: 'compromised' } : {}) } }));
       if (!r) return;
       $('[data-issued]', body).replaceChildren(credentialPanel(identity, r));
-      toast('Key issued — shown once', 'ok');
+      toast(compromised ? 'Key issued — shown once. The old key is revoked.' : 'Key issued — shown once', 'ok');
     });
     $('[data-export]', body).addEventListener('click', async () => {
       const r = await attempt(() => api(`/v1/charge-points/${enc(identity)}/commissioning-export`));

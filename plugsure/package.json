@@ -1,9 +1,9 @@
 {
   "name": "plugsure",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
-  "description": "PlugSure ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â multi-tenant EV charging management system (CSMS) for Indonesia",
+  "description": "PlugSure — multi-tenant EV charging management system (CSMS) for Indonesia",
   "engines": {
     "node": ">=22"
   },
@@ -28,6 +28,7 @@
     "e2e:card-holds": "tsx tools/e2e/card-holds-e2e.mts",
     "e2e:linked-wallets": "tsx tools/e2e/linked-wallets-e2e.mts",
     "e2e:postpay": "tsx tools/e2e/postpay-e2e.mts",
+    "e2e:pilot-fixes": "tsx tools/e2e/pilot-fixes-e2e.mts",
     "openapi": "tsx tools/openapi/generate.mts",
     "sdk": "tsx tools/sdk/generate.mts",
     "e2e:field": "tsx tools/e2e/field-e2e.mts",
@@ -63,7 +64,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
+    "@types/node": "^22.20.4",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.15.6",
     "@types/qrcode": "^1.5.6",

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { appNameFor } from '../services/brand.js';
 import { one, many, query, tx } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
-import { paymentsFor, PaymentsUnavailable, logPaymentCreated, startPayment, MethodUnavailable } from '../services/payments/registry.js';
+import { bus } from '../services/events.js';
+import { paymentsFor, PaymentsUnavailable, logPaymentCreated, startPayment, MethodUnavailable, type PreparedPayment } from '../services/payments/registry.js';
 import { CHANNEL_LABEL } from '../services/payments/provider.js';
 import { feeTax } from '../services/benefits.js';
 import { qrDataUri, qrPngDataUri, paymentSetupFor, paymentView, type PayOptions } from './charge.js';
@@ -181,8 +183,19 @@ export async function buyPass(p: DriverPrincipal, planId: string, pay: PayOption
   if (tax.total > 0) {
     try { acq = await paymentsFor(plan.org_id); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false as const, error: 'Pembayaran belum tersedia di operator ini.' }; throw e; }
   }
-  let r;
-  try { r = await tx(async () => {
+  /**
+   * The charge is RECORDED (and committed) before the acquirer is asked for money.
+   *
+   * The acquirer used to be called inside the transaction that inserted the
+   * subscription_charge: a saved card or linked e-wallet is taken at once, so a
+   * database error after that call rolled the row back and left a completed sale
+   * that nothing pointed at — the settlement then matched no charge. Now the row
+   * exists first (reference membership:<charge id>), startPayment's prepare() hook
+   * writes the provider reference before the call, and a failed or unanswered call
+   * voids the row: should the money have been taken after all, its notification
+   * finds a void charge and is refunded in full (passPaidAfterVoid).
+   */
+  const r = await tx(async () => {
     let subId: string;
     if (live && (live.plan_id === plan.id || switching)) subId = live.id;
     else {
@@ -200,41 +213,56 @@ export async function buyPass(p: DriverPrincipal, planId: string, pay: PayOption
     // An unpaid pending charge (an abandoned checkout) is replaced.
     const pending = await one<any>(`SELECT * FROM subscription_charge WHERE subscription_id = $1 AND state = 'pending'`, [subId]);
     if (pending) await query(`UPDATE subscription_charge SET state = 'void' WHERE id = $1`, [pending.id]);
-    const started = acq
-      ? await startPayment(acq, {
-          channel: pay.channel, customerPhone: pay.phone ?? p.account?.phone ?? null, returnUrl: pay.returnUrl,
-          appDriverId: p.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: false, walletId: pay.walletId ?? null,
-          referenceId: `membership:${subId}:${Date.now()}`, amountIdr: tax.total, description: `${await appNameFor(plan.org_id)} ${plan.name}`,
-        })
-      : null;
     const ch = await one<{ id: string }>(
-      `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, provider_ref, provider, integration_id,
-                                        channel, checkout_url, save_card, driver_card_id, credit_idr, switch_to_plan_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$12,$9,$10,$11,$13,$14,$15,$16,$17,$18) RETURNING id`,
-      [subId, plan.org_id, cur, end, plan.monthly_fee_idr, tax.dpp, tax.ppn, tax.total, started?.providerRef ?? null, acq?.provider.name ?? null, acq?.resolved.integrationId ?? null,
-       started?.method ?? 'credit', started?.channel ?? null, started?.checkoutUrl ?? null, started?.saveCard ?? false, started?.savedCardId ?? null,
-       terms.creditUsedIdr, switching ? plan.id : null],
+      `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, provider, integration_id,
+                                        credit_idr, switch_to_plan_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      [subId, plan.org_id, cur, end, plan.monthly_fee_idr, tax.dpp, tax.ppn, tax.total, acq ? 'qris' : 'credit', acq?.provider.name ?? null,
+       acq?.resolved.integrationId ?? null, terms.creditUsedIdr, switching ? plan.id : null],
     );
-    // Renew automatically with this saved card or linked e-wallet, if the driver asked.
-    if (pay.autoRenew === true && (pay.savedCardId || pay.walletId)) {
-      await query(`UPDATE subscription SET auto_renew = true, renew_method_id = $2, renew_error = NULL, renew_attempts = 0, renew_next_at = NULL WHERE id = $1`,
-        [subId, pay.savedCardId ?? pay.walletId]);
+    return { subId, chargeId: ch!.id, start: cur, end };
+  });
+
+  let started: Awaited<ReturnType<typeof startPayment>> | null = null;
+  if (acq) {
+    const record = (x: { providerRef: string | null; method: string; channel: string | null; savedCardId: string | null; saveCard: boolean }): Promise<void> =>
+      query(
+        `UPDATE subscription_charge SET provider_ref = $2, via = $3, channel = $4, driver_card_id = $5, save_card = $6 WHERE id = $1`,
+        [r.chargeId, x.providerRef, x.method, x.channel, x.savedCardId, x.saveCard],
+      ).then(() => undefined);
+    try {
+      started = await startPayment(acq, {
+        channel: pay.channel, customerPhone: pay.phone ?? p.account?.phone ?? null, returnUrl: pay.returnUrl,
+        appDriverId: p.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: false, walletId: pay.walletId ?? null,
+        referenceId: `membership:${r.chargeId}`, amountIdr: tax.total, description: `${await appNameFor(plan.org_id)} ${plan.name}`,
+        prepare: record,
+      });
+    } catch (e) {
+      await query(`UPDATE subscription_charge SET state = 'void' WHERE id = $1 AND state = 'pending'`, [r.chargeId]);
+      if (e instanceof MethodUnavailable) return { ok: false as const, error: e.message, ...(e.code ? { code: e.code } : {}) };
+      throw e;
     }
-    return { subId, chargeId: ch!.id, started, start: cur, end };
-  }); } catch (e) { if (e instanceof MethodUnavailable) return { ok: false as const, error: e.message, ...(e.code ? { code: e.code } : {}) }; throw e; }
-  if (r.started && acq) await logPaymentCreated(acq.resolved, plan.org_id, r.started.providerRef, tax.total, 'app pass', r.started.channel);
+    await record(started);
+    await query(`UPDATE subscription_charge SET checkout_url = $2 WHERE id = $1`, [r.chargeId, started.checkoutUrl ?? null]);
+  }
+  // Renew automatically with this saved card or linked e-wallet, if the driver asked.
+  if (pay.autoRenew === true && (pay.savedCardId || pay.walletId)) {
+    await query(`UPDATE subscription SET auto_renew = true, renew_method_id = $2, renew_error = NULL, renew_attempts = 0, renew_next_at = NULL WHERE id = $1`,
+      [r.subId, pay.savedCardId ?? pay.walletId]);
+  }
+  if (started && acq) await logPaymentCreated(acq.resolved, plan.org_id, started.providerRef, tax.total, 'app pass', started.channel);
   // Nothing to pay (a switch covered by the credit), or a saved card / linked e-wallet taken at once: the pass is paid now.
-  if (!r.started || r.started.immediate === 'captured') await markPassPaid(r.chargeId);
+  if (!started || started.immediate === 'captured') await markPassPaid(r.chargeId);
   return {
     ok: true as const,
     chargeId: r.chargeId, subscriptionId: r.subId, plan: plan.name, operator: plan.operator,
     periodStart: r.start.toISOString(), periodEnd: r.end.toISOString(),
     feeIdr: plan.monthly_fee_idr, creditIdr: terms.creditUsedIdr, ppnIdr: tax.ppn, totalIdr: tax.total,
-    paid: !r.started || r.started.immediate === 'captured',
+    paid: !started || started.immediate === 'captured',
     // Sandbox acquirer only: the app offers the demo payment button.
     demo: acq?.provider.demo === true,
-    ...(r.started ? { payment: paymentView(r.started, tax.total) } : {}),
-    ...(r.started?.qrString ? { qr: { qrString: r.started.qrString, qrImage: await qrDataUri(r.started.qrString), qrPng: await qrPngDataUri(r.started.qrString), providerRef: r.started.providerRef, amountIdr: tax.total, expiresAt: r.started.expiresAt } } : {}),
+    ...(started ? { payment: paymentView(started, tax.total) } : {}),
+    ...(started?.qrString ? { qr: { qrString: started.qrString, qrImage: await qrDataUri(started.qrString), qrPng: await qrPngDataUri(started.qrString), providerRef: started.providerRef, amountIdr: tax.total, expiresAt: started.expiresAt } } : {}),
   };
 }
 
@@ -332,6 +360,42 @@ export async function markPassPaid(chargeId: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * A pass payment the acquirer confirmed for a charge that can no longer be paid: replaced by a newer checkout, or
+ * cancelled (void). The money arrived, so it is owed back: recorded as a payment (mode 'pass', on the account that took
+ * it) in the refund queue — refunded through the acquirer at once when it came from a linked e-wallet — with an alert.
+ * Idempotent per charge. False when there is nothing to refund (an invoice charge, or nothing was taken).
+ */
+export async function passPaidAfterVoid(
+  chargeId: string,
+  acquirer: { provider: string; integrationId: string | null },
+  paid: { amountIdr: number | null; paymentId: string | null; status: string },
+): Promise<boolean> {
+  const c = await one<any>(`SELECT * FROM subscription_charge WHERE id = $1`, [chargeId]);
+  if (!c || c.state === 'paid' || !['qris', 'ewallet', 'card'].includes(c.via)) return false;
+  const amount = Math.round(Number(paid.amountIdr ?? c.total_idr));
+  if (!(amount > 0)) return false;
+  const row = await one<{ id: string }>(
+    `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr, amount_captured_idr, captured_at,
+                                 idem_key, integration_id, channel, provider_payment_id, driver_card_id, raw_events)
+     VALUES ($1, $2, $3, $4, 'pass', 'captured', $5, $6, now(), $7, $8, $9, $10, $11, $12::jsonb)
+     ON CONFLICT (idem_key) DO NOTHING RETURNING id`,
+    [c.org_id, c.provider ?? acquirer.provider, c.provider_ref, c.via, Number(c.total_idr), amount, `pass-after-void:${chargeId}`,
+     c.integration_id ?? acquirer.integrationId, c.channel, paid.paymentId, c.driver_card_id,
+     JSON.stringify([{ at: new Date(), status: paid.status, amountIdr: paid.amountIdr, subscriptionChargeId: chargeId }])],
+  );
+  if (!row) return true; // already recorded (a repeated notification)
+  const { markRefundDue } = await import('../services/refunds.js');
+  await markRefundDue(row.id, amount, 'A 30-day pass was paid after its checkout had been replaced or cancelled; the payment is refunded in full');
+  logger.warn({ charge: chargeId, intent: row.id, amountIdr: amount }, 'pass paid after its charge was voided; refund due');
+  bus.emit('alert.raised', {
+    orgId: c.org_id, kind: 'payment.refund_due', severity: 'warning',
+    message: `A driver paid Rp ${amount.toLocaleString('id-ID')} for a 30-day pass whose checkout had already been replaced or cancelled. A full refund is due — see Refunds.`,
+    targetType: 'payment_intent', targetId: row.id,
+  });
+  return true;
+}
+
 export async function markPassPaidByProviderRef(providerRef: string): Promise<boolean> {
   const c = await one<{ id: string }>(`SELECT id FROM subscription_charge WHERE provider_ref = $1`, [providerRef]);
   return c ? markPassPaid(c.id) : false;
@@ -355,7 +419,7 @@ export async function passPaymentFailed(chargeId: string, status: string): Promi
 export async function confirmPassPayment(p: DriverPrincipal, id: string) {
   const c = await ownCharge(p, id);
   if (!c) return { ok: false, error: 'Transaksi tidak ditemukan.' };
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   if (c.provider && c.provider !== 'mock') return { ok: false, error: 'Menunggu konfirmasi pembayaran dari penyedia QRIS.' };
   await markPassPaid(c.id);
   return { ok: true };
@@ -415,18 +479,31 @@ export async function renewPasses(): Promise<{ renewed: number; waiting: number;
     const tax = feeTax(s.monthly_fee_idr, s.pkp);
     // A checkout the driver abandoned for the same window makes way (before any money moves, so the renewal's record always fits).
     await query(`UPDATE subscription_charge SET state = 'void' WHERE subscription_id = $1 AND state = 'pending' AND NOT auto_renewal AND period_start = $2`, [s.id, start]);
+    // The renewal's charge is recorded (pending) BEFORE the card or e-wallet is charged, with the acquirer's reference
+    // (derived from the charge's own id): a charge whose answer is lost is still matched by its notification — the pass
+    // is paid, or, once this charge is void, the payment is refunded — instead of being an unknown payment.
+    const newCharge = randomUUID();
+    let chargeId: string | null = null;
+    const record = async (p: PreparedPayment) => {
+      chargeId = (await one<{ id: string }>(
+        `INSERT INTO subscription_charge (id, subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, provider_ref, provider, integration_id,
+                                          channel, driver_card_id, auto_renewal)
+         VALUES ($15,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,true) RETURNING id`,
+        [s.id, s.org_id, start, end, s.monthly_fee_idr, tax.dpp, tax.ppn, tax.total, p.method, p.providerRef, acq.provider.name, acq.resolved.integrationId,
+         p.channel, s.renew_method_id, newCharge],
+      ))!.id;
+    };
     try {
       const started = await startPayment(acq, {
         appDriverId: s.app_driver_id, customerPhone: s.phone, returnUrl: '/app/paid.html', allowHold: false,
         ...(s.method_kind === 'ewallet' ? { walletId: s.renew_method_id } : { savedCardId: s.renew_method_id, channel: 'CARD' }),
-        referenceId: `membership-renew:${s.id}:${Date.now()}`, amountIdr: tax.total, description: `${await appNameFor(s.org_id)} ${s.plan_name} (renewal)`,
+        referenceId: `membership-renew:${newCharge}`, amountIdr: tax.total, description: `${await appNameFor(s.org_id)} ${s.plan_name} (renewal)`,
+        prepare: record,
       });
+      if (!chargeId) await record({ providerRef: started.providerRef, mode: started.mode, method: started.method, channel: started.channel, savedCardId: started.savedCardId, saveCard: false });
       const ch = await one<{ id: string }>(
-        `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, provider_ref, provider, integration_id,
-                                          channel, checkout_url, driver_card_id, auto_renewal)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,true) RETURNING id`,
-        [s.id, s.org_id, start, end, s.monthly_fee_idr, tax.dpp, tax.ppn, tax.total, started.method, started.providerRef, acq.provider.name, acq.resolved.integrationId,
-         started.channel, started.checkoutUrl, s.renew_method_id],
+        `UPDATE subscription_charge SET via = $2, provider_ref = $3, channel = $4, checkout_url = $5 WHERE id = $1 RETURNING id`,
+        [chargeId, started.method, started.providerRef, started.channel, started.checkoutUrl],
       );
       await logPaymentCreated(acq.resolved, s.org_id, started.providerRef, tax.total, 'pass renewal', started.channel);
       if (started.immediate === 'captured') { await markPassPaid(ch!.id); out.renewed++; continue; }
@@ -439,6 +516,9 @@ export async function renewPasses(): Promise<{ renewed: number; waiting: number;
         s.id, start).catch(() => {});
       out.waiting++;
     } catch (e) {
+      // Not charged (declined), or no answer: the recorded charge is void, so the renewal can be tried again. Should a
+      // charge without an answer have gone through after all, its notification finds this void charge: refunded in full.
+      if (chargeId) await query(`UPDATE subscription_charge SET state = 'void' WHERE id = $1 AND state = 'pending'`, [chargeId]);
       if (!(e instanceof MethodUnavailable)) {
         logger.warn({ subscription: s.id, err: (e as Error).message }, 'pass renewal failed — retried');
         await query(`UPDATE subscription SET renew_next_at = now() + interval '30 minutes' WHERE id = $1`, [s.id]);

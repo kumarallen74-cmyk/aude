@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { one, query } from '../db/pool.js';
+import { one, query, tx } from '../db/pool.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { writeAudit } from './audit.js';
@@ -58,27 +58,87 @@ export function providedKeyProblem(key: string): string | null {
   return null;
 }
 
+/**
+ * Why a key is being replaced. 'routine' keeps the key the charger is using
+ * valid for the grace window; 'compromised' (the key leaked) gives NO grace:
+ * from this moment only the new key authenticates, and the charger must be
+ * reconfigured with it.
+ */
+export type KeyRotationReason = 'routine' | 'compromised';
+
 export async function issueAuthorizationKey(
   chargePointId: string,
   actor: { type: 'user' | 'api_client' | 'system'; id?: string; orgId?: string; ip?: string },
   providedKey?: string,
+  opts: { reason?: KeyRotationReason } = {},
 ): Promise<IssuedKey | null> {
-  const cp = await one<{ id: string; ocpp_identity: string; auth_key_hash: string | null }>(
-    `SELECT id, ocpp_identity, auth_key_hash FROM charge_point WHERE id = $1`,
-    [chargePointId],
-  );
-  if (!cp) return null;
-
+  const compromised = opts.reason === 'compromised';
   const key = providedKey ?? generateAuthorizationKey();
-  const row = await one<{ auth_key_rotated_at: Date }>(
-    `UPDATE charge_point
-        SET auth_key_prev_hash = auth_key_hash,
-            auth_key_hash = $2,
-            auth_key_rotated_at = now()
-      WHERE id = $1
-      RETURNING auth_key_rotated_at`,
-    [chargePointId, hashKey(key)],
-  );
+
+  /**
+   * Which key becomes "previous" — decided under a row lock.
+   *
+   * It used to be unconditionally the current one. Issue K1 while the charger
+   * runs on K0 (prev = K0), then issue again before the charger was given K1 —
+   * a lost response, a double click — and K2 pushed K0 out (prev = K1): the
+   * charger, still on K0, was locked out of a site it had never stopped
+   * serving. So while a rotation is open (a previous key in its grace window,
+   * and the charger has NOT been seen authenticating with the current key since
+   * that rotation) the previous key is the one the charger may still be using
+   * and is KEPT; only the never-used current key is replaced. Once the charger
+   * has used the current key (the gateway also retires the previous one then),
+   * or the grace window has passed, the current key becomes the previous one as
+   * before.
+   *
+   * 'compromised' clears the previous key outright: a leaked key must stop
+   * working now, not in 24 hours.
+   */
+  const res = await tx(async (c) => {
+    const cur = (
+      await c.query<{
+        id: string;
+        ocpp_identity: string;
+        auth_key_hash: string | null;
+        auth_key_prev_hash: string | null;
+        auth_key_rotated_at: Date | null;
+        auth_key_last_matched: string | null;
+        auth_key_last_auth_at: Date | null;
+      }>(
+        `SELECT id, ocpp_identity, auth_key_hash, auth_key_prev_hash, auth_key_rotated_at, auth_key_last_matched, auth_key_last_auth_at
+           FROM charge_point WHERE id = $1 FOR UPDATE`,
+        [chargePointId],
+      )
+    ).rows[0];
+    if (!cur) return null;
+    const now = Date.now();
+    const rotatedAt = cur.auth_key_rotated_at ? new Date(cur.auth_key_rotated_at).getTime() : null;
+    const rotationOpen =
+      cur.auth_key_prev_hash !== null &&
+      rotatedAt !== null &&
+      now - rotatedAt < config.gateway.keyRotationGraceMs;
+    const currentSeenSinceRotation =
+      cur.auth_key_last_matched === 'current' &&
+      cur.auth_key_last_auth_at !== null &&
+      rotatedAt !== null &&
+      new Date(cur.auth_key_last_auth_at).getTime() >= rotatedAt;
+    const keepPrevious = !compromised && rotationOpen && !currentSeenSinceRotation;
+    const prev = compromised ? null : keepPrevious ? cur.auth_key_prev_hash : cur.auth_key_hash;
+    const row = (
+      await c.query<{ auth_key_rotated_at: Date }>(
+        `UPDATE charge_point
+            SET auth_key_prev_hash = $3,
+                auth_key_hash = $2,
+                auth_key_rotated_at = now(),
+                auth_key_last_matched = NULL
+          WHERE id = $1
+          RETURNING auth_key_rotated_at`,
+        [chargePointId, hashKey(key), prev],
+      )
+    ).rows[0];
+    return { cp: cur, row, keepPrevious, prevRetained: prev !== null };
+  });
+  if (!res) return null;
+  const { cp, row, keepPrevious, prevRetained } = res;
 
   await writeAudit({
     orgId: actor.orgId ?? null,
@@ -88,19 +148,26 @@ export async function issueAuthorizationKey(
     targetType: 'charge_point',
     targetId: cp.ocpp_identity,
     // Never log the key itself, not even hashed — the audit log is exportable.
-    after: { rotated: true, previousKeyRetainedForGraceWindow: cp.auth_key_hash !== null },
+    after: {
+      rotated: true,
+      reason: compromised ? 'compromised' : 'routine',
+      previousKeyRetainedForGraceWindow: prevRetained,
+      // The charger had not yet used the key replaced here, so the key before it stays valid.
+      ...(keepPrevious ? { replacedUnusedKey: true } : {}),
+    },
     ip: actor.ip ?? null,
   });
 
   const rotatedAt = row?.auth_key_rotated_at ?? new Date();
-  logger.info({ chargePointId, identity: cp.ocpp_identity }, 'AuthorizationKey issued');
+  logger.info({ chargePointId, identity: cp.ocpp_identity, compromised, keepPrevious }, 'AuthorizationKey issued');
 
   return {
     key,
     chargePointId: cp.id,
     ocppIdentity: cp.ocpp_identity,
     rotatedAt,
-    graceEndsAt: new Date(rotatedAt.getTime() + config.gateway.keyRotationGraceMs),
+    // No grace when the old key is compromised (or there was none to keep).
+    graceEndsAt: prevRetained ? new Date(rotatedAt.getTime() + config.gateway.keyRotationGraceMs) : rotatedAt,
   };
 }
 
@@ -126,7 +193,10 @@ export async function verifyAuthorizationKey(ocppIdentity: string, given: string
 
   const givenHash = Buffer.from(hashKey(given), 'hex');
 
-  if (constantTimeEquals(row.auth_key_hash, givenHash)) return { ok: true, matched: 'current' };
+  if (constantTimeEquals(row.auth_key_hash, givenHash)) {
+    await noteKeyUse(ocppIdentity, 'current');
+    return { ok: true, matched: 'current' };
+  }
 
   const inGrace =
     row.auth_key_prev_hash &&
@@ -134,9 +204,22 @@ export async function verifyAuthorizationKey(ocppIdentity: string, given: string
     Date.now() - new Date(row.auth_key_rotated_at).getTime() < config.gateway.keyRotationGraceMs;
 
   if (inGrace && constantTimeEquals(row.auth_key_prev_hash!, givenHash)) {
+    await noteKeyUse(ocppIdentity, 'previous');
     return { ok: true, matched: 'previous' };
   }
   return { ok: false, reason: 'mismatch' };
+}
+
+/**
+ * Remember which key the charger authenticated with: issueAuthorizationKey
+ * needs it to know whether the charger has moved onto the current key. Best
+ * effort — bookkeeping never fails a connection.
+ */
+async function noteKeyUse(ocppIdentity: string, matched: 'current' | 'previous'): Promise<void> {
+  await query(
+    `UPDATE charge_point SET auth_key_last_matched = $2, auth_key_last_auth_at = now() WHERE ocpp_identity = $1`,
+    [ocppIdentity, matched],
+  ).catch((e) => logger.warn({ cp: ocppIdentity, err: (e as Error).message }, 'could not record which key was used'));
 }
 
 function constantTimeEquals(storedHex: string, givenHash: Buffer): boolean {

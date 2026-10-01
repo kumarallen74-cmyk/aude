@@ -1,6 +1,6 @@
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 
 export interface ChargePointRow {
   id: string;
@@ -67,12 +67,24 @@ export async function adoptOrPark(ocppIdentity: string): Promise<ChargePointRow 
     return null;
   }
 
-  // Never into a developer sandbox tenant.
+  // Never into a developer sandbox tenant. OCPP_AUTO_ADOPT_SITE (id or name) was
+  // documented but ignored: the charger went into the oldest site on the platform,
+  // whichever tenant owned it.
+  const wanted = config.gateway.autoAdoptSite;
+  if (!wanted && !isRelaxedEnv()) {
+    logger.warn({ ocppIdentity }, 'auto-adopt has no OCPP_AUTO_ADOPT_SITE; unknown charge point queued for adoption');
+    return null;
+  }
   const site = await one<{ id: string }>(
-    `SELECT s.id FROM site s JOIN organisation o ON o.id = s.org_id WHERE o.sandbox_of_org_id IS NULL ORDER BY s.created_at LIMIT 1`,
+    wanted
+      ? `SELECT s.id FROM site s JOIN organisation o ON o.id = s.org_id
+          WHERE o.sandbox_of_org_id IS NULL AND (s.id::text = $1 OR s.name = $1)
+          ORDER BY s.created_at LIMIT 1`
+      : `SELECT s.id FROM site s JOIN organisation o ON o.id = s.org_id WHERE o.sandbox_of_org_id IS NULL ORDER BY s.created_at LIMIT 1`,
+    wanted ? [wanted] : [],
   );
   if (!site) {
-    logger.error('no site exists to adopt charge point into — run the seed first');
+    logger.error({ ocppIdentity, site: wanted || null }, wanted ? 'OCPP_AUTO_ADOPT_SITE matches no site; charge point queued for adoption' : 'no site exists to adopt charge point into — run the seed first');
     return null;
   }
   const row = await one<{ id: string }>(

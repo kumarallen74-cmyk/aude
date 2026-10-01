@@ -1,11 +1,12 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { routePath, underPrefix } from './route-path.js';
 import { limitParam } from './paging.js';
 import fastifyStatic from '@fastify/static';
 import { contentSecurityPolicy } from './csp.js';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { one, many, query, enterOrgScope, runInRequestScope, afterResponse, outsideRequestScope, type OrgScopeHandle } from '../db/pool.js';
 import * as assets from '../services/assets.js';
@@ -26,7 +27,9 @@ import { loadTariffForConnector, createTariff, assignTariff, listTariffs } from 
 import { conservativeAllowanceWh, energyAllowanceWh, rateSession, validateTariff } from '../services/tariff.js';
 import { estimateQrisMdrIdr, QRIS_MAX_TRANSACTION_IDR } from '../services/payments/provider.js';
 import { paymentsFor, PaymentsUnavailable, logPaymentCreated, sandboxProvider } from '../services/payments/registry.js';
-import { type Principal, assertCan, assertCanAny, assertGrantable, visibleSiteIds, can, ForbiddenError } from '../services/authz.js';
+import { type Permission, type Principal, assertCan, assertCanAny, assertGrantable, visibleSiteIds, can, ForbiddenError, hasPlatformAdmin } from '../services/authz.js';
+import { refuseHttpsUrl } from '../services/net-guard.js';
+import { validateConfigValue } from '../ocpp/config-catalog.js';
 import { recordRemoteStartRequest } from '../services/operator-limits.js';
 import { registerConsoleRoutes } from './console-routes.js';
 import { listFleetDetailed, validateTopology, applyTopology, type EvseSpec } from '../services/chargepoints.js';
@@ -47,7 +50,7 @@ import {
   revokeApiKey,
 } from '../services/auth.js';
 import { verifyChain, writeAudit } from '../services/audit.js';
-import { listAttempts, pendingChargers, attemptStats, suggestMatches } from '../services/connections.js';
+import { listAttempts, pendingChargers, attemptStats, suggestMatches, identitySeenUnregistered } from '../services/connections.js';
 import { issueAuthorizationKey, setSecurityProfile, setClientCertFingerprint } from '../services/chargepoint-keys.js';
 import { listQuirkProfiles } from '../ocpp/quirks.js';
 import { bus, eventVisibleTo } from '../services/events.js';
@@ -67,7 +70,8 @@ import { isSandboxOrg } from '../sandbox/provision.js';
 import { sandboxCall } from '../ocpp/bridge.js';
 import { v2xView } from '../services/v2x.js';
 import { signedDataFor, transparencyXml } from '../services/signed-metering.js';
-import { keyBuckets, rateLimitHeaders, tooManyFailures, recordFailure, recordUsage, startUsageFlush, stopUsageFlush, flushUsage } from '../services/ratelimit.js';
+import { streamMultipartFile } from './multipart-stream.js';
+import { takeKeyToken, rateLimitHeaders, tooManyFailures, recordFailure, recordUsage, startUsageFlush, stopUsageFlush, flushUsage } from '../services/ratelimit.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The sandbox acquirer's simulator (development only); real acquirers come from Integrations. */
@@ -126,7 +130,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.addHook('onRoute', (r) => {
     for (const m of [r.method].flat()) registeredRoutes.push({ method: String(m).toUpperCase(), url: r.url });
   });
-  if (config.api.trustedProxies.length === 0 && config.env === 'production') {
+  if (config.api.trustedProxies.length === 0 && !isRelaxedEnv()) {
     logger.warn(
       'API_TRUSTED_PROXIES is empty: X-Forwarded-For is ignored and rate limiting keys on the ' +
         'socket peer. Correct behind a direct-facing listener; set it if you terminate TLS at an ingress.',
@@ -140,7 +144,10 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.addHook('onSend', async (req, reply, payload) => {
     // Settle the request transaction BEFORE the response is written, so a client
     // that gets a 2xx can immediately read its own write. (onResponse below stays
-    // as the safety net; commit/rollback are idempotent.)
+    // as the safety net; commit/rollback are idempotent.) A failed COMMIT
+    // rejects here, so the error handler answers 500 instead of the 2xx the
+    // handler produced for writes that were lost. A rollback re-appends the
+    // request's audit entries outside it (see writeAudit), before the reply.
     if (req.orgScope) {
       if (reply.statusCode >= 400) await req.orgScope.rollback();
       else await req.orgScope.commit();
@@ -167,8 +174,43 @@ export async function buildApi(): Promise<FastifyInstance> {
    * preHandler below fills it in once the tenant is known.
    */
   app.addHook('onRequest', (req, _reply, done) => {
-    if (!req.url.startsWith('/v1/')) return done();
+    if (!underPrefix(req, '/v1/')) return done();
     runInRequestScope(done);
+  });
+
+  /**
+   * End the console's live streams (Server-Sent Events) on shutdown.
+   *
+   * `app.close()` stops accepting connections and waits for the open ones to
+   * finish — and an SSE response never finishes on its own: with one console tab
+   * open, SIGTERM hung until systemd's SIGKILL (TimeoutStopSec), which also cut
+   * every other in-flight request instead of draining it. The streams are tracked
+   * here (/v1/stream and /v1/events/*) and ended in preClose, which runs BEFORE
+   * the server waits for connections; ordinary requests still drain gracefully.
+   * The browser's EventSource reconnects by itself, to another API process or to
+   * this one once it is back.
+   */
+  const liveStreams = new Set<import('node:http').ServerResponse>();
+  app.addHook('onRequest', async (req, reply) => {
+    const url = req.url.split('?')[0]!;
+    if (url !== '/v1/stream' && !url.startsWith('/v1/events/')) return;
+    const res = reply.raw;
+    liveStreams.add(res);
+    res.on('close', () => liveStreams.delete(res));
+  });
+  app.addHook('preClose', async () => {
+    for (const res of liveStreams) {
+      // A stream still being authenticated has written nothing yet: drop it, or it
+      // would open after this point and hold the close up all the same.
+      if (!res.headersSent) { res.destroy(); continue; }
+      try {
+        res.end();
+        res.socket?.destroySoon();
+      } catch {
+        res.destroy();
+      }
+    }
+    liveStreams.clear();
   });
 
   // Simple fixed-window limiter per client IP. There was none at all.
@@ -176,7 +218,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   // here they only count against the IP when the key does not authenticate.
   const hits = new Map<string, { n: number; resetAt: number }>();
   // Only the operator API (/v1) takes API keys: elsewhere the header buys nothing.
-  const withApiKey = (req: FastifyRequest) => req.url.startsWith('/v1/') && /^Bearer\s+psk_/i.test(String(req.headers.authorization ?? ''));
+  const withApiKey = (req: FastifyRequest) => underPrefix(req, '/v1/') && /^Bearer\s+psk_/i.test(String(req.headers.authorization ?? ''));
   startUsageFlush();
   app.addHook('onClose', async () => { stopUsageFlush(); await flushUsage(); });
   app.addHook('onRequest', async (req, reply) => {
@@ -202,15 +244,17 @@ export async function buildApi(): Promise<FastifyInstance> {
    * which is the only arrangement that survives contact with a growing codebase.
    */
   app.addHook('preHandler', async (req, reply) => {
-    if (req.url === '/healthz' || !req.url.startsWith('/v1/')) return;
+    // Under the prefix by the matched route OR the raw target (see underPrefix).
+    const route = routePath(req);
+    if (!underPrefix(req, '/v1/')) return;
     // The one unauthenticated /v1 route: you cannot present a session you do not have yet.
-    if (req.url === '/v1/auth/login' && req.method === 'POST') return;
+    if (route === '/v1/auth/login' && req.method === 'POST') return;
     try {
       const auth = await authenticate(req.headers as Record<string, unknown>);
       req.principal = auth.principal;
       // Each API key has its own limit (a token bucket; RateLimit-* headers on every answer).
       if (auth.kind === 'api_key') {
-        const d = keyBuckets.take(auth.credentialId, auth.rateLimitPerMin ?? config.api.keyRateLimitPerMin);
+        const d = await takeKeyToken(auth.credentialId, auth.rateLimitPerMin ?? config.api.keyRateLimitPerMin);
         reply.headers(rateLimitHeaders(d));
         req.apiKey = { id: auth.credentialId, orgId: auth.principal.orgId };
         if (!d.allowed) {
@@ -235,7 +279,7 @@ export async function buildApi(): Promise<FastifyInstance> {
        * one-time password worked indefinitely against the API itself.
        */
       if (auth.mustChangePassword) {
-        const path = req.url.split('?')[0];
+        const path = routePath(req);
         const allowed =
           (req.method === 'GET' && (path === '/v1/auth/me' || path === '/v1/meta')) ||
           (req.method === 'POST' && (path === '/v1/auth/change-password' || path === '/v1/auth/logout'));
@@ -279,7 +323,8 @@ export async function buildApi(): Promise<FastifyInstance> {
    * that long. It does its own filtering (see eventVisibleTo).
    */
   app.addHook('preHandler', async (req) => {
-    if (!req.url.startsWith('/v1/') || req.url.startsWith('/v1/stream') || req.url.startsWith('/v1/events/')) return;
+    const route = routePath(req);
+    if (!route.startsWith('/v1/') || route.startsWith('/v1/stream') || route.startsWith('/v1/events/')) return;
     if (!req.principal?.orgId) return;
     req.orgScope = await enterOrgScope(req.principal.orgId);
   });
@@ -289,13 +334,26 @@ export async function buildApi(): Promise<FastifyInstance> {
    * route (with the size cap enforced while streaming), so the parser hands the
    * request stream through untouched rather than buffering hundreds of MB.
    * Diagnostics uploads from chargers are either raw (PUT) or multipart (POST).
+   *
+   * Multipart bodies used to be buffered whole (`parseAs: 'buffer'`, up to
+   * MAX_DIAGNOSTICS_BYTES = 200 MB each) in a 1 GB API container. They are now
+   * streamed: the parser hands the route a stream of the FILE PART's bytes only
+   * (multipart-stream.ts), which the route writes to disk with saveStream() and
+   * its size cap, exactly as it does a raw upload. The parser resolves once the
+   * part headers are read, so a body with no file is still a 400.
    */
   app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
-  app.addContentTypeParser(
-    /^multipart\/form-data/,
-    { parseAs: 'buffer', bodyLimit: config.storage.maxDiagnosticsBytes },
-    (_req, body, done) => done(null, body),
-  );
+  app.addContentTypeParser(/^multipart\/form-data/, (req, payload, done) => {
+    // Framing on top of the file is small; the file itself is capped by saveStream.
+    streamMultipartFile(payload, String(req.headers['content-type'] ?? ''), config.storage.maxDiagnosticsBytes + 1024 * 1024)
+      .then((file) => {
+        // The route names the stored file from `:name` (else 'diagnostics.log'); a
+        // multipart upload carries its own name, which the buffered path used.
+        const params = req.params as { name?: string };
+        if (!params.name && file.fileName) params.name = file.fileName;
+        done(null, file);
+      }, (e) => done(e as Error, undefined));
+  });
   // Any other type (a charger's text/plain or application/gzip log upload) is
   // handed through as a stream; JSON routes keep Fastify's own JSON parser.
   app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
@@ -309,7 +367,10 @@ export async function buildApi(): Promise<FastifyInstance> {
     // 4xx/5xx replies produced without throwing (an explicit reply.status(403))
     // should not persist half-finished writes either.
     if (reply.statusCode >= 400) await req.orgScope?.rollback();
-    else await req.orgScope?.commit();
+    else await req.orgScope?.commit().catch((err) => {
+      // The reply has already gone out as a success; all that is left is to say so.
+      logger.error({ err, reqId: req.id, method: req.method, url: req.url, status: reply.statusCode }, 'request transaction failed to COMMIT after a success reply was sent; its writes were lost');
+    });
   });
 
   app.setErrorHandler((err: any, req, reply) => {
@@ -481,6 +542,55 @@ export async function buildApi(): Promise<FastifyInstance> {
     const owner = found;
     const body = (req.body ?? {}) as any;
     const actor = actorOf(req);
+
+    /**
+     * The generic dispatcher must not be a way around the dedicated routes.
+     *
+     * `charge_point:command` (held by api_client keys, technicians and field
+     * technicians) reached every command here with no further check: a firmware
+     * image from any URL (the firmware routes need firmware:write, a stored
+     * image and its checksum), charging profiles without smartcharging:write
+     * (including clearing the station ceiling the site power budget relies on),
+     * AuthorizationKey / SecurityProfile (which the config route refuses) and
+     * arbitrary vendor DataTransfer payloads. Each now needs what its own route
+     * needs.
+     */
+    const needs = (permission: Permission) => assertCan(req.principal, { permission, ...scope });
+    switch (command) {
+      case 'update-firmware': {
+        needs('firmware:write');
+        let url: URL;
+        try { url = new URL(String(body.location ?? '')); } catch { throw new BadRequestError('location must be an https URL'); }
+        const refused = refuseHttpsUrl(url);
+        if (refused) throw new BadRequestError(`firmware URL refused: ${refused}`);
+        break;
+      }
+      case 'set-charging-profile':
+      case 'clear-charging-profile': {
+        needs('smartcharging:write');
+        const purpose = String(body.purpose ?? body.chargingProfilePurpose ?? '');
+        if (/^(ChargePointMaxProfile|ChargingStationMaxProfile)$/.test(purpose)) {
+          throw new BadRequestError('the station ceiling is managed by the site power budget (Power), not by a raw command');
+        }
+        if (command === 'clear-charging-profile' && body.id == null && !purpose) {
+          throw new BadRequestError('scope the clear to a profile id or a TxDefaultProfile / TxProfile purpose');
+        }
+        break;
+      }
+      case 'change-configuration': {
+        const key = String(body.key ?? '').trim();
+        if (!/^[A-Za-z0-9_.-]{1,50}$/.test(key)) throw new BadRequestError('invalid configuration key');
+        if (key === 'SecurityProfile' || key === 'AuthorizationKey') {
+          throw new BadRequestError(`${key} is changed from the Security tab, which enforces the safe order of operations`);
+        }
+        const problem = validateConfigValue(key, String(body.value ?? ''));
+        if (problem) throw new BadRequestError(problem);
+        break;
+      }
+      case 'data-transfer':
+        needs('charge_point:config');
+        break;
+    }
 
     switch (command) {
       case 'remote-start': {
@@ -738,6 +848,23 @@ export async function buildApi(): Promise<FastifyInstance> {
    * BootNotification — visible in the console, not yet able to transact — until
    * an operator activates it.
    */
+  /**
+   * Identities are platform-wide and first-come. One that has already dialled in
+   * unregistered is a real charger, possibly another operator's; only a platform
+   * operator may register or adopt it (see identitySeenUnregistered). Null = allowed.
+   */
+  async function claimProblem(req: FastifyRequest, identity: string) {
+    if (hasPlatformAdmin(req.principal)) return null;
+    const seen = await identitySeenUnregistered(identity);
+    if (seen.attempts === 0) return null;
+    return {
+      error:
+        'A charger with this identity has already tried to connect while unregistered, so it may belong to another ' +
+        'operator. Ask the platform operator to register or adopt it for you (they can confirm the unit with your installer).',
+      code: 'identity_needs_platform_approval',
+    };
+  }
+
   app.post('/v1/charge-points', async (req, reply) => {
     const b = req.body as any;
     const identity = String(b.ocppIdentity ?? '').trim();
@@ -749,6 +876,8 @@ export async function buildApi(): Promise<FastifyInstance> {
 
     const existing = await one(`SELECT id FROM charge_point WHERE ocpp_identity = $1`, [identity]);
     if (existing) return reply.status(409).send({ error: 'that identity is already registered' });
+    const claim = await claimProblem(req, identity);
+    if (claim) return reply.status(409).send(claim);
 
     // The wizard's full hardware profile and topology. All optional, so the
     // v1.2.1 two-field call still works exactly as before.
@@ -813,13 +942,15 @@ export async function buildApi(): Promise<FastifyInstance> {
     };
   });
 
-  app.post('/v1/pending-chargers/:identity/adopt', async (req) => {
+  app.post('/v1/pending-chargers/:identity/adopt', async (req, reply) => {
     const { identity } = req.params as { identity: string };
     const siteId = String((req.body as any)?.siteId ?? '');
     await ownedSite(req, siteId, 'charge_point:write');
 
     const existing = await one(`SELECT id FROM charge_point WHERE ocpp_identity = $1`, [identity]);
     if (existing) throw new BadRequestError('that identity is already registered');
+    const claim = await claimProblem(req, identity);
+    if (claim) return reply.status(409).send(claim);
 
     const row = await one<{ id: string }>(
       `INSERT INTO charge_point (site_id, ocpp_identity, status, adopted_at, first_seen_at)

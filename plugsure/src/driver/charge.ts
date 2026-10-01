@@ -1,9 +1,9 @@
 import { appNameFor } from '../services/brand.js';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import * as registry from '../ocpp/registry.js';
 import { remoteStartTransaction, remoteStopTransaction } from '../ocpp/commands.js';
 import { loadTariffForConnector } from '../services/tariff-store.js';
@@ -15,10 +15,10 @@ import { connectorMaySellEnergy } from '../services/compliance.js';
 import { effectivePpnRateBps } from '../services/tax.js';
 import { PREPAID_CLAIM_WINDOW_MIN, runningCost } from '../services/sessions.js';
 import { receiptHtml } from '../services/session-query.js';
-import { paymentsFor, PaymentsUnavailable, logPaymentCreated, availableMethods, methodChoices, startPayment, MethodUnavailable, cardOptions, walletOptions, postpayOptions } from '../services/payments/registry.js';
+import { paymentsFor, PaymentsUnavailable, logPaymentCreated, availableMethods, methodChoices, startPayment, MethodUnavailable, cardOptions, walletOptions, postpayOptions, type PreparedPayment } from '../services/payments/registry.js';
 import { outstandingPostpay, settlePostpayNow, LINK_ENDED, HOLD_EXPIRED, PAID_IN_APP } from '../services/payments/holds.js';
 import { endLink, listCards, walletToken } from '../services/payments/cards.js';
-import { WalletLinkEnded, type Channel } from '../services/payments/provider.js';
+import { WalletLinkEnded, methodOf, type Channel } from '../services/payments/provider.js';
 import { QRIS_MAX_TRANSACTION_IDR, estimateQrisMdrIdr, CHANNEL_LABEL } from '../services/payments/provider.js';
 import { cardUsage } from '../ocpi/emsp.js';
 import { reservationOn } from './reservations.js';
@@ -154,7 +154,8 @@ export async function quotePrepaid(
   amountIdr: number,
   opts: { principal?: DriverPrincipal | null; promoCode?: string | null } = {},
 ): Promise<QuoteResult> {
-  if (!Number.isFinite(amountIdr) || amountIdr <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
+  // Whole rupiah only: a fraction (or a number past 2^53) is not an amount any acquirer charges as asked.
+  if (!Number.isSafeInteger(amountIdr) || amountIdr <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
   if (amountIdr > QRIS_MAX_TRANSACTION_IDR) {
     return { ok: false, error: `Batas QRIS per transaksi Rp ${QRIS_MAX_TRANSACTION_IDR.toLocaleString('id-ID')}.` };
   }
@@ -338,6 +339,8 @@ export async function checkoutPrepaid(
   promoCode: string | null = null,
   pay: PayOptions = { returnUrl: '/app/paid.html' },
 ): Promise<CheckoutResult> {
+  // Checked here too, before anything reaches the acquirer (the quote checks it as well).
+  if (!Number.isSafeInteger(amountIdr) || amountIdr <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
   const q = await quotePrepaid(connectorUuid, amountIdr, { principal, promoCode });
   if (!q.ok) return { ok: false, error: q.error, minimumViableIdr: q.minimumViableIdr };
 
@@ -353,16 +356,6 @@ export async function checkoutPrepaid(
 
   let acq: Awaited<ReturnType<typeof paymentsFor>>;
   try { acq = await paymentsFor(c.org_id); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false, error: 'Pembayaran belum tersedia di charger ini.' }; throw e; }
-  let charge: Awaited<ReturnType<typeof startPayment>>;
-  try {
-    charge = await startPayment(acq, {
-      channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
-      appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: true, walletId: pay.walletId ?? null,
-      referenceId: `${c.charge_point_id}:${c.connector_uuid}:${Date.now()}`,
-      amountIdr,
-      description: `${await appNameFor(c.org_id)} ${c.site_name} • ${c.ocpp_identity}/${c.connector_no}`,
-    });
-  } catch (e) { if (e instanceof MethodUnavailable) return { ok: false, error: e.message, ...(e.code ? { code: e.code } : {}) }; throw e; }
 
   // A single-use claim token bound to this payment. The charger must present this
   // exact idTag to draw the energy; nothing else can take the payment. It is minted
@@ -373,6 +366,65 @@ export async function checkoutPrepaid(
     ? await one<{ id: string; uid: string }>(`SELECT id, uid FROM token WHERE id = $1 AND kind = 'prepaid'`, [held.token_id])
     : null;
   const claimTag = reserved?.uid ?? `PS-${randomBytes(6).toString('hex').toUpperCase()}`;
+
+  // The payment is recorded (pending, bound to its claim tag) BEFORE the acquirer is asked, and its acquirer reference —
+  // derived from this record's id, so a repeated request names the same payment — is added just before the request
+  // (startPayment's prepare). A saved card or linked e-wallet charged at once whose answer is lost, or whose record could
+  // not be completed, is then still a payment its notification settles (and, never used, the unused-payment sweep
+  // refunds), never an orphaned sale.
+  const intentId = randomUUID();
+  await query(
+    `INSERT INTO payment_intent
+        (id, org_id, provider, method, mode, state, amount_authorised_idr, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted,
+         expires_at, integration_id, channel)
+      VALUES ($1, $2, $3, $4, 'prepurchase', 'pending', $5, $6, $7, $8, true, now() + interval '30 minutes', $9, $10)`,
+    [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), amountIdr, q.allowanceWh, c.connector_uuid, claimTag,
+     acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20)],
+  );
+  const prepare = (p: PreparedPayment) => query(
+    `UPDATE payment_intent SET provider_ref = COALESCE($2, provider_ref), idem_key = COALESCE($2, idem_key), mode = $3, method = $4, channel = $5,
+            driver_card_id = $6, save_card = $7, updated_at = now()
+      WHERE id = $1`,
+    [intentId, p.providerRef, p.mode, p.method, p.channel, p.savedCardId, p.saveCard],
+  ).then(() => undefined);
+  let charge: Awaited<ReturnType<typeof startPayment>>;
+  try {
+    charge = await startPayment(acq, {
+      channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
+      appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: true, walletId: pay.walletId ?? null,
+      referenceId: `charge:${intentId}`,
+      amountIdr,
+      description: `${await appNameFor(c.org_id)} ${c.site_name} • ${c.ocpp_identity}/${c.connector_no}`,
+      prepare,
+    });
+  } catch (e) {
+    if (e instanceof MethodUnavailable) {
+      // Refused (declined, not offered, link ended): nothing was taken.
+      await query(`UPDATE payment_intent SET state = 'failed', updated_at = now() WHERE id = $1 AND state = 'pending'`, [intentId]);
+      return { ok: false, error: e.message, ...(e.code ? { code: e.code } : {}) };
+    }
+    // No answer from the acquirer: the record stays pending with its reference, for a notification to settle.
+    logger.warn({ intent: intentId, err: (e as Error).message }, 'driver checkout: the acquirer did not answer; the payment stays pending for its notification');
+    throw e;
+  }
+
+  // The acquirer's answer completes the record. A notification that already arrived (the state is no longer pending) is kept.
+  await query(
+    `UPDATE payment_intent
+        SET provider_ref = $2, idem_key = $2, method = $3, mode = $4, channel = $5, checkout_url = $6,
+            provider_payment_id = COALESCE(provider_payment_id, $7), save_card = $8, driver_card_id = COALESCE($9, driver_card_id),
+            -- A saved card that went through at once: already held (or taken).
+            state = CASE WHEN state <> 'pending' THEN state WHEN $10::text = 'authorised' THEN 'authorised' WHEN $10::text = 'captured' THEN 'captured' ELSE 'pending' END,
+            authorised_at = CASE WHEN $10::text = 'authorised' THEN COALESCE(authorised_at, now()) ELSE authorised_at END,
+            hold_state = CASE WHEN $10::text = 'authorised' THEN COALESCE(hold_state, 'held') ELSE hold_state END,
+            amount_captured_idr = CASE WHEN $10::text = 'captured' THEN COALESCE(amount_captured_idr, amount_authorised_idr) ELSE amount_captured_idr END,
+            captured_at = CASE WHEN $10::text = 'captured' THEN COALESCE(captured_at, now()) ELSE captured_at END,
+            updated_at = now()
+      WHERE id = $1`,
+    [intentId, charge.providerRef, charge.method, charge.mode, charge.channel, charge.checkoutUrl, charge.providerPaymentId, charge.saveCard, charge.savedCardId, charge.immediate],
+  );
+  const intent = { id: intentId };
+
   const tok = reserved
     ? await one<{ id: string }>(
         `UPDATE token SET status = 'Accepted', valid_to = now() + make_interval(mins => $2::int) WHERE id = $1 RETURNING id`,
@@ -385,30 +437,11 @@ export async function checkoutPrepaid(
         [c.org_id, claimTag, PREPAID_CLAIM_WINDOW_MIN],
       );
 
-  const intent = await one<{ id: string }>(
-    `INSERT INTO payment_intent
-        (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr,
-         idem_key, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted, expires_at, integration_id,
-         channel, checkout_url, provider_payment_id, save_card, driver_card_id,
-         authorised_at, hold_state, amount_captured_idr, captured_at)
-      VALUES ($1,$7,$2,$9,$13,
-              -- A saved card that went through at once: already held (or taken).
-              CASE $16::text WHEN 'authorised' THEN 'authorised' WHEN 'captured' THEN 'captured' ELSE 'pending' END,
-              $3,$2,$4,$5,$6,true, now() + interval '30 minutes', $8, $10, $11, $12, $14, $15,
-              CASE WHEN $16::text = 'authorised' THEN now() END,
-              CASE WHEN $16::text = 'authorised' THEN 'held' END,
-              CASE WHEN $16::text = 'captured' THEN $3::int END,
-              CASE WHEN $16::text = 'captured' THEN now() END)
-      RETURNING id`,
-    [c.org_id, charge.providerRef, amountIdr, q.allowanceWh, c.connector_uuid, claimTag, acq.provider.name, acq.resolved.integrationId,
-     charge.method, charge.channel, charge.checkoutUrl, charge.providerPaymentId, charge.mode, charge.saveCard, charge.savedCardId, charge.immediate],
-  );
-
   const dc = await one<{ id: string }>(
     `INSERT INTO driver_charge
         (device_id, app_driver_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_idr, promo_code)
       VALUES ($1,$2,$3,$4,$5,$6,'prepaid',$7,$8) RETURNING id`,
-    [principal.deviceId, principal.appDriverId, c.org_id, c.connector_uuid, tok!.id, intent!.id, amountIdr,
+    [principal.deviceId, principal.appDriverId, c.org_id, c.connector_uuid, tok!.id, intent.id, amountIdr,
      // Kept only when it applies, so the session is rated with it.
      promoCode && q.promotion && !q.codeProblem ? String(promoCode).trim().toUpperCase().slice(0, 30) : null],
   );
@@ -474,7 +507,7 @@ export async function checkoutFleet(principal: DriverPrincipal, connectorUuid: s
 export async function confirmPayment(principal: DriverPrincipal, chargeId: string): Promise<{ ok: boolean; error?: string }> {
   const dc = await ownedCharge(principal, chargeId);
   if (!dc) return { ok: false, error: 'Transaksi tidak ditemukan.' };
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   if (!dc.payment_intent_id) return { ok: false, error: 'Bukan transaksi prabayar.' };
   const pi = await one<{ provider: string }>(`SELECT provider FROM payment_intent WHERE id = $1`, [dc.payment_intent_id]);
   if (pi?.provider !== 'mock') return { ok: false, error: 'Menunggu konfirmasi pembayaran dari penyedia QRIS.' };
@@ -526,16 +559,34 @@ export async function payUnpaid(principal: DriverPrincipal, chargeId: string, pa
   if (h.owedIdr <= 0) return { ok: false, status: 409, error: 'Tidak ada tagihan yang perlu dibayar untuk sesi ini.' };
   let acq: Awaited<ReturnType<typeof paymentsFor>>;
   try { acq = await paymentsFor(h.pi.org_id); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false, status: 409, error: 'Pembayaran belum tersedia di operator ini.' }; throw e; }
+  // As at checkout: the settlement payment is recorded (pending) before the acquirer is asked, its reference added just
+  // before the request, so a saved card or linked e-wallet charged without an answer still settles the session.
+  const settlementId = randomUUID();
+  await query(
+    `INSERT INTO payment_intent (id, org_id, provider, method, mode, state, amount_authorised_idr, expires_at, integration_id, settles_intent_id)
+     VALUES ($1, $2, $3, $4, 'settlement', 'pending', $5, now() + interval '30 minutes', $6, $7)`,
+    [settlementId, h.pi.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel),
+     h.owedIdr, acq.resolved.integrationId, h.pi.id],
+  );
   let s: Awaited<ReturnType<typeof startPayment>>;
   try {
     s = await startPayment(acq, {
       channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
       // A sale for the amount owed: never a new hold, never post-pay.
       appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: false, allowHold: false, walletId: pay.walletId ?? null,
-      referenceId: `settle:${h.pi.id}:${Date.now()}`, amountIdr: h.owedIdr,
+      referenceId: `settle:${settlementId}`, amountIdr: h.owedIdr,
       description: `${await appNameFor(h.pi.org_id)}: sesi pengisian (${h.kind === 'postpay' ? 'bayar setelah selesai' : 'penahanan kartu berakhir'})`,
+      prepare: (p) => query(
+        `UPDATE payment_intent SET provider_ref = COALESCE($2, provider_ref), idem_key = COALESCE($2, idem_key), method = $3, channel = $4, driver_card_id = $5, updated_at = now() WHERE id = $1`,
+        [settlementId, p.providerRef, p.method, p.channel, p.savedCardId]).then(() => undefined),
     });
-  } catch (e) { if (e instanceof MethodUnavailable) return { ok: false, status: 422, error: e.message, ...(e.code ? { code: e.code } : {}) }; throw e; }
+  } catch (e) {
+    if (e instanceof MethodUnavailable) {
+      await query(`UPDATE payment_intent SET state = 'failed', updated_at = now() WHERE id = $1 AND state = 'pending'`, [settlementId]);
+      return { ok: false, status: 422, error: e.message, ...(e.code ? { code: e.code } : {}) };
+    }
+    throw e;
+  }
   if (h.awaitingPin) {
     // The driver pays another way instead of confirming the e-wallet PIN: the pending e-wallet charge is cancelled at
     // the acquirer (best effort). Should the driver still confirm it, that charge is refunded (applyNotification).
@@ -556,21 +607,24 @@ export async function payUnpaid(principal: DriverPrincipal, chargeId: string, pa
     // resume. "Bayar sekarang" and the console retry still work; if one of them pays first, this payment is refunded.
     await query(`UPDATE payment_intent SET hold_next_attempt_at = now() + interval '35 minutes', updated_at = now() WHERE id = $1 AND hold_state = 'capture_failed'`, [h.pi.id]);
   }
-  const row = await one<{ id: string }>(
-    `INSERT INTO payment_intent
-        (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr, idem_key, expires_at, integration_id,
-         channel, checkout_url, provider_payment_id, driver_card_id, settles_intent_id, amount_captured_idr, captured_at)
-      VALUES ($1, $2, $3, $4, 'settlement', CASE WHEN $5::text = 'captured' THEN 'captured' ELSE 'pending' END, $6, $3, now() + interval '30 minutes', $7,
-              $8, $9, $10, $11, $12, CASE WHEN $5::text = 'captured' THEN $6::int END, CASE WHEN $5::text = 'captured' THEN now() END)
-      RETURNING id`,
-    [h.pi.org_id, acq.provider.name, s.providerRef, s.method, s.immediate ?? null, h.owedIdr, acq.resolved.integrationId,
-     s.channel, s.checkoutUrl, s.providerPaymentId, s.savedCardId, h.pi.id],
+  // The acquirer's answer completes the record (a notification that already settled it is kept).
+  await query(
+    `UPDATE payment_intent
+        SET provider_ref = $2, idem_key = $2, method = $3, channel = $4, checkout_url = $5, provider_payment_id = COALESCE(provider_payment_id, $6),
+            driver_card_id = COALESCE($7, driver_card_id),
+            state = CASE WHEN state <> 'pending' THEN state WHEN $8::text = 'captured' THEN 'captured' ELSE 'pending' END,
+            amount_captured_idr = CASE WHEN $8::text = 'captured' THEN COALESCE(amount_captured_idr, amount_authorised_idr) ELSE amount_captured_idr END,
+            captured_at = CASE WHEN $8::text = 'captured' THEN COALESCE(captured_at, now()) ELSE captured_at END,
+            updated_at = now()
+      WHERE id = $1`,
+    [settlementId, s.providerRef, s.method, s.channel, s.checkoutUrl, s.providerPaymentId, s.savedCardId, s.immediate ?? null],
   );
+  const row = { id: settlementId };
   await logPaymentCreated(acq.resolved, h.pi.org_id, s.providerRef, h.owedIdr, h.kind === 'postpay' ? 'unpaid post-pay session' : 'expired card hold', s.channel);
-  logger.info({ chargeId, intent: h.pi.id, kind: h.kind, settlement: row!.id, amountIdr: h.owedIdr, channel: s.channel }, 'driver paying an unpaid session in the app');
+  logger.info({ chargeId, intent: h.pi.id, kind: h.kind, settlement: row.id, amountIdr: h.owedIdr, channel: s.channel }, 'driver paying an unpaid session in the app');
   if (s.immediate === 'captured') {
     const { settlementPaid } = await import('../services/payments/holds.js');
-    await settlementPaid(row!.id);
+    await settlementPaid(row.id);
     return { ok: true, paid: true };
   }
   return {
@@ -605,7 +659,7 @@ export async function unpaidStatus(principal: DriverPrincipal, chargeId: string)
 export async function confirmUnpaidPayment(principal: DriverPrincipal, chargeId: string): Promise<{ ok: boolean; error?: string }> {
   const h = await unpaidOf(principal, chargeId);
   if (!h) return { ok: false, error: 'Transaksi tidak ditemukan.' };
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   const s = await one<{ id: string; provider: string }>(
     `SELECT id, provider FROM payment_intent WHERE settles_intent_id = $1 AND mode = 'settlement' AND state = 'pending' ORDER BY created_at DESC LIMIT 1`, [h.pi.id]);
   if (!s) return { ok: false, error: 'Belum ada pembayaran untuk tagihan ini.' };

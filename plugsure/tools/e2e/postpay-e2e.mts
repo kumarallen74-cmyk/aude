@@ -590,6 +590,12 @@ try {
     check(`Xendit ${ch}: the balance on the linked account (Rp ${balance}) is checked before post-pay: a larger limit refused naming it and nothing charged; a smaller one starts with nothing charged`,
       refused.status === 422 && new RegExp(`Saldo ${ch === 'SHOPEEPAY' ? 'ShopeePay' : ch}`).test(refused.data.error) && refused.data.error.includes(balance) && charged === 0
         && ok.status === 200 && ok.data.payment.postpay === true && io.mode === 'postpay' && io.state === 'authorised', { refused: refused.data, charged, ok: ok.data.payment, io });
+    // Post-pay exposure counts every session still held on the same e-wallet against its balance, so the
+    // ShopeePay checks below need this unused session released first (as the worker does after the claim window).
+    if (ch === 'SHOPEEPAY') {
+      await pg.query(`UPDATE payment_intent SET created_at = now() - interval '40 minutes' WHERE id = $1`, [io.id]);
+      await until(() => intentOfCharge(ok.data.chargeId), (i) => i.hold_state === 'released', 100_000, 2000);
+    }
   }
 
   // LinkAja reports no balance: post-pay starts unchecked, or — when the operator requires a checked balance — it is charged up front.
@@ -613,6 +619,13 @@ try {
     need.status === 200 && need.data.secretHints?.secretKey && flags.LINKAJA === false && flags.OVO === true && flags.DANA === true && flags.SHOPEEPAY === true
       && ljOn.status === 200 && ljOn.data.payment.postpay === false && ljOnI.mode === 'prepurchase' && ljOnI.state === 'captured' && ljCharge.payment_method_id === 'pm-linkaja' && ljCharge.amount === 20_000
       && spOn.data.payment?.postpay === true, { flags, ljOn: ljOn.data.payment, ljOnI, ljCharge, spOn: spOn.data.payment });
+  // Released like any unused post-pay session, so the ShopeePay balance (Rp 30,000) is free for the checks further down:
+  // post-pay exposure counts every session still held on the same e-wallet.
+  if (spOn.data.chargeId) {
+    const spOnI = await intentOfCharge(spOn.data.chargeId);
+    await pg.query(`UPDATE payment_intent SET created_at = now() - interval '40 minutes' WHERE id = $1`, [spOnI.id]);
+    await until(() => intentOfCharge(spOn.data.chargeId), (i) => i.hold_state === 'released', 100_000, 2000);
+  }
 
   // GoPay through Xendit: a v3 payment token, its balance from token_details (Rp 40,000 in the fake).
   const tG = Date.now();

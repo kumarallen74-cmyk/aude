@@ -13,15 +13,35 @@ const charger = (o: Partial<ChargerInput> = {}): ChargerInput => ({
 const site = { siteId: 'S', name: 'Site', model: 'public' as const };
 
 describe('tiers (published rates)', () => {
-  test('bounds are exclusive: "below Rp 150M" is Standard, Rp 150M is Volume', () => {
+  test('upper bounds are inclusive, as published: Rp 500M is Volume ("Volume Rp 150–500M"), Rp 150M is Standard', () => {
     assert.equal(tierFor(DEFAULT_PLAN, 149_999_999).name, 'Standard');
-    assert.equal(tierFor(DEFAULT_PLAN, 150 * M).name, 'Volume');
-    assert.equal(tierFor(DEFAULT_PLAN, 500 * M).name, 'Network');
+    assert.equal(tierFor(DEFAULT_PLAN, 150 * M).name, 'Standard');
+    assert.equal(tierFor(DEFAULT_PLAN, 150 * M + 1).name, 'Volume');
+    assert.equal(tierFor(DEFAULT_PLAN, 500 * M).name, 'Volume');
+    assert.equal(tierFor(DEFAULT_PLAN, 500 * M + 1).name, 'Network');
+    assert.equal(commissionFor(DEFAULT_PLAN, 500 * M), 32.5 * M, 'exactly Rp 500M at 6.5%, not 5%');
   });
   test('whole-volume: the whole month at the tier reached', () => {
     assert.equal(commissionFor(DEFAULT_PLAN, 100 * M), 8 * M);
     assert.equal(commissionFor(DEFAULT_PLAN, 200 * M), 13 * M);
-    assert.equal(commissionFor(DEFAULT_PLAN, 600 * M), 30 * M);
+    assert.equal(commissionFor(DEFAULT_PLAN, 700 * M), 35 * M);
+  });
+  test('whole-volume has no cliff: never less than the top of the tier below', () => {
+    // Rp 149,999,999 → Rp 12.0M used to drop to Rp 9.75M at the next rupiah.
+    assert.equal(commissionFor(DEFAULT_PLAN, 150 * M), 12 * M);
+    assert.equal(commissionFor(DEFAULT_PLAN, 150 * M + 1), 12 * M);
+    assert.equal(commissionFor(DEFAULT_PLAN, 180 * M), 12 * M, '6.5% of 180M (11.7M) is below the Standard top');
+    assert.equal(commissionFor(DEFAULT_PLAN, 600 * M), 32.5 * M, '5% of 600M (30M) is below the Volume top');
+    assert.equal(commissionFor(DEFAULT_PLAN, 650 * M), 32.5 * M);
+    let prev = 0;
+    for (let g = 0; g <= 800 * M; g += 2_500_000) {
+      const c = commissionFor(DEFAULT_PLAN, g);
+      assert.ok(c >= prev, `commission fell at Rp ${g}`);
+      prev = c;
+    }
+    for (const b of [150 * M, 500 * M]) {
+      assert.ok(commissionFor(DEFAULT_PLAN, b + 1) >= commissionFor(DEFAULT_PLAN, b), `no drop crossing Rp ${b}`);
+    }
   });
   test('marginal: each band at its own rate, no cliff at the boundary', () => {
     const p: Plan = { ...DEFAULT_PLAN, tierMode: 'marginal' };

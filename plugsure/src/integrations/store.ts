@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { seal, unseal } from '../services/secrets.js';
 import { CATALOGUE, kindDef, providerDef, type Kind } from './catalogue.js';
@@ -43,7 +43,7 @@ interface Row {
 
 const CACHE_MS = 15_000;
 const cache = new Map<string, { at: number; value: Resolved | null }>();
-const isProd = () => config.env === 'production';
+const isProd = () => !isRelaxedEnv();
 
 export function invalidate() { cache.clear(); }
 

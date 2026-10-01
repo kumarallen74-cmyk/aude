@@ -1,11 +1,21 @@
 PlugSure CSMS
-Version:   1.3.0
-Package:   plugsure-v1.3.0
-Prepared:  2026-09-28  (Enterprise operator console — SPEC-UI-CSMS-2026-FINAL)
+Version:   1.4.0
+Package:   plugsure-v1.4.0
+Prepared:  2026-10-02  (independent review fixes — see RELEASE-NOTES-v1.4.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP)
-API:       OpenAPI 3.1 at /openapi.json (266 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
-Status:    Release candidate. Typecheck clean; 541 tests passing (0 failing, 0 skipped);
-           migrations 001-042 verified on PostgreSQL 18; end-to-end: console 96/96,
+API:       OpenAPI 3.1 at /openapi.json (269 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+Status:    v1.4.0 = v1.3.0 + every finding of the independent review fixed (pilot blockers,
+           public-launch blockers and hardening): typecheck and build clean; 816 unit and
+           database tests passing; migrations 001-053 (045 unused) applied from an empty
+           PostgreSQL 16 database; all 29 end-to-end suites passing as the restricted
+           runtime role. New required settings outside development: SECRETS_KEY,
+           OCPP_MIN_SECURITY_PROFILE >= 2, OCPP_AUTO_ADOPT=false, OCPI_PUBLIC_URL (for
+           roaming). The pending items below (provider contracts, real hardware, tax
+           adviser, PKI provider, store accounts) are unchanged from v1.3.0.
+
+v1.3.0 (2026-09-28):
+           Release candidate. Typecheck clean; unit tests passing (count: see CI);
+           migrations 001-042 verified on PostgreSQL 16; end-to-end: console 96/96,
            driver app 48/48, driver map/push/reservations 46/46, driver queue 19/19, reservation fees 12/12, field conditions
            147/147, roaming 74/74 + 60/60 + smart charging and hubs 36/36, API + sandbox 38/38, SDK and per-key rate limits 23/23, bidirectional charging (OCPP 2.1) 21/21, signed meter values (OCMF) 20/20, sandbox on OCPP 2.0.1 / 2.1 17/17, white-label driver apps 28/28, iOS notifications (APNs) with badges and rich notifications 20/20, Live Activities 14/14, fleet billing 53/53,
            promotions and memberships 24/24, Plug & Charge 37/37,

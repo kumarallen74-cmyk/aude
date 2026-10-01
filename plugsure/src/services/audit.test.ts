@@ -128,7 +128,7 @@ async function recomputeChainUnkeyed(orgId: string | null): Promise<void> {
   let prev = '';
   for (const r of rows) {
     const hash = createHash('sha256').update(prev + v1Body(r)).digest('hex');
-    await query(`UPDATE audit_log SET prev_hash = $2, hash = $3 WHERE id = $1`, [r.id, prev, hash]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET prev_hash = $2, hash = $3 WHERE id = $1`, [r.id, prev, hash]);
     prev = hash;
   }
 }
@@ -145,7 +145,7 @@ async function recomputeForwardUnkeyed(orgId: string | null, fromId: number): Pr
   let prev = rows[start]!.prev_hash ?? '';
   for (const r of rows.slice(start)) {
     const hash = createHash('sha256').update(prev + v1Body(r)).digest('hex');
-    await query(`UPDATE audit_log SET prev_hash = $2, hash = $3 WHERE id = $1`, [r.id, prev, hash]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET prev_hash = $2, hash = $3 WHERE id = $1`, [r.id, prev, hash]);
     prev = hash;
   }
 }
@@ -168,8 +168,14 @@ async function v1VerifySaysIntact(orgId: string | null): Promise<boolean> {
 /**
  * What a database superuser can do that the application role cannot: run a
  * statement with every trigger switched off. The verifier must still catch it.
+ *
+ * Since migration 048 every UPDATE or DELETE of audit_log goes through here:
+ * the runtime role holds neither privilege any more, and the
+ * audit_log_append_only trigger refuses both for every role. The tampering
+ * below is therefore what a SUPERUSER can still do (session_replication_role =
+ * replica switches row triggers off) — the attacker the keyed chain exists for.
  */
-async function asSuperuserBypassingTriggers(sql: string, params: unknown[]): Promise<void> {
+async function asSuperuserBypassingTriggers(sql: string, params: unknown[] = []): Promise<void> {
   await tx(async (c) => {
     await c.query(`SET LOCAL session_replication_role = replica`);
     await c.query(sql, params);
@@ -177,7 +183,7 @@ async function asSuperuserBypassingTriggers(sql: string, params: unknown[]): Pro
 }
 
 if (DB_OK) {  before(async () => {
-    await query(`DELETE FROM audit_log`);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log`);
     await query(`DELETE FROM organisation WHERE slug IN ('audit-test-a','audit-test-b')`);
     const a = await query<{ id: string }>(
       `INSERT INTO organisation (name, slug) VALUES ('Audit Test A','audit-test-a') RETURNING id`,
@@ -282,7 +288,7 @@ dbDescribe('audit chain — tampering', () => {
     const victim = rows[2]!;
 
     // The exact audit finding: 5,000,000 becomes 500.
-    await query(`UPDATE audit_log SET after_state = $2 WHERE id = $1`, [
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET after_state = $2 WHERE id = $1`, [
       victim.id,
       JSON.stringify({ amountIdr: 500, reason: 'charger fault' }),
     ]);
@@ -308,7 +314,7 @@ dbDescribe('audit chain — tampering', () => {
     const rows = await rowsFor(ORG_A);
     const victim = rows[2]!;
 
-    await query(`UPDATE audit_log SET after_state = $2 WHERE id = $1`, [
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET after_state = $2 WHERE id = $1`, [
       victim.id,
       JSON.stringify({ amountIdr: 500, reason: 'charger fault' }),
     ]);
@@ -323,7 +329,7 @@ dbDescribe('audit chain — tampering', () => {
     await appendEntries(ORG_A, 4);
     const rows = await rowsFor(ORG_A);
     const victim = rows[1]!;
-    await query(`UPDATE audit_log SET action = 'refund.voided' WHERE id = $1`, [victim.id]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET action = 'refund.voided' WHERE id = $1`, [victim.id]);
 
     const r = await verifyChain(ORG_A);
     assertDetects(r, 'mutated');
@@ -333,21 +339,21 @@ dbDescribe('audit chain — tampering', () => {
   test('ATTACK: rewrite a timestamp (v1 never hashed ts)', async () => {
     await appendEntries(ORG_A, 3);
     const rows = await rowsFor(ORG_A);
-    await query(`UPDATE audit_log SET ts = ts - interval '30 days' WHERE id = $1`, [rows[1]!.id]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET ts = ts - interval '30 days' WHERE id = $1`, [rows[1]!.id]);
     assertDetects(await verifyChain(ORG_A), 'mutated');
   });
 
   test('ATTACK: rewrite the source IP (v1 never hashed ip/user_agent)', async () => {
     await appendEntries(ORG_A, 3);
     const rows = await rowsFor(ORG_A);
-    await query(`UPDATE audit_log SET ip = '203.0.113.9' WHERE id = $1`, [rows[0]!.id]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET ip = '203.0.113.9' WHERE id = $1`, [rows[0]!.id]);
     assertDetects(await verifyChain(ORG_A), 'mutated');
   });
 
   test('ATTACK: delete the newest row (truncation — the case v1 could not see)', async () => {
     await appendEntries(ORG_A, 5);
     const rows = await rowsFor(ORG_A);
-    await query(`DELETE FROM audit_log WHERE id = $1`, [rows[4]!.id]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE id = $1`, [rows[4]!.id]);
 
     const r = await verifyChain(ORG_A);
     assertDetects(r, 'truncated');
@@ -357,7 +363,7 @@ dbDescribe('audit chain — tampering', () => {
 
   test('ATTACK: delete the newest row AND rewrite audit_head to match', async () => {
     const rows = await appendEntries(ORG_A, 5);
-    await query(`DELETE FROM audit_log WHERE id = $1`, [rows[4]!.id]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE id = $1`, [rows[4]!.id]);
     // The attacker can read the surviving terminal hash out of audit_log, so a
     // head that merely copied it would be trivially repairable. The head MAC is
     // keyed, so this fails.
@@ -376,7 +382,7 @@ dbDescribe('audit chain — tampering', () => {
 
   test('ATTACK: a later legitimate append does not heal an earlier truncation', async () => {
     const rows = await appendEntries(ORG_A, 4);
-    await query(`DELETE FROM audit_log WHERE id = $1`, [rows[3]!.id]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE id = $1`, [rows[3]!.id]);
     await appendEntries(ORG_A, 1); // seq 5, not a reused seq 4
 
     const r = await verifyChain(ORG_A);
@@ -387,7 +393,7 @@ dbDescribe('audit chain — tampering', () => {
   test('ATTACK: delete a middle row', async () => {
     await appendEntries(ORG_A, 5);
     const rows = await rowsFor(ORG_A);
-    await query(`DELETE FROM audit_log WHERE id = $1`, [rows[2]!.id]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE id = $1`, [rows[2]!.id]);
 
     const r = await verifyChain(ORG_A);
     assertDetects(r, 'deleted');
@@ -397,14 +403,14 @@ dbDescribe('audit chain — tampering', () => {
   test('ATTACK: delete a middle row and recompute the chain unkeyed', async () => {
     await appendEntries(ORG_A, 5);
     const rows = await rowsFor(ORG_A);
-    await query(`DELETE FROM audit_log WHERE id = $1`, [rows[2]!.id]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE id = $1`, [rows[2]!.id]);
     await recomputeChainUnkeyed(ORG_A);
     assertDetects(await verifyChain(ORG_A), 'deleted');
   });
 
   test('ATTACK: delete every row for an org', async () => {
     await appendEntries(ORG_A, 6);
-    await query(`DELETE FROM audit_log WHERE org_key = $1`, [ORG_A]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE org_key = $1`, [ORG_A]);
 
     const r = await verifyChain(ORG_A);
     assertDetects(r, 'truncated');
@@ -459,9 +465,9 @@ dbDescribe('audit chain — tampering', () => {
     const rows = await rowsFor(ORG_A);
     const a = rows[1]!.id;
     const b = rows[2]!.id;
-    await query(`UPDATE audit_log SET id = -1 WHERE id = $1`, [a]);
-    await query(`UPDATE audit_log SET id = $1 WHERE id = $2`, [a, b]);
-    await query(`UPDATE audit_log SET id = $1 WHERE id = -1`, [b]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET id = -1 WHERE id = $1`, [a]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET id = $1 WHERE id = $2`, [a, b]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET id = $1 WHERE id = -1`, [b]);
 
     assertDetects(await verifyChain(ORG_A), 'reordered');
   });
@@ -475,14 +481,14 @@ dbDescribe('audit chain — tampering', () => {
     // moment org_id changes. If the destination already occupies that seq the
     // unique index refuses the move outright.
     await assert.rejects(
-      query(`UPDATE audit_log SET org_id = $2 WHERE id = $1`, [platform[1]!.id, ORG_A]),
+      asSuperuserBypassingTriggers(`UPDATE audit_log SET org_id = $2 WHERE id = $1`, [platform[1]!.id, ORG_A]),
       /audit_log_org_seq_uniq|duplicate key/i,
       'a colliding move is rejected by the per-chain sequence index',
     );
 
     // Moving the platform's seq-3 row into ORG_A (which only has seq 1..2)
     // collides with nothing, so the verifier has to catch it.
-    await query(`UPDATE audit_log SET org_id = $2 WHERE id = $1`, [platform[2]!.id, ORG_A]);
+    await asSuperuserBypassingTriggers(`UPDATE audit_log SET org_id = $2 WHERE id = $1`, [platform[2]!.id, ORG_A]);
 
     const src = await verifyChain(null);
     const dst = await verifyChain(ORG_A);
@@ -545,7 +551,7 @@ dbDescribe('audit chain — concurrency and isolation', () => {
 
     // Breaking A must not implicate B or the platform chain.
     const rows = await rowsFor(ORG_A);
-    await query(`DELETE FROM audit_log WHERE id = $1`, [rows[4]!.id]);
+    await asSuperuserBypassingTriggers(`DELETE FROM audit_log WHERE id = $1`, [rows[4]!.id]);
     assert.equal((await verifyChain(ORG_A)).ok, false);
     assert.equal((await verifyChain(ORG_B)).ok, true);
     assert.equal((await verifyChain(null)).ok, true);

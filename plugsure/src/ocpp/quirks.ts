@@ -24,8 +24,20 @@ export interface QuirkFindings {
   acceptedConfigKeys?: string[];
   /** Measurands actually observed in MeterValues, whatever we asked for. */
   emittedMeasurands?: string[];
-  /** 'A' for AC units, 'W' for DC. Query ChargingScheduleAllowedChargingRateUnit. */
+  /**
+   * 'A' for AC units, 'W' for DC — the MODEL-WIDE default, used only for a
+   * charger that has not told us its own ChargingScheduleAllowedChargingRateUnit
+   * (that answer is kept per charge point: charge_point.charging_rate_units),
+   * and only while chargingRateUnitConfirmedBy is set. A single charger never
+   * writes it; see recordChargerRateUnits.
+   */
   chargingRateUnit?: 'A' | 'W';
+  /**
+   * Who vouches for chargingRateUnit: the seed data, an operator, or agreement
+   * among chargers of at least CONSENSUS_MIN_ORGS distinct tenants. Unset means
+   * the value is not trusted.
+   */
+  chargingRateUnitConfirmedBy?: 'seed' | 'operator' | 'consensus';
   /** GetCompositeSchedule implementations vary wildly. Never make it load-bearing. */
   compositeScheduleTrustworthy?: boolean;
   /** Whether a TxDefaultProfile sent to connector 0 actually reaches the connectors. */
@@ -99,12 +111,28 @@ export const SEED_QUIRKS: Array<Omit<QuirkProfile, 'id'>> = [
 
 export async function seedQuirks() {
   for (const q of SEED_QUIRKS) {
+    const findings: QuirkFindings = q.findings.chargingRateUnit
+      ? { ...q.findings, chargingRateUnitConfirmedBy: 'seed' }
+      : q.findings;
     await query(
       `INSERT INTO quirk_profile (vendor, model, firmware_pattern, findings)
        VALUES ($1,$2,$3,$4)
        ON CONFLICT (vendor, model, firmware_pattern) DO NOTHING`,
-      [q.vendor, q.model, q.firmware_pattern, JSON.stringify(q.findings)],
+      [q.vendor, q.model, q.firmware_pattern, JSON.stringify(findings)],
     );
+    // The seed's rate unit is curated knowledge: restore it if a charger's answer
+    // overwrote it under the old rule (or migration 050 cleared it). An
+    // operator's own confirmation is left alone.
+    if (q.findings.chargingRateUnit) {
+      await query(
+        `UPDATE quirk_profile
+            SET findings = findings || jsonb_build_object('chargingRateUnit', $4::text, 'chargingRateUnitConfirmedBy', 'seed'),
+                updated_at = now()
+          WHERE vendor = $1 AND model = $2 AND firmware_pattern = $3
+            AND coalesce(findings->>'chargingRateUnitConfirmedBy', '') NOT IN ('operator', 'seed')`,
+        [q.vendor, q.model, q.firmware_pattern, q.findings.chargingRateUnit],
+      );
+    }
   }
 }
 
@@ -167,6 +195,21 @@ export async function recordFinding(
   context: { vendor: string; model: string; firmware?: string | null },
 ) {
   const discovered: string[] = [];
+
+  /**
+   * A charger's frames never set the model-wide rate unit. The profile is
+   * shared by every tenant's chargers that CLAIM this vendor/model, so one
+   * charger's ChargingScheduleAllowedChargingRateUnit answer used to decide the
+   * profile unit for all of them — one unit answering "Power" put every amp-only
+   * wallbox of the model on watt profiles, which they reject, and the station
+   * ceiling was silently not applied. The answer is per charge point
+   * (recordChargerRateUnits); the shared value comes from the seed, an operator
+   * or cross-tenant consensus.
+   */
+  if ('chargingRateUnit' in patch || 'chargingRateUnitConfirmedBy' in patch) {
+    const { chargingRateUnit: _u, chargingRateUnitConfirmedBy: _c, ...rest } = patch;
+    patch = rest;
+  }
 
   await tx(async (client) => {
     const cur = await client.query<{ findings: QuirkFindings }>(
@@ -254,4 +297,121 @@ export async function clearFinding(profileId: string, key: keyof QuirkFindings) 
     profileId,
     String(key),
   ]);
+}
+
+// ================================================================== charging rate unit
+
+/** Distinct tenants whose chargers must agree before a model-wide unit is trusted. */
+export const CONSENSUS_MIN_ORGS = 3;
+
+export type RateUnits = 'A' | 'W' | 'A,W';
+
+/**
+ * The units a charger accepts, from its ChargingScheduleAllowedChargingRateUnit
+ * (1.6: "Current", "Power", "Current,Power") or SmartChargingCtrlr.RateUnit
+ * (2.0.1: "A", "W", "A,W"). Null when the answer names neither.
+ *
+ * The previous parser called "Current,Power" watt-only (it contains a W and no
+ * A), so a charger accepting both was recorded as refusing amps.
+ */
+export function parseRateUnits(value: string | null | undefined): RateUnits | null {
+  if (typeof value !== 'string') return null;
+  const tokens = value.split(/[,;\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const a = tokens.some((t) => t === 'a' || t === 'current' || t === 'amp' || t === 'amps');
+  const w = tokens.some((t) => t === 'w' || t === 'power' || t === 'watt' || t === 'watts');
+  return a && w ? 'A,W' : a ? 'A' : w ? 'W' : null;
+}
+
+/**
+ * The unit to put in a charging schedule for one charger: its own answer first;
+ * else the model's unit when someone has confirmed it; else the hardware's
+ * natural unit (AC → A, DC → W). Pure, for smartcharging and its tests.
+ */
+export function pickRateUnit(
+  own: string | null | undefined,
+  model: Pick<QuirkFindings, 'chargingRateUnit' | 'chargingRateUnitConfirmedBy'> | null | undefined,
+  fallback: 'A' | 'W',
+): 'A' | 'W' {
+  const mine = parseRateUnits(own);
+  if (mine) return mine.includes(fallback) ? fallback : (mine as 'A' | 'W');
+  if (model?.chargingRateUnit && model.chargingRateUnitConfirmedBy) return model.chargingRateUnit;
+  return fallback;
+}
+
+/**
+ * Record what ONE charger said about rate units, on that charger only, then
+ * re-derive the model's consensus. The shared value is set by consensus only
+ * when chargers of at least CONSENSUS_MIN_ORGS distinct tenants have answered
+ * and every one of them accepts that unit (and not all of them accept the
+ * other, in which case no model-wide restriction is needed). One charger — or
+ * one tenant's whole fleet, which may share a misconfiguration — can never move
+ * it, and a dissenting charger withdraws a consensus value. Seed and operator
+ * values are never overridden by consensus.
+ */
+export async function recordChargerRateUnits(
+  chargePointId: string,
+  profileId: string | null | undefined,
+  units: RateUnits,
+  context: { vendor: string; model: string; firmware?: string | null },
+): Promise<void> {
+  await query(
+    `UPDATE charge_point SET charging_rate_units = $2, charging_rate_units_at = now() WHERE id = $1`,
+    [chargePointId, units],
+  );
+  if (!profileId) return;
+  let changed: string | null = null;
+  await tx(async (client) => {
+    const cur = await client.query<{ findings: QuirkFindings }>(
+      `SELECT findings FROM quirk_profile WHERE id = $1 FOR UPDATE`,
+      [profileId],
+    );
+    const findings: QuirkFindings = { ...(cur.rows[0]?.findings ?? {}) };
+    if (findings.chargingRateUnitConfirmedBy === 'seed' || findings.chargingRateUnitConfirmedBy === 'operator') return;
+    const agg = (
+      await client.query<{ orgs: number; all_a: boolean | null; all_w: boolean | null }>(
+        `SELECT count(DISTINCT s.org_id)::int AS orgs,
+                bool_and(cp.charging_rate_units LIKE '%A%') AS all_a,
+                bool_and(cp.charging_rate_units LIKE '%W%') AS all_w
+           FROM charge_point cp JOIN site s ON s.id = cp.site_id
+          WHERE cp.quirk_profile_id = $1 AND cp.charging_rate_units IS NOT NULL`,
+        [profileId],
+      )
+    ).rows[0];
+    const agreed: 'A' | 'W' | null =
+      agg && agg.orgs >= CONSENSUS_MIN_ORGS && agg.all_a !== agg.all_w ? (agg.all_a ? 'A' : 'W') : null;
+    const before = findings.chargingRateUnitConfirmedBy === 'consensus' ? findings.chargingRateUnit ?? null : null;
+    if (agreed === before && (agreed !== null || findings.chargingRateUnit === undefined)) return;
+    if (agreed) {
+      findings.chargingRateUnit = agreed;
+      findings.chargingRateUnitConfirmedBy = 'consensus';
+    } else {
+      // No (longer any) agreement: an unconfirmed or consensus value is withdrawn.
+      delete findings.chargingRateUnit;
+      delete findings.chargingRateUnitConfirmedBy;
+    }
+    changed = agreed ? `chargingRateUnit = ${agreed} (consensus of ${agg!.orgs} tenants)` : 'chargingRateUnit withdrawn (no consensus)';
+    await client.query(`UPDATE quirk_profile SET findings = $2, updated_at = now() WHERE id = $1`, [
+      profileId,
+      JSON.stringify(findings),
+    ]);
+  });
+  if (changed) bus.emit('quirk.discovered', { ...context, finding: changed });
+}
+
+/** Operator: confirm a model's rate unit (or clear it with null). Overrides seed and consensus. */
+export async function confirmChargingRateUnit(profileId: string, unit: 'A' | 'W' | null): Promise<void> {
+  if (unit === null) {
+    await query(
+      `UPDATE quirk_profile SET findings = findings - 'chargingRateUnit' - 'chargingRateUnitConfirmedBy', updated_at = now() WHERE id = $1`,
+      [profileId],
+    );
+    return;
+  }
+  await query(
+    `UPDATE quirk_profile
+        SET findings = findings || jsonb_build_object('chargingRateUnit', $2::text, 'chargingRateUnitConfirmedBy', 'operator'),
+            updated_at = now()
+      WHERE id = $1`,
+    [profileId, unit],
+  );
 }

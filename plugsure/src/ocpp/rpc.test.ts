@@ -127,3 +127,63 @@ describe('inbound replay cache', () => {
     assert.equal(h.calls.length, 1, 'the same request with reordered keys is still the same request');
   });
 });
+
+/**
+ * Inbound requests used to be started back to back and left to run
+ * concurrently. A StartTransaction and its StopTransaction replayed from an
+ * offline queue raced each other, and a duplicate StartTransaction arriving
+ * right behind the original ran a second time (the reply cache is only filled
+ * when a handler finishes), opening one session and closing it as superseded.
+ */
+describe('inbound ordering', () => {
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test('requests are handled one at a time, in arrival order', async () => {
+    const log: string[] = [];
+    const h = harness(async (action) => {
+      log.push(`start ${action}`);
+      await tick(action === 'StartTransaction' ? 30 : 1);
+      log.push(`end ${action}`);
+      return action === 'StartTransaction' ? { transactionId: 1, idTagInfo: { status: 'Accepted' } } : {};
+    });
+    h.ws.emit('message', Buffer.from(JSON.stringify([2, 'a', 'StartTransaction', { connectorId: 1, idTag: 'T', meterStart: 0, timestamp: '2026-09-30T00:00:00Z' }])));
+    h.ws.emit('message', Buffer.from(JSON.stringify([2, 'b', 'StopTransaction', { transactionId: 1, meterStop: 10, timestamp: '2026-09-30T00:10:00Z' }])));
+    await tick(80);
+    assert.deepEqual(log, ['start StartTransaction', 'end StartTransaction', 'start StopTransaction', 'end StopTransaction']);
+    assert.deepEqual(h.ws.sent.map((f) => f[1]), ['a', 'b'], 'answers go out in order');
+  });
+
+  test('a duplicate arriving before the original finishes gets the cached reply, not a second execution', async () => {
+    const h = harness(async () => {
+      await tick(20);
+      return { transactionId: 7, idTagInfo: { status: 'Accepted' } };
+    });
+    const start = [2, 'dup', 'StartTransaction', { connectorId: 1, idTag: 'T', meterStart: 0, timestamp: '2026-09-30T00:00:00Z' }];
+    h.ws.emit('message', Buffer.from(JSON.stringify(start)));
+    h.ws.emit('message', Buffer.from(JSON.stringify(start)));
+    await tick(80);
+    assert.equal(h.calls.length, 1, 'the handler ran once');
+    assert.equal(h.ws.sent.length, 2, 'both copies were answered');
+    assert.deepEqual(h.ws.sent[1], h.ws.sent[0]);
+  });
+
+  test("an answer to our call is not queued behind the request whose handler waits for it", async () => {
+    let conn!: OcppRpcConnection;
+    const ws = new FakeSocket();
+    conn = new OcppRpcConnection(
+      'TEST-CP',
+      ws as unknown as WebSocket,
+      async () => {
+        const r = await conn.call<{ status: string }>('GetConfiguration', {});
+        return { status: r.status };
+      },
+      { callTimeoutMs: 1_000 },
+    );
+    ws.emit('message', Buffer.from(JSON.stringify([2, 'x', 'DataTransfer', { vendorId: 'v' }])));
+    await tick(5);
+    const out = ws.sent.find((f) => f[0] === 2)!;
+    ws.emit('message', Buffer.from(JSON.stringify([3, out[1], { status: 'Accepted' }])));
+    await tick(20);
+    assert.deepEqual(ws.sent.find((f) => f[0] === 3 && f[1] === 'x')?.[2], { status: 'Accepted' });
+  });
+});

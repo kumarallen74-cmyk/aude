@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, modal, confirmDialog, field, options,
+  $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, modal, confirmDialog, html, field, options,
   formValues, fieldErrors, toast, callout, kpi, debounce, sites as loadSites,
 } from '../core.js';
 
@@ -151,7 +151,7 @@ async function offerSync(hint) {
   if (!state.can('token:write')) return;
   const yes = await confirmDialog({
     title: 'Push the local list now?',
-    message: `${esc(hint)}<br><br>Chargers that are online already enforce the new status at the next tap. Chargers that later go offline use the list stored in their flash.`,
+    message: html`${hint}<br><br>Chargers that are online already enforce the new status at the next tap. Chargers that later go offline use the list stored in their flash.`,
     confirmLabel: 'Choose a site…',
   });
   if (yes) openSiteSync();
@@ -342,7 +342,7 @@ export function openCardModal(t = null, onSaved) {
   $('[data-block]', form)?.addEventListener('click', async () => {
     const ok = await confirmDialog({
       title: 'Block this card?',
-      message: `Card <b class="mono">${esc(t.uid)}</b>${t.holder_name ? ` held by <b>${esc(t.holder_name)}</b>` : ''} will be refused at the next tap on every online charger.
+      message: html`Card <b class="mono">${t.uid}</b>${t.holder_name ? html` held by <b>${t.holder_name}</b>` : ''} will be refused at the next tap on every online charger.
         Offline chargers keep accepting it until the local authorisation list is pushed. Other unsaved edits in this dialog are discarded.`,
       confirmLabel: 'Block card',
       danger: true,

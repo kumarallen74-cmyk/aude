@@ -22,7 +22,7 @@ const FP_COLONS = 'AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:AA:A
 const OTHER = 'b'.repeat(64);
 const HEADER = 'x-client-cert-fingerprint';
 
-const ctx = (over = {}) => ({ headers: {}, trustProxyProto: true, headerName: HEADER, ...over } as ClientCertContext);
+const ctx = (over = {}) => ({ headers: {}, trustProxyProto: true, fromTrustedProxy: true, headerName: HEADER, ...over } as ClientCertContext);
 
 describe('normaliseFingerprint', () => {
   test('lowercases and strips colons to 64 hex chars', () => {
@@ -62,9 +62,32 @@ describe('presentedFingerprint', () => {
     assert.equal(p.source, 'none');
   });
   test('prefers the real socket peer cert over any header', () => {
-    const socket = { encrypted: true, getPeerCertificate: () => ({ fingerprint256: FP_COLONS }) };
+    const socket = { encrypted: true, authorized: true, getPeerCertificate: () => ({ fingerprint256: FP_COLONS }) };
     const p = presentedFingerprint(ctx({ socket, headers: { [HEADER]: OTHER } }));
     assert.deepEqual(p, { value: FP, source: 'socket' });
+  });
+  test('a certificate that does not chain to our CA (expired, self-signed) is not presented', () => {
+    const socket = { encrypted: true, authorized: false, getPeerCertificate: () => ({ fingerprint256: FP_COLONS }) };
+    assert.deepEqual(presentedFingerprint(ctx({ socket })), { value: null, source: 'none' });
+  });
+  test('a TLS connection to the gateway never falls back to a header its own client wrote', () => {
+    const socket = { encrypted: true, authorized: false, getPeerCertificate: () => undefined };
+    assert.deepEqual(presentedFingerprint(ctx({ socket, headers: { [HEADER]: FP } })), { value: null, source: 'none' });
+  });
+  test('the header is ignored from a peer that is not a configured proxy', () => {
+    const p = presentedFingerprint(ctx({ fromTrustedProxy: false, headers: { [HEADER]: FP } }));
+    assert.deepEqual(p, { value: null, source: 'none' });
+  });
+});
+
+describe('trusted proxy matcher', () => {
+  test('addresses and CIDRs, IPv4-mapped peers, nothing else', async () => {
+    const { makeProxyMatcher } = await import('./trusted-proxy.js');
+    const m = makeProxyMatcher(['127.0.0.1', '::1', '172.16.0.0/12']);
+    for (const a of ['127.0.0.1', '::ffff:127.0.0.1', '::1', '172.18.0.1', '::ffff:172.31.255.254']) assert.equal(m(a), true, a);
+    for (const a of ['203.0.113.9', '::ffff:203.0.113.9', '10.0.0.1', '172.32.0.1', '', undefined]) assert.equal(m(a), false, String(a));
+    assert.throws(() => makeProxyMatcher(['not-an-ip']), /OCPP_TRUSTED_PROXIES/);
+    assert.throws(() => makeProxyMatcher(['10.0.0.0/33']), /prefix/);
   });
 });
 

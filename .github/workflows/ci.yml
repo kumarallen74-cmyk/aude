@@ -1,0 +1,423 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# One run per branch/PR; cancel superseded runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+
+# The application lives in plugsure/ (the repository root also holds the review
+# report). Every `run:` step works from there; `uses:` steps that read files
+# (setup-node's npm cache) are pointed at it explicitly.
+defaults:
+  run:
+    working-directory: plugsure
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Typecheck, unit tests, and a from-empty migration + seed against real
+  # Postgres 16. Every step is fatal: no `continue-on-error`, no `|| true`.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: typecheck / test / migrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: plugsure
+          # The DATABASE-BACKED unit tests run only against a database with this
+          # exact name (they check DATABASE_URL and skip otherwise, so a test can
+          # never wipe a real database). The job used `plugsure`, so every one of
+          # them was silently skipped and CI was green while testing none of it.
+          POSTGRES_DB: plugsure_audit_fix
+        ports:
+          - 5432:5432
+        # The job's steps run on the runner host, not in the compose network, so
+        # the DB must be reachable on localhost AND be ready before we migrate.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plugsure_audit_fix"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://postgres:plugsure@127.0.0.1:5432/plugsure_audit_fix
+      NODE_ENV: test
+      LOG_LEVEL: warn
+      TZ: Asia/Jakarta
+      # Test-only values. The audit chain tests need a key outside development.
+      AUDIT_HMAC_KEY: ci-audit-hmac-key-not-a-secret-0123456789abcdef
+      SECRETS_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      # `npm run migrate` gives the runtime role this password, so the RLS tests can
+      # connect as plugsure_app (src/db/rls-fail-closed.test.ts).
+      POSTGRES_APP_PASSWORD: ci-app-password
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # Caches ~/.npm keyed on package-lock.json.
+          cache: npm
+          cache-dependency-path: plugsure/package-lock.json
+
+      # `npm ci` — not `npm install` — so CI installs exactly the locked tree and
+      # a drifting lockfile is a build failure rather than a silent version bump.
+      # Do NOT "fix" a failure here by switching this step to `npm install`.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Proves the schema applies cleanly from an EMPTY database — the thing that
+      # breaks silently when someone edits an already-applied migration in place.
+      - name: Migrate from empty
+        run: npm run migrate
+
+      # Idempotency: the migrator tracks applied files in schema_migration, so a
+      # second run must be a no-op rather than an error.
+      - name: Migrate again (idempotency)
+        run: npm run migrate
+
+      # Seeded first, like the local test database the suite is written against.
+      - name: Seed
+        run: npm run seed
+
+      # `npm test` is `tsx --test src/**/*.test.ts`. That glob is expanded by the
+      # shell, and bash without `globstar` does not recurse `**`, so it would run
+      # zero tests and exit 0 — a green build that tested nothing. Expand the file
+      # list explicitly and fail if the list is empty.
+      - name: Unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          files=(src/**/*.test.ts)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no test files matched src/**/*.test.ts"
+            exit 1
+          fi
+          printf 'running %d test file(s):\n' "${#files[@]}"
+          printf '  %s\n' "${files[@]}"
+          npx tsx --test "${files[@]}"
+
+      - name: Assert schema is recorded
+        run: |
+          set -euo pipefail
+          count=$(psql "$DATABASE_URL" -tAc "select count(*) from schema_migration")
+          echo "applied migrations: $count"
+          test "$count" -ge 1
+
+      - name: Build (tsc -p tsconfig.build.json)
+        run: npm run build
+
+      - name: Assert build output is runnable
+        run: |
+          set -euo pipefail
+          test -f dist/apps/gateway.js
+          test -f dist/apps/api.js
+          test -f dist/db/migrate.js
+          # The Dockerfile copies src/web -> dist/web; tsc does not. Guard the
+          # layout assumption that src/api/server.ts makes: join(here, '../web').
+          test -f src/web/index.html
+          node --check dist/apps/gateway.js
+          node --check dist/apps/api.js
+
+  # ---------------------------------------------------------------------------
+  # End-to-end: the split deployment (gateway + API as separate processes) against
+  # a migrated, seeded Postgres, connecting as the RUNTIME role plugsure_app —
+  # never the superuser, so row-level security is really in force — and driven by
+  # the e2e suites (simulated chargers over OCPP 1.6 / 2.0.1 / 2.1, the console
+  # API, the bridge). Unit tests cannot see a broken route, a missing grant for
+  # plugsure_app, or the bridge between the two processes; these do.
+  # ---------------------------------------------------------------------------
+  e2e:
+    name: end-to-end (split deployment)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: verify
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: plugsure
+          POSTGRES_DB: plugsure
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plugsure"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Owner connection: migrations and seed only.
+      OWNER_DATABASE_URL: postgresql://postgres:plugsure@127.0.0.1:5432/plugsure
+      # The runtime role the migrator provisions from POSTGRES_APP_PASSWORD.
+      POSTGRES_APP_PASSWORD: ci-app-password
+      DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+      # development: bench security profile and auto-adoption are allowed, which
+      # the simulators rely on. Test-only secrets.
+      NODE_ENV: development
+      LOG_LEVEL: warn
+      TZ: Asia/Jakarta
+      AUDIT_HMAC_KEY: ci-audit-hmac-key-not-a-secret-0123456789abcdef
+      SECRETS_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      INTERNAL_API_TOKEN: ci-internal-token-0123456789abcdef0123456789
+      OCPP_VERSIONS: ocpp1.6,ocpp2.0.1,ocpp2.1
+      OCPP_PORT: "9220"
+      API_PORT: "9200"
+      PUBLIC_BASE_URL: http://127.0.0.1:9200
+      OCPP_TRUST_PROXY_PROTO: "true"
+      GATEWAY_INTERNAL_URL: http://127.0.0.1:9220
+      EVENT_RELAY: "true"
+      STORAGE_DIR: /tmp/plugsure-ci-storage
+      SEED_ADMIN_PASSWORD: Console-Test-2026!
+      # The suites
+      E2E_API: http://127.0.0.1:9200
+      E2E_OCPP: ws://127.0.0.1:9220/ocpp
+      E2E_DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+      E2E_PASSWORD: Console-Test-2026!
+      E2E_QUICK: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: plugsure/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Migrate (owner) and provision plugsure_app
+        run: DATABASE_URL="$OWNER_DATABASE_URL" npm run migrate
+
+      - name: Seed (owner)
+        run: DATABASE_URL="$OWNER_DATABASE_URL" npm run seed
+
+      - name: Start gateway and API as plugsure_app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$STORAGE_DIR" "$RUNNER_TEMP/logs"
+          nohup npx tsx src/apps/gateway.ts > "$RUNNER_TEMP/logs/gateway.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gateway.pid"
+          nohup npx tsx src/apps/api.ts > "$RUNNER_TEMP/logs/api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/api.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9220/healthz >/dev/null 2>&1 && curl -fsS http://127.0.0.1:9200/healthz >/dev/null 2>&1; then
+              echo "stack up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::stack did not come up"
+          tail -n 100 "$RUNNER_TEMP/logs/gateway.log" "$RUNNER_TEMP/logs/api.log"
+          exit 1
+
+      # Each suite exits non-zero on any failed check.
+      - name: e2e — cross-tenant isolation
+        run: npm run e2e:isolation
+      - name: e2e — pilot fixes
+        run: npm run e2e:pilot-fixes
+      - name: e2e — field conditions (quick)
+        run: npm run e2e:field
+      - name: e2e — operator console
+        run: npm run e2e:console
+
+      - name: Stack logs
+        if: always()
+        shell: bash
+        run: |
+          for f in "$RUNNER_TEMP"/logs/*.log; do echo "::group::$f"; tail -n 300 "$f" || true; echo "::endgroup::"; done
+          for p in "$RUNNER_TEMP"/*.pid; do kill "$(cat "$p")" 2>/dev/null || true; done
+
+  # ---------------------------------------------------------------------------
+  # Build the production image and smoke-test BOTH roles out of it: the compiled
+  # migrator against a real Postgres, then the API serving /healthz and the
+  # operator console HTML. This is what catches a broken dist/web copy or a
+  # missing db/migrations path before a vendor integration day does.
+  # ---------------------------------------------------------------------------
+  docker:
+    name: docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: verify
+
+    env:
+      # Test-only values (never use these anywhere real).
+      AUDIT_HMAC_KEY: ci-audit-hmac-key-not-a-secret-0123456789abcdef
+      SECRETS_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      INTERNAL_API_TOKEN: ci-internal-token-0123456789abcdef0123456789
+      APP_DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: plugsure
+          POSTGRES_DB: plugsure
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plugsure"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t plugsure:ci .
+
+      - name: Image runs as non-root
+        run: |
+          set -euo pipefail
+          uid=$(docker run --rm plugsure:ci node -e "process.stdout.write(String(process.getuid()))")
+          echo "runtime uid: $uid"
+          test "$uid" != "0"
+
+      # The owner migrates and provisions the runtime role; the apps then run as
+      # plugsure_app. The image is NODE_ENV=production, where the apps refuse a
+      # superuser connection (it bypasses row-level security) and refuse to boot
+      # without AUDIT_HMAC_KEY / SECRETS_KEY — the old smoke test supplied neither
+      # and connected as postgres, so it could not pass.
+      - name: Migrate from the image
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL=postgresql://postgres:plugsure@127.0.0.1:5432/plugsure \
+            -e POSTGRES_APP_PASSWORD=ci-app-password \
+            plugsure:ci node dist/db/migrate.js
+
+      - name: Seed from the image
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL=postgresql://postgres:plugsure@127.0.0.1:5432/plugsure \
+            -e AUDIT_HMAC_KEY="$AUDIT_HMAC_KEY" -e SECRETS_KEY="$SECRETS_KEY" \
+            plugsure:ci node dist/db/seed.js
+
+      - name: API serves /healthz and the operator console
+        run: |
+          set -euo pipefail
+          docker run -d --name plugsure-api --network host \
+            -e DATABASE_URL="$APP_DATABASE_URL" \
+            -e AUDIT_HMAC_KEY="$AUDIT_HMAC_KEY" -e SECRETS_KEY="$SECRETS_KEY" \
+            -e INTERNAL_API_TOKEN="$INTERNAL_API_TOKEN" \
+            -e GATEWAY_INTERNAL_URL=http://127.0.0.1:9220 \
+            -e PUBLIC_BASE_URL=https://csms.ci.invalid -e OCPI_PUBLIC_URL=https://ocpi.ci.invalid \
+            -e API_PORT=9200 \
+            plugsure:ci node dist/apps/api.js
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9200/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker logs plugsure-api
+          curl -fsS http://127.0.0.1:9200/healthz | tee /dev/stderr | grep -q '"ok":true'
+          # The console is static HTML served from dist/web. If the Dockerfile
+          # stops copying it, this is where we find out.
+          curl -fsS -o /tmp/console.html http://127.0.0.1:9200/
+          grep -q "<title>PlugSure CSMS — Operator Console</title>" /tmp/console.html
+          docker rm -f plugsure-api
+
+      # The production-required OCPP settings: profile 2 behind a TLS-terminating
+      # proxy (trusted X-Forwarded-Proto), no auto-adoption. The gateway refuses to
+      # start in production without them.
+      - name: Gateway answers /healthz and the upgrade listener
+        run: |
+          set -euo pipefail
+          docker run -d --name plugsure-gw --network host \
+            -e DATABASE_URL="$APP_DATABASE_URL" \
+            -e AUDIT_HMAC_KEY="$AUDIT_HMAC_KEY" -e SECRETS_KEY="$SECRETS_KEY" \
+            -e INTERNAL_API_TOKEN="$INTERNAL_API_TOKEN" \
+            -e OCPP_PORT=9220 \
+            -e OCPP_MIN_SECURITY_PROFILE=2 -e OCPP_TRUST_PROXY_PROTO=true -e OCPP_AUTO_ADOPT=false \
+            -e OCPI_PUBLIC_URL=https://ocpi.ci.invalid -e PUBLIC_BASE_URL=https://csms.ci.invalid \
+            -e HEALTHCHECK_URL=http://127.0.0.1:9220/healthz -e HEALTHCHECK_OK_STATUS=200 \
+            plugsure:ci node dist/apps/gateway.js
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9220/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker logs plugsure-gw
+          curl -fsS http://127.0.0.1:9220/healthz | tee /dev/stderr | grep -q '"ok":true'
+          # 426 Upgrade Required is the upgrade listener's answer to a plain GET.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9220/)" = "426"
+          docker rm -f plugsure-gw
+
+  # ---------------------------------------------------------------------------
+  # Cheap linting of the deployment artefacts themselves.
+  # ---------------------------------------------------------------------------
+  deploy-artefacts:
+    name: deploy artefacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Compose refuses to render without the required secrets (`:?`), and .env is
+      # not in git — so render it with a throwaway CI .env, as an operator would.
+      - name: Validate docker-compose.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-postgres-password/' \
+              -e 's/^POSTGRES_APP_PASSWORD=.*/POSTGRES_APP_PASSWORD=ci-app-password/' \
+              -e 's/^AUDIT_HMAC_KEY=.*/AUDIT_HMAC_KEY=ci-audit-hmac-key-not-a-secret/' \
+              -e 's/^SECRETS_KEY=.*/SECRETS_KEY=0000000000000000000000000000000000000000000000000000000000000001/' \
+              -e 's/^INTERNAL_API_TOKEN=.*/INTERNAL_API_TOKEN=ci-internal-token/' \
+              .env.example > .env
+          docker compose config --quiet
+          rm -f .env
+
+      - name: Validate systemd units
+        run: |
+          set -euo pipefail
+          systemd-analyze verify \
+            deploy/plugsure-gateway.service \
+            deploy/plugsure-api.service \
+            deploy/plugsure-backup.service \
+            deploy/plugsure-backup.timer > /tmp/units.log 2>&1 || true
+          cat /tmp/units.log
+          # systemd-analyze exits non-zero when an ExecStart binary is missing, and on
+          # the runner they all are (/usr/bin/node, /opt/plugsure/...), so its exit
+          # code is not the gate. Fail on real syntax errors only: unknown keys or
+          # sections and unparsable values. (A bare `! grep` never fails a bash -e
+          # step — errexit ignores negated commands — so test it explicitly.)
+          if grep -Ei "Unknown (key|lvalue|section)|Failed to parse|Invalid " /tmp/units.log; then
+            echo "::error::systemd unit syntax errors (above)"
+            exit 1
+          fi
+
+      - name: Lint the backup script
+        run: bash -n tools/backup/pg-backup.sh
+
+      - name: Validate Caddyfile
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

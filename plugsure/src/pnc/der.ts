@@ -150,7 +150,7 @@ export const OID = {
   sha256: '2.16.840.1.101.3.4.2.1', sha384: '2.16.840.1.101.3.4.2.2', sha512: '2.16.840.1.101.3.4.2.3',
   basicConstraints: '2.5.29.19', keyUsage: '2.5.29.15', ski: '2.5.29.14', aki: '2.5.29.35', aia: '1.3.6.1.5.5.7.1.1',
   ocsp: '1.3.6.1.5.5.7.48.1', ocspBasic: '1.3.6.1.5.5.7.48.1.1',
-  eku: '2.5.29.37', clientAuth: '1.3.6.1.5.5.7.3.2', serverAuth: '1.3.6.1.5.5.7.3.1',
+  eku: '2.5.29.37', clientAuth: '1.3.6.1.5.5.7.3.2', serverAuth: '1.3.6.1.5.5.7.3.1', ocspSigning: '1.3.6.1.5.5.7.3.9',
 } as const;
 const SHORT: Record<string, string> = { [OID.CN]: 'CN', [OID.O]: 'O', [OID.OU]: 'OU', [OID.C]: 'C', [OID.DC]: 'DC' };
 
@@ -253,6 +253,12 @@ export interface CertSpec {
   leafUsage?: 'v2g' | 'tls-ec' | 'tls-rsa';
   /** Extended key usage OIDs, e.g. OID.clientAuth. */
   eku?: string[];
+  /**
+   * Leave the keyUsage extension out. Tests only: it reproduces foreign or
+   * forged certificates (an end-entity certificate with no keyUsage is what
+   * Node's checkIssued lets act as an issuer).
+   */
+  noKeyUsage?: boolean;
 }
 
 function ext(id: string, critical: boolean, value: Buffer): Buffer {
@@ -266,10 +272,10 @@ export function buildCertificate(s: CertSpec): Buffer {
   const exts = [
     ext(OID.basicConstraints, true, s.ca ? seq(bool(true), ...(s.ca.pathLen != null ? [int(s.ca.pathLen)] : [])) : seq()),
     // CA: keyCertSign + cRLSign. Leaf (V2G SECC, contract): digitalSignature + keyAgreement.
-    ext(OID.keyUsage, true, s.ca ? bits(Buffer.from([0x06]), 1)
+    ...(s.noKeyUsage ? [] : [ext(OID.keyUsage, true, s.ca ? bits(Buffer.from([0x06]), 1)
       : s.leafUsage === 'tls-ec' ? bits(Buffer.from([0x80]), 7) // digitalSignature
       : s.leafUsage === 'tls-rsa' ? bits(Buffer.from([0xa0]), 5) // digitalSignature + keyEncipherment
-      : bits(Buffer.from([0x88]), 3)),
+      : bits(Buffer.from([0x88]), 3))]),
     ...(s.eku?.length ? [ext(OID.eku, false, seq(...s.eku.map((o) => oid(o))))] : []),
     ext(OID.ski, false, octet(keyId(s.spki))),
     ext(OID.aki, false, seq(tlv(0x80, keyId(s.issuerSpki ?? s.spki)))),
@@ -336,6 +342,48 @@ export function certInfo(input: string | Buffer): CertInfo {
   };
 }
 
+/**
+ * The extensions a path validator needs, read from the DER (Node's
+ * X509Certificate exposes CA:TRUE but neither pathLenConstraint nor the
+ * keyUsage bits — and its checkIssued only refuses an issuer whose keyUsage is
+ * PRESENT without keyCertSign, so an end-entity certificate with no keyUsage
+ * passes as an issuer).
+ *
+ *   ca          basicConstraints cA (false when the extension is absent)
+ *   pathLen     basicConstraints pathLenConstraint, null when absent
+ *   keyUsage    the keyUsage bits as a number (bit 0 = digitalSignature = 0x80
+ *               of the first byte …), null when the extension is absent
+ *   eku         extendedKeyUsage OIDs ([] when absent)
+ */
+export interface CertConstraints { ca: boolean; pathLen: number | null; keyUsage: number | null; eku: string[] }
+/** keyUsage bit for keyCertSign (bit 5), in the representation of CertConstraints.keyUsage. */
+export const KU_KEY_CERT_SIGN = 0x04;
+
+export function certConstraints(input: string | Buffer): CertConstraints {
+  const der = typeof input === 'string' ? pemToDer(input) : input;
+  const tbs = parse(der).children[0]!;
+  const extsNode = tbs.children.find((c) => c.tag === 0xa3)?.children[0];
+  const out: CertConstraints = { ca: false, pathLen: null, keyUsage: null, eku: [] };
+  for (const e of extsNode?.children ?? []) {
+    const id = e.children[0] ? oidString(e.children[0]) : '';
+    const valueNode = e.children[e.children.length - 1];
+    if (!valueNode || valueNode.tag !== 0x04) continue;
+    const v = parse(content(valueNode));
+    if (id === OID.basicConstraints) {
+      for (const c of v.children) {
+        if (c.tag === 0x01) out.ca = content(c)[0] !== 0;
+        else if (c.tag === 0x02) out.pathLen = parseInt(content(c).toString('hex') || '0', 16);
+      }
+    } else if (id === OID.keyUsage && v.tag === 0x03) {
+      // content: [unused-bit count, bits 0–7, (bit 8 decipherOnly)]
+      out.keyUsage = content(v)[1] ?? 0;
+    } else if (id === OID.eku) {
+      out.eku = v.children.filter((c) => c.tag === 0x06).map(oidString);
+    }
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ OCPP CertificateHashData
 
 export type HashAlgorithm = 'SHA256' | 'SHA384' | 'SHA512';
@@ -382,15 +430,59 @@ export function readOcspRequest(der: Buffer): CertificateHashData {
 
 export type OcspCertStatus = 'good' | 'revoked' | 'unknown';
 
-/** Build a signed OCSP response (the test PKI's responder, which is the issuing CA). */
-export function ocspResponse(h: CertificateHashData, status: OcspCertStatus, signer: { key: KeyObject; spkiDer: Buffer }, at = new Date(), revokedAt?: Date): Buffer {
+/**
+ * Build a signed OCSP response (the test PKI's responder, which is the issuing CA).
+ * `opts.certs` are DER certificates carried in the response (the signer's own
+ * certificate, or a delegated responder's); `opts.nextUpdate` null leaves
+ * nextUpdate out (tests).
+ */
+export function ocspResponse(
+  h: CertificateHashData, status: OcspCertStatus, signer: { key: KeyObject; spkiDer: Buffer }, at = new Date(), revokedAt?: Date,
+  opts: { certs?: Buffer[]; nextUpdate?: Date | null } = {},
+): Buffer {
   const alg = seq(oid(OID.ecdsaSha256));
   const certStatus = status === 'good' ? tlv(0x80, Buffer.alloc(0)) : status === 'revoked' ? ctx(1, generalizedTime(revokedAt ?? at)) : tlv(0x82, Buffer.alloc(0));
-  const single = seq(certId(h), certStatus, generalizedTime(at), ctx(0, generalizedTime(new Date(at.getTime() + 24 * 3600_000))));
+  const next = opts.nextUpdate === undefined ? new Date(at.getTime() + 24 * 3600_000) : opts.nextUpdate;
+  const single = seq(certId(h), certStatus, generalizedTime(at), ...(next ? [ctx(0, generalizedTime(next))] : []));
   const responderId = ctx(2, octet(createHash('sha1').update(publicKeyBits(signer.spkiDer)).digest()));
   const tbs = seq(responderId, generalizedTime(at), seq(single));
-  const basic = seq(tbs, alg, bits(cryptoSign('sha256', tbs, signer.key)));
+  const basic = seq(tbs, alg, bits(cryptoSign('sha256', tbs, signer.key)), ...(opts.certs?.length ? [ctx(0, seq(...opts.certs))] : []));
   return seq(enumerated(0), ctx(0, seq(oid(OID.ocspBasic), octet(basic))));
+}
+
+/** The certificates carried in an OCSP response (BasicOCSPResponse certs), DER. Empty when none or unreadable. */
+export function ocspResponseCerts(der: Buffer): Buffer[] {
+  try {
+    const r = parse(der);
+    const bytes = r.children[1]?.children[0]?.children[1];
+    if (!bytes) return [];
+    const certs = parse(content(bytes)).children[3];
+    return (certs?.children[0]?.children ?? []).map((c) => Buffer.from(raw(c)));
+  } catch {
+    return [];
+  }
+}
+
+/** Clock skew tolerated on OCSP times. */
+export const OCSP_SKEW_MS = 5 * 60_000;
+/** Without nextUpdate, how old thisUpdate may be. */
+export const OCSP_MAX_AGE_MS = 7 * 24 * 3600_000;
+
+/**
+ * Why an OCSP answer is too old or too new to rely on, or null. Without this an
+ * old "good" (fetched over plain HTTP, as OCSP usually is) could be replayed
+ * forever for a certificate revoked since.
+ */
+export function ocspFreshnessProblem(r: Pick<OcspResult, 'thisUpdate' | 'nextUpdate'>, now = new Date()): string | null {
+  const t = now.getTime();
+  if (!r.thisUpdate) return 'the OCSP answer has no thisUpdate';
+  if (r.thisUpdate.getTime() > t + OCSP_SKEW_MS) return 'the OCSP answer is dated in the future';
+  if (r.nextUpdate) {
+    if (r.nextUpdate.getTime() < t - OCSP_SKEW_MS) return 'the OCSP answer is stale (nextUpdate has passed)';
+  } else if (t - r.thisUpdate.getTime() > OCSP_MAX_AGE_MS) {
+    return 'the OCSP answer is stale (no nextUpdate, thisUpdate older than 7 days)';
+  }
+  return null;
 }
 
 export interface OcspResult {
@@ -408,9 +500,12 @@ const RESPONSE_STATUS = ['successful', 'malformedRequest', 'internalError', 'try
 /**
  * The status of the certificate `h` in an OCSP response. `trusted` are public
  * keys allowed to sign it: the issuer's, normally. A responder certificate
- * embedded in the response is accepted when the issuer signed it.
+ * embedded in the response is accepted when the issuer signed it AND it is a
+ * delegated OCSP responder (RFC 6960 4.2.2.2: extendedKeyUsage id-kp-OCSPSigning)
+ * valid now — any other certificate the issuer signed (a charger's, another
+ * contract's) must not be able to vouch for revocation status.
  */
-export function readOcspResponse(der: Buffer, h: CertificateHashData, trusted: KeyObject[] = []): OcspResult {
+export function readOcspResponse(der: Buffer, h: CertificateHashData, trusted: KeyObject[] = [], now = new Date()): OcspResult {
   const r = parse(der);
   const code = content(r.children[0]!)[0] ?? 2;
   const responseStatus = RESPONSE_STATUS[code] ?? String(code);
@@ -443,7 +538,9 @@ export function readOcspResponse(der: Buffer, h: CertificateHashData, trusted: K
   for (const c of certs?.children[0]?.children ?? []) {
     try {
       const x = new X509Certificate(raw(c));
-      if (trusted.some((k) => x.verify(k))) keys.push(x.publicKey);
+      const delegated = certConstraints(Buffer.from(raw(c))).eku.includes(OID.ocspSigning);
+      const valid = new Date(x.validFrom) <= now && new Date(x.validTo) >= now;
+      if (delegated && valid && trusted.some((k) => x.verify(k))) keys.push(x.publicKey);
     } catch { /* not a certificate */ }
   }
   if (keys.length) {

@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.3.0";
+export const API_VERSION = "1.4.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -3790,6 +3790,16 @@ export const WEBHOOK_EVENT_TYPES = ["alert.raised","cdr.created","charge_point.b
 
 // ─────────────────────────────────────────────── request and response types
 
+export type AcceptHeldPartnerChargeRecordBody = {
+  /** Why, for the audit log. */
+  note?: string;
+};
+
+export type AcceptHeldPartnerChargeRecordResponse = {
+  id: string;
+  status: "accepted";
+};
+
 export type AcknowledgeAlertResponse = {
   ok: true;
 };
@@ -4466,6 +4476,32 @@ export type ListMembershipPlansResponse = {
   plans: SubscriptionPlan[];
 };
 
+export type ListPartnerChargeRecordsHeldForReviewResponse = {
+  id: string;
+  cdr_id: string;
+  session_id?: string | null;
+  start_date_time?: string;
+  end_date_time?: string;
+  /** Decimal number as a string (Postgres NUMERIC). */
+  total_energy?: string;
+  currency: string;
+  /** Decimal number as a string (Postgres NUMERIC). */
+  total_excl_vat: string;
+  /** Decimal number as a string (Postgres NUMERIC), or null. */
+  total_incl_vat?: string | null;
+  received_at: string;
+  country_code?: string;
+  party_id?: string;
+  hold_reason?: string | null;
+  partner_name: string;
+  uid?: string | null;
+  contract_id?: string | null;
+  holder_name?: string | null;
+  fleet_name?: string | null;
+  location_name?: string | null;
+  authorization_reference?: string | null;
+}[];
+
 export type ListPromotionsResponse = {
   promotions: Promotion[];
 };
@@ -4613,6 +4649,16 @@ export type RegisterContractBody = {
 
 export type ReinstateDecommissionedChargePointResponse = {
   ok: true;
+};
+
+export type RejectHeldPartnerChargeRecordBody = {
+  /** Why, for the audit log. */
+  note?: string;
+};
+
+export type RejectHeldPartnerChargeRecordResponse = {
+  id: string;
+  status: "rejected";
 };
 
 export type RemoveDriverAppResponse = {
@@ -5160,6 +5206,21 @@ export type VoidFleetInvoiceResponse = {
 /** Every operation of the API, one method each. `PlugSure` (index.ts) adds the transport. */
 export class Operations {
   constructor(protected readonly transport: Transport) {}
+
+  /**
+   * Accept a held partner charge record
+   *
+   * Accepts a held (or rejected) record: it is invoiced in the month it was reviewed and counts against the card limits, and the driver gets the receipt. Audited as roaming.cdr_accepted.
+   *
+   * `POST /v1/roaming/cdrs/{id}/accept` · needs `roaming:write`
+   */
+  acceptHeldPartnerChargeRecord(params: {
+    /** Charge record id (UUID). */
+    id: string;
+    body?: AcceptHeldPartnerChargeRecordBody;
+  }, options?: RequestOptions): Promise<AcceptHeldPartnerChargeRecordResponse> {
+    return this.transport.request<AcceptHeldPartnerChargeRecordResponse>({ method: "POST", path: "/v1/roaming/cdrs/{id}/accept", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
 
   /**
    * Acknowledge an alert
@@ -7297,6 +7358,17 @@ export class Operations {
   }
 
   /**
+   * List partner charge records held for review
+   *
+   * Charge records (CDRs) a partner CPO sent for our fleet cards that could not be linked to a session that partner reported or an authorisation we issued, or that failed the plausibility checks (energy, price per kWh, VAT, duration). Held records are not invoiced and do not count against card limits until accepted. Newest first (up to 500).
+   *
+   * `GET /v1/roaming/cdrs/held` · needs `roaming:read`
+   */
+  listPartnerChargeRecordsHeldForReview(options?: RequestOptions): Promise<ListPartnerChargeRecordsHeldForReviewResponse> {
+    return this.transport.request<ListPartnerChargeRecordsHeldForReviewResponse>({ method: "GET", path: "/v1/roaming/cdrs/held", accept: "json" }, options);
+  }
+
+  /**
    * List partner charging locations
    *
    * Charging locations published by connected CPO partners (up to 1,000, by city and name), with EVSE status, where our shared cards can charge.
@@ -7843,6 +7915,21 @@ export class Operations {
     identity: string;
   }, options?: RequestOptions): Promise<ReinstateDecommissionedChargePointResponse> {
     return this.transport.request<ReinstateDecommissionedChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/reinstate", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
+   * Reject a held partner charge record
+   *
+   * Rejects a held record: it is never invoiced. A record already accepted cannot be rejected (409). Audited as roaming.cdr_rejected.
+   *
+   * `POST /v1/roaming/cdrs/{id}/reject` · needs `roaming:write`
+   */
+  rejectHeldPartnerChargeRecord(params: {
+    /** Charge record id (UUID). */
+    id: string;
+    body?: RejectHeldPartnerChargeRecordBody;
+  }, options?: RequestOptions): Promise<RejectHeldPartnerChargeRecordResponse> {
+    return this.transport.request<RejectHeldPartnerChargeRecordResponse>({ method: "POST", path: "/v1/roaming/cdrs/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

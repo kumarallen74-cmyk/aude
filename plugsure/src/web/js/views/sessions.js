@@ -1,7 +1,15 @@
 import {
-  $, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, drawer, confirmDialog, field, options,
+  $, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, drawer, confirmDialog, html, field, options,
   formValues, toast, callout, kpi, download, copy, debounce, onLive, sites as loadSites,
 } from '../core.js';
+
+/** Rounding to ROUNDING_UNIT_IDR, shown as its own line so the receipt adds up (subtotal + PBJT + PPN + rounding = total). */
+function roundingRow(s) {
+  const r = Number(s.total_idr) - Number(s.subtotal_idr) - Number(s.pbjt_idr ?? 0) - Number(s.ppn_idr ?? 0);
+  return Number.isFinite(r) && r !== 0
+    ? `<tr><td>${r > 0 ? '+' : '−'} Rounding<div class="cell-sub">Total rounded to the operator's rounding unit</div></td><td class="num">${fmt.idr(Math.abs(r))}</td></tr>`
+    : '';
+}
 
 /**
  * Module 8 — Session Records, Metering & Revenue Analytics.
@@ -181,6 +189,7 @@ export function openSessionDrawer(initialRow, onChanged) {
                 <tr><td>+ PBJT-TL ${pbjtPct != null ? esc(pbjtPct) + '%' : ''}<div class="cell-sub">Regional tax on electricity, set by the regency/city</div></td><td class="num">${fmt.idr(s.pbjt_idr)}</td></tr>
                 <tr><td class="muted">DPP nilai lain<div class="cell-sub">PPN tax base — shown on the invoice, not added to the total</div></td><td class="num muted">${fmt.idr(s.ppn_dpp_idr)}</td></tr>
                 <tr><td>+ PPN ${ppnPct != null ? esc(ppnPct) + '% × DPP' : ''}<div class="cell-sub">VAT, effective 11% of the price (UU HPP)</div></td><td class="num">${fmt.idr(s.ppn_idr)}</td></tr>
+                ${roundingRow(s)}
               </tbody><tfoot><tr><td>Total charged to driver</td><td class="num">${fmt.idr(s.total_idr)}</td></tr></tfoot></table>
               <div class="small muted" style="margin-top:8px">Payment gateway MDR (estimate): <b>${fmt.idr(b.mdrIdr)}</b> — the CPO's cost, deducted at settlement. It is not charged to the driver.</div>`
             : `<div class="small muted">No CDR has been issued for this session, so there is no tax breakdown yet.</div>`;
@@ -263,7 +272,7 @@ export function openSessionDrawer(initialRow, onChanged) {
             $('[data-force]', out).addEventListener('click', async () => {
               const ok = await confirmDialog({
                 title: 'Force bill as rated?',
-                message: `The engine flagged this session: <b>${esc(r?.reason ?? 'unknown reason')}</b>.<br><br>
+                message: html`The engine flagged this session: <b>${r?.reason ?? 'unknown reason'}</b>.<br><br>
                   Forcing issues a CDR with the current tariff and bills the driver anyway. The override is recorded in the audit log under your name.
                   If the tariff is wrong, correct it and use Re-rate instead.`,
                 confirmLabel: 'Force bill',

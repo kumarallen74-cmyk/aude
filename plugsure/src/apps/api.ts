@@ -4,6 +4,7 @@ import { startApi } from '../api/server.js';
 import { bus } from '../services/events.js';
 import { query } from '../db/pool.js';
 import { assertAuditKeyConfigured } from '../services/audit.js';
+import { assertSecretsKeyConfigured } from '../services/secrets.js';
 import { assertAuthConfigured } from '../services/auth.js';
 import { assertRlsPosture } from '../db/pool.js';
 import { startBridgeClient } from '../ocpp/bridge.js';
@@ -21,6 +22,7 @@ import { persistAlert } from '../services/alerts.js';
  */
 async function main() {
   assertAuditKeyConfigured();
+  assertSecretsKeyConfigured();
   assertAuthConfigured();
   // RLS is only a second line of defence if the connection role cannot bypass it.
   await assertRlsPosture();
@@ -45,12 +47,19 @@ async function main() {
   installProcessGuards();
 
   // The API previously had no SIGTERM handler at all, so every restart cut
-  // in-flight HTTP requests.
+  // in-flight HTTP requests. app.close() drains them; open console live streams
+  // (SSE) are ended by the server's preClose hook, or the drain never finished.
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info('draining API');
+    // Backstop below systemd's TimeoutStopSec=30 / compose's 20 s grace: a request
+    // that will not finish must not turn a restart into a SIGKILL of everything.
+    setTimeout(() => {
+      logger.warn('API drain did not finish in 15 s; exiting');
+      process.exit(1);
+    }, 15_000).unref();
     await app.close().catch(() => {});
     await stopBridge().catch(() => {});
     await pool.end().catch(() => {});

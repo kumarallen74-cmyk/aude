@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { one, query } from '../db/pool.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { seal, unseal } from '../services/secrets.js';
 import { OCPI_VERSION, tokenHash, type Party } from './mapping.js';
-import { getParty, type PartnerRow, type Endpoint, type RoleEntry } from './store.js';
+import { getParty, ROLE_OF_KIND, type PartnerRow, type Endpoint, type RoleEntry } from './store.js';
 import { ocpiCall, partnerUrlProblem } from './client.js';
 
 /**
@@ -73,6 +74,24 @@ export class RegistrationError extends Error {
   }
 }
 
+/**
+ * Our public origin, as partners must call it (versions URL, endpoints, Link
+ * headers, the response_url of our commands). It comes from configuration
+ * (OCPI_PUBLIC_URL, else PUBLIC_BASE_URL), never from the request: Host and
+ * X-Forwarded-Host are whatever the caller sent, and a URL built from them
+ * would send partners (and the answers to our commands) somewhere else.
+ *
+ * Only in development and test, with nothing configured, does the request's
+ * own origin stand in. Elsewhere an unset URL is an error that says so.
+ */
+export function ocpiPublicBase(req?: { protocol: string; headers: Record<string, unknown> }): string {
+  if (config.ocpi.publicUrl) return config.ocpi.publicUrl;
+  if (isRelaxedEnv() && req) {
+    return `${req.protocol}://${String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '127.0.0.1')}`;
+  }
+  throw new RegistrationError(3000, 'roaming is not configured: set OCPI_PUBLIC_URL (or PUBLIC_BASE_URL) to the public HTTPS origin partners call', 503);
+}
+
 /** Create a partner the operator will hand token A to. */
 export async function createPartner(orgId: string, input: { name: string; kind?: string }) {
   const token = newCredentialsToken();
@@ -112,10 +131,29 @@ function parseRoles(roles: unknown): RoleEntry[] {
   });
 }
 
+/**
+ * The roles a partner registers with must match the kind the operator chose
+ * when creating it (an eMSP registers as EMSP, a CPO as CPO, a hub as HUB).
+ * The roles decide what the partner may do (push tokens, post charge records,
+ * relay for others), so a partner cannot promote itself by declaring more:
+ * a connection that really plays two roles is set up as two partners.
+ */
+export function rolesProblem(kind: PartnerRow['kind'], roles: RoleEntry[]): string | null {
+  const want = ROLE_OF_KIND[kind];
+  const other = roles.filter((r) => r.role !== want).map((r) => r.role);
+  if (other.length) {
+    return `this connection was set up by the operator as ${want}: register with the ${want} role only (not ${[...new Set(other)].join(', ')}), or ask the operator to set up the connection for that role`;
+  }
+  return null;
+}
+
+/** The parties (country_code*party_id) a set of roles stands for, sorted. */
+export const partySet = (roles: RoleEntry[]) => [...new Set(roles.map((r) => `${r.country_code}*${r.party_id}`))].sort();
+
+/** The party the partner is addressed as (OCPI-to headers): the first role it registered with. */
 function primaryParty(roles: RoleEntry[]) {
-  const r = roles.find((x) => x.role === 'HUB') ?? roles.find((x) => x.role === 'EMSP') ?? roles.find((x) => x.role === 'CPO') ?? roles[0]!;
-  const kind = roles.some((x) => x.role === 'HUB') ? 'hub' : roles.some((x) => x.role === 'EMSP') ? 'emsp' : roles.some((x) => x.role === 'CPO') ? 'cpo' : 'emsp';
-  return { country_code: r.country_code, party_id: r.party_id, kind };
+  const r = roles[0]!;
+  return { country_code: r.country_code, party_id: r.party_id };
 }
 
 /**
@@ -132,18 +170,30 @@ export async function registerFromPartner(partner: PartnerRow, body: any, base: 
   const url = typeof body?.url === 'string' ? body.url : null;
   if (!theirToken || !url) throw new RegistrationError(2001, 'token and url are required');
   const roles = parseRoles(body?.roles);
+  // The kind (and with it what the partner may do) is the operator's choice, not the partner's.
+  const problem = rolesProblem(partner.kind, roles);
+  if (problem) throw new RegistrationError(2001, problem);
+  // An update may change the token, the URL and the endpoints, not who the partner
+  // is: a different set of parties needs the operator (disconnect, then connect anew).
+  if (update && partySet(roles).join(',') !== partySet(partner.roles ?? []).join(',')) {
+    throw new RegistrationError(2001, `the parties of a registered connection cannot be changed by an update (registered: ${partySet(partner.roles ?? []).join(', ') || 'none'}); ask the operator to set up the connection again`);
+  }
   const endpoints = await discover(partner.org_id, partner.id, url, theirToken, party);
   const tokenC = newCredentialsToken();
   const who = primaryParty(roles);
-  await query(
+  // Only from the state this request started from: two POSTs with token A racing
+  // each other must not both register (the second would replace the first's token C).
+  const done = await one<{ id: string }>(
     `UPDATE ocpi_partner
         SET state = 'connected', token_out = $2, versions_url = $3, version = $4, endpoints = $5, roles = $6,
-            country_code = $7, party_id = $8, kind = $9, token_in_hash = $10, token_in = $11,
+            country_code = $7, party_id = $8, token_in_hash = $9, token_in = $10,
             registered_at = COALESCE(registered_at, now()), last_error = NULL, updated_at = now()
-      WHERE id = $1`,
+      WHERE id = $1 AND state = $11 AND token_in_hash IS NOT DISTINCT FROM $12
+      RETURNING id`,
     [partner.id, seal(theirToken), url, OCPI_VERSION, JSON.stringify(endpoints), JSON.stringify(roles),
-      who.country_code, who.party_id, who.kind, tokenHash(tokenC), seal(tokenC)],
+      who.country_code, who.party_id, tokenHash(tokenC), seal(tokenC), update ? 'connected' : 'pending', partner.token_in_hash],
   );
+  if (!done) throw new RegistrationError(2000, update ? 'the registration changed meanwhile: try again' : 'already registered: use PUT to update', 405);
   return ourCredentials(party, tokenC, base);
 }
 
@@ -168,6 +218,13 @@ export async function connectToPartner(orgId: string, partnerId: string, version
     throw new RegistrationError(3001, `the partner refused the registration (${r.error ?? 'no credentials in the answer'})`);
   }
   const roles = parseRoles(r.data.roles);
+  const problem = rolesProblem(partner.kind, roles);
+  if (problem) {
+    // We are registered at the partner now, but will not use the connection: tell it so.
+    await ocpiCall({ orgId, partnerId, method: 'DELETE', url: credentials.url, token: String(r.data.token), from: party }).catch(() => null);
+    await query(`UPDATE ocpi_partner SET last_error = $2, updated_at = now() WHERE id = $1`, [partnerId, `registration refused: ${problem}`]);
+    throw new RegistrationError(2001, `the partner answered with roles that do not match this connection: ${problem}`);
+  }
   const tokenC = String(r.data.token);
   // Re-read the endpoints with C: the partner may expose more to a registered party.
   const finalEndpoints = await discover(orgId, partnerId, String(r.data.url ?? versionsUrl), tokenC, party).catch(() => endpoints);
@@ -175,11 +232,11 @@ export async function connectToPartner(orgId: string, partnerId: string, version
   await query(
     `UPDATE ocpi_partner
         SET state = 'connected', token_out = $2, versions_url = $3, version = $4, endpoints = $5, roles = $6,
-            country_code = $7, party_id = $8, kind = $9, registered_at = COALESCE(registered_at, now()),
+            country_code = $7, party_id = $8, registered_at = COALESCE(registered_at, now()),
             last_error = NULL, updated_at = now()
       WHERE id = $1`,
     [partnerId, seal(tokenC), String(r.data.url ?? versionsUrl), OCPI_VERSION, JSON.stringify(finalEndpoints), JSON.stringify(roles),
-      who.country_code, who.party_id, who.kind],
+      who.country_code, who.party_id],
   );
 }
 

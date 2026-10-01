@@ -3,7 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { bus, type PlugSureEvents } from './events.js';
 import { seal, unseal, newSigningSecret } from './secrets.js';
 import { guardedLookup, isInternalHost } from './net-guard.js';
@@ -44,9 +44,17 @@ const MAX_ATTEMPTS = 8;
 const BACKOFF_S = [30, 120, 600, 1800, 3600, 10800, 21600];
 /** An endpoint that fails this many deliveries in a row AND has had no success for 24 h is disabled, with an alert. */
 const DISABLE_AFTER = 50;
+/** No byte for this long: give up (socket idle). */
 const TIMEOUT_MS = 10_000;
+/**
+ * Hard limit on the WHOLE delivery — connect, send, and the receiver's full
+ * answer. The idle timeout alone is reset by every byte, so a receiver that
+ * trickles one byte every 9 s held a delivery (and, through the worker's
+ * single pass, every other tenant's deliveries) for days.
+ */
+export const DELIVERY_DEADLINE_MS = 15_000;
 
-const production = () => config.env === 'production';
+const production = () => !isRelaxedEnv();
 
 // ─────────────────────────────────────────── URL / address safety
 
@@ -71,33 +79,47 @@ export function sign(secret: string, body: string, t = Math.floor(Date.now() / 1
   return `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`;
 }
 
-function post(url: string, body: string, headers: Record<string, string>): Promise<SendResult> {
+export function post(url: string, body: string, headers: Record<string, string>, deadlineMs = DELIVERY_DEADLINE_MS): Promise<SendResult> {
   const started = Date.now();
   return new Promise((resolve) => {
     let u: URL;
     try { u = new URL(url); } catch { return resolve({ ok: false, status: null, error: 'invalid URL', ms: 0 }); }
+    // Saved URLs were checked when saved; check again here (Node does not consult
+    // `lookup` for an IP literal, and the rules may have tightened since).
+    const why = checkUrl(url);
+    if (why) return resolve({ ok: false, status: null, error: why, ms: 0 });
+    let done = false;
+    const settle = (r: SendResult) => { if (!done) { done = true; clearTimeout(deadline); resolve(r); } };
     const mod = u.protocol === 'https:' ? https : http;
     const req = mod.request(
       u,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'user-agent': 'PlugSure-Webhooks/1.3', ...headers },
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'user-agent': 'PlugSure-Webhooks/1.4', ...headers },
         lookup: guardedLookup as any,
         timeout: TIMEOUT_MS,
       },
       (res) => {
         // Drain (bounded) and ignore the body — only the status matters. Redirects are NOT followed.
         let n = 0;
-        res.on('data', (c: Buffer) => { n += c.length; if (n > 64 * 1024) res.destroy(); });
-        res.on('end', () => {
+        const byStatus = () => {
           const s = res.statusCode ?? 0;
-          resolve({ ok: s >= 200 && s < 300, status: s, error: s >= 200 && s < 300 ? null : `HTTP ${s}`, ms: Date.now() - started });
-        });
-        res.on('error', () => resolve({ ok: false, status: res.statusCode ?? null, error: 'response aborted', ms: Date.now() - started }));
+          settle({ ok: s >= 200 && s < 300, status: s, error: s >= 200 && s < 300 ? null : `HTTP ${s}`, ms: Date.now() - started });
+        };
+        // A body over 64 KB is not read further; the status decides (this used to leave the delivery hanging).
+        res.on('data', (c: Buffer) => { n += c.length; if (n > 64 * 1024) { byStatus(); res.destroy(); } });
+        res.on('end', byStatus);
+        res.on('error', () => settle({ ok: false, status: res.statusCode ?? null, error: cut ?? 'response aborted', ms: Date.now() - started }));
+        res.on('close', () => settle({ ok: false, status: res.statusCode ?? null, error: cut ?? 'response aborted', ms: Date.now() - started }));
       },
     );
+    let cut: string | null = null;
+    const deadline = setTimeout(() => {
+      cut = `no complete answer within ${deadlineMs / 1000}s`;
+      req.destroy(new Error(cut));
+    }, deadlineMs);
     req.on('timeout', () => req.destroy(new Error(`timed out after ${TIMEOUT_MS / 1000}s`)));
-    req.on('error', (e) => resolve({ ok: false, status: null, error: e.message.slice(0, 300), ms: Date.now() - started }));
+    req.on('error', (e) => settle({ ok: false, status: null, error: (cut ?? e.message).slice(0, 300), ms: Date.now() - started }));
     req.end(body);
   });
 }
@@ -154,7 +176,12 @@ export async function deliverDue(limit = 50): Promise<number> {
       RETURNING d.id, d.endpoint_id, d.org_id, d.event_id, d.event_type, d.payload, d.attempts, d.created_at, w.url, w.secret`,
     [limit],
   );
-  await Promise.all(due.map((d) => attempt(d)));
+  // Every attempt is bounded by the delivery deadline, and settled on its own:
+  // a failing or slow receiver neither rejects nor holds up the others' bookkeeping.
+  const results = await Promise.allSettled(due.map((d) => attempt(d)));
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') logger.warn({ id: due[i]!.id, err: (r.reason as Error)?.message }, 'webhook attempt failed');
+  });
   return due.length;
 }
 

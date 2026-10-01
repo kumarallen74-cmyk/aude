@@ -7,9 +7,15 @@
  *     base        = session subtotal: energy + service + admin + idle fees,
  *                   EXCLUDING PBJT-TL and PPN (taxes collected for the state)
  *     tier        = by the SITE's gross transaction value for the month
- *                   Standard < Rp 150M → 8%, Volume Rp 150–500M → 6.5%,
- *                   Network > Rp 500M → 5%
- *                   'whole'    the whole month at the tier reached (default)
+ *                   Standard up to Rp 150M → 8%, Volume over 150M up to 500M → 6.5%,
+ *                   Network over Rp 500M → 5%
+ *                   A tier's upper bound belongs to it (≤): exactly Rp 500M is
+ *                   Volume, as the published band "Volume Rp 150–500M" reads, and
+ *                   exactly Rp 150M is Standard (the commission on it is Rp 12M
+ *                   either way, see 'whole' below).
+ *                   'whole'    the whole month at the tier reached (default), with
+ *                              no cliff: never less than the most the lower
+ *                              tiers charge (their upper bound at their rate)
  *                   'marginal' each band at its own rate, like tax brackets
  *     minimum     = per charger per month (AC Rp 150,000, DC Rp 350,000), credited against that
  *                   charger's commission: only a quiet charger pays the top-up
@@ -87,15 +93,42 @@ export function normalisePlan(raw: any): { plan: Plan } | { error: string } {
   };
 }
 
-/** The tier a month's gross transaction value falls in. Bounds are exclusive: "below Rp 150M". */
+/**
+ * The tier a month's gross transaction value falls in. A tier's upper bound is
+ * INCLUSIVE: "Volume Rp 150–500M" includes Rp 500,000,000, which used to fall
+ * into Network (5%) because the bound was exclusive.
+ */
 export function tierFor(plan: Plan, gtv: number): Tier {
-  return plan.tiers.find((t) => t.upToIdr === null || gtv < t.upToIdr) ?? plan.tiers[plan.tiers.length - 1]!;
+  return plan.tiers.find((t) => t.upToIdr === null || gtv <= t.upToIdr) ?? plan.tiers[plan.tiers.length - 1]!;
 }
 
-/** Commission on a site's month, before rounding to chargers. */
+/**
+ * Commission on a site's month, before rounding to chargers.
+ *
+ * 'whole' mode charges the whole month at the tier reached, and the rates fall
+ * as the tiers rise, so crossing a bound used to LOWER the commission: Rp 12.0M
+ * at Rp 150M (8%), then Rp 9.75M at Rp 150M + 1 (6.5%) — a site owner was paid
+ * to sell less, and the platform lost Rp 2.25M on the last rupiah. The no-cliff
+ * rule (as in marginal relief): the commission is never less than the most a
+ * lower tier charges, i.e. each lower tier's upper bound at that tier's rate.
+ * So from Rp 150M the commission stays at Rp 12.0M until 6.5% of the month
+ * passes it (about Rp 184.6M), and from Rp 500M it stays at Rp 32.5M until 5%
+ * passes it (Rp 650M). The commission never falls as the month grows.
+ *
+ * 'marginal' (each band at its own rate) has no cliff by construction; it is a
+ * plan setting, not the default, because it charges more than 'whole' on every
+ * month above Rp 150M (a different commercial offer, not a fix).
+ */
 export function commissionFor(plan: Plan, gtv: number): number {
   if (gtv <= 0) return 0;
-  if (plan.tierMode === 'whole') return (gtv * tierFor(plan, gtv).rateBps) / 10_000;
+  if (plan.tierMode === 'whole') {
+    let out = (gtv * tierFor(plan, gtv).rateBps) / 10_000;
+    for (const t of plan.tiers) {
+      if (t.upToIdr === null || t.upToIdr >= gtv) break;
+      out = Math.max(out, (t.upToIdr * t.rateBps) / 10_000);
+    }
+    return out;
+  }
   let rest = gtv, floor = 0, out = 0;
   for (const t of plan.tiers) {
     const band = t.upToIdr === null ? rest : Math.min(rest, t.upToIdr - floor);

@@ -1,7 +1,8 @@
 import { many, one, outsideRequestScope, query } from '../../db/pool.js';
 import { logger } from '../../logger.js';
 import { bus } from '../events.js';
-import { providerOfPayment } from './registry.js';
+import { extras, providerOfPayment } from './registry.js';
+import type pg from 'pg';
 import { unseal } from '../secrets.js';
 import { currentLink, endLink } from './cards.js';
 import type { Channel } from './provider.js';
@@ -10,6 +11,12 @@ import type { Channel } from './provider.js';
 export const LINK_ENDED = 'link ended:';
 /** hold_error of a card hold whose authorisation expired at the acquirer before it was captured. */
 export const HOLD_EXPIRED = 'hold expired:';
+/**
+ * hold_error of a post-pay charge whose outcome is unknown (no answer from the acquirer). It names the charge's reference,
+ * so the next attempt can look that charge up (or send the same reference again) instead of charging blind.
+ */
+export const OUTCOME_UNKNOWN = 'outcome unknown:';
+const UNKNOWN_RE = /^outcome unknown: the e-wallet charge (postpay:[0-9a-f-]{36}:\d+)/;
 /** What the console says when an expired hold is retried. */
 const EXPIRED_EXPLAINED = 'The card authorisation expired at the acquirer before it was captured, so it can no longer be captured. Nothing was taken from the card; collect the amount another way or write it off.';
 
@@ -286,14 +293,51 @@ async function chargePostpay(h: HoldRow, provider: Awaited<ReturnType<typeof pro
       .catch((e) => logger.warn({ intent: h.id, err: (e as Error).message }, 'could not cancel the unconfirmed e-wallet charge'));
     await query(`UPDATE payment_intent SET checkout_url = NULL WHERE id = $1`, [h.id]);
   }
+  // Each attempt is one charge with its own reference (postpay:<payment>:<attempt>); the acquirer's order id and
+  // idempotency key are derived from it and recorded BEFORE the acquirer is asked, so the settlement notification of a
+  // charge whose answer was lost (a timeout after GoPay settled) still finds this session, and is never 'unknown_payment'.
+  // An attempt whose outcome is unknown is not followed by a blind new charge: the acquirer is asked where that charge
+  // stands, where it can say (Midtrans); otherwise the same reference is sent again, which the acquirer's idempotency key
+  // answers with the first charge instead of making a second (Xendit).
+  const x = extras(provider);
+  let referenceId = `postpay:${h.id}:${h.hold_attempts}`;
+  const unknown = UNKNOWN_RE.exec(prev?.hold_error ?? '');
+  if (unknown && h.provider_ref) {
+    if (x.paymentStatus) {
+      let st;
+      try { st = await x.paymentStatus.call(provider, h.provider_ref); } catch (e) {
+        return { ok: false, error: `${OUTCOME_UNKNOWN} the e-wallet charge ${unknown[1]} could not be looked up yet (${(e as Error).message}); it is looked up again before any new charge` };
+      }
+      if (st?.status === 'captured') {
+        logger.warn({ intent: h.id, ref: h.provider_ref, amountIdr: st.amountIdr }, 'post-pay charge whose answer was lost had gone through; recorded, not charged again');
+        await query(`UPDATE payment_intent SET provider_payment_id = COALESCE($2, provider_payment_id), updated_at = now() WHERE id = $1`, [h.id, st.providerPaymentId ?? null]);
+        return { ok: true };
+      }
+      if (st?.status === 'pending') {
+        // Waiting for the driver's PIN, without its link (the answer was lost): looked up again in an hour, by then
+        // confirmed (its notification settles it) or lapsed (a new charge).
+        await query(
+          `UPDATE payment_intent SET hold_state = 'capturing', hold_error = $2, hold_next_attempt_at = now() + interval '60 minutes', updated_at = now() WHERE id = $1`,
+          [h.id, `${OUTCOME_UNKNOWN} the e-wallet charge ${unknown[1]} is waiting for the driver to confirm in ${channel}`],
+        );
+        return { ok: false, pending: true, error: 'waiting for the driver to confirm' };
+      }
+      // Failed, or the acquirer never received it: a new charge below.
+    } else {
+      referenceId = unknown[1]!;
+    }
+  }
+  const ref = x.orderRef?.call(provider, referenceId) ?? null;
+  if (ref) await query(`UPDATE payment_intent SET provider_ref = $2, updated_at = now() WHERE id = $1`, [h.id, ref]);
   let c;
   try {
     c = await provider.chargeWallet({
-      referenceId: `postpay:${h.id}:${h.hold_attempts}`, amountIdr: Number(h.hold_capture_idr), channel, token,
+      referenceId, amountIdr: Number(h.hold_capture_idr), channel, token,
       returnUrl: `${base}/app/paid.html?for=charge`, customerId: k.app_driver_id, description: 'PlugSure charging (post-pay)',
     });
   } catch (e) {
-    return { ok: false, error: (e as Error).message };
+    // No answer: the e-wallet may have been charged. Named so the next attempt looks it up first.
+    return { ok: false, error: `${OUTCOME_UNKNOWN} the e-wallet charge ${referenceId} got no answer (${(e as Error).message}); it is looked up before any new charge` };
   }
   await query(`UPDATE payment_intent SET provider_ref = $2, provider_payment_id = $3, checkout_url = $4, updated_at = now() WHERE id = $1`,
     [h.id, c.providerRef, c.providerPaymentId ?? null, c.checkoutUrl]);
@@ -314,17 +358,39 @@ async function chargePostpay(h: HoldRow, provider: Awaited<ReturnType<typeof pro
   return { ok: false, error: c.message ?? 'declined' };
 }
 
+/** The driver's post-pay payments: through the session (driver_charge) or the linked e-wallet (recorded before the session's charge row). */
+const DRIVER_POSTPAY = `pi.mode = 'postpay' AND (
+         EXISTS (SELECT 1 FROM driver_charge dc WHERE dc.payment_intent_id = pi.id AND dc.app_driver_id = $1)
+      OR EXISTS (SELECT 1 FROM driver_card k WHERE k.id = pi.driver_card_id AND k.app_driver_id = $1))`;
+
 /** A driver with a post-pay session still unpaid (charge failed, or waiting for them) may not start another. */
 export async function outstandingPostpay(appDriverId: string | null | undefined): Promise<boolean> {
   if (!appDriverId) return false;
   const r = await one<{ ok: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1 FROM payment_intent pi JOIN driver_charge dc ON dc.payment_intent_id = pi.id
-        WHERE dc.app_driver_id = $1 AND pi.mode = 'postpay' AND pi.hold_state IN ('capturing', 'capture_failed')
-     ) AS ok`,
+    `SELECT EXISTS (SELECT 1 FROM payment_intent pi WHERE ${DRIVER_POSTPAY} AND pi.hold_state IN ('capturing', 'capture_failed')) AS ok`,
     [appDriverId],
   );
   return r?.ok === true;
+}
+
+/**
+ * What the driver's post-pay sessions could still charge: unpaid (a charge failed or waits for them), and the spending
+ * limits of those not charged yet — held (claimable or running), or being decided right now (recorded, not yet held):
+ * in all (the operator's limit is per driver) and on this e-wallet (its balance pays only its own sessions).
+ * A new post-pay session must fit the limit and the e-wallet's balance together with these; the caller holds the
+ * driver's advisory lock while it decides (registry.startPayment), and passes its transaction's client.
+ */
+export async function postpayExposure(appDriverId: string, channel: string, c?: pg.PoolClient): Promise<{ unpaid: boolean; heldIdr: number; heldOnWalletIdr: number }> {
+  const sql = `SELECT COALESCE(bool_or(pi.hold_state IN ('capturing', 'capture_failed')), false) AS unpaid,
+                      COALESCE(sum(pi.amount_authorised_idr) FILTER (WHERE pi.hold_state = 'held' OR pi.hold_state IS NULL), 0)::bigint AS held,
+                      COALESCE(sum(pi.amount_authorised_idr) FILTER (WHERE (pi.hold_state = 'held' OR pi.hold_state IS NULL) AND pi.channel = $2), 0)::bigint AS held_here
+                 FROM payment_intent pi
+                WHERE ${DRIVER_POSTPAY}
+                  AND (pi.hold_state IN ('held', 'capturing', 'capture_failed')
+                       OR (pi.hold_state IS NULL AND pi.state = 'pending' AND pi.created_at > now() - interval '1 hour'))`;
+  type Row = { unpaid: boolean; held: number; held_here: number };
+  const r = c ? (await c.query<Row>(sql, [appDriverId, channel])).rows[0] : await one<Row>(sql, [appDriverId, channel]);
+  return { unpaid: r?.unpaid === true, heldIdr: Number(r?.held ?? 0), heldOnWalletIdr: Number(r?.held_here ?? 0) };
 }
 
 /** The driver pays an unpaid post-pay session now: a new charge (or the e-wallet's confirmation link). */

@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
+import { config, isRelaxedEnv } from '../config.js';
+import { bus } from '../services/events.js';
 import { unseal } from '../services/secrets.js';
 import { ocpiDateTime, STATUS, type Party } from './mapping.js';
 import { getParty, endpointUrl, partnerActsFor, type PartnerRow } from './store.js';
@@ -103,14 +105,18 @@ export async function setShared(orgId: string, tokenIds: string[] | 'all-active'
   return rows.length;
 }
 
-/** Energy and money a card has used, at our chargers and on roaming networks. */
+/**
+ * Energy and money a card has used, at our chargers and on roaming networks.
+ * Only accepted partner charge records count: one held for review (or rejected)
+ * cannot push a card over its limit, or the card could be blocked by any partner.
+ */
 export async function cardUsage(tokenId: string): Promise<{ wh: number; idr: number }> {
   const u = await one<{ wh: string; idr: string }>(
     `SELECT (COALESCE((SELECT sum(cs.energy_wh) FROM charging_session cs WHERE cs.token_id = $1), 0)
-           + COALESCE((SELECT sum(r.total_energy * 1000) FROM ocpi_remote_cdr r WHERE r.token_id = $1), 0))::bigint AS wh,
+           + COALESCE((SELECT sum(r.total_energy * 1000) FROM ocpi_remote_cdr r WHERE r.token_id = $1 AND r.status = 'accepted'), 0))::bigint AS wh,
             (COALESCE((SELECT sum(d.total_idr) FROM charging_session cs JOIN cdr d ON d.session_id = cs.id WHERE cs.token_id = $1), 0)
            + COALESCE((SELECT sum(COALESCE(r.total_incl_vat, r.total_excl_vat)) FROM ocpi_remote_cdr r
-                        WHERE r.token_id = $1 AND r.currency = 'IDR'), 0))::bigint AS idr`,
+                        WHERE r.token_id = $1 AND r.currency = 'IDR' AND r.status = 'accepted'), 0))::bigint AS idr`,
     [tokenId],
   );
   return { wh: Number(u?.wh ?? 0), idr: Number(u?.idr ?? 0) };
@@ -139,10 +145,18 @@ export async function authorizeForCpo(partner: PartnerRow, party: Party, uid: st
   else if (c.status !== 'Accepted') allowed = 'BLOCKED';
   else if (await overLimit(c)) allowed = 'NO_CREDIT';
   logger.info({ partner: partner.name, uid, allowed }, 'roaming card checked by a CPO');
+  // Remember the reference we gave: a charge record quoting it is one we approved.
+  const ref = allowed === 'ALLOWED' ? randomUUID().replace(/-/g, '').slice(0, 20) : null;
+  if (ref) {
+    await query(
+      `INSERT INTO ocpi_emsp_authorization (org_id, partner_id, token_id, authorization_reference) VALUES ($1,$2,$3,$4)`,
+      [partner.org_id, partner.id, c.id, ref],
+    );
+  }
   return {
     allowed,
     token,
-    ...(allowed === 'ALLOWED' ? { authorization_reference: randomUUID().replace(/-/g, '').slice(0, 20) } : {}),
+    ...(ref ? { authorization_reference: ref } : {}),
     ...(body?.location_id ? { location: body } : {}),
     ...(allowed !== 'ALLOWED' ? { info: { language: 'en', text: `Card ${allowed.toLowerCase().replace('_', ' ')}` } } : {}),
   };
@@ -154,8 +168,9 @@ export class EmspError extends Error {
   constructor(public http: number, public ocpi: number, message: string) { super(message); }
 }
 
+/** What a CPO publishes (locations, tariffs, sessions, CDRs) only comes from that CPO, or a hub relaying for it. */
 async function mustActFor(partner: PartnerRow, cc: string, pid: string) {
-  if (!(await partnerActsFor(partner, cc, pid))) throw new EmspError(403, STATUS.CLIENT_ERROR, `this connection may not publish for ${cc}*${pid}`);
+  if (!(await partnerActsFor(partner, cc, pid, 'CPO'))) throw new EmspError(403, STATUS.CLIENT_ERROR, `this connection may not publish for ${cc}*${pid}`);
 }
 
 function lastUpdatedOf(b: any): Date {
@@ -284,9 +299,73 @@ export async function getRemoteSession(partner: PartnerRow, cc: string, pid: str
 }
 
 /**
+ * Plausibility limits for a partner's charge record. A record beyond them is
+ * not refused (the CPO may be right) but HELD for an operator to look at before
+ * it reaches a fleet invoice or a card limit.
+ *
+ *   CDR_MAX_KWH            500 kWh: more than any car or bus battery takes in one
+ *                          session (the largest truck packs are around 500 kWh).
+ *   CDR_MAX_PRICE_PER_KWH  per currency, a ceiling on total cost per kWh charged
+ *                          (at least one kWh is assumed, so a session or parking
+ *                          fee on a near-empty charge fits): IDR 25,000/kWh is
+ *                          about five times the dearest public DC price in
+ *                          Indonesia (2026). Other currencies are never put on a
+ *                          fleet invoice or counted against a limit (both are
+ *                          IDR only), so only the energy limit applies to them.
+ */
+export const CDR_MAX_KWH = 500;
+export const CDR_MAX_PRICE_PER_KWH: Record<string, number> = { IDR: 25_000 };
+
+/** Why a charge record's totals look wrong (it is then held), or null. */
+export function cdrPlausibilityProblem(c: { currency: string; excl: number; incl: number | null; energyKwh: number; start: Date; end: Date }): string | null {
+  if (c.energyKwh > CDR_MAX_KWH) return `total_energy ${c.energyKwh} kWh is above the ${CDR_MAX_KWH} kWh plausibility limit`;
+  const cap = CDR_MAX_PRICE_PER_KWH[c.currency];
+  const total = c.incl ?? c.excl;
+  if (cap != null && total > cap * Math.max(c.energyKwh, 1)) {
+    return `total cost ${total} ${c.currency} for ${c.energyKwh} kWh is above ${cap} ${c.currency}/kWh`;
+  }
+  if (c.incl != null && c.incl < c.excl) return 'total_cost incl_vat is less than excl_vat';
+  if (c.end.getTime() - c.start.getTime() > 7 * 24 * 3600_000) return 'the session lasted more than 7 days';
+  return null;
+}
+
+/**
+ * Is this charge record about a charge we know this partner had with our card:
+ * a session it reported to us (same party, same card), or an approval we gave
+ * it (a real-time authorisation, or a command we sent with that reference)?
+ */
+async function cdrLinkProblem(partner: PartnerRow, cc: string, pid: string, tokenId: string, b: any): Promise<string | null> {
+  if (typeof b?.session_id === 'string' && b.session_id) {
+    const s = await one(
+      `SELECT 1 FROM ocpi_remote_session
+        WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND session_id = $4 AND token_id = $5`,
+      [partner.id, cc, pid, b.session_id, tokenId],
+    );
+    if (s) return null;
+  }
+  const ref = typeof b?.authorization_reference === 'string' && b.authorization_reference ? b.authorization_reference.slice(0, 36) : null;
+  if (ref) {
+    const a = await one(
+      `SELECT 1 FROM ocpi_emsp_authorization WHERE partner_id = $1 AND token_id = $2 AND authorization_reference = $3
+       UNION ALL
+       SELECT 1 FROM ocpi_command WHERE partner_id = $1 AND token_id = $2 AND request->>'authorization_reference' = $3
+       LIMIT 1`,
+      [partner.id, tokenId, ref],
+    );
+    if (a) return null;
+  }
+  return 'no session reported by this partner for this card, and no authorization of ours, matches the record';
+}
+
+/**
  * A CPO posts a charge record (OCPI CDRs receiver). Returns our id for the
  * Location header. A CDR cannot change once sent: the same CDR posted again is
  * acknowledged with the same id, a different one under the same id is refused.
+ *
+ * Totals that cannot be right (negative, not numbers) are refused. A record that
+ * is not linked to a session or approval of ours, or whose totals are beyond the
+ * plausibility limits, is stored but HELD: it stays off fleet invoices and card
+ * limits until an operator accepts it (Roaming → held charge records).
  */
 export async function receiveCdr(partner: PartnerRow, party: Party, b: any): Promise<string> {
   const cc = String(b?.country_code ?? '');
@@ -301,6 +380,12 @@ export async function receiveCdr(partner: PartnerRow, party: Party, b: any): Pro
   if (!Number.isFinite(excl) || !Number.isFinite(energy) || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || typeof b?.currency !== 'string') {
     throw new EmspError(400, STATUS.INVALID_PARAMS, 'a CDR needs start/end_date_time, currency, total_cost and total_energy');
   }
+  const inclRaw = b?.total_cost?.incl_vat;
+  const incl = inclRaw == null ? null : Number(inclRaw);
+  if (excl < 0 || energy < 0 || (incl != null && (!Number.isFinite(incl) || incl < 0))) {
+    throw new EmspError(400, STATUS.INVALID_PARAMS, 'total_cost and total_energy must be zero or more (send a credit CDR for a refund)');
+  }
+  if (end < start) throw new EmspError(400, STATUS.INVALID_PARAMS, 'end_date_time is before start_date_time');
   const tokenId = await ourCard(partner.org_id, party, b?.cdr_token);
   const existing = await one<{ id: string; data: any }>(
     `SELECT id, data FROM ocpi_remote_cdr WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND cdr_id = $4`,
@@ -312,24 +397,39 @@ export async function receiveCdr(partner: PartnerRow, party: Party, b: any): Pro
     }
     return existing.id;
   }
-  const incl = Number(b?.total_cost?.incl_vat);
+  const holdReason = cdrPlausibilityProblem({ currency: b.currency, excl, incl, energyKwh: energy, start, end })
+    ?? (await cdrLinkProblem(partner, cc, pid, tokenId, b));
   const row = await one<{ id: string }>(
     `INSERT INTO ocpi_remote_cdr (org_id, partner_id, country_code, party_id, cdr_id, session_id, token_id, data, currency,
-                                  total_excl_vat, total_incl_vat, total_energy, start_date_time, end_date_time)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+                                  total_excl_vat, total_incl_vat, total_energy, start_date_time, end_date_time, status, hold_reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [partner.org_id, partner.id, cc, pid, id, typeof b.session_id === 'string' ? b.session_id : null, tokenId, JSON.stringify(b),
-      b.currency, excl, Number.isFinite(incl) ? incl : null, energy, start, end],
+      b.currency, excl, incl, energy, start, end, holdReason ? 'held' : 'accepted', holdReason],
   );
+  if (holdReason) {
+    logger.warn({ partner: partner.name, cdr: id, excl, energy, reason: holdReason }, 'roaming CDR held for review');
+    bus.emit('alert.raised', {
+      orgId: partner.org_id,
+      kind: 'roaming.cdr_held',
+      severity: 'warning',
+      message: `A charge record from roaming partner ${partner.name} (${id}) is held for review: ${holdReason}. It is not billed until you accept it under Roaming.`,
+      targetType: 'ocpi_partner',
+      targetId: partner.id,
+    });
+    return row!.id;
+  }
   logger.info({ partner: partner.name, cdr: id, excl, energy }, 'roaming CDR received for one of our cards');
   // Tell the driver's phone(s) the receipt is ready. Never fails the CPO's request.
-  if (tokenId) {
-    const site = typeof b?.cdr_location?.name === 'string' ? b.cdr_location.name : partner.name;
-    const total = Number.isFinite(incl) ? incl : excl;
-    void import('../driver/notify.js')
-      .then((n) => n.notifyRoamingCdr(tokenId, row!.id, site, b.currency === 'IDR' ? Math.round(total) : null))
-      .catch((e) => logger.warn({ err: (e as Error).message }, 'roaming CDR push failed'));
-  }
+  notifyCdr(tokenId, row!.id, typeof b?.cdr_location?.name === 'string' ? b.cdr_location.name : partner.name, b.currency, incl ?? excl);
   return row!.id;
+}
+
+/** The driver's receipt push for an accepted charge record (also after an operator accepts a held one). */
+export function notifyCdr(tokenId: string | null, cdrId: string, site: string, currency: string, total: number): void {
+  if (!tokenId) return;
+  void import('../driver/notify.js')
+    .then((n) => n.notifyRoamingCdr(tokenId, cdrId, site, currency === 'IDR' ? Math.round(total) : null))
+    .catch((e) => logger.warn({ err: (e as Error).message }, 'roaming CDR push failed'));
 }
 
 export async function getRemoteCdr(partner: PartnerRow, ourId: string) {
@@ -344,6 +444,8 @@ export async function getRemoteCdr(partner: PartnerRow, ourId: string) {
 export async function importFromCpo(partner: PartnerRow): Promise<{ locations: number; tariffs: number }> {
   const party = await getParty(partner.org_id);
   if (!party || !partner.token_out || partner.state !== 'connected') return { locations: 0, tariffs: 0 };
+  // Only a charge point operator (or a hub relaying for them) has a network to import.
+  if (partner.kind !== 'cpo' && partner.kind !== 'hub') return { locations: 0, tariffs: 0 };
   const token = unseal(partner.token_out);
   const counts = { locations: 0, tariffs: 0 };
   for (const [module, kind] of [['locations', 'locations'], ['tariffs', 'tariffs']] as const) {
@@ -395,8 +497,12 @@ export async function sendCommand(o: {
   if (!party || !p || !p.token_out) throw new EmspError(409, STATUS.CLIENT_ERROR, 'the partner is not connected');
   const url = endpointUrl(p, 'commands', 'RECEIVER');
   if (!url) throw new EmspError(409, STATUS.CLIENT_ERROR, 'this partner does not accept commands');
+  // The CPO posts the outcome to this URL: it must be our configured public origin,
+  // never one derived from a request header (only development/test fall back to it).
+  const base = config.ocpi.publicUrl || (isRelaxedEnv() ? o.base : '');
+  if (!base) throw new EmspError(503, STATUS.SERVER_ERROR, 'roaming is not configured: set OCPI_PUBLIC_URL (or PUBLIC_BASE_URL) before sending commands to partners');
   const id = randomUUID();
-  const responseUrl = `${o.base}/ocpi/2.2.1/emsp/commands/${o.command}/${id}`;
+  const responseUrl = `${base}/ocpi/2.2.1/emsp/commands/${o.command}/${id}`;
   let body: Record<string, unknown>;
   if (o.command === 'START_SESSION' || o.command === 'RESERVE_NOW') {
     const c = await one<CardRow>(`SELECT ${CARD_COLS} FROM token WHERE id = $1 AND org_id = $2 AND kind = 'rfid'`, [o.tokenId, o.orgId]);

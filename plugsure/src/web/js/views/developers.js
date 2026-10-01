@@ -1,5 +1,5 @@
 import {
-  $, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, modal, confirmDialog, toast, copy,
+  $, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, modal, confirmDialog, html, toast, copy,
 } from '../core.js';
 
 /**
@@ -104,7 +104,7 @@ registerView('developers', {
       } else if (del) {
         const ok = await confirmDialog({
           title: 'Delete this sandbox?',
-          message: `<b>${esc(del.dataset.name)}</b>: its key stops working and its virtual chargers go offline. Its records stay in the audit trail.`,
+          message: html`<b>${del.dataset.name}</b>: its key stops working and its virtual chargers go offline. Its records stay in the audit trail.`,
           confirmLabel: 'Delete', danger: true, requireText: 'DELETE',
         });
         if (!ok) return;

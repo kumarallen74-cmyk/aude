@@ -2,7 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { one, outsideRequestScope, query, tx } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { seal, unseal } from '../services/secrets.js';
 import { resolve } from '../integrations/store.js';
@@ -75,7 +75,7 @@ export async function pkiMode(): Promise<'none' | 'mock' | 'http'> {
 export async function pkiProblem(): Promise<string | null> {
   const c = await pncConfig();
   if (c.mode === 'none') {
-    return config.env === 'production' && config.pnc.pki === 'mock'
+    return !isRelaxedEnv() && config.pnc.pki === 'mock'
       ? 'The test PKI is refused in production. Connect your PKI gateway under Govern → Integrations → Plug & Charge PKI.'
       : 'No V2G PKI is connected (Govern → Integrations → Plug & Charge PKI). Plug & Charge certificate requests are answered Failed.';
   }
@@ -186,7 +186,7 @@ export async function ocspFetch(h: CertificateHashData, responderURL: string): P
   const body = ocspRequest(h);
   const lib = u.protocol === 'https:' ? https : http;
   return new Promise<Buffer>((resolve, reject) => {
-    const req = lib.request(u, { method: 'POST', lookup: guardedLookup as any, headers: { 'content-type': 'application/ocsp-request', 'content-length': body.length, 'user-agent': 'PlugSure-PnC/1.3' } }, (res) => {
+    const req = lib.request(u, { method: 'POST', lookup: guardedLookup as any, headers: { 'content-type': 'application/ocsp-request', 'content-length': body.length, 'user-agent': 'PlugSure-PnC/1.4' } }, (res) => {
       if ((res.statusCode ?? 0) !== 200) { res.resume(); return reject(new PkiError(`the OCSP responder answered HTTP ${res.statusCode}`)); }
       const parts: Buffer[] = []; let n = 0;
       res.on('data', (c: Buffer) => { n += c.length; if (n > 65_536) { req.destroy(new PkiError('the OCSP response is too large')); return; } parts.push(c); });
@@ -242,7 +242,31 @@ export async function mockCa(): Promise<Record<CaName, Ca>> {
   const rows = await outsideRequestScope(() => tx(async (c) => {
     await c.query(`SELECT pg_advisory_xact_lock(15118)`);
     const have = (await c.query(`SELECT name, cert_pem, key_sealed FROM pnc_mock_ca`)).rows as Array<{ name: CaName; cert_pem: string; key_sealed: string }>;
-    if (have.length === 4) return have;
+    if (have.length === 4) {
+      /**
+       * Test PKIs created before v1.3.x issued their sub-CAs without an OCSP URL,
+       * which the contract check now refuses as "not verifiable". Re-issue those
+       * sub-CA certificates in place — same key, same subject, same issuer — so
+       * the roots already installed on chargers and every certificate issued
+       * under them stay valid.
+       */
+      const byName = Object.fromEntries(have.map((r) => [r.name, r])) as Record<CaName, { name: CaName; cert_pem: string; key_sealed: string }>;
+      for (const [sub, parent] of [['cpo_sub', 'v2g_root'], ['mo_sub', 'mo_root']] as Array<[CaName, CaName]>) {
+        const der = pemToDer(byName[sub].cert_pem);
+        const info = certInfo(der);
+        if (info.ocspUrl) continue;
+        const parentDer = pemToDer(byName[parent].cert_pem);
+        const reissued = buildCertificate({
+          serial: randomBytes(8), issuer: certSubjectDer(parentDer), subject: certSubjectDer(der), spki: info.spkiDer, issuerSpki: certInfo(parentDer).spkiDer,
+          notBefore: info.notBefore, notAfter: info.notAfter, ca: { pathLen: 0 }, signKey: createPrivateKey(unseal(byName[parent].key_sealed)),
+          ocspUrl: config.pnc.mockOcspUrl,
+        });
+        byName[sub].cert_pem = derToPem(reissued);
+        await c.query(`UPDATE pnc_mock_ca SET cert_pem = $2 WHERE name = $1`, [sub, byName[sub].cert_pem]);
+        logger.warn({ ca: sub }, 'Plug & Charge test PKI: re-issued a sub-CA certificate with its OCSP URL');
+      }
+      return Object.values(byName);
+    }
     const made: Record<string, { pem: string; key: KeyObject; subject: Buffer; spki: Buffer }> = {};
     const mk = (id: CaName, cn: string, parent: CaName | null, years: number) => {
       const k = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -253,6 +277,8 @@ export async function mockCa(): Promise<Record<CaName, Ca>> {
         serial: randomBytes(8), issuer: p ? p.subject : subject, subject, spki, issuerSpki: p?.spki,
         notBefore: new Date(Date.now() - 3600_000), notAfter: new Date(Date.now() + years * YEAR),
         ca: { pathLen: parent ? 0 : 1 }, signKey: p ? p.key : k.privateKey,
+        // A sub-CA names its responder too: a certificate without one cannot be revocation-checked.
+        ...(parent ? { ocspUrl: config.pnc.mockOcspUrl } : {}),
       });
       made[id] = { pem: derToPem(der), key: k.privateKey, subject, spki };
     };
@@ -284,20 +310,26 @@ async function mockSign(csrPem: string): Promise<string> {
   return derToPem(der) + ca.cpo_sub.pem;
 }
 
-/** The test PKI's OCSP responder: contract certificates it issued, and charger certificates. */
+/**
+ * The test PKI's OCSP responder: contract certificates it issued, and charger
+ * certificates. Answers are signed by the issuing CA and carry its certificate,
+ * as many real responders do, so a CSMS that knows only the MO root can still
+ * verify an answer about a contract certificate from hash data alone.
+ */
 async function mockOcsp(h: CertificateHashData): Promise<Buffer> {
   const ca = await mockCa();
   const keyHash = (c: Ca) => createHash(h.hashAlgorithm === 'SHA384' ? 'sha384' : h.hashAlgorithm === 'SHA512' ? 'sha512' : 'sha256').update(publicKeyBits(c.spki)).digest('hex');
   const issuer = (['mo_sub', 'cpo_sub', 'mo_root', 'v2g_root'] as CaName[]).find((n) => keyHash(ca[n]) === h.issuerKeyHash.toLowerCase());
   if (!issuer) return ocspResponse(h, 'unknown', { key: ca.mo_sub.key, spkiDer: ca.mo_sub.spki });
   const signer = { key: ca[issuer].key, spkiDer: ca[issuer].spki };
+  const opts = { certs: [ca[issuer].der] };
   if (issuer === 'mo_sub') {
     const c = await one<{ revoked_at: Date | null }>(`SELECT revoked_at FROM pnc_mock_contract WHERE upper(ltrim(serial, '0')) = upper(ltrim($1, '0'))`, [h.serialNumber]);
-    if (!c) return ocspResponse(h, 'unknown', signer);
-    return c.revoked_at ? ocspResponse(h, 'revoked', signer, new Date(), new Date(c.revoked_at)) : ocspResponse(h, 'good', signer);
+    if (!c) return ocspResponse(h, 'unknown', signer, new Date(), undefined, opts);
+    return c.revoked_at ? ocspResponse(h, 'revoked', signer, new Date(), new Date(c.revoked_at), opts) : ocspResponse(h, 'good', signer, new Date(), undefined, opts);
   }
   // Sub-CAs and charger certificates the test PKI issued are in good standing.
-  return ocspResponse(h, 'good', signer);
+  return ocspResponse(h, 'good', signer, new Date(), undefined, opts);
 }
 
 export interface TestContract {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { one, query } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { hashPassword, verifyPassword } from '../services/users.js';
 import { normaliseUid } from '../services/tokens.js';
@@ -107,7 +107,99 @@ export async function authenticateDriver(headers: Record<string, unknown>): Prom
 
 const OTP_TTL_MS = 5 * 60_000;
 const OTP_MAX_ATTEMPTS = 5;
-const OTP_RESEND_WINDOW_MS = 60_000;
+const OTP_RESEND_WINDOW_S = 60;
+const HOUR_S = 3600;
+const DAY_S = 24 * HOUR_S;
+
+const envInt = (name: string, def: number): number => {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : def;
+};
+
+/**
+ * Limits on the unauthenticated sign-in steps. Read on every call (not at import)
+ * so an operator can change them with a restart and tests can set them.
+ *
+ * Sending a code costs money (SMS / WhatsApp) and anyone can ask for one: a
+ * device token is free, so per-device alone stops nothing, and before v1.3.1
+ * the only brake was one code per minute per number — recorded AFTER the send,
+ * so a parallel burst for one number all passed, and a failed send was never
+ * throttled. "SMS pumping" (premium-rate numbers, or simply someone else's
+ * bill) needs a per-address, per-number and an installation-wide cap.
+ *
+ *   DRIVER_OTP_PER_PHONE_PER_DAY        codes to one number per 24 h        (10)
+ *   DRIVER_OTP_PER_IP_PER_HOUR          codes requested from one IP per hour (10; 1000 in development/test)
+ *   DRIVER_OTP_PER_DEVICE_PER_HOUR      codes requested by one app install   (5;  1000 in development/test)
+ *   DRIVER_OTP_GLOBAL_PER_DAY           codes sent by the installation       (5000; 100000 in development/test)
+ *   DRIVER_OTP_VERIFY_FAILURES_PER_DAY  wrong codes for one number per 24 h, across codes (10)
+ *   DRIVER_PIN_FAILURES_PER_IP_PER_HOUR wrong fleet sign-ins from one IP per hour (20; 1000 in development/test)
+ *
+ * Plus one code per number per minute (fixed). The development/test defaults are
+ * higher because every e2e suite signs drivers in from 127.0.0.1. An IP is
+ * `req.ip`, which honours X-Forwarded-For only from API_TRUSTED_PROXIES. Mobile
+ * carriers put many phones behind one address (CGNAT): raise the per-IP limits
+ * if real drivers hit them.
+ */
+export function authLimits() {
+  const relaxed = isRelaxedEnv();
+  return {
+    otpPerPhonePerDay: envInt('DRIVER_OTP_PER_PHONE_PER_DAY', 10),
+    otpPerIpPerHour: envInt('DRIVER_OTP_PER_IP_PER_HOUR', relaxed ? 1000 : 10),
+    otpPerDevicePerHour: envInt('DRIVER_OTP_PER_DEVICE_PER_HOUR', relaxed ? 1000 : 5),
+    otpGlobalPerDay: envInt('DRIVER_OTP_GLOBAL_PER_DAY', relaxed ? 100_000 : 5000),
+    otpVerifyFailuresPerDay: envInt('DRIVER_OTP_VERIFY_FAILURES_PER_DAY', 10),
+    pinFailuresPerIpPerHour: envInt('DRIVER_PIN_FAILURES_PER_IP_PER_HOUR', relaxed ? 1000 : 20),
+    // A fleet PIN can be 4 digits. The card lock alone (5 tries, 15 min) still allows
+    // ~480 guesses a day — the whole space in three weeks. A daily budget per CARD,
+    // across addresses, makes that 15 a day: about 18 months for 10,000 PINs.
+    pinAttemptsPerCardPerDay: envInt('DRIVER_PIN_ATTEMPTS_PER_CARD_PER_DAY', 15),
+  };
+}
+
+/**
+ * Take one slot of a fixed-window counter (driver_auth_limit, migration 046), or
+ * report that there is none left. ONE statement: the row lock taken by the upsert
+ * serialises a parallel burst, and each request re-checks the limit against the
+ * committed count, so N concurrent requests cannot all see "under the limit".
+ * `minGapS`: also refuse while the previous slot is younger than this. (0 skips the
+ * test outright: now() is each statement's transaction start, so a concurrent
+ * claim's last_at can be a hair "in the future".)
+ */
+async function claimLimit(key: string, max: number, windowS: number, minGapS = 0): Promise<boolean> {
+  const row = await one<{ hits: number }>(
+    `INSERT INTO driver_auth_limit AS l (key, window_start, hits, last_at) VALUES ($1, now(), 1, now())
+     ON CONFLICT (key) DO UPDATE SET
+       hits = CASE WHEN l.window_start <= now() - make_interval(secs => $3::int) THEN 1 ELSE l.hits + 1 END,
+       window_start = CASE WHEN l.window_start <= now() - make_interval(secs => $3::int) THEN now() ELSE l.window_start END,
+       last_at = now()
+     WHERE (l.window_start <= now() - make_interval(secs => $3::int) OR l.hits < $2::int)
+       AND ($4::int = 0 OR l.last_at <= now() - make_interval(secs => $4::int))
+     RETURNING hits`,
+    [key, max, windowS, minGapS],
+  );
+  return !!row;
+}
+
+/** Give back a slot taken by claimLimit (the attempt turned out not to be a failure). */
+async function refundLimit(key: string): Promise<void> {
+  await query(`UPDATE driver_auth_limit SET hits = GREATEST(hits - 1, 0) WHERE key = $1`, [key]);
+}
+
+/** Is the counter full right now? A read, for refusing early without taking a slot. */
+async function limitState(key: string, max: number, windowS: number, minGapS = 0): Promise<'ok' | 'gap' | 'full'> {
+  const r = await one<{ full: boolean; gap: boolean }>(
+    `SELECT (window_start > now() - make_interval(secs => $3::int) AND hits >= $2::int) AS full,
+            ($4::int > 0 AND last_at > now() - make_interval(secs => $4::int)) AS gap
+       FROM driver_auth_limit WHERE key = $1`,
+    [key, max, windowS, minGapS],
+  );
+  return !r ? 'ok' : r.full ? 'full' : r.gap ? 'gap' : 'ok';
+}
+
+const MSG_WAIT = 'Tunggu sebentar sebelum meminta kode baru.';
+const MSG_PHONE_DAY = 'Batas pengiriman kode untuk nomor ini hari ini sudah tercapai. Coba lagi besok.';
+const MSG_BUSY = 'Terlalu banyak permintaan kode. Coba lagi nanti.';
+const MSG_VERIFY_DAY = 'Terlalu banyak kode salah untuk nomor ini. Coba lagi besok.';
 
 /** Normalise an Indonesian phone number to E.164 (+62…). */
 export function normalisePhone(raw: string): string | null {
@@ -129,18 +221,52 @@ export function normalisePhone(raw: string): string | null {
  * Send an OTP. Returns the code ONLY in development, so the flow is testable
  * without an SMS provider wired up. In production the code is sent by SMS and
  * never returned to the caller.
+ *
+ * Every limit is claimed BEFORE the provider is called (see authLimits), so a
+ * burst cannot slip past, and a send that fails still counts (a failing
+ * provider is retried by the driver a minute later, not hammered).
+ * `limited` marks a refusal for a limit (HTTP 429).
  */
-export async function sendOtp(phoneRaw: string, appName?: string): Promise<{ ok: true; devCode?: string } | { ok: false; error: string }> {
+export async function sendOtp(
+  phoneRaw: string,
+  appName?: string,
+  from: { ip?: string; deviceId?: string } = {},
+): Promise<{ ok: true; devCode?: string } | { ok: false; error: string; limited?: true }> {
   const phone = normalisePhone(phoneRaw);
   if (!phone) return { ok: false, error: 'Nomor telepon tidak valid.' };
+  const lim = authLimits();
+  const phoneKey = `otp-phone:${phone}`;
 
-  // Throttle resends per phone.
-  const recent = await one<{ created_at: Date }>(
-    `SELECT created_at FROM driver_otp WHERE phone = $1 ORDER BY created_at DESC LIMIT 1`,
-    [phone],
-  );
-  if (recent && Date.now() - new Date(recent.created_at).getTime() < OTP_RESEND_WINDOW_MS) {
-    return { ok: false, error: 'Tunggu sebentar sebelum meminta kode baru.' };
+  // Old counters go eventually; no window is longer than a day.
+  if (Math.random() < 0.02) {
+    query(`DELETE FROM driver_auth_limit WHERE last_at < now() - interval '2 days'`).catch(() => {});
+  }
+
+  // Refuse early, WITHOUT taking a slot, when this number cannot get a code anyway:
+  // a driver tapping "send" again inside the minute must not use up the address's
+  // budget, and someone hammering a victim's number must not keep its minute busy.
+  if ((await limitState(`otp-verify:${phone}`, lim.otpVerifyFailuresPerDay, DAY_S)) === 'full') {
+    return { ok: false, error: MSG_VERIFY_DAY, limited: true };
+  }
+  const pre = await limitState(phoneKey, lim.otpPerPhonePerDay, DAY_S, OTP_RESEND_WINDOW_S);
+  if (pre === 'gap') return { ok: false, error: MSG_WAIT, limited: true };
+  if (pre === 'full') return { ok: false, error: MSG_PHONE_DAY, limited: true };
+
+  // The requester's budgets, then the installation's, then the number's (authoritative:
+  // its claim is what serialises two concurrent sends to one number).
+  if (from.ip && !(await claimLimit(`otp-ip:${from.ip}`, lim.otpPerIpPerHour, HOUR_S))) {
+    logger.warn({ ip: from.ip }, 'driver OTP refused: per-address limit');
+    return { ok: false, error: MSG_BUSY, limited: true };
+  }
+  if (from.deviceId && !(await claimLimit(`otp-device:${from.deviceId}`, lim.otpPerDevicePerHour, HOUR_S))) {
+    return { ok: false, error: MSG_BUSY, limited: true };
+  }
+  if (!(await claimLimit('otp-global', lim.otpGlobalPerDay, DAY_S))) {
+    logger.error({ limit: lim.otpGlobalPerDay }, 'driver OTP refused: installation-wide daily limit reached (DRIVER_OTP_GLOBAL_PER_DAY)');
+    return { ok: false, error: MSG_BUSY, limited: true };
+  }
+  if (!(await claimLimit(phoneKey, lim.otpPerPhonePerDay, DAY_S, OTP_RESEND_WINDOW_S))) {
+    return { ok: false, error: MSG_WAIT, limited: true };
   }
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -158,39 +284,73 @@ export async function sendOtp(phoneRaw: string, appName?: string): Promise<{ ok:
     [phone, sha256(code), OTP_TTL_MS],
   );
   logger.info({ phone: maskPhone(phone), channel: sent.channel }, 'driver OTP issued');
-  if (sent.devCode && config.env !== 'production') return { ok: true, devCode: sent.devCode };
+  if (sent.devCode && isRelaxedEnv()) return { ok: true, devCode: sent.devCode };
   return { ok: true };
 }
 
 /**
  * Verify an OTP and link the device to the (created or existing) account.
  * Consumes the code, counts wrong guesses, and fails closed.
+ *
+ * The guess is COUNTED before it is compared, in one statement. It used to be
+ * read (attempts < 5), compared, and only then incremented: a parallel burst all
+ * read the same count, so hundreds of guesses were compared against one code.
+ * And each new code started at zero, so ~7,200 guesses a day per number were
+ * possible even without the race. Now a code allows exactly five comparisons, the
+ * number allows DRIVER_OTP_VERIFY_FAILURES_PER_DAY wrong codes across all codes
+ * (after which neither verifying nor sending works until the window passes), and
+ * a code signs in once: the consume is conditional too.
  */
 export async function verifyOtp(
   deviceId: string,
   phoneRaw: string,
   code: string,
-): Promise<{ ok: true; account: { id: string; phone: string; name: string | null } } | { ok: false; error: string }> {
+): Promise<{ ok: true; account: { id: string; phone: string; name: string | null } } | { ok: false; error: string; limited?: true }> {
   const phone = normalisePhone(phoneRaw);
   if (!phone) return { ok: false, error: 'Nomor telepon tidak valid.' };
+  const lim = authLimits();
+  const verifyKey = `otp-verify:${phone}`;
 
-  const otp = await one<{ id: string; code_hash: string; attempts: number }>(
-    `SELECT id, code_hash, attempts FROM driver_otp
-      WHERE phone = $1 AND consumed_at IS NULL AND expires_at > now()
-      ORDER BY created_at DESC LIMIT 1`,
-    [phone],
+  if ((await limitState(verifyKey, lim.otpVerifyFailuresPerDay, DAY_S)) === 'full') {
+    return { ok: false, error: MSG_VERIFY_DAY, limited: true };
+  }
+
+  // Claim one of the newest live code's attempts.
+  const otp = await one<{ id: string; code_hash: string }>(
+    `UPDATE driver_otp SET attempts = attempts + 1
+      WHERE id = (SELECT id FROM driver_otp
+                   WHERE phone = $1 AND consumed_at IS NULL AND expires_at > now()
+                   ORDER BY created_at DESC LIMIT 1)
+        AND attempts < $2 AND consumed_at IS NULL AND expires_at > now()
+      RETURNING id, code_hash`,
+    [phone, OTP_MAX_ATTEMPTS],
   );
-  if (!otp) return { ok: false, error: 'Kode sudah tidak berlaku. Minta kode baru.' };
-  if (otp.attempts >= OTP_MAX_ATTEMPTS) {
-    return { ok: false, error: 'Terlalu banyak percobaan. Minta kode baru.' };
+  if (!otp) {
+    const live = await one<{ attempts: number }>(
+      `SELECT attempts FROM driver_otp WHERE phone = $1 AND consumed_at IS NULL AND expires_at > now()
+        ORDER BY created_at DESC LIMIT 1`,
+      [phone],
+    );
+    return live
+      ? { ok: false, error: 'Terlalu banyak percobaan. Minta kode baru.' }
+      : { ok: false, error: 'Kode sudah tidak berlaku. Minta kode baru.' };
+  }
+  // And one of the number's daily failures; given back if the code is right.
+  if (!(await claimLimit(verifyKey, lim.otpVerifyFailuresPerDay, DAY_S))) {
+    return { ok: false, error: MSG_VERIFY_DAY, limited: true };
   }
 
   if (!safeEqualHex(otp.code_hash, sha256(String(code).trim()))) {
-    await query(`UPDATE driver_otp SET attempts = attempts + 1 WHERE id = $1`, [otp.id]);
     return { ok: false, error: 'Kode salah. Coba lagi.' };
   }
+  await refundLimit(verifyKey);
 
-  await query(`UPDATE driver_otp SET consumed_at = now() WHERE id = $1`, [otp.id]);
+  // One code, one sign-in: of two concurrent right answers only one consumes it.
+  const consumed = await one<{ id: string }>(
+    `UPDATE driver_otp SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL RETURNING id`,
+    [otp.id],
+  );
+  if (!consumed) return { ok: false, error: 'Kode sudah tidak berlaku. Minta kode baru.' };
 
   const account = await one<{ id: string; phone: string; name: string | null }>(
     `INSERT INTO app_driver (phone) VALUES ($1)
@@ -216,13 +376,25 @@ export async function setDriverName(appDriverId: string, name: string): Promise<
  *
  * Knowing an RFID uid must not be enough to bill someone's fleet, so a PIN gates
  * it. The org is named by slug so a fleet driver does not need to know a UUID.
+ *
+ * `ip`: the client address, for the per-address limit on failed sign-ins
+ * (DRIVER_PIN_FAILURES_PER_IP_PER_HOUR) — the per-card lock alone lets one
+ * client try five PINs on every card it can name.
  */
 export async function fleetLogin(
   deviceId: string,
   orgSlug: string,
   rfidUid: string,
   pin: string,
-): Promise<{ ok: true; fleet: { tokenId: string; orgId: string; uid: string; orgName: string } } | { ok: false; error: string }> {
+  ip?: string,
+): Promise<{ ok: true; fleet: { tokenId: string; orgId: string; uid: string; orgName: string } } | { ok: false; error: string; limited?: true }> {
+  // Every attempt takes a slot of the address's budget first; a successful one gives it back.
+  const ipKey = ip ? `pin-ip:${ip}` : null;
+  if (ipKey && !(await claimLimit(ipKey, authLimits().pinFailuresPerIpPerHour, HOUR_S))) {
+    logger.warn({ ip }, 'fleet sign-in refused: per-address limit');
+    return { ok: false, error: 'Terlalu banyak percobaan masuk. Coba lagi nanti.', limited: true };
+  }
+
   const org = await one<{ id: string; name: string }>(
     `SELECT id, name FROM organisation WHERE slug = $1`,
     [String(orgSlug).trim().toLowerCase()],
@@ -238,10 +410,8 @@ export async function fleetLogin(
     pin_hash: string | null;
     status: string;
     valid_to: Date | null;
-    pin_failures: number;
-    pin_locked_until: Date | null;
   }>(
-    `SELECT id, uid, pin_hash, status, valid_to, pin_failures, pin_locked_until FROM token
+    `SELECT id, uid, pin_hash, status, valid_to FROM token
       WHERE org_id = $1 AND uid IN ($2, $3) AND kind = 'rfid'
       ORDER BY (uid = $2) DESC LIMIT 1`,
     [org.id, normaliseUid(typed), typed],
@@ -252,19 +422,40 @@ export async function fleetLogin(
     return { ok: false, error: 'Kartu ini sudah kedaluwarsa. Hubungi admin armada Anda.' };
   }
   if (!tok.pin_hash) return { ok: false, error: 'Kartu ini belum diaktifkan untuk aplikasi. Hubungi admin armada Anda.' };
-  if (tok.pin_locked_until && new Date(tok.pin_locked_until) > new Date()) {
+
+  /**
+   * The attempt is COUNTED before the PIN is checked, in one statement — the
+   * pattern of the operator login (services/users.ts login()).
+   *
+   * The counter used to be read with the card, the lock checked, the (slow,
+   * deliberately) scrypt run, and `read + 1` written back as an absolute value:
+   * a parallel burst all passed the lock check and together recorded one
+   * failure, so any number of PINs could be tried at once. Now each attempt
+   * atomically takes a slot; the one that reaches the limit sets the lock (and
+   * restarts the count for after it), and every later one finds the card locked
+   * and is refused whatever the PIN. A right PIN clears the counter below.
+   */
+  const cardKey = `pin-card:${tok.id}`;
+  if (!(await claimLimit(cardKey, authLimits().pinAttemptsPerCardPerDay, DAY_S))) {
+    logger.warn({ tokenId: tok.id }, 'fleet sign-in refused: daily attempt budget for this card used up');
+    return { ok: false, error: 'Terlalu banyak percobaan untuk kartu ini hari ini. Coba lagi besok atau hubungi admin armada Anda.', limited: true };
+  }
+
+  const claimed = await one<{ locked_now: boolean }>(
+    `UPDATE token
+        SET pin_failures = CASE WHEN pin_failures + 1 >= $2::int THEN 0 ELSE pin_failures + 1 END,
+            pin_locked_until = CASE WHEN pin_failures + 1 >= $2::int THEN now() + make_interval(mins => $3::int) ELSE pin_locked_until END
+      WHERE id = $1 AND (pin_locked_until IS NULL OR pin_locked_until <= now())
+      RETURNING (pin_locked_until IS NOT NULL AND pin_locked_until > now()) AS locked_now`,
+    [tok.id, FLEET_PIN_MAX_FAILURES, FLEET_PIN_LOCK_MINUTES],
+  );
+  if (!claimed) {
+    await refundLimit(cardKey); // refused by the lock without a guess being tried
     return { ok: false, error: 'Terlalu banyak PIN salah. Coba lagi nanti atau hubungi admin armada Anda.' };
   }
 
   if (!(await pinMatches(String(pin).trim(), tok.pin_hash))) {
-    const failures = Number(tok.pin_failures ?? 0) + 1;
-    await query(
-      `UPDATE token SET pin_failures = $2::int,
-              pin_locked_until = CASE WHEN $2::int >= $3::int THEN now() + make_interval(mins => $4::int) ELSE pin_locked_until END
-        WHERE id = $1`,
-      [tok.id, failures, FLEET_PIN_MAX_FAILURES, FLEET_PIN_LOCK_MINUTES],
-    );
-    if (failures >= FLEET_PIN_MAX_FAILURES) {
+    if (claimed.locked_now) {
       logger.warn({ tokenId: tok.id }, 'fleet PIN locked after repeated failures');
       return { ok: false, error: 'Terlalu banyak PIN salah. Coba lagi nanti atau hubungi admin armada Anda.' };
     }
@@ -277,6 +468,8 @@ export async function fleetLogin(
     `UPDATE token SET pin_failures = 0, pin_locked_until = NULL, pin_hash = COALESCE($2, pin_hash) WHERE id = $1`,
     [tok.id, upgraded],
   );
+  if (ipKey) await refundLimit(ipKey);
+  await refundLimit(cardKey);
   await query(`UPDATE driver_device SET fleet_token_id = $2 WHERE id = $1`, [deviceId, tok.id]);
   return { ok: true, fleet: { tokenId: tok.id, orgId: org.id, uid: tok.uid, orgName: org.name } };
 }

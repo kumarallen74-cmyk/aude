@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type pg from 'pg';
-import { query, tx } from '../db/pool.js';
+import { query, tx, onScopeRollback, type ScopeRollbackReason } from '../db/pool.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -341,13 +341,48 @@ export async function writeAuditIn(c: AuditClient, e: AuditEntry): Promise<void>
 }
 
 /**
- * Append an entry in its own transaction.
+ * Append an entry in its own transaction — or, inside an API request, in the
+ * request's transaction, which `tx` joins.
  *
  * Convenience wrapper for callers with nothing to join. If the audited action
  * touches the database, prefer `writeAuditIn` inside that action's transaction.
+ *
+ * SURVIVES A FAILED REQUEST. Joining the request transaction meant the entry
+ * shared its fate: the API rolls a request back whenever the reply is >= 400,
+ * so exactly the entries that record a failure (`refund.failed`,
+ * `card_hold.retry_failed`, anything written before a later step refused) were
+ * erased with it — the audit log only ever showed what went right. Now, when
+ * the entry is written inside a request-bound transaction, a hook is left
+ * behind: if that transaction does not commit, the entry is appended AGAIN,
+ * after the rollback, in its own transaction on a fresh connection. That append
+ * goes through `writeAuditIn` like any other — the same per-chain advisory
+ * lock and `audit_head` row lock — and the rolled-back row and head update
+ * never existed, so the chain stays gapless.
+ *
+ * The re-written entry is marked, in after_state, with
+ * `requestTransaction: 'rolled_back' | 'commit_failed'`: whatever it describes
+ * did NOT take effect, and an auditor must be able to tell that from an entry
+ * whose action committed.
+ *
+ * `writeAuditIn` is deliberately NOT covered: its contract is to commit or roll
+ * back WITH the action in the caller's transaction.
  */
 export async function writeAudit(e: AuditEntry): Promise<void> {
-  await tx((c) => writeAuditIn(c, e));
+  try {
+    await tx((c) => writeAuditIn(c, e));
+  } catch (err) {
+    // The request transaction has already failed (25P02: a handler caught a
+    // failed query and is now recording the failure). It can only roll back,
+    // so write the entry when it does instead of losing it.
+    if ((err as { code?: string }).code === '25P02' && onScopeRollback((why) => writeAudit(markRolledBack(e, why)))) return;
+    throw err;
+  }
+  onScopeRollback((why) => writeAudit(markRolledBack(e, why)));
+}
+
+/** The entry as re-appended after its request transaction failed to commit. */
+function markRolledBack(e: AuditEntry, why: ScopeRollbackReason): AuditEntry {
+  return { ...e, after: { ...(e.after ?? {}), requestTransaction: why } };
 }
 
 // ──────────────────────────────────────────────────────────────── verification

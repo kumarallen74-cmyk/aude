@@ -142,7 +142,8 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     const q = (req.query ?? {}) as Record<string, string>;
     const ids = q.ids ? String(q.ids).split(',').map((s) => s.trim()).filter(Boolean) : undefined;
     return run(reply, async () => {
-      const r = await fb.efakturExport(org(req), period, ids);
+      // Invoices already exported are skipped unless named in ids or reexport=true (a re-import makes duplicate drafts in Coretax).
+      const r = await fb.efakturExport(org(req), period, ids, { reexport: q.reexport === 'true' || q.reexport === '1' });
       await audit(req, 'fleet_invoice.efaktur_exported', 'fleet_billing', period, { invoices: r.included, skipped: r.skipped });
       reply.header('Content-Type', 'application/xml; charset=utf-8');
       reply.header('Content-Disposition', `attachment; filename="efaktur-${safeName(period)}.xml"`);

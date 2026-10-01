@@ -2,7 +2,7 @@ import { appNameFor } from '../services/brand.js';
 import { randomBytes } from 'node:crypto';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
+import { config, isRelaxedEnv } from '../config.js';
 import * as registry from '../ocpp/registry.js';
 import { reserveNow, cancelReservation } from '../ocpp/commands.js';
 import { bus } from '../services/events.js';
@@ -378,7 +378,7 @@ export async function checkoutStatus(p: DriverPrincipal, id: string) {
 
 /** Development / mock provider only: act as if the driver paid the fee. */
 export async function confirmCheckoutPayment(p: DriverPrincipal, id: string): Promise<{ ok: boolean; error?: string }> {
-  if (config.env === 'production') return { ok: false, error: 'Not available in production.' };
+  if (!isRelaxedEnv()) return { ok: false, error: 'Not available in production.' };
   const co = await one<{ payment_intent_id: string }>(`SELECT payment_intent_id FROM reservation_checkout WHERE id = $1 AND device_id = $2`, [id, p.deviceId]);
   if (!co) return { ok: false, error: 'Transaksi tidak ditemukan.' };
   const pi = await one<{ provider: string }>(`SELECT provider FROM payment_intent WHERE id = $1`, [co.payment_intent_id]);

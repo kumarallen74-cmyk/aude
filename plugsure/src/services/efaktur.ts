@@ -24,11 +24,32 @@ export interface EfakturSettings {
 }
 
 export interface EfakturInvoice {
+  /** The commercial invoice number: the faktur's reference (RefDesc). */
   number: string;
-  date: string; // YYYY-MM-DD
+  /**
+   * TaxInvoiceDate (YYYY-MM-DD): the faktur date, NOT the invoice's issue date.
+   * A monthly fleet invoice is a faktur gabungan, which must be dated no later
+   * than the last day of the month of delivery (fakturDate below).
+   */
+  date: string;
   buyer: { taxId: string | null; kind: 'TIN' | 'NIK' | 'Passport' | 'Other'; nitku: string | null; name: string; address: string | null; email: string | null };
   /** A line may carry its own item settings (a membership fee is not electricity). */
   lines: Array<{ name: string; taxBaseIdr: number; dppIdr: number; ppnIdr: number; item?: EfakturSettings }>;
+}
+
+/**
+ * The last day of a billing month (YYYY-MM-DD): the date of the faktur pajak.
+ *
+ * A fleet invoice is a faktur gabungan — one faktur for a month of deliveries —
+ * and a faktur gabungan must be made no later than the last day of the month of
+ * delivery. Using the invoice's issue date (always in the following month: a
+ * month can be invoiced only once it has ended) made every faktur late — a
+ * sanction for the seller (UU KUP art. 14(4)) and a risk to the buyer's input-tax
+ * credit for the month the electricity was delivered.
+ */
+export function fakturDate(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  return new Date(Date.UTC(y!, m!, 0)).toISOString().slice(0, 10);
 }
 
 /** Digits only; a 15-digit NPWP becomes the 16-digit form with a leading 0. */

@@ -18,6 +18,27 @@
 const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
 export const esc = (s) => String(s ?? '').replace(/[&<>"'`]/g, (c) => ESC_MAP[c]);
 
+/**
+ * Markup whose dynamic parts are escaped by construction: html`Revoke <b>${name}</b>?`.
+ *
+ * The literal template text is the caller's own code and is kept as markup; EVERY
+ * interpolated value is esc()aped, unless it is itself an html`` fragment (so fragments
+ * nest). Do not esc() a value yourself here — it would be escaped twice. APIs that accept
+ * markup from a caller (confirmDialog's message) take a plain string as TEXT and only an
+ * html`` fragment as markup, so a forgotten esc() can no longer inject anything.
+ */
+class SafeHtml {
+  constructor(markup) { this.markup = markup; }
+  toString() { return this.markup; }
+}
+export function html(strings, ...values) {
+  let out = strings[0];
+  values.forEach((v, i) => { out += (v instanceof SafeHtml ? v.markup : esc(v)) + strings[i + 1]; });
+  return new SafeHtml(out);
+}
+/** Markup for a value that may be plain text (escaped) or an html`` fragment (kept). */
+export const asHtml = (v) => (v instanceof SafeHtml ? v.markup : esc(v));
+
 export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
@@ -328,13 +349,21 @@ export function modal({ title, subtitle = '', body = '', size = '', actions = [{
   return ctx;
 }
 
-/** Promise<boolean>. requireText forces the operator to type a phrase (destructive acts). */
+/**
+ * Promise<boolean>. requireText forces the operator to type a phrase (destructive acts).
+ *
+ * `message` is TEXT: a plain string is escaped. It used to be inserted as raw HTML, and
+ * callers passed charger- and PKI-supplied strings (a certificate serial number, a trust
+ * anchor's subject) straight in — CSP stops script, but not injected markup and styling
+ * (a fake "this is safe, confirm" banner). For emphasis pass an html`` fragment, whose
+ * interpolated values are escaped by construction: html`Revoke <b>${k.name}</b>?`.
+ */
 export function confirmDialog({ title, message, confirmLabel = 'Confirm', danger = false, requireText = null }) {
   return new Promise((resolve) => {
     let ok = false;
     modal({
       title,
-      body: `<p style="margin:0 0 10px">${message}</p>${
+      body: `<p style="margin:0 0 10px">${asHtml(message)}</p>${
         requireText ? `<div class="field"><label>Type <b class="mono">${esc(requireText)}</b> to confirm</label><input data-confirm autocomplete="off"></div>` : ''
       }`,
       actions: [

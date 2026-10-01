@@ -1,3 +1,6 @@
+import { logger } from '../../logger.js';
+import { guardedFetch, type GuardedResponse } from '../net-guard.js';
+
 /**
  * Payment provider abstraction.
  *
@@ -321,18 +324,41 @@ export const last4Of = (masked: string | null | undefined): string | null => {
   return d.length >= 4 ? d.slice(-4) : null;
 };
 
-/** fetch with a timeout and a readable error. */
+/**
+ * A call to a payment / OTP / PKI provider — at an operator-configurable base
+ * URL, so it goes through the SSRF guard (net-guard.ts guardedFetch): the
+ * resolved address is checked when connecting (no private, loopback,
+ * link-local or metadata addresses outside development/test), redirects are
+ * NOT followed (a 3xx comes back as the status), `timeoutMs` (default 15 s) is
+ * a total deadline, and the answer is capped at 2 MB.
+ *
+ * The raw answer is never handed back for display: callers build operator-facing
+ * messages from the parsed JSON (`body`) and the status. `text` is kept for
+ * compatibility but holds only a placeholder; the real body of a failed call
+ * is logged server-side. (Echoing it made a URL pointed at an internal service
+ * a way to read that service.)
+ */
 export async function providerFetch(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<{ status: number; body: any; text: string }> {
-  let res: Response;
+  let host = '?';
+  try { host = new URL(url).host; } catch { /* reported by guardedFetch */ }
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((v, k) => { headers[k] = v; });
+  const b = init.body;
+  if (b != null && typeof b !== 'string' && !(b instanceof URLSearchParams) && !Buffer.isBuffer(b)) throw new Error('providerFetch: unsupported request body');
+  if (b instanceof URLSearchParams && !headers['content-type']) headers['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+  let res: GuardedResponse;
   try {
-    res = await fetch(url, { ...init, signal: AbortSignal.timeout(init.timeoutMs ?? 15_000) });
+    res = await guardedFetch(url, {
+      method: init.method ?? 'GET', headers, body: b == null ? undefined : b instanceof URLSearchParams ? b.toString() : b,
+      timeoutMs: init.timeoutMs ?? 15_000, maxBytes: 2 * 1024 * 1024, signal: init.signal ?? undefined,
+    });
   } catch (e) {
-    throw new Error(`cannot reach ${new URL(url).host}: ${(e as Error).message}`);
+    throw new Error(`cannot reach ${host}: ${(e as Error).message}`);
   }
-  const text = await res.text();
   let body: any = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
-  return { status: res.status, body, text };
+  try { body = res.text ? JSON.parse(res.text) : null; } catch { body = null; }
+  if (res.status >= 300) logger.warn({ host, status: res.status, body: res.text.slice(0, 2000) }, 'provider answered with an error');
+  return { status: res.status, body, text: `(answer not shown: HTTP ${res.status})` };
 }
 
 /**

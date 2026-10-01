@@ -100,7 +100,7 @@ const children: ChildProcess[] = [];
 const raws: RawCharger[] = [];
 function sim(args: string[]) {
   const cli = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const p = spawn(process.execPath, [cli, 'tools/simulator/autel-sim.ts', ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, [cli, 'tools/simulator/autel-sim.ts', '--url', OCPP, '--api', API, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   p.stdout!.on('data', () => {}); p.stderr!.on('data', () => {});
   children.push(p);
 }

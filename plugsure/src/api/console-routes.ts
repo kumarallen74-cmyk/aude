@@ -16,8 +16,8 @@ import {
   catalogEntry,
   validateConfigValue,
 } from '../ocpp/config-catalog.js';
-import { type Permission, CONSOLE_ROLES, assertCan, assertCanAny, can, heldPermissions, visibleSiteIds } from '../services/authz.js';
-import { revokeSession, SESSION_COOKIE, sessionFromCookie } from '../services/auth.js';
+import { type Permission, CONSOLE_ROLES, SYSTEM_ROLES, assertCan, assertCanAny, assertGrantable, can, heldPermissions, visibleSiteIds } from '../services/authz.js';
+import { revokeSession, SESSION_COOKIE, sessionFromCookie, sessionTokenOf } from '../services/auth.js';
 import { writeAudit } from '../services/audit.js';
 import * as users from '../services/users.js';
 import * as sites from '../services/sites.js';
@@ -220,9 +220,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
   app.post('/v1/auth/change-password', async (req, reply) => {
     if (!UUID_RE.test(req.principal.userId)) return clientError(reply, 400, 'only a signed-in operator can change a password');
     const b = (req.body ?? {}) as any;
-    const err = await users.changePassword(req.principal.userId, b.current, b.next);
+    // The session making this request stays signed in; every other one is revoked.
+    const err = await users.changePassword(req.principal.userId, b.current, b.next, sessionTokenOf(req.headers as Record<string, unknown>));
     if (err) return clientError(reply, 400, err);
-    await audit(req, 'auth.password_changed', 'user', req.principal.userId);
+    await audit(req, 'auth.password_changed', 'user', req.principal.userId, { otherSessionsRevoked: true });
     return { ok: true };
   });
 
@@ -869,6 +870,35 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     return id;
   }
 
+  /**
+   * User management may only hand out, or take over, authority the caller holds.
+   *
+   * `user:write` was enough to create a Super Administrator, promote anyone to
+   * one, or reset the password of any user in the organisation, including one
+   * holding platform:admin, and read back the one-time password. An API key
+   * issued with nothing but `user:write` was therefore a full takeover. API key
+   * issuance already applied assertGrantable; user management now does too:
+   * the role being given must be within the caller's permissions, and so must
+   * everything the target user already holds (for a role change, a status
+   * change or a password reset).
+   */
+  // `fleet:portal` is held by no console role; it exposes one fleet account's
+  // invoices, sessions and cards, so granting it takes what it exposes.
+  const PORTAL_EQUIVALENT: Permission[] = ['invoice:read', 'session:read', 'token:read', 'token:write'];
+  const grantableForm = (perms: string[]) => perms.flatMap((p) => (p === 'fleet:portal' ? PORTAL_EQUIVALENT : [p]));
+  const assertMayGrantRole = (req: FastifyRequest, role: string) => {
+    assertGrantable(req.principal, grantableForm(SYSTEM_ROLES[role] ?? []));
+  };
+  const assertMayManageUser = async (req: FastifyRequest, userId: string) => {
+    const r = await one<{ perms: string[] | null }>(
+      `SELECT array_agg(DISTINCT p) AS perms
+         FROM user_role ur JOIN role r ON r.id = ur.role_id, unnest(r.permissions) AS p
+        WHERE ur.user_id = $1`,
+      [userId],
+    );
+    assertGrantable(req.principal, grantableForm(r?.perms ?? []));
+  };
+
   app.post('/v1/users', async (req, reply) => {
     assertCan(req.principal, { permission: 'user:write' });
     const b = (req.body ?? {}) as any;
@@ -879,20 +909,35 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (!users.validRole(String(b.role))) return clientError(reply, 400, 'choose a role');
     const siteIds = await checkSiteIds(req, b.siteIds);
     const role = CONSOLE_ROLES.find((r) => r.name === b.role)!;
+    assertMayGrantRole(req, role.name);
     if (role.siteScoped && siteIds.length === 0) return clientError(reply, 400, 'a Site Host must be assigned at least one site');
     const ownerId = role.ownerScoped ? await checkOwnerId(req, b.ownerId) : null;
     if (role.ownerScoped && !ownerId) return clientError(reply, 400, 'choose the site owner this user belongs to');
     const fleetAccountId = role.fleetScoped ? await checkFleetAccountId(req, b.fleetAccountId) : null;
     if (role.fleetScoped && !fleetAccountId) return clientError(reply, 400, 'choose the fleet account this user belongs to');
+    /*
+     * ONE answer for "taken in this organisation" and "taken in another one". This check runs
+     * under row-level security and sees only this tenant's users; an address held by another
+     * tenant used to fall through to the global unique index and come back as a 500, so the
+     * difference told an administrator that the address had an account elsewhere. createUser
+     * turns that unique violation into EmailUnavailableError, answered identically here.
+     */
+    const EMAIL_UNAVAILABLE = 'that email cannot be used — choose a different address';
     const exists = await one(`SELECT id FROM app_user WHERE lower(email) = $1`, [email]);
-    if (exists) return clientError(reply, 409, 'a user with that email already exists');
-    const created = await users.createUser(req.principal.orgId, { name, email, phone: b.phone ?? null, role: role.name, siteIds, ownerId, fleetAccountId });
+    if (exists) return clientError(reply, 409, EMAIL_UNAVAILABLE);
+    let created: { id: string; temporaryPassword: string };
+    try {
+      created = await users.createUser(req.principal.orgId, { name, email, phone: b.phone ?? null, role: role.name, siteIds, ownerId, fleetAccountId });
+    } catch (e) {
+      if (e instanceof users.EmailUnavailableError) return clientError(reply, 409, EMAIL_UNAVAILABLE);
+      throw e;
+    }
     await audit(req, 'user.created', 'user', created.id, { email, role: role.name, siteIds, ownerId, fleetAccountId });
     return {
       ok: true,
       id: created.id,
       temporaryPassword: created.temporaryPassword,
-      warning: 'Share this one-time password securely. The user must choose a new one at first sign-in.',
+      warning: `Share this one-time password securely. It works for ${users.tempPasswordTtlHours()} hours; the user must choose a new one at first sign-in.`,
     };
   });
 
@@ -907,6 +952,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (self && (b.role !== undefined || b.status !== undefined)) {
       return clientError(reply, 400, 'you cannot change your own role or status — ask another administrator');
     }
+    if (b.role !== undefined || b.status !== undefined) await assertMayManageUser(req, id);
     if (b.name !== undefined || b.phone !== undefined) {
       await query(
         `UPDATE app_user SET name = COALESCE($2, name),
@@ -918,6 +964,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
       if (!users.validRole(String(b.role))) return clientError(reply, 400, 'choose a role');
       const siteIds = await checkSiteIds(req, b.siteIds);
       const role = CONSOLE_ROLES.find((r) => r.name === b.role)!;
+      assertMayGrantRole(req, role.name);
       if (role.siteScoped && siteIds.length === 0) return clientError(reply, 400, 'a Site Host must be assigned at least one site');
       const ownerId = role.ownerScoped ? await checkOwnerId(req, b.ownerId) : null;
       if (role.ownerScoped && !ownerId) return clientError(reply, 400, 'choose the site owner this user belongs to');
@@ -939,9 +986,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (!UUID_RE.test(id)) throw new NotFoundError('user not found');
     const u = await one<{ org_id: string }>(`SELECT org_id FROM app_user WHERE id = $1`, [id]);
     if (!u || u.org_id !== req.principal.orgId) throw new NotFoundError('user not found');
+    await assertMayManageUser(req, id);
     const temporaryPassword = await users.resetPassword(id);
     await audit(req, 'user.password_reset', 'user', id);
-    return { ok: true, temporaryPassword };
+    return { ok: true, temporaryPassword, expiresInHours: users.tempPasswordTtlHours() };
   });
 
   // =================================================================== sites (Module 3)
@@ -1240,7 +1288,15 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
       if (!Number.isInteger(n) || n < 7 || n > 730) return clientError(reply, 400, 'rotation reminder must be 7–730 days');
       await query(`UPDATE charge_point SET key_rotation_days = $2 WHERE id = $1`, [owner.chargePointId, n]);
     }
-    const issued = await issueAuthorizationKey(owner.chargePointId, actorOf(req), provided);
+    /*
+     * "The old key is compromised" (body.reason = 'compromised', or compromised: true): the
+     * rotation keeps NO grace window for the previous key, which stops working at once (a unit
+     * not yet holding the new key is refused until it is configured — the price of evicting
+     * whoever else has the old one). The reason is recorded in the service's audit entry
+     * (charge_point.authorization_key.issued, after.reason).
+     */
+    const compromised = b.reason === 'compromised' || b.compromised === true;
+    const issued = await issueAuthorizationKey(owner.chargePointId, actorOf(req), provided, { reason: compromised ? 'compromised' : 'routine' });
     if (!issued) throw new NotFoundError('charge point not found');
     // Zero-touch certificate: after its first boot on this key, the charger is asked for a
     // CSR, gets its certificate over OCPP and is moved to Profile 3 (services/charger-ca.ts).
@@ -1250,9 +1306,11 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     return {
       ...issued,
       commissioning: await commissioningBundle(req, identity, profile, issued.key),
-      warning:
-        'This key is shown once. Configure it on the charger FIRST, then raise the security profile — ' +
-        'the other order leaves the unit unable to connect.',
+      previousKeyRevoked: compromised,
+      warning: compromised
+        ? 'This key is shown once. The previous key was revoked immediately: the charger cannot connect until this key is configured on it.'
+        : 'This key is shown once. Configure it on the charger FIRST, then raise the security profile — ' +
+          'the other order leaves the unit unable to connect.',
     };
   });
 

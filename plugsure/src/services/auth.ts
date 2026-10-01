@@ -25,6 +25,16 @@ const API_KEY_PREFIX = 'psk';
 const SESSION_PREFIX = 'pss';
 const SESSION_TTL_HOURS = 12;
 
+/**
+ * A console session idle longer than this is refused, even inside its 12-hour lifetime:
+ * SESSION_IDLE_MINUTES, default 60. A browser left signed in on a shared depot PC used to stay
+ * a working credential all day. Read on every call so tests and operators can change it.
+ */
+export function sessionIdleMinutes(): number {
+  const n = Number(process.env.SESSION_IDLE_MINUTES);
+  return Number.isFinite(n) && n > 0 ? n : 60;
+}
+
 export interface AuthResult {
   principal: Principal;
   kind: 'api_key' | 'session' | 'dev';
@@ -182,18 +192,47 @@ export async function revokeSession(token: string): Promise<void> {
   await query(`UPDATE auth_session SET revoked_at = now() WHERE token_hash = $1`, [sha256(secret)]);
 }
 
+/**
+ * End every session of a user except `keepToken` (the one making the request), e.g. after
+ * the user changes their own password. With no token to keep, every session ends.
+ */
+export async function revokeOtherSessions(userId: string, keepToken: string | null): Promise<void> {
+  const secret = keepToken ? sessionSecret(keepToken) : null;
+  await query(
+    `UPDATE auth_session SET revoked_at = now()
+      WHERE user_id = $1 AND revoked_at IS NULL AND ($2::text IS NULL OR token_hash <> $2::text)`,
+    [userId, secret ? sha256(secret) : null],
+  );
+}
+
+/** The console session token a request carries (Bearer pss_… or the session cookie), if any. */
+export function sessionTokenOf(headers: Record<string, unknown>): string | null {
+  const raw = headers['authorization'];
+  if (typeof raw === 'string' && raw.startsWith('Bearer ')) {
+    const t = raw.slice(7).trim();
+    return t.startsWith(`${SESSION_PREFIX}_`) ? t : null;
+  }
+  return sessionFromCookie(headers['cookie']);
+}
+
 async function authenticateSession(token: string): Promise<AuthResult | null> {
   const secret = sessionSecret(token);
   if (!secret) return null;
 
-  const row = await one<{ id: string; user_id: string; org_id: string; must_change_password: boolean }>(
-    `SELECT s.id, s.user_id, u.org_id, u.must_change_password
+  // Idle sessions are refused like expired ones (last_seen_at, migration 053).
+  const row = await one<{ id: string; user_id: string; org_id: string; must_change_password: boolean; touch: boolean }>(
+    `SELECT s.id, s.user_id, u.org_id, u.must_change_password,
+            s.last_seen_at < now() - interval '1 minute' AS touch
        FROM auth_session s JOIN app_user u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
+        AND s.last_seen_at > now() - ($2 || ' minutes')::interval
         AND u.status = 'active'`,
-    [sha256(secret)],
+    [sha256(secret), sessionIdleMinutes()],
   );
   if (!row) return null;
+  // Activity keeps the session alive. Written at most once a minute, not on every request:
+  // the console polls, and a write per poll per tab is pointless load on a hot row.
+  if (row.touch) await query(`UPDATE auth_session SET last_seen_at = now() WHERE id = $1`, [row.id]);
 
   const grants = await loadAssignments(row.user_id, row.org_id);
   return {

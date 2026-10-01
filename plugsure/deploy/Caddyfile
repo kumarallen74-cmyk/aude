@@ -162,7 +162,7 @@ ocpp.example.id {
 				keepalive 900s
 				keepalive_idle_conns 512
 				# No HTTP/2 to the upstream: WebSocket upgrade is HTTP/1.1 only.
-				versions h1
+				versions 1.1
 			}
 
 			# Stream frames immediately instead of buffering. Without this, OCPP
@@ -337,10 +337,18 @@ console.example.id {
 # Keep an allow-list if your integrators have fixed addresses; otherwise the
 # API's per-IP rate limit applies. Remove the block to keep /v1 console-only.
 api.example.id {
-	@signin path /v1/auth/*
-	respond @signin "not served on this host" 404
 	@cookie header Cookie *
 	request_header @cookie -Cookie
+
+	# The sign-in routes are NOT served here. This must be a `handle` of its own,
+	# placed before `handle @api`: a bare `respond @signin` is ordered AFTER
+	# `handle` in Caddy's directive order, so `handle @api` proxied /v1/auth/login
+	# to the internet and the 404 never ran (password spraying and account
+	# lock-outs from anywhere, past the console's office allow-list).
+	@signin path /v1/auth/*
+	handle @signin {
+		respond "not served on this host" 404
+	}
 
 	@api path /v1/* /openapi.json /api-docs.html
 	handle @api {

@@ -1,10 +1,10 @@
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { one, many, query } from '../db/pool.js';
+import { one, many, query, tx } from '../db/pool.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { SYSTEM_ROLES, CONSOLE_ROLES } from './authz.js';
-import { createSession } from './auth.js';
+import { createSession, revokeOtherSessions } from './auth.js';
 
 /**
  * Operator accounts for the console (SPEC Module 10).
@@ -61,6 +61,17 @@ export function passwordProblem(pw: unknown): string | null {
   return null;
 }
 
+/**
+ * How long an administrator-issued one-time password (invitation, reset, create-admin without
+ * --password) works: TEMP_PASSWORD_TTL_HOURS, default 72. It used to work until first use, so
+ * one pasted into a chat and never used stayed a live credential indefinitely. Read on every
+ * call so a test or an operator can change it without a rebuild.
+ */
+export function tempPasswordTtlHours(): number {
+  const n = Number(process.env.TEMP_PASSWORD_TTL_HOURS);
+  return Number.isFinite(n) && n > 0 ? n : 72;
+}
+
 /** A readable one-time password for invitations and resets. */
 export function generateTemporaryPassword(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -114,8 +125,10 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
     failed_logins: number;
     locked_until: Date | null;
     must_change_password: boolean;
+    temp_expired: boolean;
   }>(
-    `SELECT id, org_id, name, email, status, password_hash, failed_logins, locked_until, must_change_password
+    `SELECT id, org_id, name, email, status, password_hash, failed_logins, locked_until, must_change_password,
+            (must_change_password AND temp_password_expires_at IS NOT NULL AND temp_password_expires_at <= now()) AS temp_expired
        FROM app_user WHERE lower(email) = $1`,
     [email],
   );
@@ -124,24 +137,35 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
     await checkPassword(pw, null);
     return generic;
   }
-  if (u.locked_until && new Date(u.locked_until) > new Date()) {
+  /**
+   * The attempt is COUNTED before the password is checked, in one statement.
+   *
+   * The counter used to be read, incremented in JavaScript after the (slow,
+   * deliberately) password check, and written back as an absolute value: a
+   * burst of parallel guesses all read the same count and together recorded
+   * one failure, so the lockout never engaged. Now each attempt atomically
+   * takes a slot; the attempt that reaches the limit sets the lock, and every
+   * later one finds the account locked and is refused whatever the password.
+   */
+  const claimed = await one<{ locked_now: boolean }>(
+    `UPDATE app_user
+        SET failed_logins = CASE WHEN failed_logins + 1 >= $2 THEN 0 ELSE failed_logins + 1 END,
+            locked_until = CASE WHEN failed_logins + 1 >= $2 THEN now() + ($3 || ' minutes')::interval ELSE locked_until END
+      WHERE id = $1 AND (locked_until IS NULL OR locked_until <= now())
+      RETURNING (locked_until IS NOT NULL AND locked_until > now()) AS locked_now`,
+    [u.id, config.console.loginMaxFailures, config.console.loginLockMinutes],
+  );
+  if (!claimed) {
     // The same password work as any other attempt: an instant answer would reveal the lock
     // (and so the account) by timing alone. The password is not accepted, even if right.
     await checkPassword(pw, u.password_hash);
     return generic;
   }
   const good = await checkPassword(pw, u.password_hash);
-  if (!good || u.status !== 'active') {
-    const failures = u.failed_logins + 1;
-    const lock = failures >= config.console.loginMaxFailures;
-    await query(
-      `UPDATE app_user
-          SET failed_logins = $2,
-              locked_until = CASE WHEN $3 THEN now() + ($4 || ' minutes')::interval ELSE locked_until END
-        WHERE id = $1`,
-      [u.id, lock ? 0 : failures, lock, config.console.loginLockMinutes],
-    );
-    if (lock) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
+  // An expired one-time password is refused with the same answer, after the same work: a
+  // distinct message would confirm the address and that the password was right.
+  if (!good || u.status !== 'active' || u.temp_expired) {
+    if (claimed.locked_now) logger.warn({ userId: u.id, ip }, 'operator account locked after repeated failed sign-ins');
     return generic;
   }
 
@@ -155,16 +179,25 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string): 
   };
 }
 
-export async function changePassword(userId: string, current: unknown, next: unknown): Promise<string | null> {
+/**
+ * Change the signed-in user's own password.
+ *
+ * Every OTHER session of the account is revoked: a password change is what a user does when
+ * they suspect someone else has it, and it used to leave that someone signed in for up to
+ * 12 hours. `currentToken` is the session making the request (cookie or Bearer), which stays
+ * signed in; without one (an unusual caller) every session ends.
+ */
+export async function changePassword(userId: string, current: unknown, next: unknown, currentToken?: string | null): Promise<string | null> {
   const u = await one<{ password_hash: string | null }>(`SELECT password_hash FROM app_user WHERE id = $1`, [userId]);
   if (!u) return 'user not found';
   if (!(await verifyPassword(String(current ?? ''), u.password_hash))) return 'current password is incorrect';
   const problem = passwordProblem(next);
   if (problem) return problem;
-  await query(`UPDATE app_user SET password_hash = $2, must_change_password = false WHERE id = $1`, [
+  await query(`UPDATE app_user SET password_hash = $2, must_change_password = false, temp_password_expires_at = NULL WHERE id = $1`, [
     userId,
     await hashPassword(String(next)),
   ]);
+  await revokeOtherSessions(userId, currentToken ?? null);
   return null;
 }
 
@@ -184,7 +217,9 @@ export async function listUsers(orgId: string) {
   return many(
     `SELECT u.id, u.name, u.email, u.phone_display AS phone, u.status, u.created_at, u.last_login_at,
             (u.locked_until IS NOT NULL AND u.locked_until > now()) AS locked,
-            (u.password_hash IS NOT NULL) AS has_password, u.must_change_password,
+            (u.password_hash IS NOT NULL) AS has_password, u.must_change_password, u.temp_password_expires_at,
+            -- An unused one-time password past TEMP_PASSWORD_TTL_HOURS no longer signs in: reset it.
+            (u.must_change_password AND u.temp_password_expires_at IS NOT NULL AND u.temp_password_expires_at <= now()) AS temp_password_expired,
             COALESCE(json_agg(json_build_object(
               'role', r.name, 'scopeType', ur.scope_type, 'scopeId', ur.scope_id, 'siteName', s.name, 'ownerName', so.name, 'fleetName', fa.name
             )) FILTER (WHERE r.id IS NOT NULL), '[]') AS roles
@@ -247,24 +282,61 @@ export async function setUserRole(userId: string, orgId: string, role: string, s
   }
 }
 
+/**
+ * The e-mail address is taken — in this organisation or, invisibly under row-level security,
+ * in another one. The route answers both the same way (see POST /v1/users).
+ */
+export class EmailUnavailableError extends Error {
+  constructor() {
+    super('that email cannot be used');
+    this.name = 'EmailUnavailableError';
+  }
+}
+
+/** A unique violation on app_user's e-mail (the original UNIQUE(email) or 053's lower(email) index). */
+function isEmailUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: string; table?: string; constraint?: string };
+  return err?.code === '23505' && err.table === 'app_user' && /email/.test(err.constraint ?? '');
+}
+
 export async function createUser(orgId: string, input: UserInput): Promise<{ id: string; temporaryPassword: string }> {
   const temporaryPassword = generateTemporaryPassword();
-  const row = await one<{ id: string }>(
-    `INSERT INTO app_user (org_id, email, name, phone_display, status, password_hash, must_change_password)
-     VALUES ($1, lower($2), $3, $4, 'active', $5, true)
-     RETURNING id`,
-    [orgId, input.email.trim(), input.name.trim(), input.phone ?? null, await hashPassword(temporaryPassword)],
-  );
-  await setUserRole(row!.id, orgId, input.role, input.siteIds ?? [], input.ownerId ?? null, input.fleetAccountId ?? null);
-  return { id: row!.id, temporaryPassword };
+  const hash = await hashPassword(temporaryPassword);
+  /*
+   * The route's duplicate check runs under row-level security and cannot see another
+   * tenant's users, so an address taken elsewhere surfaces here as a unique violation —
+   * which used to be a 500, telling an administrator that the address has an account in
+   * some other organisation. It becomes EmailUnavailableError. The INSERT runs under a
+   * savepoint so the failure does not abort the request's own transaction (tx() joins it).
+   */
+  const row = await tx(async (c) => {
+    await c.query('SAVEPOINT create_user');
+    try {
+      const r = await c.query<{ id: string }>(
+        `INSERT INTO app_user (org_id, email, name, phone_display, status, password_hash, must_change_password, temp_password_expires_at)
+         VALUES ($1, lower($2), $3, $4, 'active', $5, true, now() + ($6 || ' hours')::interval)
+         RETURNING id`,
+        [orgId, input.email.trim(), input.name.trim(), input.phone ?? null, hash, tempPasswordTtlHours()],
+      );
+      await c.query('RELEASE SAVEPOINT create_user');
+      return r.rows[0]!;
+    } catch (e) {
+      await c.query('ROLLBACK TO SAVEPOINT create_user');
+      if (isEmailUniqueViolation(e)) throw new EmailUnavailableError();
+      throw e;
+    }
+  });
+  await setUserRole(row.id, orgId, input.role, input.siteIds ?? [], input.ownerId ?? null, input.fleetAccountId ?? null);
+  return { id: row.id, temporaryPassword };
 }
 
 export async function resetPassword(userId: string): Promise<string> {
   const temporaryPassword = generateTemporaryPassword();
   await query(
-    `UPDATE app_user SET password_hash = $2, must_change_password = true, failed_logins = 0, locked_until = NULL
+    `UPDATE app_user SET password_hash = $2, must_change_password = true, failed_logins = 0, locked_until = NULL,
+            temp_password_expires_at = now() + ($3 || ' hours')::interval
       WHERE id = $1`,
-    [userId, await hashPassword(temporaryPassword)],
+    [userId, await hashPassword(temporaryPassword), tempPasswordTtlHours()],
   );
   // Every existing session for the account ends with the old password.
   await query(`UPDATE auth_session SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);

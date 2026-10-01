@@ -198,8 +198,26 @@ export interface AccessRequest {
 }
 
 export function can(p: Principal, req: AccessRequest): boolean {
-  // The owning organisation of the resource must match the principal's.
-  if (req.orgId && req.orgId !== p.orgId && !hasPlatformAdmin(p)) return false;
+  /**
+   * The owning organisation of the resource must match the principal's.
+   *
+   * `platform:admin` used to waive this for EVERY permission: a platform
+   * operator's credential could read and change any tenant's sessions, tariffs,
+   * users and chargers through the ordinary tenant routes, and a stolen one was
+   * a key to every tenant at once. Cross-organisation authority now exists only
+   * where it is asked for by name — the platform routes, which all check
+   * `platform:admin` itself (platform billing and commission statements,
+   * platform-scoped integrations, pending chargers) and reach other
+   * organisations deliberately, outside the caller's own RLS scope. Inside its
+   * OWN organisation a platform admin still holds everything (the loop below).
+   *
+   * Row-level security already enforced the same line for the API: a request's
+   * transaction is pinned to the caller's organisation, so another tenant's
+   * charger or site resolved to "not found" before this check ever saw it.
+   */
+  if (req.orgId && req.orgId !== p.orgId) {
+    if (req.permission !== 'platform:admin' || !hasPlatformAdmin(p)) return false;
+  }
 
   for (const a of p.assignments) {
     if (!a.permissions.includes(req.permission) && !a.permissions.includes('platform:admin')) continue;

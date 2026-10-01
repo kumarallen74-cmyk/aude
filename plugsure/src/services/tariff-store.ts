@@ -11,6 +11,14 @@ import { logger } from '../logger.js';
  * historical invoices must reproduce exactly as issued. The `at` parameter is
  * mandatory for that reason: making it optional is what let the caller silently
  * default to now() and retroactively re-price a session by 3.7x.
+ *
+ * The same holds for WHERE a tariff is assigned (migration 051). Assignments
+ * are versioned with valid_from / valid_to: unassigning closes the row instead
+ * of deleting it, and assigning opens a new one from now(). Both the tariff's
+ * own active window and the assignment's window must cover `at`. Before that,
+ * a session parked for review and rated after its tariff was unassigned fell
+ * back to the default tariff, and a tariff newly attached to a connector
+ * re-priced the connector's unrated sessions that ran before it was attached.
  */
 
 export interface ResolvedTariff {
@@ -56,6 +64,9 @@ export async function loadTariffForConnector(
       WHERE t.org_id = $2
         AND t.active_from <= $3
         AND (t.active_to IS NULL OR t.active_to > $3)
+        -- The assignment in force at that instant, not the one in force now.
+        AND ta.valid_from <= $3
+        AND (ta.valid_to IS NULL OR ta.valid_to > $3)
         AND (
           (ta.scope_type = 'connector' AND ta.scope_id = scope.connector_uuid) OR
           (ta.scope_type = 'site'      AND ta.scope_id = scope.site_id) OR
@@ -103,7 +114,9 @@ async function hydrate(row: any): Promise<Tariff> {
     components: comps.map(
       (c): TariffComponent => ({
         kind: c.kind,
-        rate: Number(c.rate),
+        // NULL (energy only, migration 051): billed at the PLN formula rate.
+        rate: c.rate == null ? 0 : Number(c.rate),
+        ...(c.rate == null && c.kind === 'energy' ? { formulaRate: true } : {}),
         touBlock: c.tou_block,
         dayMask: c.day_mask,
         timeFrom: c.time_from ?? undefined,
@@ -124,6 +137,9 @@ export async function loadTariffById(tariffId: string): Promise<Tariff | null> {
 }
 
 // ------------------------------------------------------------------ writes
+
+/** An energy component priced at the PLN formula rate: no rate given, or marked so. */
+const isFormulaRate = (c: TariffComponent) => c.formulaRate === true || c.rate == null;
 
 export interface TariffWriteInput {
   orgId: string;
@@ -211,7 +227,9 @@ export async function createTariff(input: TariffWriteInput): Promise<TariffWrite
         [
           row.id,
           c.kind,
-          c.rate,
+          // An energy component without a rate (or marked formulaRate) is billed
+          // at the PLN formula rate and stored as NULL; 0 is a price: free.
+          c.kind === 'energy' && isFormulaRate(c) ? null : c.rate,
           c.touBlock ?? 'ANY',
           c.dayMask ?? 127,
           c.timeFrom ?? null,
@@ -282,35 +300,60 @@ export async function assignTariff(
   }
   if (flags.some((f) => f.severity === 'violation')) return { ok: false, flags };
 
-  // Re-assigning the same tariff to the same scope replaces the earlier row
-  // rather than stacking duplicates the resolver would have to tie-break.
+  // Re-assigning the same tariff to the same scope replaces the earlier
+  // assignment rather than stacking duplicates the resolver would have to
+  // tie-break. It is replaced FROM NOW: the open row is closed (valid_to) and a
+  // new one opened (valid_from) at the same instant, so a session that started
+  // earlier is still priced by the assignment in force when it started, and an
+  // assignment never reaches back to sessions that ran before it was made.
+  // Re-assigning with nothing changed keeps the open row as it is.
   //
   // The replace is one transaction, so a session starting mid-way never sees
   // the scope with no assignment (and falls back to the default tariff). The
   // advisory lock serialises two concurrent assigns of the same tariff to the
-  // same scope: without it both DELETEs found nothing and both INSERTs landed.
+  // same scope: without it both found no open row and both INSERTs landed (the
+  // partial unique index on open rows, migration 051, now refuses that too).
   await tx(async (c) => {
     await c.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
       `tariff_assignment:${tariffId}:${scopeType}:${scopeId ?? ''}:${currentType ?? ''}`,
     ]);
+    const open = (
+      await c.query<{ id: string; priority: number }>(
+        `SELECT id, priority FROM tariff_assignment
+          WHERE tariff_id = $1 AND scope_type = $2 AND scope_id IS NOT DISTINCT FROM $3
+            AND current_type IS NOT DISTINCT FROM $4 AND valid_to IS NULL`,
+        [tariffId, scopeType, scopeId, currentType],
+      )
+    ).rows;
+    if (open.length === 1 && open[0]!.priority === priority) return;
+    // One instant closes the old row and opens the new one, so no session start
+    // falls between them. clock_timestamp(), not now(): the advisory lock may
+    // have waited, and the new row must not start before it was actually made.
+    const at = (await c.query<{ at: Date }>(`SELECT clock_timestamp() AS at`)).rows[0]!.at;
     await c.query(
-      `DELETE FROM tariff_assignment
-        WHERE tariff_id = $1 AND scope_type = $2 AND scope_id IS NOT DISTINCT FROM $3
-          AND current_type IS NOT DISTINCT FROM $4`,
-      [tariffId, scopeType, scopeId, currentType],
+      `UPDATE tariff_assignment SET valid_to = GREATEST(valid_from, $2::timestamptz) WHERE id = ANY($1::uuid[])`,
+      [open.map((o) => o.id), at],
     );
     await c.query(
-      `INSERT INTO tariff_assignment (tariff_id, scope_type, scope_id, priority, current_type) VALUES ($1,$2,$3,$4,$5)`,
-      [tariffId, scopeType, scopeId, priority, currentType],
+      `INSERT INTO tariff_assignment (tariff_id, scope_type, scope_id, priority, current_type, valid_from)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [tariffId, scopeType, scopeId, priority, currentType, at],
     );
   });
   return { ok: true, flags };
 }
 
+/**
+ * Unassign: the assignment stops applying to sessions that start from now on.
+ * It is closed (valid_to), never deleted — a session that started while it was
+ * in force and is rated later (parked for review, a late StopTransaction) is
+ * still priced by it, instead of falling back to the default tariff.
+ */
 export async function unassignTariff(assignmentId: string, orgId: string): Promise<boolean> {
   const r = await query(
-    `DELETE FROM tariff_assignment ta USING tariff t
-      WHERE ta.id = $1 AND t.id = ta.tariff_id AND t.org_id = $2`,
+    `UPDATE tariff_assignment ta SET valid_to = GREATEST(ta.valid_from, now())
+       FROM tariff t
+      WHERE ta.id = $1 AND t.id = ta.tariff_id AND t.org_id = $2 AND ta.valid_to IS NULL`,
     [assignmentId, orgId],
   );
   return (r.rowCount ?? 0) > 0;
@@ -336,7 +379,8 @@ export async function listTariffs(orgId: string) {
             t.active_from, t.active_to, t.validated_at, t.validation, t.status, t.description,
             t.pricing_model, t.ppn_applies, t.mdr_mode, t.archived_at, t.created_by,
             COALESCE((SELECT json_agg(json_build_object(
-              'kind', tc.kind, 'rate', tc.rate, 'touBlock', tc.tou_block,
+              -- rate NULL = the PLN formula rate (migration 051): listed as 0 with formulaRate.
+              'kind', tc.kind, 'rate', COALESCE(tc.rate, 0), 'formulaRate', tc.rate IS NULL, 'touBlock', tc.tou_block,
               'dayMask', tc.day_mask, 'timeFrom', tc.time_from, 'timeTo', tc.time_to,
               'fromKwh', tc.from_kwh, 'toKwh', tc.to_kwh,
               'fromMinutes', tc.from_minutes, 'toMinutes', tc.to_minutes
@@ -351,7 +395,8 @@ export async function listTariffs(orgId: string) {
                                                       JOIN charge_point cp ON cp.id = e.charge_point_id
                                                      WHERE c.id = ta.scope_id)
                              ELSE 'All sites' END
-            )) FROM tariff_assignment ta WHERE ta.tariff_id = t.id), '[]') AS assignments
+            -- Where it applies now; closed assignments are kept only for re-rating.
+            )) FROM tariff_assignment ta WHERE ta.tariff_id = t.id AND ta.valid_to IS NULL), '[]') AS assignments
        FROM tariff t
       WHERE t.org_id = $1
       ORDER BY t.status, t.active_from DESC`,

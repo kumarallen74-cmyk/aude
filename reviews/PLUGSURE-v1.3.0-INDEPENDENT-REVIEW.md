@@ -277,3 +277,292 @@ Paths are relative to the package root.
 **7. Hardening.** The remaining Medium items: RLS fail-closed and the tables missing it, pool timeouts, retention and backups, and log redaction.
 
 After steps 1–3 and a re-run of the full suite, the "supervised pilot" verdict would be reasonable. The vendor's hardware acceptance test and edge/load test are still needed as well.
+
+---
+
+## 7. Pilot-blocker fixes (30 September 2026)
+
+All 12 items in §3.1 are fixed on branch `claude/plufsure-csms-review-k1eebw`.
+- The delivered v1.3.0 is imported unmodified in commit `d84c62f`.
+- Each fix is its own commit on top of it, under `plugsure/`.
+
+| §3.1 | Fix | Commit |
+|---|---|---|
+| 1 | A charger's requests are handled one at a time, in order. Replies bypass the queue. Session start is atomic per connector (advisory lock), so a duplicate start gets the original session. | `d488d83`, `1705a28` |
+| 2 | A missing 2.0.1 start register is recorded as unknown (migration 043), and the first register observed becomes the start. `IMPLAUSIBLE_ENERGY` parks a gross excess (> 20 kWh beyond nameplate × duration) and warns on a small one. | `1705a28`, `39a8131` |
+| 3 | The process refuses to start without a usable `SECRETS_KEY` outside development/test. | `0c111c1` |
+| 4 | User create, role change, status change and password reset only grant or take over authority the caller holds. | `2a17741` |
+| 5 | Raw charger commands need their own permissions: firmware:write with an https, non-internal URL; smartcharging:write, never the station ceiling; the config key rules; charge_point:config for DataTransfer. | `2a17741` |
+| 6 | Authentication is decided on the matched route or the raw target, for `/v1`, `/d/v1` and `/ocpi`. | `e055347`, `0669f04` |
+| 7 | Forwarding and client-certificate headers are believed only from `OCPP_TRUSTED_PROXIES`. Self-terminated TLS requires a CA-verified certificate. | `0c8db7b` |
+| 8 | Outside development/test the gateway refuses to start with security profile < 2 or auto-adopt on, unless `ALLOW_INSECURE_OCPP=true`. `OCPP_AUTO_ADOPT_SITE` is honoured. | `3416c94` |
+| 9 | The Caddy sign-in block is its own `handle` ahead of `handle @api`, verified with Caddy 2.8.4. Login failures are counted atomically. | `b29cbf2` |
+| 10 | Tiers are banded across the whole session. Windowed components price each segment once. The time component excludes idle minutes. Idle minutes are unit- and phase-correct. | `c863bf0`, `1705a28` |
+| 11 | Money-moving and messaging workers run one at a time platform-wide (advisory lock per worker). | `c2785a8` |
+| 12 | Only an explicit `development` or `test` relaxes a security control. | `0c111c1` |
+
+### Verification after the fixes
+
+Node 22, PostgreSQL 16, with the API and gateway as separate processes connected as `plugsure_app`.
+
+- **Typecheck and production build:** clean.
+- **Unit and database tests:** 602/602. That is the 571 original tests plus 31 new ones, which cover:
+  - frame ordering;
+  - secrets and environment handling;
+  - encoded paths;
+  - client-cert and trusted-proxy rules;
+  - session integrity;
+  - tariff tiers and windows;
+  - the login burst;
+  - worker locks.
+  The new tests that exercise a fixed defect were checked to fail on the original code.
+- **End-to-end, every suite in the package plus the new `e2e:pilot-fixes`:** all green.
+
+| Suites | Result |
+|---|---|
+| pilot-fixes | 16/16 |
+| isolation | 45/45 |
+| ocpi-auth | 9/9 |
+| console | 96/96 |
+| field | 132/132 |
+| driver | 50/50 |
+| driver-plus | 46/46 |
+| queue | 19/19 |
+| reservation-fees | 12/12 |
+| fleet-billing | 53/53 |
+| pricing | 24/24 |
+| pnc | 37/37 |
+| onboarding | 19/19 |
+| integrations | 22/22 |
+| payment-methods | 21/21 |
+| card-holds | 38/38 |
+| linked-wallets | 19/19 |
+| postpay | 40/40 |
+| ocpi | 74/74 |
+| ocpi-emsp | 60/60 |
+| ocpi-profiles | 36/36 |
+| sdk | 23/23 |
+| v2x | 21/21 |
+| ocmf | 20/20 |
+| sandbox-2x | 17/17 |
+| brand | 28/28 |
+| apns | 20/20 |
+| live-activity | 17/17 |
+| api-sandbox | 38/38 |
+
+Some suites need their documented prerequisites, and were run with them:
+- console needs `PUBLIC_BASE_URL`;
+- onboarding needs `OCPP_TRUST_PROXY_PROTO=true`;
+- integrations needs a platform-admin account;
+- apns and live-activity need `APNS_URL_*` pointed at their stand-ins.
+
+### Operator-visible changes
+
+- A production (or staging) process now **refuses to start** in three cases:
+  - without a real `SECRETS_KEY`;
+  - with `OCPP_MIN_SECURITY_PROFILE` < 2;
+  - with `OCPP_AUTO_ADOPT=true`.
+  Set these before upgrading. `ALLOW_INSECURE_OCPP=true` is only for a supervised bench.
+- On the systemd path, set `OCPP_TRUSTED_PROXIES` if Caddy does not connect from 127.0.0.1. Compose already includes the Docker bridge range.
+- Keys that held only `charge_point:command` (the `api_client` role) can no longer push firmware, set charging profiles or send DataTransfer.
+- Migration 043 is additive.
+
+§3.2 is addressed in §8 and §3.3/§3.4 in §9.
+
+---
+
+## 8. Public-launch blocker fixes (1 October 2026)
+
+All 13 items in §3.2 are fixed on the same branch.
+
+| §3.2 | Fix | Commit |
+|---|---|---|
+| 13 | A prepaid token is bound to the connector it was paid for. A start that claims nothing is refused (1.6: transactionId 0, Invalid/ConcurrentTx; 2.0.1: idTokenInfo), and no postpaid session is ever created for a prepaid token. | `064327f` |
+| 14 | A pass payment is refused from another operator's acquirer account and when underpaid. A payment after a void is refunded. | `f0296a2` |
+| 15 | Post-pay, e-wallet and saved-card charges use deterministic references saved before the call. A retry after a lost answer looks up the status instead of charging again. Checkout and pass purchase record the payment first. | `f0296a2`, `0348509` |
+| 16 | OTP and PIN attempts are claimed atomically. There are per-phone, per-IP, per-device, per-card and global budgets, and send budgets are claimed before the SMS goes out. | `756de29` |
+| 17 | Partner roles, party and kind are pinned to what the operator chose. A token cannot be moved to another partner. A hub acts for nobody until HubClientInfo arrives. | `7d5ad81` |
+| 18 | The eMSP receiver endpoints are CPO-only. Unlinked or implausible CDRs are held for operator review and are not invoiced, counted against limits or shown to drivers. | `7d5ad81` |
+| 19 | A Midtrans capture notification reconciles the hold, and a refused capture checks the order status. | `f0296a2` |
+| 20 | Refund state changes are conditional. A bank transfer is refused while a provider refund is in flight. Stuck refunds are polled. A DB CHECK enforces refund ≤ captured. | `f0296a2` |
+| 21 | The post-pay decision runs under a per-driver lock over all held exposure. | `f0296a2` |
+| 22 | Points and promotions are reserved in the CDR transaction under locks. Pre-purchase sessions do not take points. Device-only guests do not get new-driver or per-customer promotions. | `064327f` |
+| 23 | Webhooks and OCPI have hard total deadlines; outbox passes use allSettled and run concurrently over leased rows. | `1c207e6` |
+| 24 | Every tenant-configured URL goes through guardedFetch, with a connect-time check, no redirects and a size cap. Provider bodies are not echoed. Internal SMTP hosts need `SMTP_ALLOWED_INTERNAL_HOSTS`. net-guard covers NAT64, 6to4 and IPv4-compatible addresses. | `1c207e6` |
+| 25 | The OCPI base URL and response_url come from `OCPI_PUBLIC_URL` / `PUBLIC_BASE_URL` only. | `7d5ad81`, `756de29` |
+
+### Verification
+
+- **Typecheck and build:** clean.
+- **Unit and database tests:** 702/702.
+- **End-to-end:** a fresh database (migrations 001–047, 46 files; 045 was not needed), with the API and gateway run as `plugsure_app`.
+
+| Suite | Result |
+|---|---|
+| pilot-fixes | 16/16 |
+| isolation | 45/45 |
+| ocpi-auth | 9/9 |
+| console | 96/96 |
+| field | 139/139 |
+| driver | 50/50 |
+| driver-plus | 46/46 |
+| queue | 19/19 |
+| reservation-fees | 12/12 |
+| fleet-billing | 53/53 |
+| pricing | 24/24 |
+| pnc | 37/37 |
+| onboarding | 19/19 |
+| integrations | 22/22 |
+| payment-methods | 21/21 |
+| card-holds | 38/38 |
+| linked-wallets | 19/19 |
+| postpay | 40/40 |
+| ocpi | 74/74 |
+| ocpi-emsp | 63/63 |
+| ocpi-profiles | 36/36 |
+| sdk | 23/23 |
+| v2x | 21/21 |
+| ocmf | 20/20 |
+| sandbox-2x | 17/17 |
+| brand | 28/28 |
+| apns | 20/20 |
+| live-activity | 17/17 |
+| api-sandbox | 38/38 |
+
+Two suites were adjusted for intended behaviour:
+- **ocpi-emsp:** its CDR now quotes the authorisation it belongs to, and the suite also checks the held/reject flow.
+- **postpay:** it releases unused ShopeePay sessions, because exposure now counts every session still held on the same e-wallet.
+
+### What operators must set or know
+
+- **Environment:**
+  - `OCPI_PUBLIC_URL` (or `PUBLIC_BASE_URL`) is required outside development/test, or the OCPI API and roaming commands answer 503.
+  - A same-host SMTP relay must be listed in `SMTP_ALLOWED_INTERNAL_HOSTS`.
+  - Provider URLs on private networks are refused, and provider redirects now fail.
+- **Driver sign-in limits:** defaults are 10 codes per phone per day, 10 per IP per hour, 5 per device per hour, 5,000 per day globally, 10 wrong codes per phone per day, 20 PIN attempts per IP per hour, and 15 PIN attempts per card per day. Each can be changed with a `DRIVER_*` environment variable. Mobile carrier NAT may need the per-IP limits raised. Limit refusals answer 429.
+- **Roaming:**
+  - A partner that is both CPO and eMSP needs two connections.
+  - A hub acts for no clients until it sends HubClientInfo.
+  - Held partner CDRs wait in `GET /v1/roaming/cdrs/held` until accepted or rejected.
+- **Charging and payments:**
+  - A prepaid QR presented on the wrong connector is refused at the charger.
+  - Pre-purchase sessions no longer use loyalty points (they still earn them).
+  - Promotion budgets are never exceeded.
+  - Webhook receivers must answer within 15 s.
+- **Migrations:** 044 (refund bound), 046 (driver auth limits) and 047 (OCPI trust) are additive.
+
+### Still open
+
+- §3.3/§3.4 (hardening and Low items).
+- Xendit has no payment-status lookup by reference; retries rely on its idempotency key.
+- A pending refund at an acquirer without a refund-status API stays "processing" with no alert.
+- Web Push delivery has only an idle timeout. Its targets are restricted to known push services.
+
+---
+
+## 9. Hardening fixes (§3.3 and §3.4), 1–2 October 2026
+
+Every item in §3.3 and §3.4 is fixed on the same branch, together with the CI and documentation findings from §2 and §4. Several §3.4 items had already been fixed in §8:
+- the Xendit allowlist;
+- BI-SNAP freshness and raw-body hashing;
+- integer amounts;
+- net-guard ranges;
+- the OCPI push dead-letter, credentials race, uid matching and connector-bound approvals.
+
+| Area | What changed | Commit |
+|---|---|---|
+| Tenant isolation | **RLS fails closed.** All 76 policies are rewritten to `app_rls_bypass() OR org_id = app_current_org()`. The bypass is on only for unscoped system work and never when an org is pinned. RLS is added to `audit_log`, `audit_head`, `driver_charge` and `role`. `platform:admin` no longer satisfies every permission in other orgs. | `db53c64` |
+| Audit | **`audit_log` is append-only:** revoked for the runtime role, a trigger refuses UPDATE/DELETE, and the migrator re-asserts this after every run. Entries written during a failed request are re-appended after the rollback, marked as such. A failed COMMIT is no longer reported as success. | `db53c64`, `35bfc93` |
+| Database | **Pool limits.** Connect timeout, statement timeout, pool size and an error listener. `assertRlsPosture` fails closed. | `db53c64` |
+| Secrets | **Secret storage.** Optional associated data (`enc:v2`) and a pinned tag length. Plaintext is refused outside development/test. | `db53c64` |
+| OCPP station state | **Suspended and decommissioned stations.** Decommissioned stations are refused at connect. Suspended stations boot Pending and refuse new cards. pending_adoption cannot start transactions. | `239b5f5` |
+| OCPP transactions | **No lost or under-billed transactions.** Offline transactions with a refused token are recorded as unauthorised, parked sessions (never billed automatically), and refused 1.6 starts get unique ids. A 2.0.1 token arriving after Started is authorised and bound. 1.6 stops bill max(sample, meterStop) or the End register. | `239b5f5` |
+| OCPP protocol | **Protocol checks.** OCMF B/E readings must come from one transaction. A late pong no longer counts for a replaced socket. CALLRESULT payloads are validated. The prepaid claim window and the refund sweep run from payment (049 `paid_at`). | `239b5f5` |
+| Charger trust | **Units, signing and keys.** Rate units are learned per charger; a model-wide value needs consensus. Station CSRs are signed only when requested and only over Profile 2+, rate-limited. AuthorizationKey double-issue is safe, and there is a "compromised" rotation. | `529ef3d` |
+| Plug & Charge | **Chain and OCSP.** Every issuer must be CA:TRUE with keyCertSign and pathLen respected (the forged-chain case is now refused). OCSP freshness and the responder EKU are enforced, unverifiable responses are refused, and the check fails closed by default. | `529ef3d` |
+| Provisioning | **2.0.1 provisioning.** 2.0.1 stations are provisioned in 2.0.1 form, and NumberOfConnectors is capped. | `529ef3d` |
+| Billing and fiscal | **Billing.**<br>• e-Faktur is dated the last day of the delivery month, and invoices already exported are skipped.<br>• The fleet is captured at session time.<br>• Tariff assignments are versioned (effective at session start).<br>• An energy rate of 0 means free and NULL means the PLN formula.<br>• Commission bands are inclusive, with no cliff, and use the session's site.<br>• Receipts carry a rounding line.<br>• Tera/SLO dates are handled as Jakarta dates. | `a54d100`, `9736889` |
+| Console and accounts | **Accounts.**<br>• Dialogs are escaped (an `html` tag).<br>• A password change revokes other sessions.<br>• One-time passwords expire, and console sessions have an idle timeout.<br>• No cross-tenant email oracle; email is unique case-insensitively.<br>• The Security tab offers a "compromised key" rotation. | `4ce2927` |
+| Operations | **Processes.**<br>• No `systemctl reload` (it used to kill the gateway).<br>• API_HOST and OCPP_HOST default to 127.0.0.1 outside development.<br>• Logs redact PII and secrets, and an uncaught exception exits.<br>• SSE streams close on shutdown.<br>• Diagnostics uploads stream to disk. | `6aa79eb` |
+| Operations | **Data, limits and identities.**<br>• Retention for `ocpp_frame` / `connection_attempt`, plus a backup script and timer.<br>• API-key rate limits shared in Postgres.<br>• A tenant sees a charger's connection history only from its own adoption, and an identity already seen on the network needs platform approval.<br>• The migrator takes an advisory lock and a lock_timeout. | `6aa79eb` |
+| CI and docs | **CI.**<br>• DB-backed unit tests actually run.<br>• A new e2e job runs as `plugsure_app`.<br>• The docker job is fixed.<br>• Docs corrected (Node 22/PG16, defaults, test counts); package metadata fixed. | `6aa79eb` |
+| Follow-up | **System command audit.** A command issued by a system actor is audited to the charger's org. This was found by e2e:api-sandbox after RLS was tightened. | `190c988` |
+
+### Verification
+
+- **Migrations:** 001–053 (52 files; 045 unused) apply cleanly from an empty PostgreSQL 16 database with the real migrator, and a second run is a no-op. On a fresh install `plugsure_app` has no UPDATE/DELETE on `audit_log`.
+- **Typecheck and production build:** clean.
+- **Unit and database tests:** 816/816.
+  - Three consecutive full runs passed in about 35 s each, and every file also passes on its own.
+  - One earlier full run stalled until its 30-minute limit (the first run right after the database was rebuilt). It has not reproduced since.
+- **End-to-end:** fresh database, with the API and gateway as `plugsure_app` and the documented prerequisites set.
+
+| Suite | Result |
+|---|---|
+| pilot-fixes | 16/16 |
+| isolation | 45/45 |
+| ocpi-auth | 9/9 |
+| console | 96/96 |
+| field | 139/139 |
+| driver | 50/50 |
+| driver-plus | 46/46 |
+| queue | 19/19 |
+| reservation-fees | 12/12 |
+| fleet-billing | 53/53 |
+| pricing | 24/24 |
+| pnc | 37/37 |
+| onboarding | 20/20 |
+| integrations | 22/22 |
+| payment-methods | 21/21 |
+| card-holds | 38/38 |
+| linked-wallets | 19/19 |
+| postpay | 40/40 |
+| ocpi | 74/74 |
+| ocpi-emsp | 63/63 |
+| ocpi-profiles | 36/36 |
+| sdk | 23/23 |
+| v2x | 21/21 |
+| ocmf | 20/20 |
+| sandbox-2x | 17/17 |
+| brand | 28/28 |
+| apns | 20/20 |
+| live-activity | 17/17 |
+| api-sandbox | 38/38 |
+
+Suite changes:
+- The pnc and onboarding suites now connect on Profile 2 and expect unsolicited CSRs to be refused.
+- The console and driver simulators target the configured gateway.
+- The field suite ages `paid_at`.
+
+### Operator-visible changes in this round
+
+- **Listen addresses:** `API_HOST` and new `OCPP_HOST` default to `127.0.0.1` outside development, and Compose and the image set `0.0.0.0`. On the systemd path the gateway binds loopback, so put Caddy in front.
+- **New settings:**
+
+| Area | Settings |
+|---|---|
+| Database pool | `PG_POOL_MAX`, `PG_CONNECT_TIMEOUT_MS`, `PG_STATEMENT_TIMEOUT_MS`, `PG_IDLE_IN_TX_TIMEOUT_MS` |
+| Accounts | `TEMP_PASSWORD_TTL_HOURS` (72), `SESSION_IDLE_MINUTES` (60) |
+| Rate limits and retention | `API_RATE_LIMIT_SHARED`, `OCPP_FRAME_RETENTION_DAYS` (90), `CONNECTION_ATTEMPT_RETENTION_DAYS` (30) |
+| Migrations | `MIGRATION_LOCK_TIMEOUT` (10s) |
+| Secrets | `SECRETS_ALLOW_PLAINTEXT` (escape hatch) |
+| Backups | `BACKUP_*` |
+
+- **Processes:** `systemctl reload` is no longer supported; use restart. An uncaught exception now restarts the process.
+- **Chargers:**
+  - Suspended chargers boot Pending; decommissioned ones are refused at connect.
+  - Unsolicited certificate requests and anything below Profile 2 are refused.
+  - Plug & Charge fails closed when OCSP cannot be checked. An org that saved `acceptWhenOcspUnavailable: true` keeps it.
+  - Registering a charger identity the network has already tried to connect as needs a platform admin.
+- **Finance:** the e-Faktur date is the last day of the month billed. Tariff changes apply to sessions that start afterwards. A rate of 0 now means free. Commission at exactly Rp 500M is 6.5%, and 'whole' mode never falls as turnover grows.
+- **Console users:** changing a password signs out other sessions; one-time passwords expire after 72 h; sessions idle for 60 min are refused.
+
+### Known limits that remain
+
+These are design choices or provider constraints, not open defects:
+- Child tables without `org_id` (meter values, frames, connectors, tariff components) are protected through their RLS-scoped parents, not by policies of their own; per-row policies on those hot paths were judged too costly.
+- Xendit offers no payment-status lookup by reference, so retries rely on its idempotency key.
+- A refund at an acquirer with no refund-status API stays "processing" without an alert.
+- Web Push has only an idle timeout; its targets are limited to known push services.
+- The CI image build and run steps were not executed here (no Docker daemon). Their configuration was validated (`docker compose config`, YAML, `systemd-analyze verify`).
+

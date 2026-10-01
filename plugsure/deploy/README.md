@@ -77,7 +77,7 @@
 > - Each API key has its own limit: `API_KEY_RATE_LIMIT_PER_MIN`, default 600 a minute, or set per key in the console.
 > - `API_RATE_LIMIT_PER_MIN` still limits the console and other callers per IP.
 > - `API_KEY_AUTH_FAILURES_PER_MIN` (default 30) limits keys that do not authenticate, per address.
-> - Limits are kept per API process.
+> - Per-key limits are shared by all API processes through Postgres (migration 052; `API_RATE_LIMIT_SHARED`, default on outside development/test). The per-IP and failed-key limits are still kept per API process.
 > - The TypeScript SDK is served at `/sdk/plugsure-csms-sdk.tgz` from the console host (inside the office allow-list). Hand it to integrators, or allow `/sdk/*` in the Caddyfile.
 >
 > **Console sign-in.** Bootstrap the first administrator once:
@@ -292,16 +292,23 @@ openssl rand -hex 32   # -> SECRETS_KEY
 | `TZ` | `Asia/Jakarta` | **not cosmetic** — WBP/LWBP tariff blocks are evaluated in local time |
 | **`OCPP_MIN_SECURITY_PROFILE`** | **`2`** | **wss + HTTP Basic. The OCPP 1.6 certification baseline and the only acceptable production setting.** `0` (the code default) accepts any charger with no credential at all; `1` accepts Basic over plaintext. Setting this to `2` makes `checkAuth()` demand Basic credentials matching the stored `AuthorizationKey` for every connection. |
 | **`OCPP_TRUST_PROXY_PROTO`** | **`true`** *(when TLS terminates at Caddy)* | **Required whenever `OCPP_MIN_SECURITY_PROFILE >= 2` and TLS is NOT terminated by the gateway itself.** `isTls()` learns the scheme from `X-Forwarded-Proto`, which it ignores unless this is set — so the documented production stack (profile 2 behind Caddy) previously refused 100 % of connections with `403 Security profile 2 requires TLS` while logging a healthy "listening" line. The gateway now refuses to start in that combination. Only enable it when the proxy is the sole ingress and strips client-supplied forwarding headers, or a direct client can claim TLS it does not have. |
-| **`OCPP_AUTO_ADOPT`** | **`false`** | **Production must not adopt strangers.** With `true` (the code default) any charge point that connects is created and attached to `OCPP_AUTO_ADOPT_SITE` — that is a bench convenience, and in the field it means an unknown unit can enrol itself into a tenant's fleet and start producing billable sessions. With `false`, unknown identities are parked and refused with `404 unknown charge point — parked for adoption`, and you adopt them deliberately from the console. |
+| `OCPP_TRUSTED_PROXIES` | `127.0.0.1,::1` *(compose adds `172.16.0.0/12`)* | Addresses or CIDRs whose `X-Forwarded-Proto` and `X-Client-Cert-Fingerprint` the gateway believes. From any other peer those headers are ignored, so a client that reaches port 9220 directly cannot claim TLS or present another charger's certificate fingerprint. List the address your TLS terminator connects from. |
+| **`OCPP_AUTO_ADOPT`** | **`false`** | **Production must not adopt strangers.** The code default is `true` only under `NODE_ENV=development` and `false` everywhere else; set it explicitly anyway. With `true` any charge point that connects is created and attached to `OCPP_AUTO_ADOPT_SITE` — that is a bench convenience, and in the field it means an unknown unit can enrol itself into a tenant's fleet and start producing billable sessions. With `false`, unknown identities are parked and refused with `404 unknown charge point — parked for adoption`, and you adopt them deliberately from the console. |
 | **`OCPP_VERSIONS`** | **`ocpp1.6,ocpp2.0.1`** | Subprotocols the gateway negotiates, in order of preference. The code default is `ocpp1.6` alone: a unit offering only `ocpp2.0.1` is then refused with `400 No supported OCPP subprotocol offered`. Keep `ocpp1.6` alone until a 2.0.1 model has passed acceptance. Add `ocpp2.1` for OCPP 2.1 stations (needed for bidirectional charging). Sandbox virtual chargers registered as 2.0.1 or 2.1 need those versions listed here too. |
 | `OCPP_PORT` | `9220` | behind Caddy; never published directly |
+| `OCPP_HOST` | `127.0.0.1` | Interface the gateway binds. Code default: `127.0.0.1` outside `NODE_ENV=development` (`0.0.0.0` in development, for a bench charger on the LAN). Earlier revisions always bound every interface. Set `0.0.0.0` only when chargers or an API on another host reach the gateway without a local proxy — then firewall it. The image (Path A) sets `0.0.0.0` inside the container; the port binding (`OCPP_BIND`) decides exposure. |
 | `OCPP_PATH` | `/ocpp` | must match the vendor's configured URL path |
 | `OCPP_HEARTBEAT_S` | `300` | drives the Caddy read timeout — keep the proxy above 3× this |
 | `OCPP_CALL_TIMEOUT_MS` | `30000` | raise to `60000` for units on poor cellular links |
 | `OCPP_KEY_ROTATION_GRACE_MS` | `86400000` | 24 h window in which old + new AuthorizationKey both work |
-| `OCPP_AUTO_ADOPT_SITE` | *(unset)* | only meaningful when `OCPP_AUTO_ADOPT=true` |
+| `OCPP_AUTO_ADOPT_SITE` | *(unset)* | only meaningful when `OCPP_AUTO_ADOPT=true`: the site (id or name) auto-adopted chargers join. Unset, only a development/test gateway falls back to the oldest site; otherwise unknown chargers are parked. |
+| `ALLOW_INSECURE_OCPP` | `false` | Outside `NODE_ENV=development`/`test` the gateway **refuses to start** with `OCPP_MIN_SECURITY_PROFILE` below 2 or `OCPP_AUTO_ADOPT=true`. Set this only to acknowledge a supervised bench; the gateway then logs an error at boot. |
 | `API_PORT` | `9200` | |
-| `API_HOST` | `127.0.0.1` | **loopback only** by default (§9). Path A binds the container port to `127.0.0.1` on the host instead. |
+| `API_HOST` | `127.0.0.1` | **loopback only** — now also the code default (it was `0.0.0.0`, which on Path B exposed the console and `/v1` on every interface despite this table). Path A sets `0.0.0.0` inside the container and binds the host port to `127.0.0.1` (`API_BIND`) instead. |
+| `API_RATE_LIMIT_SHARED` | `true` *(default outside development/test)* | Per-API-key limits are kept in Postgres and shared by every API process (one small `UPDATE` per API-key request). `false` keeps per-process buckets: behind N API processes a key then gets N× its limit. If the database does not answer within 1 s the request is limited per process instead (fail open, logged). |
+| `OCPP_FRAME_RETENTION_DAYS` | `90` | The gateway's hourly retention pass deletes OCPP frames older than this, in batches of 10,000 with pauses (at most ~50 s per pass; a large backlog is worked off over several hours after an upgrade). `0` keeps them forever. |
+| `CONNECTION_ATTEMPT_RETENTION_DAYS` | `30` | Same for the connection-attempt log. |
+| `MIGRATION_LOCK_TIMEOUT` | `10s` | How long one migration may wait for a table lock. Past it the migration fails and rolls back (retry; find the blocker in `pg_stat_activity`) rather than queueing every query on that table behind it. Migrators also take an advisory lock, so two never run at once. |
 | **`API_TRUSTED_PROXIES`** | *(your ingress IP)* | Comma-separated IPs/CIDRs whose `X-Forwarded-For` is believed. **Leave unset unless you terminate TLS at a proxy.** This used to be a hardcoded "trust everyone", which let any caller forge a fresh client IP per request and so never hit the rate limit — brute force against a bearer token was free — and poisoned the client IP recorded in the audit log. With Caddy on the same host, set `API_TRUSTED_PROXIES=127.0.0.1`. |
 | `IDLE_FEE_CAP_IDR` | `100000` | Hard per-session cap on idle/occupancy charges. Not a regulatory figure — a platform safety bound. An unbounded idle fee turned a 60 kWh delivery into a Rp 6,692,360 invoice. Raise it deliberately or not at all. |
 | `PPN_RATE_BPS` | `1200` | 12 % headline rate |
@@ -690,6 +697,18 @@ Check state:
 psql "$DATABASE_URL" -c "select name, applied_at from schema_migration order by name"
 ```
 
+Each file runs in its own transaction with `lock_timeout` = `MIGRATION_LOCK_TIMEOUT`
+(10 s): a migration that cannot get a table lock fails and rolls back instead of
+stalling the gateway's writes behind it — re-run it when the blocking transaction
+(see `pg_stat_activity`) is gone. The whole run holds an advisory lock, so a
+second migrator (another host, a manual run during an ExecStartPre) waits, then
+finds everything applied. Because each file is one transaction, a migration
+cannot use `CREATE INDEX CONCURRENTLY`; an index on a large, busy table (above
+all `ocpp_frame`) is better created by hand with `CONCURRENTLY` before the
+upgrade, so the migration's `CREATE INDEX IF NOT EXISTS` finds it and does
+nothing. Migration 052 deliberately adds no index on `ocpp_frame` for this
+reason (the retention pass walks its primary key instead).
+
 **Never edit an applied migration in place.** It will not re-run, and the next
 environment built from empty will get a schema this one does not have. Add a new
 numbered file.
@@ -721,9 +740,58 @@ If a **migration** is the problem, restore from a snapshot rather than
 hand-editing:
 
 ```bash
-# take one before every deploy
-pg_dump "$DATABASE_URL" -Fc -f /var/backups/plugsure-$(date +%F-%H%M).dump
+# take one before every deploy (as the OWNER — plugsure_app is subject to RLS)
+pg_dump "$MIGRATION_DATABASE_URL" -Fc -f /var/backups/plugsure/plugsure-predeploy-$(date +%F-%H%M).dump
 ```
+
+### Backups and restore rehearsal
+
+`tools/backup/pg-backup.sh` writes a `pg_dump -Fc` of the whole database and a
+tar of `STORAGE_DIR` (firmware images, charger diagnostics — they are not in the
+database), checks the dump is readable, writes SHA-256 sums, optionally copies
+everything off the host (`BACKUP_OFFSITE_CMD`), and only then deletes files older
+than `BACKUP_RETENTION_DAYS` (14). Path B schedules it nightly with
+`deploy/plugsure-backup.service` + `deploy/plugsure-backup.timer` (install notes
+in the unit). On Path A run it from the host against `PG_HOST_PORT` with the
+superuser, and archive the `plugsure-storage` volume
+(`docker run --rm -v plugsure-storage:/s -v /var/backups/plugsure:/b debian tar czf /b/storage-$(date +%F).tar.gz -C /s .`).
+
+A backup that has never been restored is a hope. **Rehearse a restore monthly,
+and after every major upgrade**, into a scratch database on a non-production host
+(the commands are the real recovery procedure):
+
+```bash
+# 1. Fetch the newest backup and verify it.
+cd /var/backups/plugsure && sha256sum -c plugsure-<stamp>.sha256
+
+# 2. Restore into an empty database. Roles are cluster-wide and not in the dump:
+#    create the owner role and plugsure_app first (NOLOGIN is enough for a rehearsal).
+sudo -u postgres psql -c "CREATE ROLE plugsure NOLOGIN" 2>/dev/null || true
+sudo -u postgres psql -c "CREATE ROLE plugsure_app NOLOGIN" 2>/dev/null || true
+sudo -u postgres createdb plugsure_restore -O plugsure
+time pg_restore --exit-on-error --jobs=4 -d plugsure_restore plugsure-db-<stamp>.dump
+
+# 3. Check it is complete and current.
+psql -d plugsure_restore -c "select max(name) from schema_migration"
+psql -d plugsure_restore -c "select count(*), max(started_at) from charging_session"
+psql -d plugsure_restore -c "select has_table_privilege('plugsure_app','charging_session','SELECT')"
+
+# 4. Point a scratch API at it (DATABASE_URL as plugsure_app, the SAME AUDIT_HMAC_KEY
+#    and SECRETS_KEY) and verify the audit chain: Govern → Audit → Verify. A restore
+#    without the original SECRETS_KEY loses every sealed provider credential.
+
+# 5. Restore the file storage and spot-check a firmware image.
+tar -xzf plugsure-storage-<stamp>.tar.gz -C /tmp/restore-check
+
+# 6. Record how long steps 2-5 took: that is your real recovery time.
+sudo -u postgres dropdb plugsure_restore
+```
+
+For the real thing: stop both units, restore into a fresh `plugsure` database,
+restore `STORAGE_DIR`, start `plugsure-api` (migrations then bring an older dump
+up to the current schema) and `plugsure-gateway`. Keep `AUDIT_HMAC_KEY` and
+`SECRETS_KEY` in a secrets store separate from the backups — the backup is
+useless without them, and dangerous alongside them.
 
 ---
 
@@ -836,6 +904,12 @@ Work down the list; each step tells you which layer to stop looking at.
    Expected in production (`OCPP_AUTO_ADOPT=false`). The unit is parked; adopt it
    in the console, or insert it with the identity the vendor gave you. Identity
    is case- and character-exact.
+   Once an identity has dialled in unregistered, only a **platform** operator can
+   register or adopt it (a tenant gets `409 identity_needs_platform_approval`):
+   identities are platform-wide, and first-come registration let any tenant claim
+   another operator's charger. Registering before the unit dials in (the
+   commissioning order in §4) is unaffected. A tenant's connection-attempt log
+   starts at the moment the identity was registered or adopted in its account.
 
 5. **`401 unauthorized`.**
    Security profile 1/2 Basic auth failed. The username **must equal the charge
@@ -957,8 +1031,15 @@ Deployment-relevant, and none of them are fixed by this runbook:
   and fleet-customer portal users need that allow-list widened, or the console
   published on its own hostname.
 * **No log shipping off-box** beyond rotation; add the CloudWatch agent (§8).
-* **No automated backups.** Take a `pg_dump` before every deploy (§7) until an
-  RDS snapshot schedule exists.
+* **Backups are only as good as the last rehearsal.** The nightly backup timer
+  (§7 "Backups and restore rehearsal") is shipped but not installed by default,
+  and it copies off the host only if `BACKUP_OFFSITE_CMD` is set.
 
 Fixed since the previous revision of this list: `npm ci` works (§0), and the API
-drains in-flight requests on SIGTERM like the gateway.
+drains in-flight requests on SIGTERM like the gateway (open console live streams
+are ended so the drain completes).
+
+`systemctl reload` is not supported for either unit (neither has an
+`ExecReload`; node's default action on SIGHUP is to exit, so the old gateway
+`ExecReload=kill -HUP` dropped every charger). Configuration is read at start:
+use `systemctl restart`.

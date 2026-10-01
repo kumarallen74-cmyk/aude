@@ -34,6 +34,8 @@ export interface PeerCertLike {
 }
 export interface ClientCertSocketLike {
   encrypted?: boolean;
+  /** Node's verdict on the peer certificate's chain (TLSSocket.authorized). */
+  authorized?: boolean;
   getPeerCertificate?: (detailed?: boolean) => PeerCertLike | undefined;
 }
 export interface ClientCertContext {
@@ -41,6 +43,8 @@ export interface ClientCertContext {
   socket?: ClientCertSocketLike;
   /** Trust the proxy-set fingerprint header. Mirrors gateway.trustProxyProto. */
   trustProxyProto: boolean;
+  /** The connection comes from a configured trusted proxy (OCPP_TRUSTED_PROXIES). */
+  fromTrustedProxy?: boolean;
   /** Header the proxy sets, lower-cased (e.g. 'x-client-cert-fingerprint'). */
   headerName: string;
 }
@@ -73,13 +77,23 @@ export function fingerprintsMatch(a: string, b: string): boolean {
 /** Read the fingerprint the charger presented, and say where it came from. */
 export function presentedFingerprint(ctx: ClientCertContext): { value: string | null; source: 'socket' | 'header' | 'none' } {
   // 1) Gateway terminated TLS itself — read the peer cert directly (most trustworthy).
-  if (ctx.socket?.encrypted && typeof ctx.socket.getPeerCertificate === 'function') {
-    const cert = ctx.socket.getPeerCertificate();
-    const fp = normaliseFingerprint(cert?.fingerprint256);
-    if (fp) return { value: fp, source: 'socket' };
+  //    Only a certificate that chains to our CA counts (the server asks for one with
+  //    rejectUnauthorized:false so Profile 1/2 chargers can connect without): an
+  //    expired or self-signed certificate with a matching fingerprint is refused.
+  //    And a TLS connection to the gateway never falls back to a header its own
+  //    client wrote.
+  if (ctx.socket?.encrypted) {
+    if (typeof ctx.socket.getPeerCertificate === 'function' && ctx.socket.authorized === true) {
+      const cert = ctx.socket.getPeerCertificate();
+      const fp = normaliseFingerprint(cert?.fingerprint256);
+      if (fp) return { value: fp, source: 'socket' };
+    }
+    return { value: null, source: 'none' };
   }
   // 2) TLS terminated at a trusted proxy that forwards the verified fingerprint.
-  if (ctx.trustProxyProto) {
+  //    Believed only from a configured proxy address: from anyone else it is text
+  //    the client chose, and the fingerprint is not a secret.
+  if (ctx.trustProxyProto && ctx.fromTrustedProxy === true) {
     const raw = ctx.headers[ctx.headerName.toLowerCase()];
     const fp = normaliseFingerprint(Array.isArray(raw) ? raw[0] : raw);
     if (fp) return { value: fp, source: 'header' };

@@ -54,13 +54,14 @@ const energy = (rate: number, extra: Record<string, unknown> = {}) =>
   ({ kind: 'energy', rate, touBlock: 'ANY', fromKwh: 0, fromMinutes: 0, ...extra }) as any;
 
 dbDescribe('tariff writes are atomic', () => {
-  test('concurrent assigns of one tariff to one scope leave exactly one assignment', async () => {
+  test('concurrent assigns of one tariff to one scope leave exactly one open assignment', async () => {
     const t = await createTariff({ orgId, name: 'Concurrent assign', components: [energy(2000)], appliesToMaxPowerW: 22_000 });
     assert.equal(t.ok, true);
     const results = await Promise.all(Array.from({ length: 6 }, (_, i) => assignTariff(t.tariffId!, 'site', siteId, i, 'AC')));
     assert.ok(results.every((r) => r.ok));
     const n = await one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM tariff_assignment WHERE tariff_id = $1 AND scope_type = 'site' AND scope_id = $2 AND current_type = 'AC'`,
+      // Replaced assignments are closed (valid_to), not deleted (migration 051): one is open.
+      `SELECT count(*)::int AS n FROM tariff_assignment WHERE tariff_id = $1 AND scope_type = 'site' AND scope_id = $2 AND current_type = 'AC' AND valid_to IS NULL`,
       [t.tariffId, siteId],
     );
     assert.equal(n!.n, 1);

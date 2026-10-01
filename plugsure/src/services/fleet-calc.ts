@@ -99,7 +99,7 @@ export interface FleetStatementCalc {
   sites: SiteLine[];
   cards: Array<{ uid: string; holder: string | null; sessions: number; energyWh: number; totalIdr: number; roamingIdr: number }>;
   sessions: Array<FleetSession & { taxBaseIdr: number }>;
-  roaming: Array<FleetRoaming & { amountIdr: number }>;
+  roaming: Array<FleetRoaming & { amountIdr: number; /** The partner sent no total incl. VAT: billed excl. VAT. */ vatMissing?: boolean }>;
   fees: FeeLine[];
   totals: {
     sessions: number;
@@ -172,14 +172,19 @@ export function computeFleetStatement(sessionsIn: FleetSession[], roamingIn: Fle
     l.totalIdr = l.subtotalIdr + l.pbjtIdr + l.ppnIdr;
   }
 
-  const roaming: Array<FleetRoaming & { amountIdr: number }> = [];
+  const roaming: FleetStatementCalc['roaming'] = [];
   if (opts.includeRoaming) {
     let foreign = 0;
+    let noVat = 0;
     for (const x of roamingIn) {
       if (x.currency !== 'IDR') { foreign++; continue; }
-      roaming.push({ ...x, amountIdr: r(x.inclVat ?? x.exclVat) });
+      // A partner that sent no total incl. VAT is billed at its total excl. VAT
+      // (as before), but said so: the invoice may be short of the partner's PPN.
+      if (x.inclVat == null) noVat++;
+      roaming.push({ ...x, amountIdr: r(x.inclVat ?? x.exclVat), ...(x.inclVat == null ? { vatMissing: true } : {}) });
     }
     if (foreign) warnings.push(`${foreign} partner network charge record(s) in another currency were left off; bill them separately.`);
+    if (noVat) warnings.push(`${noVat} partner network charge record(s) carry no total incl. VAT; they are billed at the partner's total excl. VAT. Check them with the partner.`);
   }
 
   const cardMap = new Map<string, { uid: string; holder: string | null; sessions: number; energyWh: number; totalIdr: number; roamingIdr: number }>();

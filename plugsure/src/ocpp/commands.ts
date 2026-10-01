@@ -43,8 +43,15 @@ async function send<T = any>(
       ? translate201(action, payload)
       : { action, payload: strip16(action, payload), mapResult: (r: any) => r };
 
+  // A command is about one tenant's charger, so its audit entry belongs on that tenant's chain. A system actor
+  // (load management, reconciliation) carries no org: resolve the charger's. Left empty it went to the platform
+  // chain, which inside a tenant's request is refused by row-level security (048) and aborted the request.
+  const orgId = actor.orgId ?? (await one<{ org_id: string }>(
+    `SELECT s.org_id FROM charge_point cp JOIN site s ON s.id = cp.site_id WHERE cp.ocpp_identity = $1`,
+    [ocppIdentity],
+  ))?.org_id;
   await writeAudit({
-    orgId: actor.orgId,
+    orgId,
     actorType: actor.type,
     actorId: actor.id,
     action: `ocpp.${action}`,

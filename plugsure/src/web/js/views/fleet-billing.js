@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, icon, field, callout, table, fmt, tag, drawer, modal, confirmDialog, toast, kpi, download, formValues,
+  $, $$, esc, api, state, registerView, pageHead, icon, field, callout, table, fmt, tag, drawer, modal, confirmDialog, html, toast, kpi, download, formValues,
 } from '../core.js';
 import { recentMonths, monthLabel } from './statement-render.js';
 
@@ -134,7 +134,7 @@ async function renderInvoices(box, canWrite) {
     on('[data-print]', () => open(inv ? `/v1/fleet-invoices/${inv}/invoice.html` : `/v1/fleet-accounts/${r.accountId}/statement.html?period=${period}`));
     on('[data-csv]', () => open(`/v1/fleet-invoices/${inv}/invoice.csv`));
     on('[data-issue]', async () => {
-      const ok = await confirmDialog({ title: `Issue the ${monthLabel(period)} invoice?`, message: `An invoice for <b>${esc(r.name)}</b> of <b>${fmt.idr(r.totalIdr)}</b> is numbered and frozen. Charges added later go on next month's invoice.`, confirmLabel: 'Issue invoice' });
+      const ok = await confirmDialog({ title: `Issue the ${monthLabel(period)} invoice?`, message: html`An invoice for <b>${r.name}</b> of <b>${fmt.idr(r.totalIdr)}</b> is numbered and frozen. Charges added later go on next month's invoice.`, confirmLabel: 'Issue invoice' });
       if (!ok) return;
       try { const x = await api('/v1/fleet-invoices', { method: 'POST', body: { fleetAccountId: r.accountId, period } }); toast(`Invoice ${x.number} issued`, 'ok'); d.close(); }
       catch (e) { toast(e.message, 'crit'); }

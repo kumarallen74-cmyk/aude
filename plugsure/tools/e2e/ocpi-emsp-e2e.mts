@@ -252,9 +252,22 @@ try {
   // ─────────────────────────────────────────── limits hold across networks
   const lim = (await ops('GET', '/v1/roaming/cards')).data.find((c: any) => c.id === LIM.id);
   const aLimBefore = await auth(LIM.uid);
-  await ocpi('POST', ep('cdrs', 'RECEIVER'), TOKEN_C, cdr(`CPX-CDR-L-${RUN}`, LIM.uid, lim.contract_id, 54_000, 59_940, 20));
+  // The record quotes the approval we just gave (no session was reported for this card):
+  // a CDR linked to neither a session nor an approval of ours is held, not billed.
+  await ocpi('POST', ep('cdrs', 'RECEIVER'), TOKEN_C, { ...cdr(`CPX-CDR-L-${RUN}`, LIM.uid, lim.contract_id, 54_000, 59_940, 20), session_id: `CPX-S-L-${RUN}`, authorization_reference: aLimBefore.body.data?.authorization_reference });
   const aLimAfter = await auth(LIM.uid);
   check('limits: a card over its Rp 50,000 limit because of roaming charges gets NO_CREDIT', aLimBefore.body.data?.allowed === 'ALLOWED' && aLimAfter.body.data?.allowed === 'NO_CREDIT', { before: aLimBefore.body.data?.allowed, after: aLimAfter.body.data?.allowed });
+
+  // ─────────────────────────────────────────── records we cannot place are held, not billed
+  const negative = await ocpi('POST', ep('cdrs', 'RECEIVER'), TOKEN_C, cdr(`CPX-CDR-N-${RUN}`, OK.uid, cOK.contract_id, -1000, -1110, 1));
+  check('review: a CDR with a negative total is refused (400)', negative.status === 400, negative.body);
+  const orphan = await ocpi('POST', ep('cdrs', 'RECEIVER'), TOKEN_C, cdr(`CPX-CDR-O-${RUN}`, OK.uid, cOK.contract_id, 10_000, 11_100, 3, `NO-SUCH-${RUN}`));
+  const held = await ops('GET', '/v1/roaming/cdrs/held');
+  const heldRow = (held.data ?? []).find((c: any) => c.cdr_id === `CPX-CDR-O-${RUN}`);
+  check('review: a CDR for no session or approval of ours is received but held for review', orphan.status === 200 && !!heldRow && /no session/.test(heldRow.hold_reason ?? ''), { orphan: orphan.body, held: held.data });
+  const rejected = heldRow ? await ops('POST', `/v1/roaming/cdrs/${heldRow.id}/reject`, { note: 'e2e' }) : null;
+  const rejectedAgain = heldRow ? await ops('POST', `/v1/roaming/cdrs/${heldRow.id}/reject`, {}) : null;
+  check('review: the operator rejects it (once)', rejected?.status === 200 && rejected.data.status === 'rejected' && rejectedAgain?.status === 409, { r: rejected?.data, again: rejectedAgain?.status });
 
   // ─────────────────────────────────────────── what the operator sees and bills
   const cardsAfter = (await ops('GET', '/v1/roaming/cards')).data ?? [];

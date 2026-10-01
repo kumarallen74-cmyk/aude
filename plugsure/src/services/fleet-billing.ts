@@ -4,7 +4,7 @@ import { unseal } from './secrets.js';
 import { sendEmail } from './notify-transports.js';
 import { PERIOD_RE, currentPeriod } from './commission.js';
 import { computeFleetStatement, splitFees, type FeeLine, type FleetSession, type FleetRoaming, type TaxCfg } from './fleet-calc.js';
-import { efakturXml, settingsProblem, buyerProblem, feeItemProblem, normaliseNpwp, nitkuFor, type EfakturSettings, type EfakturInvoice } from './efaktur.js';
+import { efakturXml, fakturDate, settingsProblem, buyerProblem, feeItemProblem, normaliseNpwp, nitkuFor, type EfakturSettings, type EfakturInvoice } from './efaktur.js';
 import { membershipFeesFor } from './benefits.js';
 
 /**
@@ -13,9 +13,17 @@ import { membershipFeesFor } from './benefits.js';
  *
  * Which month a session belongs to: the month its charge record was issued, in
  * BILLING_TIMEZONE, as for commission statements; a partner network's charge
- * record belongs to the month it was received. An invoice can be issued only
- * for a month that has ended, and freezes what it bills: each session or record
- * is on at most one live invoice (voiding releases them for a new one).
+ * record belongs to the month it was received.
+ *
+ * Which account a session belongs to: the fleet its card was on WHEN THE SESSION
+ * STARTED (charging_session.fleet_account_id, captured by a database trigger,
+ * migration 051), and for a partner's charge record the card's fleet when the
+ * record was received. Billing by the card's current fleet put a card's past,
+ * not yet invoiced sessions on the invoice of whichever account it was moved to.
+ *
+ * An invoice can be issued only for a month that has ended, and freezes what it
+ * bills: each session or record is on at most one live invoice (voiding releases
+ * them for a new one).
  */
 
 export class FleetBillingError extends Error {
@@ -259,6 +267,7 @@ export async function assignCards(orgId: string, id: string, uids: string[], rem
 
 async function loadMonth(orgId: string, accountId: string, period: string) {
   const { from, to } = await monthBounds(period);
+  // The session's own fleet (at its start), not the card's fleet today.
   const sessions = await many<any>(
     `SELECT cs.id, cs.started_at, cs.ended_at, cs.site_id, s.name AS site_name, cp.ocpp_identity, t.uid, t.holder_name,
             cs.energy_wh, d.subtotal_idr, d.pbjt_idr, d.ppn_dpp_idr, d.ppn_rate_bps, d.ppn_idr, d.total_idr
@@ -267,7 +276,7 @@ async function loadMonth(orgId: string, accountId: string, period: string) {
        JOIN token t ON t.id = cs.token_id
        JOIN site s ON s.id = cs.site_id
        JOIN charge_point cp ON cp.id = cs.charge_point_id
-      WHERE d.org_id = $1 AND t.fleet_account_id = $2 AND d.issued_at >= $3 AND d.issued_at < $4
+      WHERE d.org_id = $1 AND cs.fleet_account_id = $2 AND d.issued_at >= $3 AND d.issued_at < $4
         AND COALESCE(cs.payment_mode, '') <> 'prepurchase'
         AND NOT EXISTS (SELECT 1 FROM fleet_invoice_item i WHERE i.kind = 'session' AND i.ref_id = cs.id)
       ORDER BY cs.started_at`,
@@ -279,7 +288,11 @@ async function loadMonth(orgId: string, accountId: string, period: string) {
        FROM ocpi_remote_cdr r
        JOIN token t ON t.id = r.token_id
        JOIN ocpi_partner p ON p.id = r.partner_id
-      WHERE r.org_id = $1 AND t.fleet_account_id = $2 AND r.received_at >= $3 AND r.received_at < $4
+      WHERE r.org_id = $1 AND r.fleet_account_id = $2
+        -- Only accepted partner records are billed; one held for review counts from
+        -- the month an operator accepted it (its own month may be invoiced by then).
+        AND r.status = 'accepted'
+        AND COALESCE(r.reviewed_at, r.received_at) >= $3 AND COALESCE(r.reviewed_at, r.received_at) < $4
         AND NOT EXISTS (SELECT 1 FROM fleet_invoice_item i WHERE i.kind = 'roaming' AND i.ref_id = r.id)
       ORDER BY r.start_date_time`,
     [orgId, accountId, from, to],
@@ -425,13 +438,17 @@ export async function periodOverview(orgId: string, period: string) {
   return { period, periodLabel: monthName(period), current: currentPeriod(), ended: period < currentPeriod(), rows, unassigned };
 }
 
-/** Fleet-card sessions this month whose card is on no fleet account (so on no invoice). */
+/**
+ * Fleet-card sessions this month that ran while their card was on no fleet
+ * account (so they are on no invoice — putting the card on an account later
+ * does not bill its earlier sessions).
+ */
 async function unassignedFleetSessions(orgId: string, period: string) {
   const { from, to } = await monthBounds(period);
   const r = await one<{ n: number; total: number }>(
     `SELECT count(*)::int AS n, COALESCE(sum(d.total_idr), 0)::bigint AS total
        FROM cdr d JOIN charging_session cs ON cs.id = d.session_id JOIN token t ON t.id = cs.token_id
-      WHERE d.org_id = $1 AND t.account_type = 'fleet' AND t.fleet_account_id IS NULL
+      WHERE d.org_id = $1 AND t.account_type = 'fleet' AND cs.fleet_account_id IS NULL
         AND d.issued_at >= $2 AND d.issued_at < $3 AND COALESCE(cs.payment_mode, '') <> 'prepurchase'`,
     [orgId, from, to],
   );
@@ -607,22 +624,31 @@ const lineName = (site: string, period: string, sessions: number, kwh: number) =
   `Pengisian listrik kendaraan listrik (SPKLU) ${site} — ${bulan(period)} — ${sessions} sesi, ${kwh.toLocaleString('id-ID', { maximumFractionDigits: 3 })} kWh`;
 
 /**
- * The Coretax import file for a month's invoices (all live ones with PPN, or
- * the given ids). Invoices that cannot carry a faktur are listed as skipped.
+ * The Coretax import file for a month's invoices: the live ones with PPN not yet
+ * exported, or the given ids (exported or not). Importing the same invoice into
+ * Coretax twice prepares a second faktur pajak for the same sale, so an invoice
+ * already exported is left out (listed as skipped) unless it is asked for by id
+ * or with `reexport` (for a file lost before it was imported). Invoices that
+ * cannot carry a faktur are listed as skipped.
  */
-export async function efakturExport(orgId: string, period: string, ids?: string[]) {
+export async function efakturExport(orgId: string, period: string, ids?: string[], opts: { reexport?: boolean } = {}) {
   mustPeriod(period);
   const { seller, settings, efakturReady } = await getSettings(orgId);
   if (efakturReady) throw new FleetBillingError(409, efakturReady);
+  const byId = !!ids?.length;
   const rows = await many<any>(
     `SELECT * FROM fleet_invoice WHERE org_id = $1 AND period = ($2 || '-01')::date AND status <> 'void'
         AND ($3::uuid[] IS NULL OR id = ANY($3::uuid[])) ORDER BY number`,
-    [orgId, period, ids?.length ? ids.filter((i) => UUID_RE.test(i)) : null],
+    [orgId, period, byId ? ids!.filter((i) => UUID_RE.test(i)) : null],
   );
   const invoices: EfakturInvoice[] = [];
   const included: string[] = [];
   const skipped: Array<{ number: string; reason: string }> = [];
   for (const inv of rows) {
+    if (inv.efaktur_exported_at && !byId && !opts.reexport) {
+      skipped.push({ number: inv.number, reason: `already exported ${fmtDate(new Date(inv.efaktur_exported_at))} (export it by id, or with reexport=true, to export it again)` });
+      continue;
+    }
     const d = inv.data;
     const lines = (d.sites as any[]).filter((l) => l.taxBaseIdr > 0).map((l) => ({
       name: lineName(l.siteName, d.period, l.sessions - l.untaxedSessions, Math.round(l.energyWh) / 1000),
@@ -647,7 +673,10 @@ export async function efakturExport(orgId: string, period: string, ids?: string[
     const buyer = { taxId: d.buyer.taxId, kind: d.buyer.taxIdKind, nitku: d.buyer.nitku, name: d.buyer.name, address: d.buyer.address, email: (d.buyer.email ?? '').split(/[,;]/)[0]?.trim() || null };
     const bp = buyerProblem(buyer);
     if (bp) { skipped.push({ number: inv.number, reason: `buyer has ${bp}` }); continue; }
-    invoices.push({ number: inv.number, date: d.issuedDate ?? fmtDate(inv.issued_at), buyer, lines });
+    // Dated the last day of the month billed (a faktur gabungan, see fakturDate);
+    // the invoice number stays the reference (RefDesc) to the commercial invoice,
+    // which keeps its own issue date.
+    invoices.push({ number: inv.number, date: fakturDate(d.period ?? period), buyer, lines });
     included.push(inv.id);
   }
   if (!invoices.length) throw new FleetBillingError(409, skipped.length ? `No invoice can carry a faktur: ${skipped.map((s) => `${s.number} (${s.reason})`).join('; ')}` : 'No invoices for this month.');

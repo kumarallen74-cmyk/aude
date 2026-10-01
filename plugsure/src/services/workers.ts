@@ -1,6 +1,6 @@
 import { logger } from '../logger.js';
 import { instrumentWorker, startHealthMonitor } from './worker-health.js';
-import { many, query } from '../db/pool.js';
+import { many, query, pool } from '../db/pool.js';
 import { bus } from './events.js';
 import { runComplianceSweep, keyRotationSweep } from './compliance.js';
 import { runControlLoop } from './smartcharging.js';
@@ -28,6 +28,7 @@ import { renewExpiringCertificates } from '../pnc/service.js';
 import { renewStationCertificates } from './charger-ca.js';
 import { setSandboxHandler } from '../ocpp/bridge.js';
 import { syncVirtualFleet, simulate, stopVirtualFleet, type SimulateEvent } from '../sandbox/fleet.js';
+import { runRetention } from './retention.js';
 
 /**
  * Background work, in ONE place.
@@ -69,6 +70,43 @@ export function registerCoreListeners(): void {
   registerQueueListeners();
 }
 
+/**
+ * ONE RUNNER AT A TIME, platform-wide, for the workers that move money or send
+ * something to a person.
+ *
+ * RUN_WORKERS defaults to true, so every gateway replica runs every worker,
+ * and a pass that outlives its interval overlaps the next one in the same
+ * process. None of these took a lock. Pass renewal captured a saved card
+ * before inserting the row its unique index protects: two runners charged
+ * the driver twice and the second charge was never recorded. Refunds, card
+ * holds and reminders ran twice likewise. Each pass now takes a session-level
+ * advisory lock named after the worker and skips if another runner has it.
+ * Resolves true when this runner ran the pass, false when it skipped.
+ *
+ * (The outboxes — webhooks, push, roaming, alert routing — already lease rows
+ * with FOR UPDATE SKIP LOCKED. Load management and FOTA command the chargers
+ * connected to THIS gateway, so they stay per process.)
+ */
+export async function exclusive(name: string, fn: () => Promise<unknown>): Promise<boolean> {
+  const key = `plugsure.worker:${name}`;
+  const client = await pool.connect();
+  let healthy = true;
+  try {
+    const got = await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS ok`, [key]);
+    if (!got.rows[0]?.ok) return false;
+    try {
+      await fn();
+    } finally {
+      // A lock left on a pooled connection would block this worker forever: if the
+      // unlock fails, the connection is discarded, which releases it.
+      await client.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [key]).catch(() => { healthy = false; });
+    }
+    return true;
+  } finally {
+    client.release(healthy ? undefined : true);
+  }
+}
+
 export function startWorkers(): () => void {
   const intervals: Record<string, number> = {};
   const guard = (name: string, fn: () => Promise<unknown>) => {
@@ -79,7 +117,30 @@ export function startWorkers(): () => void {
     };
   };
 
-  const compliance = guard('compliance', async () => {
+  const once = (name: string, fn: () => Promise<unknown>) => guard(name, () => exclusive(name, fn));
+
+  /**
+   * Outbox passes (webhooks, roaming). A single-flight flag used to let ONE pass
+   * run at a time, and a pass waited for every call in its batch: one receiver
+   * trickling its answer stalled every tenant's deliveries. Each call now has a
+   * hard total deadline (webhooks.ts, ocpi/client.ts) and up to OUTBOX_PASSES
+   * passes may run at once, so a batch waiting on a slow receiver does not stop
+   * the next tick from sending what else is due. Overlap is safe: rows are
+   * leased (FOR UPDATE SKIP LOCKED, next_attempt_at pushed 2 minutes out — longer
+   * than any call's deadline), and roaming calls for one object stay in order
+   * because a leased row still blocks the later rows of its object.
+   */
+  const OUTBOX_PASSES = 3;
+  const outbox = (name: string, deliver: () => Promise<number>) => {
+    let running = 0;
+    return guard(name, async () => {
+      if (running >= OUTBOX_PASSES) return;
+      running++;
+      try { while ((await deliver()) === 50); } finally { running--; }
+    });
+  };
+
+  const compliance = once('compliance', async () => {
     await runComplianceSweep();
     await keyRotationSweep();
   });
@@ -92,22 +153,17 @@ export function startWorkers(): () => void {
       if (ms > 5_000) logger.warn({ siteId: s.id, ms }, 'load management: a site took long');
     }
   });
-  const reconcile = guard('reconcile', () => reconcileStuckSessions());
+  const reconcile = once('reconcile', () => reconcileStuckSessions());
   const fota = guard('fota', () => firmwareTick());
   // Paid-but-never-started prepaid payments → refund queue (and their tokens retired).
-  const refunds = guard('refunds', () => sweepUnusedPayments());
+  const refunds = once('refunds', () => sweepUnusedPayments());
   // Card holds: release unused ones, retry captures and releases that failed.
-  const holds = guard('card-holds', () => sweepHolds());
+  const holds = once('card-holds', () => sweepHolds());
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
-  const outages = guard('outages', () => sweepOutages());
+  const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
-  let sending = false;
-  const webhooks = guard('webhooks', async () => {
-    if (sending) return;
-    sending = true;
-    try { while ((await deliverDue()) === 50); } finally { sending = false; }
-  });
-  const prune = guard('webhook-prune', () => pruneDeliveries());
+  const webhooks = outbox('webhooks', () => deliverDue());
+  const prune = once('webhook-prune', () => pruneDeliveries());
   // Alert notifications (e-mail, WhatsApp): route new/resolved/escalated alerts, send what is due.
   let routing = false;
   const alertRouting = guard('alert-routing', async () => {
@@ -117,17 +173,12 @@ export function startWorkers(): () => void {
   });
 
   // Roaming (OCPI): send the outbox; re-publish changed locations and tariffs.
-  let roamingSending = false;
-  const roaming = guard('roaming', async () => {
-    if (roamingSending) return;
-    roamingSending = true;
-    try { while ((await deliverRoaming()) === 50); } finally { roamingSending = false; }
-  });
-  const roamingSync = guard('roaming-sync', () => syncAllRoaming());
-  const roamingPrune = guard('roaming-prune', () => pruneRoaming());
+  const roaming = outbox('roaming', () => deliverRoaming());
+  const roamingSync = once('roaming-sync', () => syncAllRoaming());
+  const roamingPrune = once('roaming-prune', () => pruneRoaming());
   // eMSP role: refresh CPO partners' networks (they also push changes as they happen).
   // Hubs: who is behind them (they also push changes as they happen).
-  const roamingImport = guard('roaming-import', async () => {
+  const roamingImport = once('roaming-import', async () => {
     await importCpoNetworks();
     await pullAllHubClients();
   });
@@ -140,12 +191,12 @@ export function startWorkers(): () => void {
     try { while ((await deliverPush()) === 50); } finally { pushing = false; }
   });
   // Reservations first: an offer that lapsed frees its connector for the next driver in the queue.
-  const reservations = guard('reservations', async () => {
+  const reservations = once('reservations', async () => {
     await sweepReservations();
     await sweepRoamingReservations();
     await sweepQueues();
   });
-  const pushPrune = guard('push-prune', () => prunePush());
+  const pushPrune = once('push-prune', () => prunePush());
   // iOS Live Activities: a charge under way on the lock screen (starts, updates within Apple's budget, ends).
   let liveBusy = false;
   const live = guard('live-activities', async () => {
@@ -154,21 +205,25 @@ export function startWorkers(): () => void {
     try { await liveActivityPass(); } finally { liveBusy = false; }
   });
   // Unpaid sessions payable in the app: reminders 15 min, 1 day and 3 days after the session.
-  const unpaid = guard('unpaid-reminders', () => remindUnpaidSessions());
+  const unpaid = once('unpaid-reminders', () => remindUnpaidSessions());
   // Membership passes bought in the app: reminder three days before they end.
-  const passes = guard('membership-passes', () => remindEndingPasses());
-  const renewals = guard('pass-renewals', () => renewPasses());
-  const pointsExpiry = guard('loyalty-expiry', () => expirePoints());
+  const passes = once('membership-passes', () => remindEndingPasses());
+  const renewals = once('pass-renewals', () => renewPasses());
+  const pointsExpiry = once('loyalty-expiry', () => expirePoints());
   // Plug & Charge: renew chargers' V2G certificates before they expire.
-  const pncRenewal = guard('pnc-renewal', () => renewExpiringCertificates());
+  const pncRenewal = once('pnc-renewal', () => renewExpiringCertificates());
   // Chargers' own client certificates (Security Profile 3) from PlugSure's CA.
-  const stationCertRenewal = guard('station-cert-renewal', () => renewStationCertificates());
+  const stationCertRenewal = once('station-cert-renewal', () => renewStationCertificates());
 
   // Developer sandbox: keep each sandbox tenant's virtual chargers running here.
   setSandboxHandler((identity, event, args) =>
     identity === '*' && event === 'sync' ? syncVirtualFleet() : simulate(identity, event as SimulateEvent, args),
   );
   const sandboxFleet = guard('sandbox-fleet', () => syncVirtualFleet());
+  // Retention of ocpp_frame / connection_attempt (OCPP_FRAME_RETENTION_DAYS,
+  // CONNECTION_ATTEMPT_RETENTION_DAYS). Exclusive: two gateways deleting the same
+  // batches would only fight over row locks.
+  const retention = once('retention', () => runRetention());
 
   const every = (fn: () => void, ms: number, name: string) => { intervals[name] = ms; return setInterval(fn, ms); };
   const stopHealth = startHealthMonitor();
@@ -198,15 +253,21 @@ export function startWorkers(): () => void {
     every(fota, 30_000, 'fota'),
     every(refunds, 5 * 60_000, 'refunds'),
     every(holds, 60_000, 'card-holds'),
+    every(retention, 60 * 60_000, 'retention'),
   ];
   compliance();
   reconcile();
   refunds();
   holds();
   sandboxFleet();
+  // Retention's first pass a few minutes after boot (not during the reconnect
+  // storm), so a gateway restarted more often than hourly still prunes.
+  const retentionKick = setTimeout(retention, 5 * 60_000);
+  retentionKick.unref();
   logger.info('background workers started: load management, compliance, reconciliation, FOTA, refunds, outages, webhooks, alert notifications, roaming, sandbox fleet');
   return () => {
     timers.forEach((t) => clearInterval(t));
+    clearTimeout(retentionKick);
     stopHealth();
     void stopVirtualFleet();
   };
