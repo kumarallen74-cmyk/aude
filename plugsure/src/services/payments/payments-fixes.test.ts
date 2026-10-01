@@ -342,3 +342,27 @@ dbDescribe('E — the post-pay limit and balance cover all the driver\'s session
     assert.equal((await start(prov, 30_000, r)).mode, 'postpay');
   });
 });
+
+dbDescribe('B — buying a pass: the charge is recorded before the acquirer is asked', () => {
+  test('a linked-wallet charge with no answer leaves a VOID charge carrying its reference; a late settlement is refunded, not lost', async () => {
+    const { buyPass } = await import('../../driver/membership.js');
+    answers.set('POST /v2/charge', 'drop');
+    // Org A offers linked GoPay for this test only.
+    const saved = (await one<{ settings: any }>(`SELECT settings FROM integration WHERE id = $1`, [ids.int_a]))!.settings;
+    await query(`UPDATE integration SET settings = settings || '{"methods":["QRIS","GOPAY"],"linkWallets":true}'::jsonb WHERE id = $1`, [ids.int_a]);
+    try {
+      const p = { appDriverId: ids.driver, account: { id: ids.driver, phone: '+628990001001', name: null } } as any;
+      await assert.rejects(buyPass(p, ids.plan!, { returnUrl: '/app/paid.html', walletId: ids.gopay, channel: 'GOPAY' } as any));
+    } finally {
+      answers.delete('POST /v2/charge');
+      await query(`UPDATE integration SET settings = $2 WHERE id = $1`, [ids.int_a, JSON.stringify(saved)]);
+    }
+    const ch = await one<{ id: string; state: string; provider_ref: string | null }>(
+      `SELECT id, state, provider_ref FROM subscription_charge WHERE subscription_id = $1 ORDER BY created_at DESC LIMIT 1`, [ids.sub]);
+    assert.equal(ch?.state, 'void', 'the unanswered charge is voided, not left pending or rolled away');
+    assert.ok(ch?.provider_ref, 'its acquirer reference was written before the call');
+    // The money was taken after all: the settlement finds the void charge and the full amount is owed back.
+    await midtransNotify(hook.a, KEY_A, ch!.provider_ref!, 'settlement', 111000);
+    assert.equal(await lastOutcome(ids.int_a!), 'pass_paid_after_void_refund_due');
+  });
+});
