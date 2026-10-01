@@ -260,7 +260,7 @@ no `node_modules`, no build output. Build per `deploy/README.md`.
 - `db/migrations/`   schema migrations (`007_driver_app.sql` = driver app)
 - `deploy/`          runbook (`README.md`), `Caddyfile`, systemd units, `DRIVER-APP-PILOT.md`, Autel handout
 - `tools/simulator/` Autel OCPP simulator (`autel-sim.ts`) for charger QA
-- `.github/workflows/ci.yml`  CI: typecheck, tests, docker image build
+- `../.github/workflows/ci.yml` (repository root)  CI: typecheck, DB-backed unit tests, e2e as plugsure_app, docker image
 - `Dockerfile`, `docker-compose.yml`, `.env.example`
 
 ## Build & run (see deploy/README.md)

@@ -17,6 +17,13 @@ permissions:
 env:
   NODE_VERSION: "22"
 
+# The application lives in plugsure/ (the repository root also holds the review
+# report). Every `run:` step works from there; `uses:` steps that read files
+# (setup-node's npm cache) are pointed at it explicitly.
+defaults:
+  run:
+    working-directory: plugsure
+
 jobs:
   # ---------------------------------------------------------------------------
   # Typecheck, unit tests, and a from-empty migration + seed against real
@@ -66,6 +73,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           # Caches ~/.npm keyed on package-lock.json.
           cache: npm
+          cache-dependency-path: plugsure/package-lock.json
 
       # `npm ci` — not `npm install` — so CI installs exactly the locked tree and
       # a drifting lockfile is a build failure rather than a silent version bump.
@@ -197,6 +205,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          cache-dependency-path: plugsure/package-lock.json
 
       - name: Install dependencies
         run: npm ci
