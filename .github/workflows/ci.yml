@@ -397,11 +397,17 @@ jobs:
             deploy/plugsure-gateway.service \
             deploy/plugsure-api.service \
             deploy/plugsure-backup.service \
-            deploy/plugsure-backup.timer 2>&1 | tee /tmp/units.log
-          # systemd-analyze warns about paths that do not exist on the runner
-          # (/opt/plugsure, /etc/plugsure/plugsure.env). Only fail on real syntax
-          # errors: unknown directives and bad assignments.
-          ! grep -Ei "Unknown (lvalue|section)|Failed to parse|Invalid " /tmp/units.log
+            deploy/plugsure-backup.timer > /tmp/units.log 2>&1 || true
+          cat /tmp/units.log
+          # systemd-analyze exits non-zero when an ExecStart binary is missing, and on
+          # the runner they all are (/usr/bin/node, /opt/plugsure/...), so its exit
+          # code is not the gate. Fail on real syntax errors only: unknown keys or
+          # sections and unparsable values. (A bare `! grep` never fails a bash -e
+          # step — errexit ignores negated commands — so test it explicitly.)
+          if grep -Ei "Unknown (key|lvalue|section)|Failed to parse|Invalid " /tmp/units.log; then
+            echo "::error::systemd unit syntax errors (above)"
+            exit 1
+          fi
 
       - name: Lint the backup script
         run: bash -n tools/backup/pg-backup.sh
