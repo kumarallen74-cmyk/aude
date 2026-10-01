@@ -672,6 +672,50 @@ export const ops: Op[] = [
   },
   {
     method: 'GET',
+    path: '/v1/roaming/cdrs/held',
+    tag: 'Roaming',
+    summary: 'List partner charge records held for review',
+    description:
+      'Charge records (CDRs) a partner CPO sent for our fleet cards that could not be linked to a session that partner reported or an ' +
+      'authorisation we issued, or that failed the plausibility checks (energy, price per kWh, VAT, duration). Held records are not ' +
+      'invoiced and do not count against card limits until accepted. Newest first (up to 500).',
+    responses: { 200: { description: 'Held charge records.', schema: arrayOf(obj({
+  id: UUID, cdr_id: S, session_id: nS, start_date_time: DT, end_date_time: DT, total_energy: DEC, currency: S,
+  total_excl_vat: DEC, total_incl_vat: nDEC, received_at: DT, country_code: S, party_id: S,
+  hold_reason: nS, partner_name: S, uid: nS, contract_id: nS, holder_name: nS, fleet_name: nS,
+  location_name: nS, authorization_reference: nS,
+}, ['id', 'cdr_id', 'currency', 'total_excl_vat', 'received_at', 'partner_name'])) } },
+  },
+  {
+    method: 'POST',
+    path: '/v1/roaming/cdrs/:id/accept',
+    tag: 'Roaming',
+    summary: 'Accept a held partner charge record',
+    description: 'Accepts a held (or rejected) record: it is invoiced in the month it was reviewed and counts against the card limits, and the driver gets the receipt. Audited as roaming.cdr_accepted.',
+    pathParams: { id: 'Charge record id (UUID).' },
+    body: {
+      required: false,
+      schema: { type: 'object', properties: { note: { type: 'string', maxLength: 500, description: 'Why, for the audit log.' } } },
+    },
+    responses: { 200: { description: 'The new status.', schema: obj({ id: UUID, status: { type: 'string', enum: ['accepted'] } }, ['id', 'status']) } },
+    errors: [404, 409],
+  },
+  {
+    method: 'POST',
+    path: '/v1/roaming/cdrs/:id/reject',
+    tag: 'Roaming',
+    summary: 'Reject a held partner charge record',
+    description: 'Rejects a held record: it is never invoiced. A record already accepted cannot be rejected (409). Audited as roaming.cdr_rejected.',
+    pathParams: { id: 'Charge record id (UUID).' },
+    body: {
+      required: false,
+      schema: { type: 'object', properties: { note: { type: 'string', maxLength: 500, description: 'Why, for the audit log.' } } },
+    },
+    responses: { 200: { description: 'The new status.', schema: obj({ id: UUID, status: { type: 'string', enum: ['rejected'] } }, ['id', 'status']) } },
+    errors: [404, 409],
+  },
+  {
+    method: 'GET',
     path: '/v1/roaming/sessions',
     tag: 'Roaming',
     summary: 'List partner drivers’ sessions',

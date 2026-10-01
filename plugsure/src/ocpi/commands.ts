@@ -150,21 +150,23 @@ export async function handleCommand(
   // START_SESSION and RESERVE_NOW carry the driver's token.
   const token = parseToken(b?.token);
   if (typeof token === 'string') return reject(`token: ${token}`, STATUS.INVALID_PARAMS);
-  if (!(await partnerActsFor(partner, token.country_code, token.party_id))) {
+  if (!(await partnerActsFor(partner, token.country_code, token.party_id, 'EMSP'))) {
     return reject(`this connection may not act for ${token.country_code}*${token.party_id}`);
   }
   if (!token.valid) return reject('the token is not valid');
   const evse = pickEvse(loc, typeof b?.evse_uid === 'string' ? b.evse_uid : undefined);
   if (!evse) return reject('unknown EVSE', STATUS.UNKNOWN_LOCATION);
   const ref = typeof b?.authorization_reference === 'string' ? b.authorization_reference.slice(0, 36) : null;
+  // A token another connection pushed first is not taken over by a command.
   const stored = await upsertToken(partner, token);
+  if (!stored) return reject('this token was issued through another connection');
 
   // ── START_SESSION
   if (command === 'START_SESSION') {
     await query(
-      `INSERT INTO ocpi_authorization (org_id, token_id, auth_method, authorization_reference, connector_uuid, expires_at)
-       VALUES ($1,$2,'COMMAND',$3,$4, now() + interval '5 minutes')`,
-      [partner.org_id, stored.id, ref, evse.connectorUuids[0] ?? null],
+      `INSERT INTO ocpi_authorization (org_id, token_id, auth_method, authorization_reference, connector_uuid, charge_point_id, expires_at)
+       VALUES ($1,$2,'COMMAND',$3,$4,$5, now() + interval '5 minutes')`,
+      [partner.org_id, stored.id, ref, evse.connectorUuids[0] ?? null, evse.chargePointId],
     );
     return accept(async () => {
       if (!evse.online) return done('EVSE_INOPERATIVE', 'the charger is offline');
@@ -190,9 +192,9 @@ export async function handleCommand(
   );
   // The reservation is the provider's approval for this driver until it expires.
   await query(
-    `INSERT INTO ocpi_authorization (org_id, token_id, auth_method, authorization_reference, connector_uuid, expires_at)
-     VALUES ($1,$2,'COMMAND',$3,$4,$5)`,
-    [partner.org_id, stored.id, ref, evse.connectorUuids[0] ?? null, expiry],
+    `INSERT INTO ocpi_authorization (org_id, token_id, auth_method, authorization_reference, connector_uuid, charge_point_id, expires_at)
+     VALUES ($1,$2,'COMMAND',$3,$4,$5,$6)`,
+    [partner.org_id, stored.id, ref, evse.connectorUuids[0] ?? null, evse.chargePointId, expiry],
   );
   return accept(async () => {
     const [r, m] = await charger(() => ocpp.reserveNow(evse.ocppIdentity, { connectorId: evse.evseNo, expiryDate: expiry.toISOString(), idTag: token.uid, reservationId: res!.id }, actor));

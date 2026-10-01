@@ -73,21 +73,44 @@ export function endpointUrl(p: Pick<PartnerRow, 'endpoints'>, identifier: string
 }
 
 /**
- * May this partner act for (country_code, party_id)? A partner acts for the
- * roles it registered with. A hub acts for the parties behind it: once it has
- * told us who they are (HubClientInfo), only those that are CONNECTED or
- * OFFLINE; until then, anyone.
+ * The one OCPI role a partner of each kind may register with. The operator
+ * chooses the kind when creating the partner; the partner cannot change it by
+ * declaring other roles (registration refuses a mismatch).
  */
-export async function partnerActsFor(p: Pick<PartnerRow, 'id' | 'kind' | 'roles'>, cc: string, pid: string): Promise<boolean> {
-  if ((p.roles ?? []).some((r) => r.country_code === cc && r.party_id === pid)) return true;
+export const ROLE_OF_KIND: Record<PartnerRow['kind'], string> = { emsp: 'EMSP', cpo: 'CPO', hub: 'HUB' };
+
+/**
+ * May this partner act for (country_code, party_id), optionally in a given
+ * role ('CPO' for what a charge point operator publishes, 'EMSP' for tokens)?
+ *
+ * A partner acts for the parties it registered with, but only in the role its
+ * operator-pinned kind allows (roles stored by an older version that do not
+ * match the kind are ignored). A hub acts for the parties behind it that it
+ * reported (HubClientInfo) as CONNECTED or OFFLINE, in the role reported.
+ * A hub that has reported nobody yet acts for nobody but itself: fail closed.
+ */
+export async function partnerActsFor(
+  p: Pick<PartnerRow, 'id' | 'kind' | 'roles'>, cc: string, pid: string, role?: 'CPO' | 'EMSP',
+): Promise<boolean> {
+  const own = ROLE_OF_KIND[p.kind];
+  if ((!role || role === own) && (p.roles ?? []).some((r) => r.role === own && r.country_code === cc && r.party_id === pid)) return true;
   if (p.kind !== 'hub') return false;
-  const r = await one<{ known: boolean; allowed: boolean }>(
-    `SELECT count(*) > 0 AS known,
-            bool_or(country_code = $2 AND party_id = $3 AND status IN ('CONNECTED','OFFLINE')) AS allowed
-       FROM ocpi_hub_client WHERE partner_id = $1`,
-    [p.id, cc, pid],
+  const r = await one<{ allowed: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM ocpi_hub_client
+                     WHERE partner_id = $1 AND country_code = $2 AND party_id = $3
+                       AND status IN ('CONNECTED','OFFLINE') AND ($4::text IS NULL OR role = $4)) AS allowed`,
+    [p.id, cc, pid, role ?? null],
   );
-  return !r?.known || !!r.allowed;
+  return !!r?.allowed;
+}
+
+/** Does a hub have at least one CPO behind it that is connected (it may relay for CPOs)? */
+export async function hubHasCpoClients(partnerId: string): Promise<boolean> {
+  const r = await one<{ n: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM ocpi_hub_client WHERE partner_id = $1 AND role = 'CPO' AND status IN ('CONNECTED','OFFLINE')) AS n`,
+    [partnerId],
+  );
+  return !!r?.n;
 }
 
 // ─────────────────────────────────────────────── locations
@@ -426,8 +449,14 @@ export async function listCdrs(orgId: string, partnerId: string, party: Party, p
 
 export interface TokenRow extends TokenIn { id: string; org_id: string; partner_id: string }
 
-export async function upsertToken(partner: Pick<PartnerRow, 'id' | 'org_id'>, t: TokenIn): Promise<TokenRow> {
-  const row = await one<TokenRow>(
+/**
+ * Store a token a partner pushed (or sent with a command). A token belongs to
+ * the partner that first sent it: another partner sending the same
+ * (country_code, party_id, uid, type) does not take it over (nor re-validate
+ * it after its owner revoked it). Returns null in that case; the caller refuses.
+ */
+export async function upsertToken(partner: Pick<PartnerRow, 'id' | 'org_id'>, t: TokenIn): Promise<TokenRow | null> {
+  return one<TokenRow>(
     `INSERT INTO ocpi_token (org_id, partner_id, country_code, party_id, uid, type, contract_id, visual_number, issuer,
                              group_id, valid, whitelist, language, default_profile_type, energy_contract, last_updated)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
@@ -436,12 +465,12 @@ export async function upsertToken(partner: Pick<PartnerRow, 'id' | 'org_id'>, t:
        issuer = EXCLUDED.issuer, group_id = EXCLUDED.group_id, valid = EXCLUDED.valid, whitelist = EXCLUDED.whitelist,
        language = EXCLUDED.language, default_profile_type = EXCLUDED.default_profile_type,
        energy_contract = EXCLUDED.energy_contract, last_updated = EXCLUDED.last_updated, received_at = now()
+     WHERE ocpi_token.partner_id = EXCLUDED.partner_id
      RETURNING *`,
     [partner.org_id, partner.id, t.country_code, t.party_id, t.uid, t.type, t.contract_id, t.visual_number, t.issuer,
       t.group_id, t.valid, t.whitelist, t.language, t.default_profile_type,
       t.energy_contract ? JSON.stringify(t.energy_contract) : null, t.last_updated],
   );
-  return row!;
 }
 
 export async function getToken(orgId: string, cc: string, pid: string, uid: string, type: string): Promise<TokenRow | null> {

@@ -1,17 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { routePath, underPrefix } from '../api/route-path.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { config } from '../config.js';
 import { logger } from '../logger.js';
 import {
   OCPI_VERSION, STATUS, envelope, paging, parseToken, tokenOut, tokenHash, tokensFromAuthHeader, type Party,
 } from './mapping.js';
 import {
   getParty, partnerByTokenHash, renderLocations, renderTariffs, publishedTariffIds, listSessions, listCdrs,
-  getToken, upsertToken, partnerActsFor, logMessage, getPartner, type PartnerRow,
+  getToken, upsertToken, partnerActsFor, hubHasCpoClients, logMessage, getPartner, type PartnerRow,
 } from './store.js';
 import {
-  ourEndpoints, registerFromPartner, currentCredentials, closePartner, versionDetailsUrlOf, RegistrationError,
+  ourEndpoints, registerFromPartner, currentCredentials, closePartner, versionDetailsUrlOf, RegistrationError, ocpiPublicBase,
 } from './registration.js';
 import { handleCommand, runFollowUp } from './commands.js';
 import { syncOrg } from './push.js';
@@ -27,6 +26,7 @@ declare module 'fastify' {
     ocpiPartner?: PartnerRow;
     ocpiParty?: Party;
     ocpiStarted?: number;
+    ocpiBase?: string;
   }
 }
 
@@ -41,8 +41,8 @@ declare module 'fastify' {
  *   hubclientinfo                                  RECEIVER: a hub tells us who is behind it
  */
 
-const base = (req: FastifyRequest) =>
-  config.ocpi.publicUrl || `${req.protocol}://${String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '127.0.0.1')}`;
+/** Our public origin for this request: set by the authentication hook (see ocpiPublicBase). */
+const base = (req: FastifyRequest) => req.ocpiBase!;
 
 class OcpiError extends Error {
   constructor(public http: number, public ocpi: number, message: string) { super(message); }
@@ -70,6 +70,19 @@ export async function registerOcpiApi(app: FastifyInstance): Promise<void> {
     const toPid = req.headers['ocpi-to-party-id'];
     if (typeof toCc === 'string' && typeof toPid === 'string' && (toCc !== party.country_code || toPid !== party.party_id)) {
       return reply.status(400).send(envelope(undefined, STATUS.INVALID_PARAMS, `this platform is ${party.country_code}*${party.party_id}, not ${toCc}*${toPid}`));
+    }
+    // Every URL we hand out is built on the configured public origin, never on
+    // the caller's Host header (outside development/test, unset = refuse).
+    try { req.ocpiBase = ocpiPublicBase(req as unknown as { protocol: string; headers: Record<string, unknown> }); } catch (e) {
+      logger.error({ err: (e as Error).message }, 'OCPI request refused: no public URL configured');
+      return reply.status(503).send(envelope(undefined, STATUS.SERVER_ERROR, (e as Error).message));
+    }
+    // The eMSP side (our cards, and what CPOs report about our drivers) is for
+    // charge point operators only: a partner the operator set up as a CPO, or a
+    // hub relaying for CPOs (each object is then checked against the hub's clients).
+    if (routePath(req).startsWith(`/ocpi/${OCPI_VERSION}/emsp/`) && partner.kind !== 'cpo'
+        && !(partner.kind === 'hub' && (await hubHasCpoClients(partner.id)))) {
+      return reply.status(403).send(envelope(undefined, STATUS.CLIENT_ERROR, 'only a charge point operator (CPO) connection may use the eMSP endpoints'));
     }
     req.ocpiPartner = partner;
     req.ocpiParty = party;
@@ -232,13 +245,17 @@ export async function registerOcpiApi(app: FastifyInstance): Promise<void> {
   app.put(T, async (req, reply) => {
     const { partner } = ctx(req);
     const k = tokenPath(req);
-    if (!(await partnerActsFor(partner, k.country_code, k.party_id))) {
+    // Tokens are an eMSP's (its drivers'): pushed by the eMSP itself, or by a hub for one behind it.
+    if (!(await partnerActsFor(partner, k.country_code, k.party_id, 'EMSP'))) {
       return reply.status(403).send(envelope(undefined, STATUS.CLIENT_ERROR, `this connection may not push tokens for ${k.country_code}*${k.party_id}`));
     }
     const t = parseToken(req.body, k);
     if (typeof t === 'string') return reply.status(400).send(envelope(undefined, STATUS.INVALID_PARAMS, t));
     if (t.type !== k.type && (req.query as any)?.type) return reply.status(400).send(envelope(undefined, STATUS.INVALID_PARAMS, 'type must match ?type='));
-    await upsertToken(partner, t);
+    // A token another connection pushed first stays that connection's.
+    if (!(await upsertToken(partner, t))) {
+      return reply.status(403).send(envelope(undefined, STATUS.CLIENT_ERROR, 'this token was issued through another connection and cannot be changed through this one'));
+    }
     return envelope(undefined);
   });
   app.patch(T, async (req, reply) => {
@@ -250,7 +267,9 @@ export async function registerOcpiApi(app: FastifyInstance): Promise<void> {
     if (!b.last_updated) return reply.status(400).send(envelope(undefined, STATUS.INVALID_PARAMS, 'last_updated is required'));
     const merged = parseToken({ ...tokenOut(cur), ...b, country_code: cur.country_code, party_id: cur.party_id, uid: cur.uid, type: cur.type }, k);
     if (typeof merged === 'string') return reply.status(400).send(envelope(undefined, STATUS.INVALID_PARAMS, merged));
-    await upsertToken(partner, merged);
+    if (!(await upsertToken(partner, merged))) {
+      return reply.status(403).send(envelope(undefined, STATUS.CLIENT_ERROR, 'this token was issued through another connection and cannot be changed through this one'));
+    }
     return envelope(undefined);
   });
 

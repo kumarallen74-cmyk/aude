@@ -11,10 +11,10 @@ import { ocpiCall } from './client.js';
  * RECEIVER) and we pull the whole list from it after registering and every few
  * hours (when it offers a SENDER endpoint).
  *
- * What it changes: a hub that has told us who is behind it may only act for
- * those parties (tokens, commands, locations), and not for one it reports as
- * SUSPENDED or merely PLANNED. A hub that has told us nothing is trusted for
- * anyone, as before.
+ * What it changes: a hub may only act for the parties it reported behind it
+ * (tokens, commands, locations, charge records), in the role reported, and not
+ * for one it reports as SUSPENDED or merely PLANNED. A hub that has told us
+ * nothing acts for nobody but itself (fail closed) until it does.
  */
 
 export class HubClientError extends Error {
@@ -63,7 +63,9 @@ export async function listClients(orgId: string, partnerId: string) {
 
 /**
  * Pull the hub's full list (paged, following the Link header). A complete pull
- * is the truth: parties the hub no longer lists are forgotten.
+ * is the truth: parties the hub no longer lists are forgotten. An EMPTY list is
+ * not taken as "nobody is behind me any more" (a hub glitch would otherwise
+ * wipe what we know): it changes nothing, and is logged.
  */
 export async function pullHubClients(partner: PartnerRow): Promise<{ clients: number } | null> {
   if (partner.kind !== 'hub' || partner.state !== 'connected' || !partner.token_out) return null;
@@ -85,6 +87,10 @@ export async function pullHubClients(partner: PartnerRow): Promise<{ clients: nu
     }
     const link = String(r.headers.link ?? '');
     url = /<([^>]+)>;\s*rel="?next"?/.exec(link)?.[1] ?? null;
+  }
+  if (!seen.length) {
+    logger.warn({ partner: partner.name }, 'the hub returned an empty client list; keeping the parties we know');
+    return { clients: 0 };
   }
   for (const c of seen) await upsert(partner, c);
   await query(

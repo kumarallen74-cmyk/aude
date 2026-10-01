@@ -279,7 +279,11 @@ async function loadMonth(orgId: string, accountId: string, period: string) {
        FROM ocpi_remote_cdr r
        JOIN token t ON t.id = r.token_id
        JOIN ocpi_partner p ON p.id = r.partner_id
-      WHERE r.org_id = $1 AND t.fleet_account_id = $2 AND r.received_at >= $3 AND r.received_at < $4
+      WHERE r.org_id = $1 AND t.fleet_account_id = $2
+        -- Only accepted partner records are billed; one held for review counts from
+        -- the month an operator accepted it (its own month may be invoiced by then).
+        AND r.status = 'accepted'
+        AND COALESCE(r.reviewed_at, r.received_at) >= $3 AND COALESCE(r.reviewed_at, r.received_at) < $4
         AND NOT EXISTS (SELECT 1 FROM fleet_invoice_item i WHERE i.kind = 'roaming' AND i.ref_id = r.id)
       ORDER BY r.start_date_time`,
     [orgId, accountId, from, to],

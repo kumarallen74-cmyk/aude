@@ -217,9 +217,10 @@ export async function roamingStatus(p: DriverPrincipal, id: string) {
   );
   const cmd = r.start_command_id ? await one<{ response: string | null; result: string | null; message: string | null }>(`SELECT response, result, message FROM ocpi_command WHERE id = $1`, [r.start_command_id]) : null;
   const s = await sessionOf(r);
+  // Only an ACCEPTED partner record is the driver's bill: a held one is still in the operator's review.
   const cdr = s ? await one<{ id: string; total_incl_vat: string | null; total_excl_vat: string; total_energy: string; currency: string }>(
     `SELECT id, total_incl_vat, total_excl_vat, total_energy, currency FROM ocpi_remote_cdr
-      WHERE partner_id = $1 AND session_id = $2 ORDER BY received_at DESC LIMIT 1`, [r.partner_id, s.session_id]) : null;
+      WHERE partner_id = $1 AND session_id = $2 AND status = 'accepted' ORDER BY received_at DESC LIMIT 1`, [r.partner_id, s.session_id]) : null;
 
   let state: 'starting' | 'rejected' | 'charging' | 'finishing' | 'billed';
   let problem: string | null = null;
@@ -276,7 +277,7 @@ export async function roamingReceipt(p: DriverPrincipal, cdrId: string) {
     `SELECT r.id, r.data, r.currency, r.total_excl_vat, r.total_incl_vat, r.total_energy, r.start_date_time, r.end_date_time,
             p.name AS partner_name, r.country_code, r.party_id
        FROM ocpi_remote_cdr r JOIN ocpi_partner p ON p.id = r.partner_id
-      WHERE r.id = $1 AND r.token_id = $2`,
+      WHERE r.id = $1 AND r.token_id = $2 AND r.status = 'accepted'`,
     [cdrId, p.fleet.tokenId],
   );
   if (!c) return null;
@@ -334,7 +335,7 @@ export async function roamingHistory(p: DriverPrincipal, limit = 40) {
   const cdrs = await many<{ id: string; data: any; end_date_time: Date; start_date_time: Date; total_energy: string; total_incl_vat: string | null; total_excl_vat: string; currency: string; partner_name: string }>(
     `SELECT r.id, r.data, r.start_date_time, r.end_date_time, r.total_energy, r.total_incl_vat, r.total_excl_vat, r.currency, p.name AS partner_name
        FROM ocpi_remote_cdr r JOIN ocpi_partner p ON p.id = r.partner_id
-      WHERE r.token_id = $1 ORDER BY r.end_date_time DESC LIMIT $2`,
+      WHERE r.token_id = $1 AND r.status = 'accepted' ORDER BY r.end_date_time DESC LIMIT $2`,
     [p.fleet.tokenId, limit],
   );
   for (const c of cdrs) {

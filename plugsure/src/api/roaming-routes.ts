@@ -1,13 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { config } from '../config.js';
 import { one, many, query, afterResponse, outsideRequestScope } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { assertCan } from '../services/authz.js';
 import { writeAudit } from '../services/audit.js';
 import { getParty, setParty, getPartner, renderLocations, type PartnerRow } from '../ocpi/store.js';
-import { createPartner, connectToPartner, closePartner, versionsUrlOf, RegistrationError } from '../ocpi/registration.js';
+import { createPartner, connectToPartner, closePartner, versionsUrlOf, RegistrationError, ocpiPublicBase } from '../ocpi/registration.js';
 import { syncOrg, replayFailed } from '../ocpi/push.js';
-import { setShared, importFromCpo, sendCommand, EmspError, type OurCommand } from '../ocpi/emsp.js';
+import { setShared, importFromCpo, sendCommand, notifyCdr, EmspError, type OurCommand } from '../ocpi/emsp.js';
 import { csvCell } from '../services/session-query.js';
 import { listClients, pullHubClients } from '../ocpi/hubclients.js';
 import { profileLimitAt, type ChargingProfileIn } from '../ocpi/mapping.js';
@@ -22,8 +21,16 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PARTNER_COLS = `id, name, kind, state, versions_url, version, endpoints, roles, country_code, party_id,
                       last_error, last_success_at, registered_at, created_at`;
 
-const base = (req: FastifyRequest) =>
-  config.ocpi.publicUrl || `${req.protocol}://${String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '127.0.0.1')}`;
+/**
+ * Our OCPI origin: OCPI_PUBLIC_URL / PUBLIC_BASE_URL, never the request's Host
+ * header (see ocpiPublicBase). Throws a RegistrationError (503) when it is not
+ * configured outside development/test.
+ */
+const base = (req: FastifyRequest) => ocpiPublicBase(req as unknown as { protocol: string; headers: Record<string, unknown> });
+/** The same, or null with the reason when it is not configured (for read-only views). */
+const baseOrProblem = (req: FastifyRequest): { url: string | null; problem: string | null } => {
+  try { return { url: base(req), problem: null }; } catch (e) { return { url: null, problem: (e as Error).message }; }
+};
 
 export async function registerRoamingRoutes(app: FastifyInstance): Promise<void> {
   const audit = (req: FastifyRequest, action: string, targetType: string, targetId: string, after?: Record<string, unknown>) =>
@@ -63,6 +70,7 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
               (SELECT count(*) FROM charging_session cs WHERE cs.ocpi_partner_id = p.id)::int AS sessions,
               (SELECT count(*) FROM ocpi_remote_location l WHERE l.partner_id = p.id)::int AS network_locations,
               (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.partner_id = p.id)::int AS cdrs_received,
+              (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.partner_id = p.id AND r.status = 'held')::int AS cdrs_held,
               (SELECT count(*) FROM ocpi_hub_client h WHERE h.partner_id = p.id)::int AS hub_clients
          FROM ocpi_partner p WHERE p.org_id = $1 AND p.state <> 'closed' ORDER BY p.created_at`,
       [org(req)],
@@ -74,9 +82,12 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
         }))
       : [];
     const optedIn = new Set((await many<{ id: string }>(`SELECT id FROM site WHERE org_id = $1 AND roaming_publish`, [org(req)])).map((s) => s.id));
+    const pub = baseOrProblem(req);
     return {
       party,
-      versionsUrl: versionsUrlOf(base(req)),
+      versionsUrl: pub.url ? versionsUrlOf(pub.url) : null,
+      // Why there is no versions URL (OCPI_PUBLIC_URL not set), for the console to show.
+      publicUrlProblem: pub.problem,
       partners,
       sites: sites.map((s) => ({ ...s, optedIn: optedIn.has(s.id) })),
     };
@@ -111,10 +122,14 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     const b = (req.body ?? {}) as Record<string, unknown>;
     const name = String(b.name ?? '').trim();
     if (!name) return bad(reply, 400, 'Give the partner a name');
+    // The partner needs our versions URL to register: refuse before issuing a token it cannot use.
+    const pub = baseOrProblem(req);
+    if (!pub.url) return bad(reply, 503, pub.problem!);
+    // The kind is pinned here: the partner may only register with the matching role.
     const r = await createPartner(org(req), { name, kind: String(b.kind ?? 'emsp') });
     await audit(req, 'roaming.partner_created', 'ocpi_partner', r.partner.id, { name, kind: r.partner.kind });
     const { token_in: _a, token_in_hash: _b, token_out: _c, ...partner } = r.partner;
-    return { partner, token: r.token, versionsUrl: versionsUrlOf(base(req)) };
+    return { partner, token: r.token, versionsUrl: versionsUrlOf(pub.url) };
   });
 
   app.post('/v1/roaming/partners/:id/connect', async (req, reply) => {
@@ -125,10 +140,12 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     const versionsUrl = String(b.versionsUrl ?? '').trim();
     const token = String(b.token ?? '').trim();
     if (!versionsUrl || !token) return bad(reply, 400, "Enter the partner's versions URL and the token it gave you");
+    const pub = baseOrProblem(req);
+    if (!pub.url) return bad(reply, 503, pub.problem!);
     try {
       // Outside this request's transaction: the partner calls back into /ocpi while
       // we register, and must see the token we just issued.
-      await outsideRequestScope(() => connectToPartner(org(req), p.id, versionsUrl, token, base(req)));
+      await outsideRequestScope(() => connectToPartner(org(req), p.id, versionsUrl, token, pub.url!));
     } catch (e) {
       if (e instanceof RegistrationError) return bad(reply, 502, e.message);
       throw e;
@@ -301,8 +318,10 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     return many(
       `SELECT t.id, t.uid, t.status, t.valid_to, t.holder_name, t.fleet_name, t.account_type, t.roaming_shared, t.contract_id,
               t.energy_limit_wh, t.spend_limit_idr,
-              (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.token_id = t.id)::int AS roaming_cdrs,
-              (SELECT COALESCE(sum(COALESCE(r.total_incl_vat, r.total_excl_vat)), 0) FROM ocpi_remote_cdr r WHERE r.token_id = t.id AND r.currency = 'IDR')::bigint AS roaming_idr
+              (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.token_id = t.id AND r.status = 'accepted')::int AS roaming_cdrs,
+              (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.token_id = t.id AND r.status = 'held')::int AS roaming_cdrs_held,
+              (SELECT COALESCE(sum(COALESCE(r.total_incl_vat, r.total_excl_vat)), 0) FROM ocpi_remote_cdr r
+                WHERE r.token_id = t.id AND r.currency = 'IDR' AND r.status = 'accepted')::bigint AS roaming_idr
          FROM token t WHERE t.org_id = $1 AND t.kind = 'rfid'
         ORDER BY t.roaming_shared DESC, t.fleet_name NULLS LAST, t.holder_name NULLS LAST, t.uid LIMIT 2000`,
       [org(req)],
@@ -361,11 +380,14 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     const b = (req.body ?? {}) as Record<string, string>;
     if (!['START_SESSION', 'STOP_SESSION', 'UNLOCK_CONNECTOR'].includes(b.command ?? '')) return bad(reply, 400, 'Unknown command');
     if (!UUID_RE.test(String(b.partnerId))) return bad(reply, 404, 'roaming partner not found');
+    // The CPO answers to our response_url: no configured public URL, no command.
+    const pub = baseOrProblem(req);
+    if (!pub.url) return bad(reply, 503, pub.problem!);
     try {
       // Outside this request's transaction: the CPO may post the result back
       // before this request ends, and must find the command.
       const r = await outsideRequestScope(() => sendCommand({
-        orgId: org(req), partnerId: b.partnerId!, command: b.command as OurCommand, base: base(req), userId: req.principal.userId,
+        orgId: org(req), partnerId: b.partnerId!, command: b.command as OurCommand, base: pub.url!, userId: req.principal.userId,
         tokenId: b.tokenId, locationId: b.locationId, evseUid: b.evseUid, connectorId: b.connectorId, sessionId: b.sessionId,
         locationParty: b.countryCode && b.partyId ? { country_code: b.countryCode, party_id: b.partyId } : undefined,
       }));
@@ -391,7 +413,7 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
 
   const ABROAD_SQL = `
     SELECT r.id, r.cdr_id, r.session_id, r.start_date_time, r.end_date_time, r.total_energy, r.currency,
-           r.total_excl_vat, r.total_incl_vat, r.received_at, r.country_code, r.party_id,
+           r.total_excl_vat, r.total_incl_vat, r.received_at, r.country_code, r.party_id, r.status, r.hold_reason,
            p.name AS partner_name, t.uid, t.contract_id, t.holder_name, t.fleet_name,
            COALESCE(r.data->'cdr_location'->>'name', l.data->>'name') AS location_name,
            COALESCE(r.data->'cdr_location'->>'city', l.data->>'city') AS city
@@ -428,14 +450,68 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     assertCan(req.principal, { permission: 'roaming:read' });
     const q = (req.query ?? {}) as Record<string, string>;
     const rows = await many<any>(ABROAD_SQL, [org(req), ...range(q)]);
-    const head = ['start', 'end', 'partner', 'operator', 'location', 'city', 'card', 'contract_id', 'holder', 'fleet', 'kwh', 'currency', 'total_excl_vat', 'total_incl_vat', 'cdr_id', 'session_id'];
+    // status: accepted (billed), held (awaiting review, not billed) or rejected.
+    const head = ['start', 'end', 'partner', 'operator', 'location', 'city', 'card', 'contract_id', 'holder', 'fleet', 'kwh', 'currency', 'total_excl_vat', 'total_incl_vat', 'cdr_id', 'session_id', 'status'];
     const lines = rows.map((r) => [r.start_date_time, r.end_date_time, r.partner_name, `${r.country_code}*${r.party_id}`, r.location_name, r.city, r.uid, r.contract_id,
-      r.holder_name, r.fleet_name, r.total_energy, r.currency, r.total_excl_vat, r.total_incl_vat, r.cdr_id, r.session_id].map(csvCell).join(','));
+      r.holder_name, r.fleet_name, r.total_energy, r.currency, r.total_excl_vat, r.total_incl_vat, r.cdr_id, r.session_id, r.status].map(csvCell).join(','));
     return reply
       .header('content-type', 'text/csv; charset=utf-8')
       .header('content-disposition', `attachment; filename="roaming-charges-${new Date().toISOString().slice(0, 10)}.csv"`)
       .send([head.join(','), ...lines].join('\r\n') + '\r\n');
   });
+
+  // ── Partner charge records held for review (no matching session or approval of
+  //    ours, or implausible totals). They stay off fleet invoices and card limits
+  //    until accepted here; a rejected one never counts.
+  app.get('/v1/roaming/cdrs/held', async (req) => {
+    assertCan(req.principal, { permission: 'roaming:read' });
+    return many(
+      `SELECT r.id, r.cdr_id, r.session_id, r.start_date_time, r.end_date_time, r.total_energy, r.currency,
+              r.total_excl_vat, r.total_incl_vat, r.received_at, r.country_code, r.party_id, r.hold_reason,
+              p.name AS partner_name, t.uid, t.contract_id, t.holder_name, t.fleet_name,
+              r.data->'cdr_location'->>'name' AS location_name, r.data->>'authorization_reference' AS authorization_reference
+         FROM ocpi_remote_cdr r
+         JOIN ocpi_partner p ON p.id = r.partner_id
+         LEFT JOIN token t ON t.id = r.token_id
+        WHERE r.org_id = $1 AND r.status = 'held'
+        ORDER BY r.received_at DESC LIMIT 500`,
+      [org(req)],
+    );
+  });
+
+  for (const decision of ['accept', 'reject'] as const) {
+    app.post(`/v1/roaming/cdrs/:id/${decision}`, async (req, reply) => {
+      assertCan(req.principal, { permission: 'roaming:write' });
+      const { id } = req.params as { id: string };
+      if (!UUID_RE.test(id)) return bad(reply, 404, 'charge record not found');
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const note = typeof b.note === 'string' ? b.note.trim().slice(0, 500) : null;
+      // Accept a held record (or one rejected by mistake); reject only a held one:
+      // an accepted record may already be on an invoice.
+      const row = await one<{ id: string; cdr_id: string; token_id: string | null; currency: string; total: string; location_name: string | null; partner_name: string; hold_reason: string | null }>(
+        `UPDATE ocpi_remote_cdr r SET status = $3, reviewed_by = $4, reviewed_at = now()
+           FROM ocpi_partner p
+          WHERE r.id = $1 AND r.org_id = $2 AND p.id = r.partner_id
+            AND r.status = ANY($5::text[])
+          RETURNING r.id, r.cdr_id, r.token_id, r.currency, COALESCE(r.total_incl_vat, r.total_excl_vat)::text AS total,
+                    r.data->'cdr_location'->>'name' AS location_name, p.name AS partner_name, r.hold_reason`,
+        [id, org(req), decision === 'accept' ? 'accepted' : 'rejected', req.principal.userId,
+          decision === 'accept' ? ['held', 'rejected'] : ['held']],
+      );
+      if (!row) {
+        const exists = await one<{ status: string }>(`SELECT status FROM ocpi_remote_cdr WHERE id = $1 AND org_id = $2`, [id, org(req)]);
+        return exists ? bad(reply, 409, `This charge record is ${exists.status}`) : bad(reply, 404, 'charge record not found');
+      }
+      await audit(req, decision === 'accept' ? 'roaming.cdr_accepted' : 'roaming.cdr_rejected', 'ocpi_remote_cdr', row.id,
+        { cdrId: row.cdr_id, partner: row.partner_name, currency: row.currency, total: Number(row.total), holdReason: row.hold_reason, note });
+      // The driver's receipt, held back while the record was in review.
+      if (decision === 'accept') {
+        afterResponse(reply.raw, async () => notifyCdr(row.token_id, row.id, row.location_name ?? row.partner_name, row.currency, Number(row.total)),
+          (e) => logger.warn({ err: e.message }, 'roaming receipt push after review failed'));
+      }
+      return { id: row.id, status: decision === 'accept' ? 'accepted' : 'rejected' };
+    });
+  }
 
   app.get('/v1/roaming/sessions', async (req) => {
     assertCan(req.principal, { permission: 'roaming:read' });

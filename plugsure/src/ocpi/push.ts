@@ -303,8 +303,24 @@ export async function deliverDue(limit = 50): Promise<number> {
     [limit],
   );
   // Different objects in parallel; calls within one object are already serialised by the query.
-  await Promise.all(due.map((d) => attempt(d).catch((e) => logger.warn({ id: d.id, err: (e as Error).message }, 'roaming push failed'))));
+  await Promise.all(due.map((d) => attempt(d).catch((e) => crashed(d, e as Error))));
   return due.length;
+}
+
+/**
+ * An attempt that threw (rendering the body failed, the database hiccuped...)
+ * counts like a refused one: the claim above already counted it, so back off,
+ * and after MAX_ATTEMPTS dead-letter the row instead of retrying it every two
+ * minutes forever (and holding back every later call about the same object).
+ */
+async function crashed(d: DueRow, e: Error): Promise<void> {
+  logger.warn({ id: d.id, attempts: d.attempts, err: e.message }, 'roaming push failed');
+  const dead = d.attempts >= MAX_ATTEMPTS;
+  const wait = BACKOFF_S[Math.min(Math.max(d.attempts - 1, 0), BACKOFF_S.length - 1)]!;
+  await query(
+    `UPDATE ocpi_push SET state = $2, last_error = $3, next_attempt_at = now() + make_interval(secs => $4::int) WHERE id = $1 AND state = 'pending'`,
+    [d.id, dead ? 'failed' : 'pending', `internal error: ${e.message}`.slice(0, 500), wait],
+  ).catch((err) => logger.error({ id: d.id, err: (err as Error).message }, 'could not record a failed roaming push'));
 }
 
 async function attempt(d: DueRow): Promise<void> {
