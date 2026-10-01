@@ -213,6 +213,7 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
         effectivePpnPct: effectivePpnRateBps() / 100,
         wbp: { start: config.tou.wbpStart, end: config.tou.wbpEnd },
         env: config.env,
+        version: config.version,
       },
     };
   });

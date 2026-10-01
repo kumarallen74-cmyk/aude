@@ -287,7 +287,8 @@ openssl rand -hex 32   # -> SECRETS_KEY
 | Variable | Production value | Notes |
 | --- | --- | --- |
 | `NODE_ENV` | `production` | anything else turns on `pino-pretty`; keep logs JSON |
-| `DATABASE_URL` | `postgresql://plugsure:<pw>@127.0.0.1:5432/plugsure` | Path A overrides this to `@postgres:5432` inside the compose network |
+| `DATABASE_URL` | `postgresql://plugsure_app:<pw>@127.0.0.1:5432/plugsure` | The apps' connection, as the runtime role `plugsure_app` (never the owner). Path A overrides this to `@postgres:5432` inside the compose network |
+| `MIGRATION_DATABASE_URL` | `postgresql://plugsure:<pw>@127.0.0.1:5432/plugsure` | Path B only: the owner connection `plugsure-api.service` runs migrations with |
 | `LOG_LEVEL` | `info` | `debug` only while chasing a fault; it logs every OCPP frame |
 | `TZ` | `Asia/Jakarta` | **not cosmetic** — WBP/LWBP tariff blocks are evaluated in local time |
 | **`OCPP_MIN_SECURITY_PROFILE`** | **`2`** | **wss + HTTP Basic. The OCPP 1.6 certification baseline and the only acceptable production setting.** `0` (the code default) accepts any charger with no credential at all; `1` accepts Basic over plaintext. Setting this to `2` makes `checkAuth()` demand Basic credentials matching the stored `AuthorizationKey` for every connection. |
@@ -331,7 +332,13 @@ Minimal production `/etc/plugsure/plugsure.env`:
 NODE_ENV=production
 TZ=Asia/Jakarta
 LOG_LEVEL=info
-DATABASE_URL=postgresql://plugsure:CHANGE_ME@127.0.0.1:5432/plugsure
+# The apps connect as the restricted runtime role, never as the owner: as the
+# owner (or a superuser) row-level security would not constrain them.
+DATABASE_URL=postgresql://plugsure_app:CHANGE_ME_APP@127.0.0.1:5432/plugsure
+# The owner connection plugsure-api.service's ExecStartPre migrates with.
+MIGRATION_DATABASE_URL=postgresql://plugsure:CHANGE_ME@127.0.0.1:5432/plugsure
+# Migrations set plugsure_app's password from this; use the same value as above.
+POSTGRES_APP_PASSWORD=CHANGE_ME_APP
 
 # No defaults. The process exits at boot without these — see "Required secrets".
 AUDIT_HMAC_KEY=CHANGE_ME_openssl_rand_hex_32
@@ -658,8 +665,14 @@ sudo -u plugsure cp -R src/web dist/web            # operator console
 sudo -u plugsure cp -R src/driver-web dist/driver-web  # driver app (/app)
 sudo chown -R plugsure:plugsure /opt/plugsure
 
-sudo -u postgres createuser plugsure --pwprompt
+# The owner needs CREATEROLE: migrations create the runtime role plugsure_app
+# and set its LOGIN and password. Without it the first migration fails with
+# "permission denied to alter role".
+sudo -u postgres createuser plugsure --createrole --pwprompt
 sudo -u postgres createdb plugsure -O plugsure
+# Only if plugsure_app already exists in this cluster (created by another role):
+# PostgreSQL 16 also requires the owner to hold ADMIN OPTION on it.
+#   sudo -u postgres psql -c "GRANT plugsure_app TO plugsure WITH ADMIN OPTION"
 
 sudo install -m 0644 deploy/plugsure-gateway.service deploy/plugsure-api.service /etc/systemd/system/
 sudo systemctl daemon-reload

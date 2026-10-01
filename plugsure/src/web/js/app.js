@@ -196,7 +196,7 @@ function renderShell() {
           .map((v) => `<a href="#/${esc(v.id)}" data-view="${esc(v.id)}" title="${esc(v.title)}">${icon(v.icon)}<span>${esc(v.title)}</span>${v.id === 'dashboard' ? '<b class="count hidden" data-alerts></b>' : ''}</a>`)
           .join('')}</div>`;
       }).join('')}</nav>
-      <div class="sidebar-foot"><div>${esc(portalMode() ? `${me.owners[0].name} · operated by ${me.org?.name ?? ''}` : fleetMode() ? `${me.fleets[0].name} · billed by ${me.org?.name ?? ''}` : me.org?.name ?? '')}</div><div class="mono">v1.3.0 · ${esc(me.features?.env ?? '')}</div></div>
+      <div class="sidebar-foot"><div>${esc(portalMode() ? `${me.owners[0].name} · operated by ${me.org?.name ?? ''}` : fleetMode() ? `${me.fleets[0].name} · billed by ${me.org?.name ?? ''}` : me.org?.name ?? '')}</div><div class="mono">${me.features?.version ? `v${esc(me.features.version)} · ` : ''}${esc(me.features?.env ?? '')}</div></div>
     </aside>
     <div class="nav-scrim" data-scrim></div>
     <div class="main">

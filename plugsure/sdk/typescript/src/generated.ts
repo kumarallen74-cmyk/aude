@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.4.1";
+export const API_VERSION = "1.4.2";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -309,6 +309,8 @@ export interface AuthMe {
       end: string;
     };
     env: string;
+    /** The installed PlugSure release (package.json version). */
+    version: string;
   };
 }
 

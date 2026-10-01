@@ -1,4 +1,4 @@
-# PlugSure CSMS v1.4.0: hardware acceptance checklist
+# PlugSure CSMS v1.4: hardware acceptance checklist
 
 Run this on at least one real charger before the pilot. It supersedes
 `ACCEPTANCE-v1.3.md`, which demonstrates the console against the simulator.
@@ -23,7 +23,7 @@ Tick each box. Record a UTC time, the session or transaction ID and the evidence
 | Reference meter (make, serial, calibration date) | |
 | Test vehicle(s) | |
 | Witnesses | |
-| PlugSure build (git tag) | `v1.4.0` |
+| PlugSure build (git tag, e.g. `v1.4.2`) | |
 
 **Equipment:**
 - a calibrated reference energy meter on the test connector;
@@ -36,7 +36,7 @@ Tick each box. Record a UTC time, the session or transaction ID and the evidence
 
 ## 0. Before you go on site
 
-- [ ] The server runs `v1.4.0` from the published release, behind Caddy with a Let's Encrypt certificate (`deploy/Caddyfile` re-deployed).
+- [ ] The server runs the published release under test (`v1.4.2` or later; record the tag above), behind Caddy with a Let's Encrypt certificate (`deploy/Caddyfile` re-deployed).
 - [ ] The gateway environment has:
   - `NODE_ENV=production`;
   - `OCPP_MIN_SECURITY_PROFILE=2`;
@@ -44,7 +44,7 @@ Tick each box. Record a UTC time, the session or transaction ID and the evidence
   - a 64-hex `SECRETS_KEY`.
   The gateway refuses to start otherwise.
 - [ ] The API and gateway connect as `plugsure_app`. **Pass:** the startup log says *"row-level security is in force for application queries"*.
-- [ ] `curl https://<ocpp-host>/healthz` returns `"ok":true`. A plain `GET` on the OCPP path returns `426`.
+- [ ] **Health.** On the server, `curl http://127.0.0.1:9220/healthz` (gateway) and `curl http://127.0.0.1:9200/healthz` (API) both return `"ok":true`. From outside, `curl -i https://<ocpp-host>/ocpp/<identity>` returns `426` (the gateway, reached through Caddy, expects a WebSocket upgrade). The supplied Caddyfile answers 404 for any other path on the OCPP host, including `/healthz`.
 - [ ] The charger identity is registered in the console. Send the vendor the identity and URL with `deploy/AUTEL-HANDOUT.md`, and send the AuthorizationKey by a separate channel.
 - [ ] Take a database backup (`tools/backup/pg-backup.sh`) and note its file name. The test leaves real sessions and invoices behind.
 - [ ] Assign a known tariff to the site and write down the expected price. Use one with an energy rate and an idle fee, and if possible a time window that the test session will cross.

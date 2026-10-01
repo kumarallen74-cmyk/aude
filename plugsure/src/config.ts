@@ -1,10 +1,21 @@
 import 'dotenv/config';
+import { readFileSync } from 'node:fs';
 
 const num = (v: string | undefined, d: number) => (v === undefined ? d : Number(v));
 const bool = (v: string | undefined, d: boolean) => (v === undefined ? d : v === 'true' || v === '1');
 
+/** The release, from package.json (one level above both src/ and dist/). */
+function packageVersion(): string {
+  try {
+    return String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? 'unknown');
+  } catch {
+    return 'unknown';
+  }
+}
+
 export const config = {
   env: process.env.NODE_ENV ?? 'development',
+  version: packageVersion(),
 
   databaseUrl:
     process.env.DATABASE_URL ?? 'postgresql://postgres:plugsure@127.0.0.1:5432/plugsure',

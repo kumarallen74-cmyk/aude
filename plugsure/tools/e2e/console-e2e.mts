@@ -283,6 +283,11 @@ try {
   const boot201 = await c201.call('BootNotification', { reason: 'PowerUp', chargingStation: { model: 'MaxiCharger AC Wallbox', vendorName: 'Autel', firmwareVersion: '1.0.5' } });
   check('2.0.1: boot with a 22-char model accepted (tolerated deviation)', boot201.status === 'Accepted', boot201);
   await c201.call('StatusNotification', { timestamp: new Date().toISOString(), connectorStatus: 'Available', evseId: 1, connectorId: 1 });
+  // "Scan from live charger": an unregistered card tapped at the reader is offered for issuing.
+  const SCAN_TAG = `E2ESCAN${Date.now().toString(16).slice(-8).toUpperCase()}`;
+  const auth201 = await c201.call('Authorize', { idToken: { idToken: SCAN_TAG, type: 'ISO14443' } });
+  const scanned = await until(() => ops.get(`/v1/tokens/unknown?identity=${ID2}`), (r) => (r.data ?? []).some((t: any) => t.id_tag === SCAN_TAG), 10_000, 300);
+  check('rfid: scan from live charger offers the unregistered card just tapped', auth201?.idTokenInfo?.status !== 'Accepted' && (scanned.data ?? []).some((t: any) => t.id_tag === SCAN_TAG && t.ocpp_identity === ID2), { auth: auth201, scanned: scanned.data });
   await sleep(4000);
   c201.handlers.RequestStartTransaction = () => ({ status: 'Accepted' });
   const rs201 = await ops.post(`/v1/charge-points/${ID2}/remote-start`, { connectorId: 1, idTag: 'ID-RFID-0001' });
