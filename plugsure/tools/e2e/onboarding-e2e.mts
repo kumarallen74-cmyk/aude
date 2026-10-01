@@ -247,23 +247,30 @@ try {
   await c4.boot();
 
   // ================================================================ D. OCPP 2.0.1 station
+  // A station certificate is only signed over an authenticated (Profile 2+) connection, and only when PlugSure asked
+  // for it: an unsolicited CSR is refused even from the right charger.
   const D = `ONB-D-${sfx}`;
   await register(D, 'ocpp2.0.1');
+  const keyD = await ops('POST', `/v1/charge-points/${D}/keys`, { profile: 2 });
+  await ops('PUT', `/v1/charge-points/${D}/security-profile`, { profile: 2 });
   await ops('POST', `/v1/charge-points/${D}/activate`);
   const d1 = new Raw(D, 'ocpp2.0.1'); raws.push(d1);
-  await d1.connect({});
+  await d1.connect({ key: keyD.data.key });
   await d1.boot();
   const kD = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-  const t2 = Date.now();
-  const sD = await d1.call('SignCertificate', { csr: buildCsr(name([['CN', D], ['O', 'E2E Hardware']]), kD), certificateType: 'ChargingStationCertificate' });
-  const csD = await d1.waitFor('CertificateSigned', t2);
-  const badD = await d1.call('SignCertificate', { csr: buildCsr(name([['CN', 'NOT-ME']]), kD) });
-  check('D: 2.0.1 SignCertificate(ChargingStationCertificate) accepted and answered with CertificateSigned; a CSR for another identity Rejected',
-    sD.status === 'Accepted' && csD?.payload.certificateType === 'ChargingStationCertificate' && new X509Certificate(splitPemChain(csD.payload.certificateChain)[0]!).subject.includes(`CN=${D}`) && badD.status === 'Rejected', { sD, badD, cs: csD?.payload?.certificateType });
+  const unsolicited = await d1.call('SignCertificate', { csr: buildCsr(name([['CN', D], ['O', 'E2E Hardware']]), kD), certificateType: 'ChargingStationCertificate' });
+  check('D: an unsolicited 2.0.1 SignCertificate is Rejected (NotAllowed): PlugSure signs only what it asked for',
+    unsolicited.status === 'Rejected' && unsolicited.statusInfo?.reasonCode === 'NotAllowed', unsolicited);
   const t3 = Date.now();
   const trigD = await ops('POST', `/v1/charge-points/${D}/certificate/request`);
   const tmD = await d1.waitFor('TriggerMessage', t3);
   check('D: a certificate request to a 2.0.1 station is TriggerMessage(SignChargingStationCertificate)', trigD.status === 200 && tmD?.payload.requestedMessage === 'SignChargingStationCertificate', tmD?.payload);
+  const badD = await d1.call('SignCertificate', { csr: buildCsr(name([['CN', 'NOT-ME']]), kD) });
+  const t2 = Date.now();
+  const sD = await d1.call('SignCertificate', { csr: buildCsr(name([['CN', D], ['O', 'E2E Hardware']]), kD), certificateType: 'ChargingStationCertificate' });
+  const csD = await d1.waitFor('CertificateSigned', t2);
+  check('D: the requested 2.0.1 SignCertificate(ChargingStationCertificate) accepted and answered with CertificateSigned; a CSR for another identity Rejected',
+    sD.status === 'Accepted' && csD?.payload.certificateType === 'ChargingStationCertificate' && new X509Certificate(splitPemChain(csD.payload.certificateChain)[0]!).subject.includes(`CN=${D}`) && badD.status === 'Rejected', { sD, badD, cs: csD?.payload?.certificateType });
 
   // ================================================================ E. Onboarding page data, audit, console
   const onb = await ops('GET', '/v1/onboarding');

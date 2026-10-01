@@ -2,7 +2,7 @@ import { many, one, query } from '../db/pool.js';
 import { logger } from '../logger.js';
 import * as registry from '../ocpp/registry.js';
 import { setChargingProfile, clearChargingProfile, getCompositeSchedule } from '../ocpp/commands.js';
-import { resolveQuirks } from '../ocpp/quirks.js';
+import { resolveQuirks, pickRateUnit } from '../ocpp/quirks.js';
 import { profileLimitAt, type ChargingProfileIn } from '../ocpi/mapping.js';
 import { planSite, type SitePlanResult } from './v2x.js';
 
@@ -517,14 +517,25 @@ function idleFloorW(budget: { ceilingW: number; reserveW: number } | null, stati
   return Math.floor(usable / stations);
 }
 
-/** The rate unit this hardware actually accepts, learned during provisioning. */
+/**
+ * The rate unit this hardware actually accepts.
+ *
+ * THIS charger's own answer (learned during provisioning) comes first. The
+ * model-wide value is a fallback only when it is confirmed (seed, operator or
+ * cross-tenant consensus): it used to be whatever the last charger of the model
+ * answered, on any tenant, so one charger saying "Power" sent watt profiles to
+ * every amp-only unit of the model — rejected, and the station ceiling that
+ * keeps the site under its PLN capacity was never applied. Last, the
+ * hardware's natural unit (AC → A, DC → W).
+ */
 async function unitFor(chargePointId: string, fallback: 'A' | 'W'): Promise<'A' | 'W'> {
-  const cp = await one<{ vendor: string; model: string; firmware: string }>(
-    `SELECT vendor, model, firmware FROM charge_point WHERE id = $1`,
+  const cp = await one<{ vendor: string; model: string; firmware: string; charging_rate_units: string | null }>(
+    `SELECT vendor, model, firmware, charging_rate_units FROM charge_point WHERE id = $1`,
     [chargePointId],
   );
+  if (cp?.charging_rate_units) return pickRateUnit(cp.charging_rate_units, null, fallback);
   const quirks = await resolveQuirks(cp?.vendor, cp?.model, cp?.firmware);
-  return quirks?.findings?.chargingRateUnit ?? fallback;
+  return pickRateUnit(null, quirks?.findings, fallback);
 }
 
 /**

@@ -7,8 +7,9 @@ import { authorizeIdTag, type AdapterContext } from '../ocpp/adapter16.js';
 import { authorizeRoaming } from '../ocpi/authorize.js';
 import { pncCommand, type Actor } from '../ocpp/commands.js';
 import {
-  certInfo, hashDataOf, readOcspResponse, splitPemChain, parseCsr, type CertificateHashData, type OcspResult,
+  certInfo, ocspFreshnessProblem, ocspResponseCerts, readOcspResponse, splitPemChain, parseCsr, type CertificateHashData, type OcspResult,
 } from './der.js';
+import { checkContractChain, trustedIssuerFor, type CertStatus } from './chain.js';
 import { normaliseEmaid, formatEmaid } from './emaid.js';
 import { evCertificate, ocspFetch, pkiRoots, PkiError, signCsr, pkiProblem } from './pki.js';
 
@@ -65,10 +66,18 @@ export async function contractIdTag(chargePointId: string, value: string): Promi
 
 export interface PncSettings {
   enabled: boolean;
-  /** Accept a contract when its OCSP responder cannot be reached (the charger validated the chain). */
+  /**
+   * Accept a contract whose revocation status cannot be established: the OCSP
+   * responder is unreachable or errs, its answer is stale, or the certificate
+   * names no responder. OFF by default (fail closed): with it on, anyone able to
+   * block or delay OCSP traffic — or holding a certificate with no OCSP URL —
+   * charges on a revoked contract. Turn it on only where outages are a bigger
+   * risk than revoked contracts, and know that it is then a policy, not a check.
+   * A forged, unsigned or wrongly signed answer is refused either way.
+   */
   acceptWhenOcspUnavailable: boolean;
 }
-const DEFAULTS: PncSettings = { enabled: false, acceptWhenOcspUnavailable: true };
+const DEFAULTS: PncSettings = { enabled: false, acceptWhenOcspUnavailable: false };
 
 export async function getSettings(orgId: string): Promise<PncSettings> {
   const r = await one<{ s: any }>(`SELECT pnc_settings AS s FROM organisation WHERE id = $1`, [orgId]);
@@ -150,12 +159,23 @@ async function onSignCertificate(ctx: AdapterContext, p: any) {
     return { status: 'Rejected', ...statusInfo(code, why) };
   };
   // The station's own client certificate (Security Profile 3): PlugSure's charging-station CA, independent of Plug & Charge.
+  // Its rules (platform request, Profile 2+, rate limit) live in charger-ca.ts.
+  const { onStationCsr, connectionProfile } = await import('../services/charger-ca.js');
   if (type !== 'V2GCertificate') {
-    const { onStationCsr } = await import('../services/charger-ca.js');
     const r = await onStationCsr(ctx, String(p.csr));
-    return r.status === 'Accepted' ? { status: 'Accepted' } : { status: 'Rejected', ...statusInfo('InvalidCSR', r.reason) };
+    return r.status === 'Accepted' ? { status: 'Accepted' } : { status: 'Rejected', ...statusInfo(r.code ?? 'InvalidCSR', r.reason) };
   }
   if (!s.enabled) return refuse('Disabled', 'Plug & Charge is switched off');
+  /**
+   * A V2G (SECC) certificate is the TLS server identity the station presents to
+   * cars, chained to the V2G root every car trusts. Issued to a connection that
+   * is not authenticated over TLS (Profile 0/1: no credential, or a Basic
+   * password in clear), anyone who can claim the station's identity could obtain
+   * one and impersonate a charging station to cars. Same bar as the station
+   * certificate: Security Profile 2 or 3; unknown counts as 0.
+   */
+  const profile = connectionProfile(ctx as { securityProfile?: unknown });
+  if (profile < 2) return refuse('NotAllowed', `the connection is on Security Profile ${profile}; a V2G certificate is only issued over an authenticated TLS connection (Profile 2 or 3)`);
   const why = await pkiProblem();
   if (why) return refuse('NoPki', why);
   let subject: string;
@@ -204,56 +224,64 @@ async function signAndDeliver(ctx: AdapterContext, certId: string, csr: string, 
 
 // ------------------------------------------------------------------ Authorize with a contract
 
-type CertStatus = 'Accepted' | 'SignatureError' | 'CertificateExpired' | 'CertificateRevoked' | 'NoCertificateAvailable' | 'CertChainError' | 'ContractCancelled';
-
 async function moRoots(orgId: string): Promise<X509Certificate[]> {
   const rows = await many<{ pem: string }>(`SELECT pem FROM pnc_trust_anchor WHERE org_id = $1 AND kind = 'MORootCertificate'`, [orgId]);
   return rows.map((r) => new X509Certificate(r.pem));
 }
 
-/** Check a contract chain presented to the CSMS: leaf first, up to one of the operator's MO roots. */
-async function checkChain(orgId: string, pem: string, emaid: string): Promise<{ status: CertStatus; why?: string; hashData?: Array<CertificateHashData & { responderURL: string; issuerKey: KeyObject }> }> {
-  let certs: X509Certificate[];
-  try { certs = splitPemChain(pem).map((p) => new X509Certificate(p)); } catch { return { status: 'CertChainError', why: 'the certificate cannot be read' }; }
-  if (!certs.length) return { status: 'NoCertificateAvailable', why: 'no certificate in the request' };
-  const now = new Date();
-  if (certs.some((c) => new Date(c.validTo) < now || new Date(c.validFrom) > now)) return { status: 'CertificateExpired', why: 'a certificate in the chain is expired or not yet valid' };
-  const cn = certInfo(certs[0]!.raw).subjectAttrs.find(([k]) => k === 'CN')?.[1] ?? '';
-  if (normaliseEmaid(cn) !== emaid) return { status: 'CertChainError', why: `the certificate is for ${cn || 'no contract'}, not ${formatEmaid(emaid)}` };
-  const roots = await moRoots(orgId);
-  if (!roots.length) return { status: 'CertChainError', why: 'no MO root certificate is installed (Plug & Charge → Trust anchors)' };
-  // Every link signed by the next; the last by a trusted root (or the last IS a trusted root).
-  for (let i = 0; i < certs.length - 1; i++) {
-    if (!certs[i]!.checkIssued(certs[i + 1]!) || !certs[i]!.verify(certs[i + 1]!.publicKey)) return { status: 'SignatureError', why: 'the chain does not verify' };
-  }
-  const top = certs[certs.length - 1]!;
-  const anchored = roots.some((r) => r.fingerprint256 === top.fingerprint256 || (top.checkIssued(r) && top.verify(r.publicKey)));
-  if (!anchored) return { status: 'CertChainError', why: 'the chain does not lead to an installed MO root' };
-  const issuers = [...certs.slice(1), ...roots.filter((r) => top.checkIssued(r))];
-  const hashData = certs.flatMap((c, i) => {
-    const issuer = issuers[i];
-    const url = certInfo(c.raw).ocspUrl;
-    if (!issuer || !url || c.fingerprint256 === issuer.fingerprint256) return [];
-    return [{ ...hashDataOf(c.raw, issuer.raw), responderURL: url, issuerKey: issuer.publicKey }];
-  });
-  return { status: 'Accepted', hashData };
-}
+/** One certificate to check by OCSP: its hash data, where to ask, and who may sign the answer (when known). */
+type OcspItem = CertificateHashData & { responderURL: string | null; issuerKey?: KeyObject };
 
-/** OCSP for each certificate: revoked or unknown fails; unreachable is reported separately. */
-async function checkRevocation(list: Array<CertificateHashData & { responderURL: string; issuerKey?: KeyObject }>): Promise<{ status: CertStatus | 'unreachable'; why?: string; results: Array<{ serial: string; status: string }> }> {
+/**
+ * OCSP for each certificate: revoked or unknown fails; unreachable is reported
+ * separately (the operator's acceptWhenOcspUnavailable decides).
+ *
+ * The answer must be SIGNED by the certificate's issuer (or a delegated
+ * responder the issuer certified for OCSP signing) and FRESH. Before, an answer
+ * nobody could verify (signatureValid null) counted as good — and on the
+ * hash-data path, where the CHARGER names the responder and no issuer key was
+ * known, every answer was unverifiable, so any "good" from any URL passed. An
+ * old good answer could also be replayed for ever (no thisUpdate/nextUpdate
+ * check, OCSP is plain HTTP). And a certificate without an OCSP URL was simply
+ * not checked: it is now "not verifiable", which only acceptWhenOcspUnavailable
+ * lets through.
+ */
+async function checkRevocation(
+  list: OcspItem[],
+  roots: X509Certificate[],
+  now = new Date(),
+): Promise<{ status: CertStatus | 'unreachable'; why?: string; results: Array<{ serial: string; status: string }> }> {
   const results: Array<{ serial: string; status: string }> = [];
   for (const h of list) {
+    if (!h.responderURL) {
+      results.push({ serial: h.serialNumber, status: 'no_ocsp_url' });
+      return { status: 'unreachable', why: `certificate ${h.serialNumber} names no OCSP responder, so its revocation status cannot be checked`, results };
+    }
     let r: OcspResult;
     try {
       const der = await ocspFetch(h, h.responderURL);
-      r = readOcspResponse(der, h, h.issuerKey ? [h.issuerKey] : []);
+      // Who may sign: the issuer we already verified (full chain), else an issuer
+      // certificate that chains to an installed MO root — from the trust anchors
+      // or carried in the answer itself. Never "whoever the responder says".
+      let issuerKey = h.issuerKey;
+      if (!issuerKey) {
+        const pool = ocspResponseCerts(der).flatMap((d) => { try { return [new X509Certificate(d)]; } catch { return []; } });
+        issuerKey = trustedIssuerFor(h, pool, roots, now)?.publicKey;
+      }
+      r = readOcspResponse(der, h, issuerKey ? [issuerKey] : [], now);
+      if (r.responseStatus === 'successful' && !issuerKey) {
+        results.push({ serial: h.serialNumber, status: 'unverifiable' });
+        return { status: 'SignatureError', why: `the OCSP answer for ${h.serialNumber} cannot be verified: its issuer does not chain to an installed MO root`, results };
+      }
     } catch (e) {
       results.push({ serial: h.serialNumber, status: 'unreachable' });
       return { status: 'unreachable', why: (e as Error).message, results };
     }
     results.push({ serial: h.serialNumber, status: r.status ?? r.responseStatus });
     if (r.responseStatus !== 'successful') return { status: 'unreachable', why: `the OCSP responder answered ${r.responseStatus}`, results };
-    if (r.signatureValid === false) return { status: 'SignatureError', why: 'the OCSP answer is not signed by the issuer', results };
+    if (r.signatureValid !== true) return { status: 'SignatureError', why: 'the OCSP answer is not signed by the issuer or a delegated OCSP responder', results };
+    const stale = ocspFreshnessProblem(r, now);
+    if (stale) return { status: 'unreachable', why: `${stale} (certificate ${h.serialNumber})`, results };
     if (r.status === 'revoked') return { status: 'CertificateRevoked', why: `certificate ${h.serialNumber} is revoked`, results };
     if (r.status !== 'good') return { status: 'CertChainError', why: `the PKI does not know certificate ${h.serialNumber}`, results };
   }
@@ -280,17 +308,23 @@ export async function authorizeContract(ctx: AdapterContext, p: any): Promise<{ 
   if (!emaid) return done('bad_emaid', { idTokenInfo: { status: 'Invalid' } }, { presented: raw.slice(0, 40) });
 
   // 1. The certificate: the chain itself (checked here), or the hash data of a chain the charger checked.
-  let ocspList: Array<CertificateHashData & { responderURL: string; issuerKey?: KeyObject }> = [];
+  const roots = hasCert || hashData.length ? await moRoots(ctx.orgId) : [];
+  let ocspList: OcspItem[] = [];
   if (hasCert) {
-    const c = await checkChain(ctx.orgId, p.certificate, emaid);
+    const c = checkContractChain(String(p.certificate), emaid, roots);
     if (c.status !== 'Accepted') return done('certificate_refused', { idTokenInfo: { status: 'Invalid' }, certificateStatus: c.status }, { reason: c.why });
-    ocspList = c.hashData ?? [];
+    ocspList = (c.revocation ?? []).map((x) => ({ ...x.hashData, responderURL: x.responderURL, issuerKey: x.issuer.publicKey }));
   } else if (hashData.length) {
-    ocspList = hashData.map((h) => ({ hashAlgorithm: h.hashAlgorithm, issuerNameHash: h.issuerNameHash, issuerKeyHash: h.issuerKeyHash, serialNumber: h.serialNumber, responderURL: h.responderURL }));
+    // The charger checked the chain; we check revocation. The responder URL is the
+    // charger's word, so the answer counts only if an issuer we trust signed it.
+    ocspList = hashData.map((h) => ({
+      hashAlgorithm: h.hashAlgorithm, issuerNameHash: h.issuerNameHash, issuerKeyHash: h.issuerKeyHash, serialNumber: h.serialNumber,
+      responderURL: typeof h.responderURL === 'string' && h.responderURL ? h.responderURL : null,
+    }));
   }
   let ocsp: Awaited<ReturnType<typeof checkRevocation>> | null = null;
   if (ocspList.length) {
-    ocsp = await checkRevocation(ocspList);
+    ocsp = await checkRevocation(ocspList, roots);
     if (ocsp.status === 'unreachable') {
       if (!s.acceptWhenOcspUnavailable) return done('ocsp_unavailable', { idTokenInfo: { status: 'Unknown' } }, { reason: ocsp.why, ocsp: ocsp.results });
     } else if (ocsp.status !== 'Accepted') {

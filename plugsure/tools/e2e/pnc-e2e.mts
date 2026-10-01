@@ -61,8 +61,10 @@ class Raw {
   pending = new Map<string, (v: any) => void>();
   n = 0;
   constructor(public id: string, public version: 'ocpp1.6' | 'ocpp2.0.1') {}
+  key = '';
   async connect() {
-    this.ws = new WebSocket(`${OCPP}/${this.id}`, [this.version]);
+    const headers: Record<string, string> = this.key ? { authorization: 'Basic ' + Buffer.from(`${this.id}:${this.key}`).toString('base64'), 'x-forwarded-proto': 'https' } : {};
+    this.ws = new WebSocket(`${OCPP}/${this.id}`, [this.version], { headers });
     await new Promise<void>((res, rej) => { this.ws.once('open', () => res()); this.ws.once('error', rej); });
     this.ws.on('message', (raw) => {
       const f = JSON.parse(raw.toString());
@@ -123,11 +125,17 @@ try {
       evses: [{ evseId: 1, connectors: [{ connectorId: 1, connectorType: 'cCCS2', currentKind: 'DC', maxPowerW: 60000, teraCertStatus: 'verified', teraDueAt: '2027-12-31' }] }] });
     await ops('POST', `/v1/charge-points/${id}/activate`);
   }
-  const st = new Raw(ID2, 'ocpp2.0.1'); raws.push(st);
+  // Certificates are only issued over Profile 2+: connect both chargers with a key over (proxied) TLS.
+  const keys: Record<string, string> = {};
+  for (const id of [ID2, ID16]) {
+    keys[id] = (await ops('POST', `/v1/charge-points/${id}/keys`, { profile: 2 })).data.key;
+    await ops('PUT', `/v1/charge-points/${id}/security-profile`, { profile: 2 });
+  }
+  const st = new Raw(ID2, 'ocpp2.0.1'); raws.push(st); st.key = keys[ID2]!;
   await st.connect();
   await st.call('BootNotification', { reason: 'PowerUp', chargingStation: { model: 'PNC-201', vendorName: 'E2ESim', firmwareVersion: '2.0.1' } });
   await st.call('StatusNotification', { timestamp: iso(), connectorStatus: 'Available', evseId: 1, connectorId: 1 });
-  const c16 = new Raw(ID16, 'ocpp1.6'); raws.push(c16);
+  const c16 = new Raw(ID16, 'ocpp1.6'); raws.push(c16); c16.key = keys[ID16]!;
   await c16.connect();
   await c16.call('BootNotification', { chargePointVendor: 'E2ESim', chargePointModel: 'PNC-16', firmwareVersion: '1.6.0' });
   await c16.call('StatusNotification', { connectorId: 1, errorCode: 'NoError', status: 'Available', timestamp: iso() });
@@ -203,7 +211,7 @@ try {
   const badCsr = await st.call('SignCertificate', { csr: 'MIIB-not-a-csr', certificateType: 'V2GCertificate' });
   const csCert = await st.call('SignCertificate', { csr: buildCsr(name([['CN', ID2]]), v2gKeys) });
   check('SignCertificate: a malformed request is Rejected (InvalidCSR); a station certificate goes to the charging-station CA (Accepted)',
-    badCsr.status === 'Rejected' && badCsr.statusInfo?.reasonCode === 'InvalidCSR' && csCert.status === 'Accepted', { badCsr, csCert });
+    badCsr.status === 'Rejected' && badCsr.statusInfo?.reasonCode === 'InvalidCSR' && csCert.status === 'Rejected' && csCert.statusInfo?.reasonCode === 'NotAllowed', { badCsr, csCert });
 
   // ================================================================ contracts at the station (2.0.1)
   const tc = await ops('POST', '/v1/pnc/test-contracts', { emaid: EMAID });

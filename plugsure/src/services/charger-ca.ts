@@ -216,24 +216,103 @@ async function recordCertificate(orgId: string, chargePointId: string, state: st
 
 // ================================================================== over OCPP (the charger keeps its key)
 
-interface Ctx { ocppIdentity: string; chargePointId: string; orgId: string }
+interface Ctx {
+  ocppIdentity: string;
+  chargePointId: string;
+  orgId: string;
+  /**
+   * The OCPP Security Profile this CONNECTION was authenticated at (set by the
+   * gateway when the WebSocket is accepted): 3 = mutual TLS, 2 = Basic auth over
+   * TLS, 1 = Basic auth in clear, 0 = no credential. Unknown is treated as 0.
+   */
+  securityProfile?: number | null;
+}
+
+/** How long a platform request for a station CSR stays open. */
+export const STATION_CSR_REQUEST_TTL_MS = 15 * 60_000;
+/** Station certificates signed per charger in any 24 hours, whatever asked for them. */
+export const STATION_CSR_MAX_PER_DAY = 3;
+
+/** The Security Profile a connection was authenticated at; unknown counts as 0 (refuse). */
+export function connectionProfile(ctx: { securityProfile?: unknown }): number {
+  const p = Number(ctx.securityProfile);
+  return Number.isInteger(p) && p >= 0 && p <= 3 ? p : 0;
+}
+
+/**
+ * Whether a station CSR may be signed — pure, for onStationCsr and its tests.
+ *
+ *   - the connection is authenticated AND encrypted (Security Profile 2 or 3):
+ *     on Profile 0/1 the identity is unauthenticated or its key travels in
+ *     clear, so anyone who can claim the identity would get a client
+ *     certificate the TLS terminator trusts — i.e. a permanent Profile 3
+ *     credential for someone else's charger;
+ *   - PlugSure asked for it: a request (zero-touch upgrade, renewal, operator)
+ *     is open, or the certificate PlugSure's CA issued is inside its renewal
+ *     window (OCPP 2.0.1 lets a station start its own renewal);
+ *   - at most STATION_CSR_MAX_PER_DAY signings per charger per day.
+ */
+export function stationCsrRefusal(s: {
+  profile: number;
+  requestOpen: boolean;
+  renewalDue: boolean;
+  signedLastDay: number;
+}): string | null {
+  if (s.profile < 2) return `the connection is on Security Profile ${s.profile}; a station certificate is only issued over an authenticated TLS connection (Profile 2 or 3)`;
+  if (!s.requestOpen && !s.renewalDue) return 'PlugSure did not ask this charger for a certificate request (no open request and no renewal due)';
+  if (s.signedLastDay >= STATION_CSR_MAX_PER_DAY) return `rate limit: ${STATION_CSR_MAX_PER_DAY} station certificates were already requested by this charger in the last 24 hours`;
+  return null;
+}
 
 /**
  * SignCertificate from a charger for its own (station) certificate. Answered
  * at once; the certificate is signed and sent with CertificateSigned after.
+ *
+ * It used to sign ANY such request, unsolicited and at any security profile: a
+ * Profile 0/1 connection claiming a charger's identity (no credential, or a
+ * Basic password sent in clear) walked away with a client certificate from the
+ * CA the TLS terminator trusts. See stationCsrRefusal for the rules; anything
+ * else is answered Rejected.
  */
-export async function onStationCsr(ctx: Ctx, csrPem: string): Promise<{ status: 'Accepted' | 'Rejected'; reason?: string }> {
+export async function onStationCsr(ctx: Ctx, csrPem: string): Promise<{ status: 'Accepted' | 'Rejected'; reason?: string; code?: 'InvalidCSR' | 'NotAllowed' }> {
   const { logEvent } = await import('../pnc/service.js');
+  const reject = async (reason: string, code: 'InvalidCSR' | 'NotAllowed') => {
+    await logEvent(ctx.orgId, ctx.chargePointId, 'SignCertificate', 'rejected', { certificateType: 'ChargingStationCertificate', reason });
+    if (code === 'NotAllowed') logger.warn({ cp: ctx.ocppIdentity, reason }, 'station certificate request refused');
+    return { status: 'Rejected' as const, reason, code };
+  };
   let subject: string;
   try { subject = checkStationCsr(csrPem, ctx.ocppIdentity).subjectText; }
-  catch (e) {
-    await logEvent(ctx.orgId, ctx.chargePointId, 'SignCertificate', 'rejected', { certificateType: 'ChargingStationCertificate', reason: (e as Error).message });
-    return { status: 'Rejected', reason: (e as Error).message };
-  }
-  const row = await one<{ id: string }>(
-    `INSERT INTO pnc_certificate (org_id, charge_point_id, certificate_type, csr_subject, source) VALUES ($1,$2,'ChargingStationCertificate',$3,'ocpp_csr') RETURNING id`,
-    [ctx.orgId, ctx.chargePointId, subject],
-  );
+  catch (e) { return reject((e as Error).message, 'InvalidCSR'); }
+
+  // Decide and consume the request in one transaction, so two CSRs racing on
+  // one request cannot both be signed.
+  const decision = await tx(async (c) => {
+    const cp = (await c.query<{ request_open: boolean; renewal_due: boolean; signed_last_day: number }>(
+      `SELECT cp.station_csr_requested_until IS NOT NULL AND cp.station_csr_requested_until > now() AS request_open,
+              (cp.client_cert_source IN ('plugsure_ca', 'plugsure_ca_csr', 'ocpp_csr')
+                 AND cp.client_cert_not_after < now() + make_interval(days => $2)) IS TRUE AS renewal_due,
+              (SELECT count(*)::int FROM pnc_certificate p
+                WHERE p.charge_point_id = cp.id AND p.certificate_type = 'ChargingStationCertificate'
+                  AND p.source = 'ocpp_csr' AND p.requested_at > now() - interval '24 hours') AS signed_last_day
+         FROM charge_point cp WHERE cp.id = $1 FOR UPDATE`,
+      [ctx.chargePointId, config.chargerCa.renewDays],
+    )).rows[0];
+    if (!cp) return { refusal: 'charge point not found' } as const;
+    const refusal = stationCsrRefusal({
+      profile: connectionProfile(ctx), requestOpen: cp.request_open, renewalDue: cp.renewal_due, signedLastDay: cp.signed_last_day,
+    });
+    if (refusal) return { refusal } as const;
+    // One request, one certificate.
+    await c.query(`UPDATE charge_point SET station_csr_requested_until = NULL WHERE id = $1`, [ctx.chargePointId]);
+    const row = (await c.query<{ id: string }>(
+      `INSERT INTO pnc_certificate (org_id, charge_point_id, certificate_type, csr_subject, source) VALUES ($1,$2,'ChargingStationCertificate',$3,'ocpp_csr') RETURNING id`,
+      [ctx.orgId, ctx.chargePointId, subject],
+    )).rows[0]!;
+    return { refusal: null, row } as const;
+  });
+  if (decision.refusal !== null) return reject(decision.refusal, 'NotAllowed');
+  const row = decision.row;
   await logEvent(ctx.orgId, ctx.chargePointId, 'SignCertificate', 'accepted', { certificateType: 'ChargingStationCertificate', subject });
   setTimeout(() => { void signAndInstall(ctx, row!.id, csrPem).catch((e) => logger.warn({ cp: ctx.ocppIdentity, err: (e as Error).message }, 'station certificate not installed')); }, 250);
   return { status: 'Accepted' };
@@ -297,9 +376,18 @@ async function signAndInstall(ctx: Ctx, certId: string, csrPem: string) {
   }
 }
 
-/** Ask the charger for a CSR for its station certificate (it answers with SignCertificate). */
+/**
+ * Ask the charger for a CSR for its station certificate (it answers with
+ * SignCertificate). Opens the request onStationCsr requires — BEFORE the
+ * trigger goes out, since the charger may answer before our call returns.
+ */
 export async function requestStationCertificate(identity: string, actor: { type: 'user' | 'api_client' | 'system'; id?: string; orgId?: string; ip?: string }) {
   const { sendBackground, wireVersion, triggerMessage } = await import('../ocpp/commands.js');
+  // Outside any request transaction: the gateway (another process) must see it at once.
+  await outsideRequestScope(() => query(
+    `UPDATE charge_point SET station_csr_requested_until = now() + make_interval(secs => $2) WHERE ocpp_identity = $1`,
+    [identity, STATION_CSR_REQUEST_TTL_MS / 1000],
+  ));
   const v = await wireVersion(identity);
   const r = v === 'ocpp2.0.1' || v === 'ocpp2.1'
     ? await triggerMessage(identity, 'SignChargingStationCertificate', undefined, actor)
