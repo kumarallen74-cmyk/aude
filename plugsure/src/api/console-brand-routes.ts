@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { assertCan } from '../services/authz.js';
-import { afterResponse } from '../db/pool.js';
+import { afterResponse, outsideRequestScope } from '../db/pool.js';
 import { writeAudit } from '../services/audit.js';
 import { sandboxInfo } from '../sandbox/provision.js';
 import { BrandError } from '../services/brand.js';
@@ -110,7 +110,8 @@ export async function registerConsoleBrandRoutes(app: FastifyInstance): Promise<
     if (!UUID_RE.test(orgId)) return reply.status(404).send({ error: 'organisation not found' });
     try {
       const claim = await approveHostname(orgId, ((req.body ?? {}) as Record<string, unknown>).hostname, UUID_RE.test(req.principal.userId) ? req.principal.userId : null);
-      await writeAudit({ orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action: 'console_brand.hostname_approved', targetType: 'organisation', targetId: orgId, after: { hostname: claim.hostname }, ip: req.ip });
+      // The approval commits outside the request's transaction, so its audit record does too.
+      await outsideRequestScope(() => writeAudit({ orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action: 'console_brand.hostname_approved', targetType: 'organisation', targetId: orgId, after: { hostname: claim.hostname }, ip: req.ip }));
       forgetAfterCommit(reply);
       return claim;
     } catch (e) {
@@ -122,7 +123,7 @@ export async function registerConsoleBrandRoutes(app: FastifyInstance): Promise<
     const { orgId } = req.params as { orgId: string };
     assertCan(req.principal, { permission: 'platform:admin' });
     if (!UUID_RE.test(orgId) || !(await revokeHostname(orgId))) return reply.status(404).send({ error: 'No approved console web address for this organisation.' });
-    await writeAudit({ orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action: 'console_brand.hostname_revoked', targetType: 'organisation', targetId: orgId, after: null, ip: req.ip });
+    await outsideRequestScope(() => writeAudit({ orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action: 'console_brand.hostname_revoked', targetType: 'organisation', targetId: orgId, after: null, ip: req.ip }));
     forgetAfterCommit(reply);
     return { ok: true };
   });

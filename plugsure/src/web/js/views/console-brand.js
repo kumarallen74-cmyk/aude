@@ -166,6 +166,12 @@ registerView('console-brand', {
         } catch (e) { toast(e.message, 'crit'); }
       }));
       $$('[data-revoke]', root).forEach((btn) => btn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'Withdraw the approval?',
+          message: 'The address shows the PlugSure sign-in page again and any account can sign in there, until it is approved again.',
+          confirmLabel: 'Withdraw', danger: true,
+        });
+        if (!ok) return;
         try {
           await api(`/v1/platform/console-hostnames/${encodeURIComponent(btn.dataset.revoke)}/revoke`, { method: 'POST' });
           toast('Approval withdrawn.', 'ok');

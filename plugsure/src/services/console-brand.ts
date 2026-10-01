@@ -268,10 +268,12 @@ export async function approveHostname(orgId: string, hostname: unknown, approver
   const taken = await hostnameTaken(h, orgId);
   if (taken) throw new BrandError(409, taken === 'console' ? 'Another operator’s console already has this address approved.' : 'A driver app uses this address.', { hostname: 'taken' });
   try {
-    await outsideRequestScope(() => query(
+    const done = await outsideRequestScope(() => query(
       `UPDATE console_brand SET hostname_approved_at = now(), hostname_approved_by = $3 WHERE org_id = $1 AND hostname = $2`,
       [orgId, h, approverId],
     ));
+    // The operator changed or removed the address after it was read: nothing was approved.
+    if (!done.rowCount) throw new BrandError(409, 'The operator changed its console web address meanwhile; approve the address it has now.', { hostname: 'changed' });
   } catch (e) {
     if ((e as { code?: string }).code === '23505') throw new BrandError(409, 'Another operator’s console already has this address approved.', { hostname: 'taken' });
     throw e;

@@ -59,20 +59,25 @@ When an operator saved its driver app, the check that "another operator already 
 
 ## Verification
 
-- typecheck clean; 826/826 unit and database tests, including the new console-brand tests:
-  - contrast across colour combinations;
+- **Unit and database tests:** typecheck clean; 829/829. The new console-brand tests run as the runtime role and cover:
+  - contrast across many colour combinations;
   - validation;
-  - cross-operator address checks as the runtime role;
+  - the approval flow (a waiting claim blocks nobody, a stale approval is refused, withdrawal);
+  - PlugSure's reserved addresses;
+  - console and driver-app addresses kept apart across operators;
   - the logo.
-- `console-brand` end-to-end suite (32 checks) against the running stack as `plugsure_app`:
+- **`console-brand` end-to-end suite** (45 checks, now in CI) against the running stack as `plugsure_app`:
   - saving and validation;
+  - an address with no effect until approved;
+  - only a platform administrator can approve;
+  - one operator per approved address;
   - the sign-in page by address;
-  - own account accepted and another operator's refused with the wrong-password answer;
-  - the refusal audited;
-  - the address protected from other operators' consoles and driver apps;
+  - another operator's account refused exactly as a wrong password (counted, no session, nothing in the host operator's audit log);
   - the logo served as 256 × 256;
   - a read-only key refused;
-  - removal.
-- Browser check (Chromium, light and dark), on the brand's address and on PlugSure's own:
+  - withdrawal and removal.
+- **All 30 end-to-end suites** pass in full mode on a fresh database as `plugsure_app`.
+- **Browser check** (Chromium, light and dark), on the brand's address and on PlugSure's own:
   - the sign-in page, the sidebar, the window title, the tab icon and the accent colours;
   - PlugSure's own address unchanged.
+- **Independent review:** the blocker it found (claiming PlugSure's own address) and the sign-in refusal that showed a password was right are both fixed. It re-checked the fixes.
