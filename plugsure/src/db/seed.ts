@@ -241,7 +241,7 @@ async function main() {
     `INSERT INTO tariff_assignment (tariff_id, scope_type, scope_id, priority)
      SELECT $1, 'org', $2, 0
       WHERE NOT EXISTS (SELECT 1 FROM tariff_assignment
-                         WHERE tariff_id = $1 AND scope_type = 'org' AND scope_id = $2 AND current_type IS NULL)`,
+                         WHERE tariff_id = $1 AND scope_type = 'org' AND scope_id = $2 AND current_type IS NULL AND valid_to IS NULL)`,
     [tariff!.id, orgId],
   );
 

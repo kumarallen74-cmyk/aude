@@ -81,6 +81,9 @@ if (DB_OK) {
     // Effective from well before the sessions start (rating uses the tariff as of the start).
     await query(`UPDATE tariff SET active_from = now() - interval '1 day' WHERE id = $1`, [t.tariffId]);
     assert.equal((await assignTariff(t.tariffId!, 'site', siteId, 0, 'AC')).ok, true);
+    // Assignments are versioned: one made now applies to sessions that START from now. The sessions here
+    // are backdated, so the assignment is too.
+    await query(`UPDATE tariff_assignment SET valid_from = now() - interval '1 day' WHERE tariff_id = $1`, [t.tariffId]);
   });
   after(async () => {
     await cleanup();

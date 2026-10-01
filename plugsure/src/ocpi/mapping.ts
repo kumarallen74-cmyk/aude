@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { config } from '../config.js';
-import { plnEnergyRate, type Tariff, type TariffComponent, type CdrLine } from '../services/tariff.js';
+import { plnEnergyRate, usesFormulaRate, type Tariff, type TariffComponent, type CdrLine } from '../services/tariff.js';
 
 /**
  * PlugSure's data model -> OCPI 2.2.1 objects.
@@ -331,7 +331,8 @@ export function buildTariff(party: Party, t: TariffIn) {
     const r = windowRestrictions(c);
     if ((c.fromKwh ?? 0) > 0) r.min_kwh = c.fromKwh;
     if (c.toKwh != null) r.max_kwh = c.toKwh;
-    el([{ type: 'ENERGY', price: r4(c.rate > 0 ? c.rate : (regulated ?? 0)), vat, step_size: 1 }], r);
+    // A free tier (rate 0) is published as free; only a tier without a rate uses the PLN formula price.
+    el([{ type: 'ENERGY', price: r4(usesFormulaRate(c) ? (regulated ?? 0) : Number(c.rate)), vat, step_size: 1 }], r);
   }
 
   // Service + admin fee: one flat price, not charged below the minimum billable energy.
