@@ -133,8 +133,12 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
       WHERE s.org_id = $1`,
     [orgId],
   );
-  const sessions = await many<{ charge_point_id: string; subtotal_idr: string; pbjt_idr: string; ppn_idr: string; total_idr: string; energy_wh: string; method: string | null; captured: string | null; paid_at: Date | null; needs_review: boolean }>(
-    `SELECT cs.charge_point_id, d.subtotal_idr, d.pbjt_idr, d.ppn_idr, d.total_idr, cs.energy_wh,
+  // Each session counts for the site it ran at (charging_session.site_id, set at
+  // the start), not the site its charger is at now: a charger moved to another
+  // site — another owner's — used to take its earlier sessions, and their
+  // commission and owner share, along with it.
+  const sessions = await many<{ charge_point_id: string; site_id: string; subtotal_idr: string; pbjt_idr: string; ppn_idr: string; total_idr: string; energy_wh: string; method: string | null; captured: string | null; paid_at: Date | null; needs_review: boolean }>(
+    `SELECT cs.charge_point_id, cs.site_id, d.subtotal_idr, d.pbjt_idr, d.ppn_idr, d.total_idr, cs.energy_wh,
             pi.method, pi.amount_captured_idr AS captured, pi.created_at AS paid_at, cs.needs_review
        FROM cdr d
        JOIN charging_session cs ON cs.id = d.session_id
@@ -159,8 +163,17 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
     });
   }
   for (const s of sessions) {
-    const c = byCp.get(s.charge_point_id);
-    if (!c) continue;
+    const home = byCp.get(s.charge_point_id);
+    if (!home) continue;
+    // A session at a site the charger has since left: a line for the charger at
+    // that site, with its sales and no minimum (the minimum is charged where the
+    // charger is in service now).
+    let c = home;
+    if (s.site_id && s.site_id !== home.siteId) {
+      const key = `${s.charge_point_id}|${s.site_id}`;
+      c = byCp.get(key) ?? { ...home, siteId: s.site_id, activeFraction: 0, sessions: 0, energyWh: 0, gtvIdr: 0, pbjtIdr: 0, ppnIdr: 0, grossIdr: 0, mdrIdr: 0, inReview: 0 };
+      byCp.set(key, c);
+    }
     c.sessions++;
     c.energyWh += Number(s.energy_wh ?? 0);
     c.gtvIdr += Number(s.subtotal_idr ?? 0);

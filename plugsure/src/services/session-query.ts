@@ -108,6 +108,14 @@ const SELECT = `
     LEFT JOIN cdr d ON d.session_id = cs.id
     LEFT JOIN payment_intent pi ON pi.id = cs.payment_intent_id`;
 
+/**
+ * The rounding (pembulatan) in a charge record's total: total − (subtotal + PBJT
+ * + PPN). Read from the record rather than stored, so records rated before the
+ * rounding line existed show it too. 0 with ROUNDING_UNIT_IDR = 1.
+ */
+export const roundingOf = (r: { subtotal_idr?: unknown; pbjt_idr?: unknown; ppn_idr?: unknown; total_idr?: unknown }) =>
+  r.total_idr == null ? 0 : Number(r.total_idr) - Number(r.subtotal_idr ?? 0) - Number(r.pbjt_idr ?? 0) - Number(r.ppn_idr ?? 0);
+
 /** Split the frozen CDR lines into the columns the explorer shows. */
 export function breakdown(row: any) {
   const lines: any[] = Array.isArray(row.lines) ? row.lines : [];
@@ -126,6 +134,8 @@ export function breakdown(row: any) {
      * estimate for reconciliation of net revenue.
      */
     mdrIdr: total != null && row.payment_method === 'qris' ? estimateQrisMdrIdr(total) : 0,
+    /** Rounding to ROUNDING_UNIT_IDR (tax.ts): what the total adds beyond subtotal + PBJT + PPN. */
+    roundingIdr: row.cdr_id ? roundingOf(row) : null,
     grossTotalIdr: total,
   };
 }
@@ -275,6 +285,8 @@ export async function receiptHtml(sessionId: string, maskCard = false): Promise<
   // The usage is shown; every amount is zero. The receipt with the real figures is issued once it is paid.
   const nil = !!r.cdr_id && (r.payment_mode === 'preauth' || r.payment_mode === 'postpay') && (r.hold_state === 'capturing' || r.hold_state === 'capture_failed');
   const amt = (v: unknown) => (nil ? 0 : v);
+  // The total rounded to ROUNDING_UNIT_IDR: shown as its own line, so the lines add up to the total.
+  const rounding = nil || !r.cdr_id ? 0 : roundingOf(r);
   const receiptNo = `PS-${String(r.id).slice(0, 8).toUpperCase()}${nil ? '-NIL' : ''}`;
   // Signed meter data (OCMF): what the meter signed, so the driver can check the bill with the
   // S.A.F.E. Transparency Software and the meter's public key.
@@ -331,6 +343,7 @@ ${nil ? '<div class="warn"><b>Transaksi nihil / Nil transaction.</b> Sesi ini be
 <tr><td colspan="3">PBJT-TL (Pajak Barang dan Jasa Tertentu — Tenaga Listrik) ${esc(pbjtPct)}%</td><td class="n">${idr(amt(r.pbjt_idr))}</td></tr>
 <tr><td colspan="3">DPP nilai lain (${esc(dppFrac)} × harga)</td><td class="n">${idr(amt(r.ppn_dpp_idr))}</td></tr>
 <tr><td colspan="3">PPN ${esc(ppnPct)}% × DPP (efektif ${esc(effPct)}%, UU HPP)</td><td class="n">${idr(amt(r.ppn_idr))}</td></tr>
+${rounding ? `<tr><td colspan="3">Pembulatan / Rounding</td><td class="n">${rounding < 0 ? '−' : ''}${idr(Math.abs(rounding))}</td></tr>` : ''}
 <tr class="grand"><td colspan="3">Total dibayar / Total</td><td class="n">${idr(amt(r.total_idr))}</td></tr>
 </tbody></table>
 <div class="note">Harga energi tunduk pada batas tarif layanan khusus PLN; biaya layanan tunduk pada Kepmen ESDM 182.K/TL.04/MEM.S/2023.

@@ -25,8 +25,18 @@ export type ComponentKind = 'energy' | 'time' | 'session' | 'idle' | 'admin';
 
 export interface TariffComponent {
   kind: ComponentKind;
-  /** IDR per kWh (energy) / per minute (time, idle) / flat (session, admin). */
+  /**
+   * IDR per kWh (energy) / per minute (time, idle) / flat (session, admin).
+   *
+   * Energy only: 0 is a price — free (a "first 5 kWh free" tier). An energy
+   * component billed at the PLN formula rate says so explicitly: `formulaRate`,
+   * or no rate at all (null/undefined, as an API caller may send it; stored as
+   * NULL, migration 051). A zero rate used to mean "formula", so a free tier on
+   * a layanan khusus tariff was billed at Rp 2,467.50/kWh.
+   */
   rate: number;
+  /** Energy only: bill this band at the PLN formula rate (`rate` is ignored). */
+  formulaRate?: boolean;
   touBlock: TouBlock;
   /** Bitmask, bit 0 = Monday. 127 = every day. */
   dayMask?: number;
@@ -105,6 +115,15 @@ export interface RegulatoryFlag {
 
 // ---------------------------------------------------------------- PLN formula
 
+/**
+ * Is this energy component billed at the PLN formula rate? Only when it says
+ * so (formulaRate) or carries no rate. Typed as number, a rate can still arrive
+ * as null/undefined from JSON (the API, a stored tariff snapshot).
+ */
+export function usesFormulaRate(c: Pick<TariffComponent, 'rate' | 'formulaRate'>): boolean {
+  return c.formulaRate === true || c.rate == null;
+}
+
 /** Resolve the regulated energy rate from the PLN multiplier formula. */
 export function plnEnergyRate(t: Pick<Tariff, 'plnScheme' | 'plnBaseRate' | 'plnMultiplier'>): number | null {
   if (!t.plnScheme || t.plnScheme === 'none') return null;
@@ -169,6 +188,14 @@ export function validateTariff(t: Tariff, connectorMaxPowerW: number): Regulator
     flags.push(...validateMultiplier(t.plnScheme, t.plnMultiplier));
   }
 
+  // Only an energy component may leave its rate out (the PLN formula rate);
+  // anything else without a price cannot be billed or stored.
+  for (const c of t.components) {
+    if (c.kind !== 'energy' && (c.rate == null || !Number.isFinite(Number(c.rate)))) {
+      flags.push({ code: 'RATE_MISSING', severity: 'violation', message: `The ${c.kind} component has no rate.` });
+    }
+  }
+
   const ceiling = serviceFeeCeiling(cls);
   if (ceiling != null) {
     // The ceiling caps the charge for the charging SERVICE, not just the
@@ -224,7 +251,8 @@ export function validateTariff(t: Tariff, connectorMaxPowerW: number): Regulator
   // when the multiplier is already out of range and validateMultiplier has
   // caught it. That made this check structurally unable to fire.
   const maxEnergy = regulatedEnergyCeiling(t);
-  const billed = t.components.filter((c) => c.kind === 'energy').map((c) => c.rate);
+  const formulaRate = plnEnergyRate(t) ?? 0;
+  const billed = t.components.filter((c) => c.kind === 'energy').map((c) => (usesFormulaRate(c) ? formulaRate : c.rate));
   const worst = billed.length ? Math.max(...billed) : null;
   if (worst != null && worst > maxEnergy + 0.001) {
     flags.push({
@@ -578,11 +606,21 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
               `starts at ${implicitTo} kWh. Billed to ${implicitTo} kWh so no energy is charged twice.`,
           });
         }
+        // The PLN formula rate only where the component asks for it; a rate of 0
+        // is a free band and stays free (it used to be read as "use the formula").
+        const formula = usesFormulaRate(e.c);
+        if (formula && regulated == null) {
+          flagOnce({
+            code: 'NO_FORMULA_RATE',
+            severity: 'warning',
+            message: 'An energy tier is priced at the PLN formula rate, but the tariff has no PLN scheme: it is billed at Rp 0.',
+          });
+        }
         return {
           e,
           from: e.c.fromKwh ?? 0,
           to: Math.min(declaredTo, implicitTo),
-          rate: e.c.rate > 0 ? e.c.rate : (regulated ?? 0),
+          rate: formula ? (regulated ?? 0) : e.c.rate,
         };
       });
       bandCache.set(key, bands);

@@ -49,6 +49,12 @@ export interface TaxResult {
   ppnDppIdr: number;
   ppnRateBps: number;
   ppnIdr: number;
+  /**
+   * Rounding to ROUNDING_UNIT_IDR (pembulatan): totalIdr − (subtotal + PBJT +
+   * PPN), 0 when the unit is 1. A receipt shows it as its own line so the lines
+   * add up to the total; the taxes themselves are never rounded to the unit.
+   */
+  roundingIdr: number;
   totalIdr: number;
 }
 
@@ -78,10 +84,11 @@ export function computeTax(input: TaxInput): TaxResult {
   const ppnDppIdr = ppnApplies ? round((ppnBase * ppnDppNumerator) / ppnDppDenominator) : 0;
   const ppnIdr = ppnApplies ? round((ppnDppIdr * ppnRateBps) / 10_000) : 0;
 
-  let totalIdr = subtotalIdr + pbjtIdr + ppnIdr;
-  if (roundingUnitIdr > 1) {
-    totalIdr = Math.round(totalIdr / roundingUnitIdr) * roundingUnitIdr;
-  }
+  // Rounding the total to a cash unit is a separate, stated adjustment: rounding
+  // the total alone left a receipt whose subtotal, PBJT and PPN did not add up to
+  // what the driver paid.
+  const exactIdr = subtotalIdr + pbjtIdr + ppnIdr;
+  const totalIdr = roundingUnitIdr > 1 ? Math.round(exactIdr / roundingUnitIdr) * roundingUnitIdr : exactIdr;
 
   return {
     subtotalIdr,
@@ -91,6 +98,7 @@ export function computeTax(input: TaxInput): TaxResult {
     ppnDppIdr,
     ppnRateBps: ppnApplies ? ppnRateBps : 0,
     ppnIdr,
+    roundingIdr: totalIdr - exactIdr,
     totalIdr,
   };
 }
