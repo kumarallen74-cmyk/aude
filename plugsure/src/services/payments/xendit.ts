@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   providerFetch,
   type CaptureArgs, type Channel, type Checkout, type CheckoutArgs, type CreateQrisChargeArgs, type PaymentNotification,
@@ -6,6 +6,7 @@ import {
   type HoldArgs, type HoldResult, type SavedCardCharge, type SavedCardChargeArgs, cardBrand, last4Of,
   type WalletChargeArgs, type WalletLink, type WalletLinkArgs, type WalletLinkStatus, WalletLinkEnded,
 } from './provider.js';
+import type { RefundStatusArgs } from './registry.js';
 
 /**
  * Xendit — dynamic QRIS, e-wallets and cards.
@@ -49,9 +50,24 @@ import {
  *               POST {base}/v3/payment_tokens/{id}/cancel. Refunds: POST {base}/refunds { payment_request_id }.
  *               Xendit activates GoPay recurring per account.
  *
+ *   references  reference_id (and the idempotency key of a payment request) is derived from PlugSure's reference
+ *               (orderRef), never random: PlugSure records it before asking, and a request repeated after a lost
+ *               answer is answered by Xendit with the first payment instead of making a second.
+ *   callbacks   only the payment events below are read as payments; link events (payment_method.*, payment_token.*)
+ *               go to parseLinkEvent, refund events (refund.*, ewallet.refund) to parseRefundEvent.
+ *
  * Authentication: HTTP Basic, the secret key as user name and no password.
  * xenPlatform: `for-user-id` charges on a sub-account.
  */
+
+/** The callback events that report a payment (QRIS, e-wallet charges, payment requests v2 and v3). Anything else is not one. */
+const PAYMENT_EVENTS = new Set([
+  'qr.payment', 'ewallet.capture',
+  'payment.succeeded', 'payment.failed', 'payment.pending', 'payment.awaiting_capture',
+  'payment.capture', 'payment.authorization', 'payment.failure', 'payment.expiry',
+]);
+/** The callback events that report a refund. */
+const REFUND_EVENTS = new Set(['refund.succeeded', 'refund.failed', 'ewallet.refund']);
 export interface XenditConfig {
   secretKey: string;
   callbackToken: string;
@@ -72,11 +88,14 @@ export class XenditProvider implements PaymentProvider {
     };
   }
 
+  /** reference_id for a PlugSure reference: the same reference, the same Xendit payment (and idempotency key). */
+  orderRef(referenceId: string): string { return `ps-${createHash('sha256').update(referenceId, 'utf8').digest('hex').slice(0, 32)}`; }
+
   channels(): Channel[] { return ['QRIS', 'GOPAY', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA', 'CARD']; }
   canRefund(channel: string | null): boolean { return ['GOPAY', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA'].includes(String(channel)); }
 
   async createQrisCharge(a: CreateQrisChargeArgs): Promise<QrisCharge> {
-    const referenceId = `ps-${randomUUID()}`;
+    const referenceId = this.orderRef(a.referenceId);
     const expiresAt = new Date(Date.now() + (a.expiresInS ?? 900) * 1000).toISOString();
     const r = await providerFetch(`${this.base()}/qr_codes`, {
       method: 'POST', headers: this.headers(),
@@ -131,7 +150,7 @@ export class XenditProvider implements PaymentProvider {
       const c = await this.chargeSavedCard({ referenceId: a.referenceId, amountIdr: a.amountIdr, token: a.token, preauth: false, returnUrl: a.returnUrl, customerId: a.customerId, description: a.description });
       return c.linkEnded ? { ...c, message: `the GoPay link has ended; link it again (${c.message ?? 'refused'})` } : c;
     }
-    const referenceId = `ps-${randomUUID()}`;
+    const referenceId = this.orderRef(a.referenceId);
     const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
     const r = await providerFetch(`${this.base()}/payment_requests`, {
       method: 'POST', headers: { ...this.headers(), 'idempotency-key': referenceId },
@@ -268,7 +287,7 @@ export class XenditProvider implements PaymentProvider {
   }
 
   async chargeSavedCard(a: SavedCardChargeArgs): Promise<SavedCardCharge> {
-    const referenceId = `ps-${randomUUID()}`;
+    const referenceId = this.orderRef(a.referenceId);
     const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
     const r = await providerFetch(`${this.base()}/v3/payment_requests`, {
       method: 'POST', headers: { ...this.v3Headers(), 'idempotency-key': referenceId },
@@ -324,7 +343,7 @@ export class XenditProvider implements PaymentProvider {
   }
 
   async createCheckout(a: CheckoutArgs): Promise<Checkout> {
-    const referenceId = `ps-${randomUUID()}`;
+    const referenceId = this.orderRef(a.referenceId);
     const expiresInS = a.expiresInS ?? 900;
     const expiresAt = new Date(Date.now() + expiresInS * 1000).toISOString();
     if (a.channel === 'CARD' && (a.preauth || a.saveCard)) return this.cardSession(a, referenceId, expiresAt);
@@ -392,6 +411,9 @@ export class XenditProvider implements PaymentProvider {
       const st = String(j.status ?? '');
       return { providerRef: String(j.external_id), paid: st === 'PAID' || st === 'SETTLED', status: st, amountIdr: j.paid_amount != null ? Math.round(Number(j.paid_amount)) : j.amount != null ? Math.round(Number(j.amount)) : null, paymentId: j.id ? String(j.id) : undefined };
     }
+    // Only payment events are payments: a GoPay link (payment_token.*, which also carries a reference_id) belongs to
+    // parseLinkEvent, and a refund (refund.*: status SUCCEEDED, an amount, the payment's reference) is not money received.
+    if (!PAYMENT_EVENTS.has(String(j?.event ?? ''))) return null;
     const d = j?.data;
     if (!d?.reference_id) return null;
     const amount = d.captured_amount ?? d.capture_amount ?? d.charge_amount ?? d.request_amount ?? d.amount;
@@ -432,6 +454,37 @@ export class XenditProvider implements PaymentProvider {
     const j = r.body ?? {};
     if (r.status >= 300) return { status: 'failed', refundRef: '', raw: { status: r.status, error: j.error_code ?? j.message ?? r.text.slice(0, 200) } };
     return { status: j.status === 'SUCCEEDED' ? 'refunded' : 'pending', refundRef: String(j.id ?? a.idempotencyKey), raw: j };
+  }
+
+  /**
+   * A refund that came back pending (or whose answer was lost): its state at Xendit. Payment requests: GET /refunds/{id};
+   * e-wallet charges: GET /ewallets/charges/{charge}/refunds/{id}. null: Xendit has no such refund (or it cannot be named).
+   */
+  async refundStatus(a: RefundStatusArgs): Promise<'refunded' | 'pending' | 'failed' | null> {
+    if (!a.refundRef || !a.providerPaymentId || a.refundRef === a.idempotencyKey) return null;
+    const url = a.providerPaymentId.startsWith('pr-')
+      ? `${this.base()}/refunds/${encodeURIComponent(a.refundRef)}`
+      : `${this.base()}/ewallets/charges/${encodeURIComponent(a.providerPaymentId)}/refunds/${encodeURIComponent(a.refundRef)}`;
+    const r = await providerFetch(url, { headers: this.headers() });
+    if (r.status === 404) return null;
+    if (r.status >= 300) throw new Error(`Xendit refund lookup failed: ${r.status} ${r.body?.error_code ?? ''}`.trim());
+    return XenditProvider.refundState(r.body?.status);
+  }
+
+  private static refundState(st: unknown): 'refunded' | 'pending' | 'failed' {
+    const s = String(st ?? '').toUpperCase();
+    return s === 'SUCCEEDED' ? 'refunded' : s === 'FAILED' ? 'failed' : 'pending';
+  }
+
+  /** A refund callback (refund.succeeded / refund.failed; ewallet.refund), verified like a payment callback. */
+  parseRefundEvent(rawBody: string, headers: Record<string, string | string[] | undefined>): { refundRef: string; status: 'refunded' | 'pending' | 'failed'; event: string } | null {
+    if (!this.callbackOk(headers)) return null;
+    let j: any;
+    try { j = JSON.parse(rawBody); } catch { return null; }
+    const event = String(j?.event ?? '');
+    if (!REFUND_EVENTS.has(event)) return null;
+    const id = j.data?.id;
+    return id ? { refundRef: String(id), status: XenditProvider.refundState(j.data?.status), event } : null;
   }
 
   async testConnection() {

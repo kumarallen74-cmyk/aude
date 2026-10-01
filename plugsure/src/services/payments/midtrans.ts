@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   providerFetch,
   type CaptureArgs, type Channel, type Checkout, type CheckoutArgs, type CreateQrisChargeArgs, type PaymentNotification, type PaymentProvider, type PaymentResult,
@@ -6,6 +6,7 @@ import {
   type HoldArgs, type HoldResult, type SavedCardCharge, type SavedCardChargeArgs, cardBrand, last4Of,
   type WalletChargeArgs, type WalletLink, type WalletLinkArgs, type WalletLinkStatus, WalletLinkEnded,
 } from './provider.js';
+import type { PaymentStatus, RefundStatusArgs } from './registry.js';
 
 /**
  * Midtrans Core API — QRIS.
@@ -16,7 +17,13 @@ import {
  *                 signature_key = SHA-512(order_id + status_code + gross_amount + server_key).
  *                 Paid = transaction_status 'settlement' (or 'capture' + fraud_status 'accept').
  *   refund        POST {base}/v2/{order_id}/refund { refund_key, amount, reason }
- *   status        GET  {base}/v2/{order_id}/status  (used to test the key)
+ *   status        GET  {base}/v2/{order_id}/status  (tests the key; looks up a payment whose answer was lost,
+ *                 a capture Midtrans refused, and a refund: its refunds[] carry our refund_key)
+ *
+ *   order ids     derived from PlugSure's reference (orderRef), never random: the same payment asked for
+ *                 again names the same order (Midtrans refuses a second charge on a used order_id), and
+ *                 PlugSure records the order id BEFORE asking, so the notification of a charge whose
+ *                 answer was lost still finds its payment.
  *   GoPay         POST {base}/v2/charge   { payment_type: 'gopay', gopay: { enable_callback, callback_url } }
  *                 → the 'deeplink-redirect' action opens the GoPay app
  *   ShopeePay     POST {base}/v2/charge   { payment_type: 'shopeepay', shopeepay: { callback_url } }
@@ -56,6 +63,9 @@ export interface MidtransConfig {
 /** Midtrans reports times in Jakarta time without an offset ("2027-12-31 07:00:00"). */
 const jakartaIso = (s: string): string | null => { const d = new Date(s.replace(' ', 'T') + '+07:00'); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
 
+/** order_id for a PlugSure reference: letters, digits, - _ . ~ and at most 50 characters; the same reference, the same order. */
+const orderIdOf = (referenceId: string): string => `ps-${createHash('sha256').update(referenceId, 'utf8').digest('hex').slice(0, 24)}`;
+
 export class MidtransProvider implements PaymentProvider {
   readonly name = 'midtrans';
   constructor(private cfg: MidtransConfig) {}
@@ -65,9 +75,39 @@ export class MidtransProvider implements PaymentProvider {
     return { Authorization: 'Basic ' + Buffer.from(`${this.cfg.serverKey}:`).toString('base64'), Accept: 'application/json', 'Content-Type': 'application/json' };
   }
 
+  /**
+   * The order id Midtrans will know a payment by, from PlugSure's reference for it: known before the request, so it is
+   * recorded first, and the same for a repeated request (Midtrans refuses a used order_id instead of charging again).
+   */
+  orderRef(referenceId: string): string { return orderIdOf(referenceId); }
+
+  /**
+   * Where an order stands at Midtrans (GET /v2/{order_id}/status): null when Midtrans has no such order (the charge never
+   * reached it). Throws when Midtrans cannot be asked, so the caller keeps treating the outcome as unknown.
+   */
+  async paymentStatus(providerRef: string): Promise<PaymentStatus | null> {
+    const r = await providerFetch(`${this.base()}/v2/${encodeURIComponent(providerRef)}/status`, { headers: this.headers() });
+    const j = r.body ?? {};
+    const code = String(j.status_code ?? r.status);
+    if (code === '404') return null;
+    if (!j.transaction_status) throw new Error(`Midtrans status lookup failed: ${code} ${j.status_message ?? r.text.slice(0, 200)}`.trim());
+    const st = String(j.transaction_status);
+    const fraud = String(j.fraud_status ?? 'accept');
+    const status: PaymentStatus['status'] =
+      ['deny', 'cancel', 'expire', 'failure'].includes(st) || fraud === 'deny' ? 'failed'
+      : st === 'pending' || fraud === 'challenge' ? 'pending'
+      : st === 'authorize' ? 'authorised'
+      // settlement, capture, and a payment refunded since (refund, partial_refund): the money was taken.
+      : 'captured';
+    return {
+      status, acquirerStatus: st, amountIdr: j.gross_amount != null && Number.isFinite(Number(j.gross_amount)) ? Math.round(Number(j.gross_amount)) : null,
+      ...(j.transaction_id ? { providerPaymentId: String(j.transaction_id) } : {}), raw: j,
+    };
+  }
+
   async createQrisCharge(a: CreateQrisChargeArgs): Promise<QrisCharge> {
-    // order_id: letters, digits, - _ . ~ and at most 50 characters. It is the reference notifications carry.
-    const orderId = `ps-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    // order_id: derived from PlugSure's reference (see orderRef). It is the reference notifications carry.
+    const orderId = this.orderRef(a.referenceId);
     const minutes = Math.max(1, Math.round((a.expiresInS ?? 900) / 60));
     const r = await providerFetch(`${this.base()}/v2/charge`, {
       method: 'POST', headers: this.headers(),
@@ -122,6 +162,20 @@ export class MidtransProvider implements PaymentProvider {
     return { status: 'failed', refundRef: '', raw: { status_code: j.status_code ?? r.status, message: j.status_message ?? r.text.slice(0, 200) } };
   }
 
+  /**
+   * A refund whose answer was lost: Midtrans refunds synchronously, and the order's status lists its refunds with the
+   * refund_key PlugSure sent (the idempotency key). Found: refunded; not found: null (it was not made, safe to send again).
+   */
+  async refundStatus(a: RefundStatusArgs): Promise<'refunded' | 'pending' | 'failed' | null> {
+    const r = await providerFetch(`${this.base()}/v2/${encodeURIComponent(a.providerRef)}/status`, { headers: this.headers() });
+    const j = r.body ?? {};
+    const code = String(j.status_code ?? r.status);
+    if (code === '404') return null;
+    if (!j.transaction_status) throw new Error(`Midtrans status lookup failed: ${code} ${j.status_message ?? r.text.slice(0, 200)}`.trim());
+    const keys = new Set([a.idempotencyKey.slice(0, 50), ...(a.refundRef ? [a.refundRef] : [])]);
+    return (Array.isArray(j.refunds) ? j.refunds : []).some((x: any) => keys.has(String(x?.refund_key ?? ''))) ? 'refunded' : null;
+  }
+
   async testConnection() {
     const r = await providerFetch(`${this.base()}/v2/plugsure-connection-test-${Date.now()}/status`, { headers: this.headers() });
     const code = String(r.body?.status_code ?? r.status);
@@ -135,7 +189,7 @@ export class MidtransProvider implements PaymentProvider {
   private snapBase() { return (this.cfg.baseUrl || (this.cfg.environment === 'production' ? 'https://app.midtrans.com' : 'https://app.sandbox.midtrans.com')).replace(/\/+$/, ''); }
 
   async createCheckout(a: CheckoutArgs): Promise<Checkout> {
-    const orderId = `ps-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    const orderId = this.orderRef(a.referenceId);
     const minutes = Math.max(1, Math.round((a.expiresInS ?? 900) / 60));
     const expiresAt = new Date(Date.now() + minutes * 60_000).toISOString();
     const details = { order_id: orderId, gross_amount: Math.round(a.amountIdr) };
@@ -167,7 +221,7 @@ export class MidtransProvider implements PaymentProvider {
 
   /** A saved card (One Click): a hold or a sale on its token; 3-D Secure again when configured. */
   async chargeSavedCard(a: SavedCardChargeArgs): Promise<SavedCardCharge> {
-    const orderId = `ps-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    const orderId = this.orderRef(a.referenceId);
     const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
     const r = await providerFetch(`${this.base()}/v2/charge`, {
       method: 'POST', headers: this.headers(),
@@ -251,7 +305,7 @@ export class MidtransProvider implements PaymentProvider {
   }
 
   async chargeWallet(a: WalletChargeArgs): Promise<SavedCardCharge> {
-    const orderId = `ps-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    const orderId = this.orderRef(a.referenceId);
     const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
     let t: { accountId: string; token: string };
     try { t = JSON.parse(a.token); } catch { return { providerRef: orderId, status: 'failed', checkoutUrl: null, expiresAt, message: 'the GoPay link is damaged; link it again' }; }
@@ -311,6 +365,10 @@ export class MidtransProvider implements PaymentProvider {
     });
     const j = r.body ?? {};
     if (String(j.status_code) === '200' && (j.transaction_status ?? 'capture') === 'capture') return { ok: true, raw: j };
+    // Refused. /v2/capture takes no idempotency key: a retry after an answer that was lost (the capture went through)
+    // is refused as "already captured". Ask Midtrans where the order stands: captured is what this capture wanted.
+    const now = await this.paymentStatus(a.providerRef).catch(() => null);
+    if (now?.status === 'captured') return { ok: true, raw: { ...j, reconciled: now.acquirerStatus, gross_amount: now.amountIdr } };
     // 407 "Expired transaction": the authorisation lapsed before this capture.
     const expired = String(j.status_code) === '407' || j.transaction_status === 'expire';
     return { ok: false, error: `${j.status_code ?? r.status} ${j.status_message ?? r.text.slice(0, 200)}`.trim(), raw: j, ...(expired ? { expired: true } : {}) };

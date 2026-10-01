@@ -1,4 +1,4 @@
-import { createHash, createHmac, createSign, createVerify, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, createSign, createVerify, randomUUID } from 'node:crypto';
 import {
   providerFetch,
   type CaptureArgs, type Channel, type CreateQrisChargeArgs, type PaymentNotification, type PaymentProvider, type PaymentResult,
@@ -22,6 +22,11 @@ import {
  *                     signs asymmetrically with ITS private key:
  *                     X-SIGNATURE = RSA-SHA256(`POST:${path}:${sha256hex(minified body)}:${timestamp}`),
  *                     verified with the bank's public key. Paid = latestTransactionStatus '00'.
+ *                     The hash is over the body AS RECEIVED, minified (whitespace outside strings
+ *                     removed, nothing else touched), not over a re-serialisation of what was parsed.
+ *                     A notification whose X-TIMESTAMP is more than 5 minutes off is refused
+ *                     (notificationFresh, checked first by registry.handleNotification: a replay), and
+ *                     one in another currency than IDR is not a payment.
  *
  * Timestamps are ISO-8601 with the +07:00 offset. Confirm every path and field
  * in the bank's SNAP sandbox before production. Refunds are by bank transfer
@@ -42,6 +47,28 @@ export interface SnapQrisConfig {
 
 const jakartaIso = (ms = Date.now()): string => new Date(ms + 7 * 3600_000).toISOString().replace(/\.\d{3}Z$/, '+07:00');
 const sha256LowerHex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex').toLowerCase();
+
+/** How far a notification's X-TIMESTAMP may be from now (either way) before it is treated as a replay. */
+const NOTIFICATION_SKEW_MS = 5 * 60_000;
+
+/**
+ * SNAP's minify(body): the JSON text with the whitespace OUTSIDE strings removed, every other character exactly as
+ * sent (numbers, escapes, key order). Not JSON.stringify(JSON.parse(body)), which rewrites what the bank signed.
+ */
+export function minifyJson(raw: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (inString) {
+      out += ch;
+      if (ch === '\\') { out += raw[i + 1] ?? ''; i++; }
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') { inString = true; out += ch; }
+    else if (ch !== ' ' && ch !== '\n' && ch !== '\r' && ch !== '\t') out += ch;
+  }
+  return out;
+}
 
 export class SnapQrisProvider implements PaymentProvider {
   readonly name = 'snap';
@@ -76,13 +103,16 @@ export class SnapQrisProvider implements PaymentProvider {
     return createHmac('sha512', this.cfg.clientSecret).update(`${method}:${path}:${accessToken}:${sha256LowerHex(body)}:${timestamp}`).digest('base64');
   }
 
+  /** partnerReferenceNo for a PlugSure reference: known before the request (recorded first), the same if it is repeated. */
+  orderRef(referenceId: string): string { return `PS${createHash('sha256').update(referenceId, 'utf8').digest('hex').slice(0, 24).toUpperCase()}`; }
+
   async createQrisCharge(a: CreateQrisChargeArgs): Promise<QrisCharge> {
     const accessToken = await this.getAccessToken();
     const path = this.paths().generateQr;
     const timestamp = jakartaIso();
     const validForS = a.expiresInS ?? 900;
-    // partnerReferenceNo: ours, alphanumeric; it is what the notification names.
-    const partnerReferenceNo = `PS${randomBytes(12).toString('hex').toUpperCase()}`;
+    // partnerReferenceNo: ours, alphanumeric; it is what the notification names. Derived from PlugSure's reference (orderRef).
+    const partnerReferenceNo = this.orderRef(a.referenceId);
     const body = JSON.stringify({
       partnerReferenceNo,
       amount: { value: a.amountIdr.toFixed(2), currency: 'IDR' },
@@ -106,21 +136,35 @@ export class SnapQrisProvider implements PaymentProvider {
     return { providerRef: partnerReferenceNo, qrString: j.qrContent, amountIdr: a.amountIdr, expiresAt: new Date(Date.now() + validForS * 1000).toISOString(), status: 'pending' };
   }
 
-  /** The bank's notification, verified with the bank's public key over the SNAP string-to-sign. */
+  /**
+   * Whether the notification was signed within 5 minutes of now (X-TIMESTAMP, ISO-8601 with its offset). The timestamp is
+   * part of the signed string, so an old notification replayed as is fails here, not at the signature.
+   */
+  notificationFresh(headers: Record<string, string | string[] | undefined>, now = Date.now()): boolean {
+    const t = Date.parse(String(headers['x-timestamp'] ?? ''));
+    return Number.isFinite(t) && Math.abs(now - t) <= NOTIFICATION_SKEW_MS;
+  }
+
+  /**
+   * The bank's notification, verified with the bank's public key over the SNAP string-to-sign. The timestamp's freshness
+   * is notificationFresh (registry.handleNotification checks it before this).
+   */
   parseNotification(rawBody: string, headers: Record<string, string | string[] | undefined>, path: string): PaymentNotification | null {
     const h = (k: string) => String(headers[k.toLowerCase()] ?? '');
     const signature = h('X-SIGNATURE');
     const timestamp = h('X-TIMESTAMP');
     if (!signature || !timestamp) return null;
-    let j: any;
-    try { j = JSON.parse(rawBody); } catch { return null; }
-    const minified = JSON.stringify(j);
+    // The signature covers the bytes the bank sent (minified), checked before anything is read from them.
     const ok = (() => {
-      try { return createVerify('RSA-SHA256').update(`POST:${path}:${sha256LowerHex(minified)}:${timestamp}`).verify(this.cfg.bankPublicKeyPem, signature, 'base64'); } catch { return false; }
+      try { return createVerify('RSA-SHA256').update(`POST:${path}:${sha256LowerHex(minifyJson(rawBody))}:${timestamp}`).verify(this.cfg.bankPublicKeyPem, signature, 'base64'); } catch { return false; }
     })();
     if (!ok) return null;
-    const ref = j.originalPartnerReferenceNo ?? j.partnerReferenceNo;
+    let j: any;
+    try { j = JSON.parse(rawBody); } catch { return null; }
+    const ref = j?.originalPartnerReferenceNo ?? j?.partnerReferenceNo;
     if (!ref) return null;
+    // Rupiah only: an amount in another currency is not the payment PlugSure asked for.
+    if (j.amount != null && String(j.amount.currency ?? '') !== 'IDR') return null;
     const st = String(j.latestTransactionStatus ?? j.transactionStatusDesc ?? '');
     return { providerRef: String(ref), paid: st === '00', status: st, amountIdr: j.amount?.value != null ? Math.round(Number(j.amount.value)) : null, paymentId: j.originalReferenceNo ? String(j.originalReferenceNo) : undefined };
   }

@@ -1,7 +1,7 @@
 import { one, many, query, outsideRequestScope } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { bus } from './events.js';
-import { providerOfPayment } from './payments/registry.js';
+import { extras, providerOfPayment } from './payments/registry.js';
 import { PREPAID_CLAIM_WINDOW_MIN } from './sessions.js';
 
 /**
@@ -18,7 +18,21 @@ import { PREPAID_CLAIM_WINDOW_MIN } from './sessions.js';
  *   due → refunded                     (bank transfer, recorded with its reference)
  *   processing → failed → due/refunded (provider refused; retry or pay manually)
  * Every transition is audited by the caller; the driver sees the state in-app.
+ *
+ * A refund is paid once. Each transition is a conditional UPDATE from the state it
+ * leaves (two clicks, or a click and the worker, cannot both complete it). While a
+ * provider refund is in flight or pending at the acquirer ('processing'), it cannot
+ * be recorded as paid by bank transfer: only once the acquirer has refused it
+ * ('failed'). A provider call with no answer stays 'processing' (it may have been
+ * made). The refunds worker settles 'processing' refunds: it asks the acquirer where
+ * the refund stands, where it can say (Xendit's pending refunds; Midtrans lists the
+ * refunds on the order), sends one that never got an answer again with the same
+ * idempotency key, and the acquirer's refund callback settles it too (refundSettled).
+ * The database refuses a refund larger than what was captured (migration 044).
  */
+
+/** A 'processing' refund untouched this long is looked at by the worker. */
+const PROCESSING_STALE_MIN = 10;
 
 
 /** Grace after the claim window before an unused payment is declared refundable. */
@@ -84,7 +98,72 @@ export async function sweepUnusedPayments(): Promise<number> {
     });
   }
   if (n) logger.info({ n }, 'unused prepaid payments marked for refund');
+  return n + (await sweepProcessingRefunds());
+}
+
+/**
+ * Worker: refunds left 'processing' — pending at the acquirer, or sent without an answer. The acquirer is asked where
+ * each stands (refunded → completed; refused → failed, so it can be retried or paid by bank transfer); one the acquirer
+ * has no record of and that never got an answer is sent again, with the same idempotency key.
+ */
+export async function sweepProcessingRefunds(): Promise<number> {
+  const rows = await many<{ id: string; org_id: string; provider: string; provider_ref: string | null; integration_id: string | null; channel: string | null;
+    provider_payment_id: string | null; refund_ref: string | null; due: number }>(
+    `SELECT id, org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_ref, refund_due_idr AS due
+       FROM payment_intent
+      WHERE refund_state = 'processing' AND updated_at < now() - make_interval(mins => $1::int)
+      ORDER BY updated_at LIMIT 50`,
+    [PROCESSING_STALE_MIN],
+  );
+  let n = 0;
+  for (const r of rows) {
+    const provider = await providerOfPayment(r).catch(() => null);
+    const ask = extras(provider).refundStatus;
+    let st: 'refunded' | 'pending' | 'failed' | null | undefined;
+    if (ask && r.provider_ref) {
+      try {
+        st = await ask.call(provider, { providerRef: r.provider_ref, providerPaymentId: r.provider_payment_id, channel: r.channel, refundRef: r.refund_ref, idempotencyKey: `refund-${r.id}` });
+      } catch (e) {
+        logger.warn({ intentId: r.id, err: (e as Error).message }, 'refund status lookup failed; asked again later');
+        st = 'pending';
+      }
+    }
+    if (st === 'refunded') {
+      if (await complete(r.id, r.org_id, Number(r.due), 'provider', r.refund_ref ?? `refund-${r.id}`, null, ['processing'])) n++;
+    } else if (st === 'failed') {
+      await query(`UPDATE payment_intent SET refund_state = 'failed', refund_error = $2, updated_at = now() WHERE id = $1 AND refund_state = 'processing'`,
+        [r.id, 'The payment provider reports the refund failed. Retry, or refund by bank transfer and record the reference.']);
+    } else if (st == null && !r.refund_ref) {
+      // Never answered, and (where the acquirer can be asked) not made: sent again, under the same idempotency key.
+      if ((await processRefund(r.id, null, { resume: true })).state === 'refunded') n++;
+    } else {
+      // Still pending at the acquirer (or it cannot be asked): looked at again later.
+      await query(`UPDATE payment_intent SET updated_at = now() WHERE id = $1 AND refund_state = 'processing'`, [r.id]);
+    }
+  }
   return n;
+}
+
+/**
+ * The acquirer's refund callback (e.g. Xendit refund.succeeded / refund.failed) for a refund that came back pending:
+ * completes or fails it, once. Matched by the refund's reference at the account that sent it.
+ */
+export async function refundSettled(acquirer: { provider: string; integrationId: string | null }, refundRef: string, status: 'refunded' | 'pending' | 'failed'): Promise<string> {
+  const r = await one<{ id: string; org_id: string; due: number }>(
+    `SELECT id, org_id, refund_due_idr AS due FROM payment_intent
+      WHERE provider = $1 AND refund_ref = $2 AND refund_method = 'provider'
+        AND ($3::uuid IS NULL OR integration_id IS NULL OR integration_id = $3::uuid)
+      ORDER BY refund_requested_at DESC LIMIT 1`,
+    [acquirer.provider, refundRef, acquirer.integrationId],
+  );
+  if (!r) return 'refund_unknown';
+  if (status === 'refunded') return (await complete(r.id, r.org_id, Number(r.due), 'provider', refundRef, null, ['processing'])) ? 'refund_completed' : 'duplicate';
+  if (status === 'failed') {
+    const f = await one(`UPDATE payment_intent SET refund_state = 'failed', refund_error = $2, updated_at = now() WHERE id = $1 AND refund_state = 'processing' RETURNING id`,
+      [r.id, 'The payment provider reports the refund failed. Retry, or refund by bank transfer and record the reference.']);
+    return f ? 'refund_failed' : 'duplicate';
+  }
+  return 'refund_pending';
 }
 
 export interface RefundOutcome {
@@ -94,13 +173,17 @@ export interface RefundOutcome {
   error?: string;
 }
 
-/** Pay the refund through the payment provider. */
-export async function processRefund(intentId: string, actorUserId: string | null): Promise<RefundOutcome> {
+/**
+ * Pay the refund through the payment provider. `resume` (the worker): also a refund left 'processing' without an answer
+ * (no refund reference) for a while — sent again with the same idempotency key, so the acquirer cannot pay it twice.
+ */
+export async function processRefund(intentId: string, actorUserId: string | null, opts: { resume?: boolean } = {}): Promise<RefundOutcome> {
   const row = await one<{ org_id: string; provider: string; provider_ref: string | null; integration_id: string | null; channel: string | null; provider_payment_id: string | null; due: number }>(
     `UPDATE payment_intent SET refund_state = 'processing', refund_error = NULL, updated_at = now()
-      WHERE id = $1 AND refund_state IN ('due', 'failed')
+      WHERE id = $1 AND (refund_state IN ('due', 'failed')
+                         OR ($2::boolean AND refund_state = 'processing' AND refund_ref IS NULL AND updated_at < now() - make_interval(mins => $3::int)))
       RETURNING org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_due_idr AS due`,
-    [intentId],
+    [intentId, opts.resume === true, PROCESSING_STALE_MIN],
   );
   if (!row) {
     const cur = await one<{ refund_state: string | null }>(`SELECT refund_state FROM payment_intent WHERE id = $1`, [intentId]);
@@ -110,7 +193,7 @@ export async function processRefund(intentId: string, actorUserId: string | null
   // The account that took the payment, even if the operator has since changed acquirer.
   const provider = await providerOfPayment(row);
   const fail = async (error: string): Promise<RefundOutcome> => {
-    await query(`UPDATE payment_intent SET refund_state = 'failed', refund_error = $2, updated_at = now() WHERE id = $1`, [intentId, error]);
+    await query(`UPDATE payment_intent SET refund_state = 'failed', refund_error = $2, updated_at = now() WHERE id = $1 AND refund_state = 'processing'`, [intentId, error]);
     return { ok: false, state: 'failed', error };
   };
   if (!provider?.refund) {
@@ -132,15 +215,23 @@ export async function processRefund(intentId: string, actorUserId: string | null
     });
     if (res.status === 'failed') return fail(`Provider refused the refund${res.refundRef ? ` (${res.refundRef})` : ''}.`);
     if (res.status === 'pending') {
-      // Accepted by the provider, settles asynchronously; keep 'processing' with its reference.
-      await query(`UPDATE payment_intent SET refund_ref = $2, refund_method = 'provider', updated_at = now() WHERE id = $1`, [intentId, res.refundRef]);
+      // Accepted by the provider, settles asynchronously; keep 'processing' with its reference (the worker and the
+      // acquirer's refund callback complete it).
+      await query(`UPDATE payment_intent SET refund_ref = $2, refund_method = 'provider', updated_at = now() WHERE id = $1 AND refund_state = 'processing'`, [intentId, res.refundRef]);
       return { ok: true, state: 'processing', refundRef: res.refundRef };
     }
-    await complete(intentId, row.org_id, Number(row.due), 'provider', res.refundRef, actorUserId);
+    if (!(await complete(intentId, row.org_id, Number(row.due), 'provider', res.refundRef, actorUserId, ['processing']))) {
+      const cur = await one<{ refund_state: string | null }>(`SELECT refund_state FROM payment_intent WHERE id = $1`, [intentId]);
+      return { ok: false, state: cur?.refund_state ?? 'none', error: 'The refund was completed meanwhile.' };
+    }
     return { ok: true, state: 'refunded', refundRef: res.refundRef };
   } catch (e) {
-    logger.warn({ intentId, err: (e as Error).message }, 'provider refund failed');
-    return fail(`Provider error: ${(e as Error).message}`);
+    // No answer: the provider may have made the refund. It stays 'processing' (not 'failed', which would allow a bank
+    // transfer on top); the worker asks the provider, or sends it again with the same idempotency key.
+    logger.warn({ intentId, err: (e as Error).message }, 'provider refund got no answer; outcome unknown');
+    const error = `No answer from the payment provider (${(e as Error).message}). The refund may have been made; it is checked again automatically.`;
+    await query(`UPDATE payment_intent SET refund_error = $2, refund_method = 'provider', updated_at = now() WHERE id = $1 AND refund_state = 'processing'`, [intentId, error]);
+    return { ok: false, state: 'processing', error };
   }
 }
 
@@ -148,29 +239,46 @@ export async function processRefund(intentId: string, actorUserId: string | null
 export async function markRefundedManually(intentId: string, reference: string, actorUserId: string | null): Promise<RefundOutcome> {
   const ref = String(reference ?? '').trim();
   if (ref.length < 3) return { ok: false, state: 'due', error: 'Enter the bank transfer reference.' };
-  const row = await one<{ org_id: string; due: number }>(
-    `SELECT org_id, refund_due_idr AS due FROM payment_intent WHERE id = $1 AND refund_state IN ('due', 'failed', 'processing')`,
+  const row = await one<{ org_id: string; due: number; refund_state: string; refund_ref: string | null }>(
+    `SELECT org_id, refund_due_idr AS due, refund_state, refund_ref FROM payment_intent WHERE id = $1 AND refund_state IN ('due', 'failed', 'processing')`,
     [intentId],
   );
   if (!row) return { ok: false, state: 'none', error: 'No refund is outstanding for this payment.' };
-  await complete(intentId, row.org_id, Number(row.due), 'manual', ref.slice(0, 120), actorUserId);
+  // A provider refund in flight or pending at the acquirer may still pay the driver: a bank transfer on top would pay
+  // twice. Only once the acquirer has refused it ('failed') can it be paid another way.
+  if (row.refund_state === 'processing') {
+    return {
+      ok: false, state: 'processing',
+      error: row.refund_ref
+        ? `A refund through the payment provider is in progress (${row.refund_ref}). It is checked automatically; record a bank transfer only if it fails.`
+        : 'A refund through the payment provider is being made. Wait until it completes or fails.',
+    };
+  }
+  if (!(await complete(intentId, row.org_id, Number(row.due), 'manual', ref.slice(0, 120), actorUserId, ['due', 'failed']))) {
+    const cur = await one<{ refund_state: string | null }>(`SELECT refund_state FROM payment_intent WHERE id = $1`, [intentId]);
+    return { ok: false, state: cur?.refund_state ?? 'none', error: 'The refund changed meanwhile (completed or being paid by the provider). Reload.' };
+  }
   return { ok: true, state: 'refunded', refundRef: ref };
 }
 
-async function complete(intentId: string, orgId: string, amount: number, method: 'provider' | 'manual', reference: string, actor: string | null) {
-  await query(
+/** Mark the refund paid, once: only from the states given (a conditional UPDATE). False when it was not in one of them. */
+async function complete(intentId: string, orgId: string, amount: number, method: 'provider' | 'manual', reference: string, actor: string | null, from: Array<'due' | 'failed' | 'processing'>): Promise<boolean> {
+  const done = await one<{ id: string }>(
     `UPDATE payment_intent
         SET refund_state = 'refunded', refunded_idr = $2, refund_method = $3, refund_ref = $4,
             refunded_at = now(), refunded_by = $5, refund_error = NULL, updated_at = now()
-      WHERE id = $1`,
-    [intentId, amount, method, reference, actor],
+      WHERE id = $1 AND refund_state = ANY($6::text[])
+      RETURNING id`,
+    [intentId, amount, method, reference, actor, from],
   );
+  if (!done) return false;
   // Close the "refund due" alert this payment raised, if any.
   await query(
     `UPDATE alert SET resolved_at = now() WHERE target_type = 'payment_intent' AND target_id = $1 AND resolved_at IS NULL`,
     [intentId],
   );
   bus.emit('refund.completed', { orgId, paymentIntentId: intentId, amountIdr: amount, method, reference });
+  return true;
 }
 
 export async function listRefunds(orgId: string, state?: string) {
