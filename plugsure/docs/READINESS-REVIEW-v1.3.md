@@ -4,7 +4,7 @@
 
 | Reviewed | Build | Baseline | Stack |
 |---|---|---|---|
-| 28 Sep 2026 | v1.3.0 (final) | v1.2.1 | Node 24 · PostgreSQL 18 (target 16) |
+| 28 Sep 2026 | v1.3.0 (final) | v1.2.1 | Node 22 · PostgreSQL 16 |
 
 > Markdown copy of [`PlugSure-v1.3.0-Readiness-Review.pdf`](PlugSure-v1.3.0-Readiness-Review.pdf). The PDF is the signed-off version; keep both in step.
 

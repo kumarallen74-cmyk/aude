@@ -66,10 +66,16 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends dumb-init tzdata ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# API_HOST / OCPP_HOST: outside development the apps bind loopback by default
+# (the systemd path, behind Caddy). Inside a container loopback is unreachable
+# from the published port, so the image binds every interface and the run
+# command's -p / compose's port binding decides exposure.
 ENV NODE_ENV=production \
     TZ=Asia/Jakarta \
     NODE_OPTIONS=--enable-source-maps \
-    NPM_CONFIG_UPDATE_NOTIFIER=false
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    API_HOST=0.0.0.0 \
+    OCPP_HOST=0.0.0.0
 
 # Dedicated unprivileged user (same name as the systemd unit user, for symmetry
 # with the no-Docker deployment path).
@@ -100,10 +106,11 @@ EXPOSE 9200 9220
 
 # One healthcheck for both roles.
 #   * API  (dist/apps/api.js)     — GET /healthz             -> 200
-#   * Gateway (dist/apps/gateway.js) — GET /  on the OCPP port -> 426 Upgrade Required
-#     426 is the gateway's *healthy* answer: its HTTP server exists only to be
-#     upgraded to a WebSocket. It proves the listener is up and the event loop is
-#     responsive, which is all a black-box check can prove here.
+#   * Gateway (dist/apps/gateway.js) — GET /healthz on the OCPP port -> 200 (it
+#     queries the database); docker-compose.yml points HEALTHCHECK_URL there.
+#     With no HEALTHCHECK_URL a plain GET / gets 426 Upgrade Required, which is
+#     also accepted: it proves the listener is up and the event loop responsive,
+#     though not that the database answers.
 # Override HEALTHCHECK_URL per container (docker-compose.yml does exactly this).
 ENV HEALTHCHECK_URL="" \
     HEALTHCHECK_OK_STATUS="200,426"

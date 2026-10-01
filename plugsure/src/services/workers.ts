@@ -28,6 +28,7 @@ import { renewExpiringCertificates } from '../pnc/service.js';
 import { renewStationCertificates } from './charger-ca.js';
 import { setSandboxHandler } from '../ocpp/bridge.js';
 import { syncVirtualFleet, simulate, stopVirtualFleet, type SimulateEvent } from '../sandbox/fleet.js';
+import { runRetention } from './retention.js';
 
 /**
  * Background work, in ONE place.
@@ -219,6 +220,10 @@ export function startWorkers(): () => void {
     identity === '*' && event === 'sync' ? syncVirtualFleet() : simulate(identity, event as SimulateEvent, args),
   );
   const sandboxFleet = guard('sandbox-fleet', () => syncVirtualFleet());
+  // Retention of ocpp_frame / connection_attempt (OCPP_FRAME_RETENTION_DAYS,
+  // CONNECTION_ATTEMPT_RETENTION_DAYS). Exclusive: two gateways deleting the same
+  // batches would only fight over row locks.
+  const retention = once('retention', () => runRetention());
 
   const every = (fn: () => void, ms: number, name: string) => { intervals[name] = ms; return setInterval(fn, ms); };
   const stopHealth = startHealthMonitor();
@@ -248,15 +253,21 @@ export function startWorkers(): () => void {
     every(fota, 30_000, 'fota'),
     every(refunds, 5 * 60_000, 'refunds'),
     every(holds, 60_000, 'card-holds'),
+    every(retention, 60 * 60_000, 'retention'),
   ];
   compliance();
   reconcile();
   refunds();
   holds();
   sandboxFleet();
+  // Retention's first pass a few minutes after boot (not during the reconnect
+  // storm), so a gateway restarted more often than hourly still prunes.
+  const retentionKick = setTimeout(retention, 5 * 60_000);
+  retentionKick.unref();
   logger.info('background workers started: load management, compliance, reconciliation, FOTA, refunds, outages, webhooks, alert notifications, roaming, sandbox fleet');
   return () => {
     timers.forEach((t) => clearInterval(t));
+    clearTimeout(retentionKick);
     stopHealth();
     void stopVirtualFleet();
   };

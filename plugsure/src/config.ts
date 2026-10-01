@@ -11,6 +11,18 @@ export const config = {
 
   gateway: {
     port: num(process.env.OCPP_PORT, 9220),
+    /**
+     * Interface the OCPP listener binds. It used to bind every interface with no
+     * way to say otherwise, so on the systemd path :9220 — plain ws, and the
+     * gateway's /internal bridge endpoints — was reachable from the network beside
+     * Caddy. In every documented production setup chargers arrive through Caddy on
+     * the same host, so outside development the default is loopback. Development
+     * keeps 0.0.0.0 so a bench charger on the LAN can dial in directly; docker
+     * compose sets 0.0.0.0 inside the container (the host port mapping decides
+     * exposure). Set OCPP_HOST=0.0.0.0 only for a gateway that chargers or a
+     * remote API host reach without a local proxy.
+     */
+    host: process.env.OCPP_HOST ?? ((process.env.NODE_ENV ?? 'development') === 'development' ? '0.0.0.0' : '127.0.0.1'),
     /** Path prefix. The charge point ID is ALWAYS the final path segment. */
     path: process.env.OCPP_PATH ?? '/ocpp',
     /**
@@ -54,8 +66,8 @@ export const config = {
     /**
      * Peers whose X-Forwarded-Proto and client-certificate header are believed:
      * addresses or CIDRs, comma-separated. Those headers used to be taken from
-     * ANY peer once OCPP_TRUST_PROXY_PROTO was on, and the gateway listens on
-     * every interface, so a client reaching :9220 directly could claim TLS and
+     * ANY peer once OCPP_TRUST_PROXY_PROTO was on, and the gateway listened on
+     * every interface (see OCPP_HOST), so a client reaching :9220 directly could claim TLS and
      * present a Profile 3 charger's (non-secret) certificate fingerprint. Default:
      * the loopback proxy (Caddy on the same host). Docker Compose adds the
      * bridge networks, which is where a host Caddy's connections come from.
@@ -106,7 +118,14 @@ export const config = {
 
   api: {
     port: num(process.env.API_PORT, 9200),
-    host: process.env.API_HOST ?? '0.0.0.0',
+    /**
+     * Loopback by default, as deploy/README.md always said: the console and /v1
+     * are published only through Caddy (TLS, IP allow-list). The default used to
+     * be 0.0.0.0, which on the systemd path exposed the API on every interface.
+     * docker compose sets API_HOST=0.0.0.0 inside the container, where the port
+     * mapping (API_BIND, loopback by default) decides exposure.
+     */
+    host: process.env.API_HOST ?? '127.0.0.1',
     /**
      * Development bypass for authentication. NEVER true outside a workstation.
      * The server refuses to start with this on unless NODE_ENV is development.
@@ -118,6 +137,18 @@ export const config = {
     keyRateLimitPerMin: num(process.env.API_KEY_RATE_LIMIT_PER_MIN, 600),
     /** Requests per IP per minute with an API key that does not authenticate. */
     keyAuthFailuresPerMin: num(process.env.API_KEY_AUTH_FAILURES_PER_MIN, 30),
+    /**
+     * Keep each API key's token bucket in Postgres (api_key_rate_bucket), shared
+     * by every API process. The in-process buckets gave each key its limit PER
+     * PROCESS, so behind N API processes a key got N times its limit. Costs one
+     * small UPDATE per API-key request. If the database call fails the request is
+     * limited by the in-process bucket instead (fail open, logged) — availability
+     * over exactness. Defaults on outside development and test.
+     */
+    keyRateLimitShared: bool(
+      process.env.API_RATE_LIMIT_SHARED,
+      !['development', 'test'].includes(process.env.NODE_ENV ?? 'development'),
+    ),
     /**
      * Trusted reverse proxies, as a comma-separated list of IPs or CIDRs.
      *
@@ -332,6 +363,18 @@ export const config = {
   workers: {
     /** In the split deployment the GATEWAY runs them, because it owns the sockets. */
     enabled: bool(process.env.RUN_WORKERS, true),
+  },
+
+  /**
+   * Retention of the high-volume diagnostic logs (services/retention.ts, an
+   * hourly worker pass). ocpp_frame (every OCPP message, with idTags) and
+   * connection_attempt grew without limit: tens of GB a year on a few hundred
+   * chargers. Days; 0 keeps rows forever. Nothing billing- or audit-relevant
+   * lives in these tables — sessions, CDRs and the audit log are not touched.
+   */
+  retention: {
+    ocppFrameDays: num(process.env.OCPP_FRAME_RETENTION_DAYS, 90),
+    connectionAttemptDays: num(process.env.CONNECTION_ATTEMPT_RETENTION_DAYS, 30),
   },
 
   security: {

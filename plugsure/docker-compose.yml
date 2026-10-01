@@ -108,6 +108,7 @@ services:
       TZ: ${TZ:-Asia/Jakarta}
       AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?set AUDIT_HMAC_KEY in .env — openssl rand -hex 32}
       SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env — openssl rand -hex 32}
+      MIGRATION_LOCK_TIMEOUT: ${MIGRATION_LOCK_TIMEOUT:-10s}
     # migrate.js also provisions the runtime role's password when
     # POSTGRES_APP_PASSWORD is set, which is what makes the app services below
     # able to connect as a non-superuser.
@@ -148,6 +149,14 @@ services:
       SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env — openssl rand -hex 32}
 
       OCPP_PORT: "9220"
+      # Inside the container: every interface. Exposure is decided by the port
+      # binding below (OCPP_BIND, loopback by default), and the API reaches
+      # http://gateway:9220 across the compose network. Outside development the
+      # gateway's own default is 127.0.0.1, which would be unreachable here.
+      OCPP_HOST: "0.0.0.0"
+      # Retention of the OCPP message log and connection attempts, in days (0 = keep).
+      OCPP_FRAME_RETENTION_DAYS: ${OCPP_FRAME_RETENTION_DAYS:-90}
+      CONNECTION_ATTEMPT_RETENTION_DAYS: ${CONNECTION_ATTEMPT_RETENTION_DAYS:-30}
       # v1.3 bridge: the API reaches chargers through this gateway. Same token on both.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env — openssl rand -hex 32}
       EVENT_RELAY: "true"
@@ -173,9 +182,10 @@ services:
       DRIVER_RESERVATIONS: ${DRIVER_RESERVATIONS:-true}
       DRIVER_RESERVATION_MINUTES: ${DRIVER_RESERVATION_MINUTES:-15}
       DRIVER_RESERVATION_NO_SHOW_LIMIT: ${DRIVER_RESERVATION_NO_SHOW_LIMIT:-2}
-      # The gateway serves a real /healthz that queries the database. Health-checking
-      # on the 426 from the upgrade listener only proved the event loop was alive.
-      # That IS the healthy response — see the HEALTHCHECK note in the Dockerfile.
+      # The gateway serves a real /healthz that queries the database, and 200 from
+      # it is the healthy answer here. (The Dockerfile's generic default also accepts
+      # the 426 a plain GET / gets from the upgrade listener, which only proves the
+      # event loop is alive — see the HEALTHCHECK note there.)
       HEALTHCHECK_URL: http://127.0.0.1:9220/healthz
       HEALTHCHECK_OK_STATUS: "200"
     ports:
@@ -239,7 +249,11 @@ services:
       DRIVER_RESERVATIONS: ${DRIVER_RESERVATIONS:-true}
       DRIVER_RESERVATION_MINUTES: ${DRIVER_RESERVATION_MINUTES:-15}
       DRIVER_RESERVATION_NO_SHOW_LIMIT: ${DRIVER_RESERVATION_NO_SHOW_LIMIT:-2}
+      # Inside the container: every interface; the API_BIND port binding below
+      # (loopback by default) decides exposure. The app's own default is 127.0.0.1.
       API_HOST: "0.0.0.0"
+      # Per-key API rate limits shared across API replicas (Postgres).
+      API_RATE_LIMIT_SHARED: ${API_RATE_LIMIT_SHARED:-true}
       HEALTHCHECK_URL: http://127.0.0.1:9200/healthz
       HEALTHCHECK_OK_STATUS: "200"
     volumes:

@@ -1,0 +1,49 @@
+# PlugSure nightly backup (database + file storage) — run by plugsure-backup.timer.
+#
+# Install (see deploy/README.md §"Backups and restore rehearsal"):
+#   install -o root -g root -m 0755 tools/backup/pg-backup.sh /opt/plugsure/tools/backup/pg-backup.sh
+#   install -o root -g root -m 0644 deploy/plugsure-backup.service deploy/plugsure-backup.timer \
+#       /etc/systemd/system/
+#   install -d -o plugsure -g plugsure -m 0700 /var/backups/plugsure
+#   install -o root -g plugsure -m 0640 /dev/null /etc/plugsure/backup.env   # then edit
+#   (needs pg_dump/pg_restore of the server's major version or newer: postgresql-client-16)
+#   systemctl daemon-reload && systemctl enable --now plugsure-backup.timer
+#
+# /etc/plugsure/backup.env:
+#   BACKUP_DATABASE_URL=postgresql://plugsure:...@127.0.0.1:5432/plugsure   (the OWNER, not plugsure_app)
+#   BACKUP_DIR=/var/backups/plugsure
+#   STORAGE_DIR=/var/lib/plugsure/storage
+#   BACKUP_RETENTION_DAYS=14
+#   BACKUP_OFFSITE_CMD=aws s3 sync "$BACKUP_DIR" s3://<bucket>/plugsure/ --only-show-errors
+#
+# Run once by hand:     systemctl start plugsure-backup && journalctl -u plugsure-backup -n 50
+# A failed run leaves the unit "failed" (systemctl --failed); alert on it.
+
+[Unit]
+Description=PlugSure backup (pg_dump + storage archive)
+Documentation=file:/opt/plugsure/deploy/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=plugsure
+Group=plugsure
+EnvironmentFile=/etc/plugsure/backup.env
+ExecStart=/opt/plugsure/tools/backup/pg-backup.sh
+# Low priority: never compete with the gateway for CPU or disk.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plugsure-backup
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/plugsure
+ReadOnlyPaths=/var/lib/plugsure
+UMask=0077

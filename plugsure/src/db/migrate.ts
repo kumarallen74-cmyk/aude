@@ -7,12 +7,63 @@ import { logger } from '../logger.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, '../../db/migrations');
 
+/**
+ * One migrator at a time, cluster-wide: a session-level advisory lock on a fixed
+ * key, held on a dedicated connection for the whole run.
+ *
+ * Nothing stopped two migrators running at once — `docker compose up` on two
+ * hosts, a systemd ExecStartPre racing a manual `npm run migrate`, two replicas
+ * of a migrate job. Both read schema_migration, both applied the same file, and
+ * the loser failed half way (or, for a non-idempotent file, both succeeded). The
+ * second runner now waits for the first, then finds everything applied.
+ */
+const MIGRATION_LOCK_KEY = 'plugsure.schema_migration';
+
+/**
+ * How long one migration may WAIT for a table lock (env MIGRATION_LOCK_TIMEOUT,
+ * a Postgres interval such as '10s' or '500ms'; default 10s, '0' = wait forever).
+ *
+ * An ALTER TABLE queues for an ACCESS EXCLUSIVE lock behind any long transaction
+ * on that table — and every query that arrives after it queues behind the ALTER.
+ * With no timeout one slow report during a deploy stalled the gateway's frame
+ * writes and every API request touching the table. With it the migration fails
+ * fast (the transaction rolls back, nothing half-applied) and can be retried.
+ */
+export function migrationLockTimeout(raw = process.env.MIGRATION_LOCK_TIMEOUT): string {
+  const v = (raw ?? '10s').trim();
+  if (!/^\d+\s*(us|ms|s|min|h|d)?$/.test(v)) {
+    throw new Error(`MIGRATION_LOCK_TIMEOUT must be a duration like 10s, 500ms or 2min, got ${JSON.stringify(raw)}`);
+  }
+  return v;
+}
+
 async function main() {
+  const lockTimeout = migrationLockTimeout();
+  const lock = await pool.connect();
+  let lockHealthy = true;
+  try {
+    const waiting = setTimeout(() => logger.info('waiting for another migrator to finish (advisory lock)'), 2_000);
+    await lock.query(`SELECT pg_advisory_lock(hashtextextended($1, 0))`, [MIGRATION_LOCK_KEY]);
+    clearTimeout(waiting);
+    try {
+      await migrateAll(lockTimeout);
+    } finally {
+      await lock.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [MIGRATION_LOCK_KEY]).catch(() => { lockHealthy = false; });
+    }
+  } finally {
+    lock.release(lockHealthy ? undefined : true);
+  }
+  await provisionRuntimeRole();
+  await pool.end();
+}
+
+async function migrateAll(lockTimeout: string) {
   await query(`CREATE TABLE IF NOT EXISTS schema_migration (
     name TEXT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 
+  // Read under the lock: a migrator that waited sees what the first one applied.
   const applied = new Set(
     (await query<{ name: string }>('SELECT name FROM schema_migration')).rows.map((r) => r.name),
   );
@@ -25,24 +76,29 @@ async function main() {
       continue;
     }
     const sql = await readFile(join(migrationsDir, f), 'utf8');
-    logger.info({ migration: f }, 'applying migration');
+    logger.info({ migration: f, lockTimeout }, 'applying migration');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Transaction-local: ends with this migration's COMMIT / ROLLBACK.
+      await client.query(`SELECT set_config('lock_timeout', $1, true)`, [lockTimeout]);
       await client.query(sql);
       await client.query('INSERT INTO schema_migration (name) VALUES ($1)', [f]);
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
-      logger.error({ migration: f, err: e }, 'migration failed');
+      if ((e as { code?: string }).code === '55P03') {
+        logger.error({ migration: f, lockTimeout },
+          'migration could not get a table lock within MIGRATION_LOCK_TIMEOUT (a long transaction holds it); nothing was applied — retry, or find the blocker in pg_stat_activity');
+      } else {
+        logger.error({ migration: f, err: e }, 'migration failed');
+      }
       throw e;
     } finally {
       client.release();
     }
   }
   logger.info({ count: files.length }, 'migrations up to date');
-  await provisionRuntimeRole();
-  await pool.end();
 }
 
 /**
@@ -87,7 +143,12 @@ async function provisionRuntimeRole() {
   logger.info({ role }, 'runtime role provisioned — the applications connect as this, not as the owner');
 }
 
-main().catch((e) => {
-  logger.error(e);
-  process.exit(1);
-});
+// Always runs when loaded, as before (an entry-point check by path would silently
+// skip migrating under a symlinked deploy root). A unit test that only wants
+// migrationLockTimeout() sets PLUGSURE_MIGRATE_IMPORT_ONLY before importing.
+if (!process.env.PLUGSURE_MIGRATE_IMPORT_ONLY) {
+  main().catch((e) => {
+    logger.error(e);
+    process.exit(1);
+  });
+}

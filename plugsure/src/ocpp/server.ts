@@ -103,7 +103,7 @@ export async function startGateway(): Promise<GatewayHandle> {
     });
   });
 
-  await new Promise<void>((res) => http.listen(config.gateway.port, res));
+  await new Promise<void>((res) => http.listen(config.gateway.port, config.gateway.host, res));
   logger.info(
     {
       port: config.gateway.port,

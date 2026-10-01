@@ -1,5 +1,6 @@
-import { query } from '../db/pool.js';
+import { query, pool } from '../db/pool.js';
 import { logger } from '../logger.js';
+import { config } from '../config.js';
 
 /**
  * Rate limits for the operator API.
@@ -15,8 +16,13 @@ import { logger } from '../logger.js';
  *                 answered 429, and its key requests count against its IP window
  *                 (valid keys keep working within it).
  *
- * Buckets live in the API process. An installation that runs several API
- * processes behind a balancer gives each key its limit per process.
+ * With API_RATE_LIMIT_SHARED (the default outside development and test) each
+ * key's bucket lives in Postgres (api_key_rate_bucket, migration 052), so a key
+ * gets its limit across ALL API processes; before, each process kept its own
+ * buckets and a key behind N processes got N times its limit. If the database
+ * cannot answer (error, or slower than SHARED_TIMEOUT_MS) the request is limited
+ * by this process's in-memory bucket instead — fail open towards availability,
+ * with a warning — and the in-memory path is the only one when sharing is off.
  *
  * Every request made with a key is counted per hour (served, refused for the
  * limit, answered with an error) and written to api_key_usage once a minute.
@@ -73,6 +79,52 @@ export class TokenBuckets {
 }
 
 export const keyBuckets = new TokenBuckets();
+
+/** A bucket state as the token-bucket arithmetic sees it, turned into a Decision. */
+export function decisionFrom(limitPerMin: number, allowed: boolean, tokensLeft: number): Decision {
+  const limit = Math.max(1, Math.floor(limitPerMin));
+  const rate = limit / 60_000;
+  const tokens = Math.max(0, Math.min(limit, tokensLeft));
+  return {
+    allowed,
+    limit,
+    remaining: Math.floor(tokens),
+    resetS: Math.ceil((limit - tokens) / rate / 1000),
+    retryAfterS: allowed ? 0 : Math.max(1, Math.ceil((1 - tokens) / rate / 1000)),
+  };
+}
+
+const SHARED_TIMEOUT_MS = 1_000;
+let lastSharedWarnAt = 0;
+
+/**
+ * Take one request from an API key's allowance: the shared (Postgres) bucket when
+ * API_RATE_LIMIT_SHARED is on, else — or when the database fails — this process's.
+ */
+export async function takeKeyToken(keyId: string, limitPerMin: number, shared = config.api.keyRateLimitShared): Promise<Decision> {
+  if (!shared) return keyBuckets.take(keyId, limitPerMin);
+  const limit = Math.max(1, Math.floor(limitPerMin));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    // The plain pool, never a request-scoped transaction: a bucket update must not
+    // be rolled back with a refused request, nor hold a row lock until it commits.
+    const r = await Promise.race([
+      pool.query<{ ok: boolean; remaining_tokens: number }>(`SELECT ok, remaining_tokens FROM api_key_rate_take($1, $2)`, [keyId, limit]),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${SHARED_TIMEOUT_MS} ms`)), SHARED_TIMEOUT_MS); }),
+    ]);
+    const row = r.rows[0];
+    if (!row) throw new Error('api_key_rate_take returned no row');
+    return decisionFrom(limit, row.ok, Number(row.remaining_tokens));
+  } catch (e) {
+    if (Date.now() - lastSharedWarnAt > 60_000) {
+      lastSharedWarnAt = Date.now();
+      logger.warn({ err: (e as Error).message }, 'shared API key rate limit unavailable; limiting per process until it answers');
+    }
+    return keyBuckets.take(keyId, limit);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** The standard response headers (IETF RateLimit header fields). */
 export function rateLimitHeaders(d: Decision): Record<string, string> {

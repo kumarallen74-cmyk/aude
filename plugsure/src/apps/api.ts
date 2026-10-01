@@ -47,12 +47,19 @@ async function main() {
   installProcessGuards();
 
   // The API previously had no SIGTERM handler at all, so every restart cut
-  // in-flight HTTP requests.
+  // in-flight HTTP requests. app.close() drains them; open console live streams
+  // (SSE) are ended by the server's preClose hook, or the drain never finished.
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info('draining API');
+    // Backstop below systemd's TimeoutStopSec=30 / compose's 20 s grace: a request
+    // that will not finish must not turn a restart into a SIGKILL of everything.
+    setTimeout(() => {
+      logger.warn('API drain did not finish in 15 s; exiting');
+      process.exit(1);
+    }, 15_000).unref();
     await app.close().catch(() => {});
     await stopBridge().catch(() => {});
     await pool.end().catch(() => {});

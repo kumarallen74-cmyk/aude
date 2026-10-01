@@ -50,9 +50,14 @@ Restart=always
 RestartSec=5
 
 # --- shutdown -----------------------------------------------------------------
-# NOTE: src/apps/api.ts installs no SIGTERM handler, so node's default terminate
-# applies and in-flight HTTP requests are cut rather than drained. 30s is ample
-# for the current behaviour; raise it if a graceful Fastify close is added.
+# src/apps/api.ts handles SIGTERM: Fastify stops accepting connections, drains
+# in-flight requests, ends open console live streams (SSE), then closes the bridge
+# and the pg pool. 30s covers a normal drain; a request still running after that
+# is cut by the SIGKILL below.
+#
+# No ExecReload: there is no SIGHUP handler and node's default for SIGHUP is to
+# terminate, so a `kill -HUP` reload would be an ungraceful restart. Configuration
+# is read at start; use `systemctl restart plugsure-api`.
 KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStopSec=30

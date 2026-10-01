@@ -27,7 +27,7 @@ import { loadTariffForConnector, createTariff, assignTariff, listTariffs } from 
 import { conservativeAllowanceWh, energyAllowanceWh, rateSession, validateTariff } from '../services/tariff.js';
 import { estimateQrisMdrIdr, QRIS_MAX_TRANSACTION_IDR } from '../services/payments/provider.js';
 import { paymentsFor, PaymentsUnavailable, logPaymentCreated, sandboxProvider } from '../services/payments/registry.js';
-import { type Permission, type Principal, assertCan, assertCanAny, assertGrantable, visibleSiteIds, can, ForbiddenError } from '../services/authz.js';
+import { type Permission, type Principal, assertCan, assertCanAny, assertGrantable, visibleSiteIds, can, ForbiddenError, hasPlatformAdmin } from '../services/authz.js';
 import { refuseHttpsUrl } from '../services/net-guard.js';
 import { validateConfigValue } from '../ocpp/config-catalog.js';
 import { recordRemoteStartRequest } from '../services/operator-limits.js';
@@ -50,7 +50,7 @@ import {
   revokeApiKey,
 } from '../services/auth.js';
 import { verifyChain, writeAudit } from '../services/audit.js';
-import { listAttempts, pendingChargers, attemptStats, suggestMatches } from '../services/connections.js';
+import { listAttempts, pendingChargers, attemptStats, suggestMatches, identitySeenUnregistered } from '../services/connections.js';
 import { issueAuthorizationKey, setSecurityProfile, setClientCertFingerprint } from '../services/chargepoint-keys.js';
 import { listQuirkProfiles } from '../ocpp/quirks.js';
 import { bus, eventVisibleTo } from '../services/events.js';
@@ -70,7 +70,8 @@ import { isSandboxOrg } from '../sandbox/provision.js';
 import { sandboxCall } from '../ocpp/bridge.js';
 import { v2xView } from '../services/v2x.js';
 import { signedDataFor, transparencyXml } from '../services/signed-metering.js';
-import { keyBuckets, rateLimitHeaders, tooManyFailures, recordFailure, recordUsage, startUsageFlush, stopUsageFlush, flushUsage } from '../services/ratelimit.js';
+import { streamMultipartFile } from './multipart-stream.js';
+import { takeKeyToken, rateLimitHeaders, tooManyFailures, recordFailure, recordUsage, startUsageFlush, stopUsageFlush, flushUsage } from '../services/ratelimit.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The sandbox acquirer's simulator (development only); real acquirers come from Integrations. */
@@ -143,7 +144,10 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.addHook('onSend', async (req, reply, payload) => {
     // Settle the request transaction BEFORE the response is written, so a client
     // that gets a 2xx can immediately read its own write. (onResponse below stays
-    // as the safety net; commit/rollback are idempotent.)
+    // as the safety net; commit/rollback are idempotent.) A failed COMMIT
+    // rejects here, so the error handler answers 500 instead of the 2xx the
+    // handler produced for writes that were lost. A rollback re-appends the
+    // request's audit entries outside it (see writeAudit), before the reply.
     if (req.orgScope) {
       if (reply.statusCode >= 400) await req.orgScope.rollback();
       else await req.orgScope.commit();
@@ -172,6 +176,41 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.addHook('onRequest', (req, _reply, done) => {
     if (!underPrefix(req, '/v1/')) return done();
     runInRequestScope(done);
+  });
+
+  /**
+   * End the console's live streams (Server-Sent Events) on shutdown.
+   *
+   * `app.close()` stops accepting connections and waits for the open ones to
+   * finish — and an SSE response never finishes on its own: with one console tab
+   * open, SIGTERM hung until systemd's SIGKILL (TimeoutStopSec), which also cut
+   * every other in-flight request instead of draining it. The streams are tracked
+   * here (/v1/stream and /v1/events/*) and ended in preClose, which runs BEFORE
+   * the server waits for connections; ordinary requests still drain gracefully.
+   * The browser's EventSource reconnects by itself, to another API process or to
+   * this one once it is back.
+   */
+  const liveStreams = new Set<import('node:http').ServerResponse>();
+  app.addHook('onRequest', async (req, reply) => {
+    const url = req.url.split('?')[0]!;
+    if (url !== '/v1/stream' && !url.startsWith('/v1/events/')) return;
+    const res = reply.raw;
+    liveStreams.add(res);
+    res.on('close', () => liveStreams.delete(res));
+  });
+  app.addHook('preClose', async () => {
+    for (const res of liveStreams) {
+      // A stream still being authenticated has written nothing yet: drop it, or it
+      // would open after this point and hold the close up all the same.
+      if (!res.headersSent) { res.destroy(); continue; }
+      try {
+        res.end();
+        res.socket?.destroySoon();
+      } catch {
+        res.destroy();
+      }
+    }
+    liveStreams.clear();
   });
 
   // Simple fixed-window limiter per client IP. There was none at all.
@@ -215,7 +254,7 @@ export async function buildApi(): Promise<FastifyInstance> {
       req.principal = auth.principal;
       // Each API key has its own limit (a token bucket; RateLimit-* headers on every answer).
       if (auth.kind === 'api_key') {
-        const d = keyBuckets.take(auth.credentialId, auth.rateLimitPerMin ?? config.api.keyRateLimitPerMin);
+        const d = await takeKeyToken(auth.credentialId, auth.rateLimitPerMin ?? config.api.keyRateLimitPerMin);
         reply.headers(rateLimitHeaders(d));
         req.apiKey = { id: auth.credentialId, orgId: auth.principal.orgId };
         if (!d.allowed) {
@@ -295,13 +334,26 @@ export async function buildApi(): Promise<FastifyInstance> {
    * route (with the size cap enforced while streaming), so the parser hands the
    * request stream through untouched rather than buffering hundreds of MB.
    * Diagnostics uploads from chargers are either raw (PUT) or multipart (POST).
+   *
+   * Multipart bodies used to be buffered whole (`parseAs: 'buffer'`, up to
+   * MAX_DIAGNOSTICS_BYTES = 200 MB each) in a 1 GB API container. They are now
+   * streamed: the parser hands the route a stream of the FILE PART's bytes only
+   * (multipart-stream.ts), which the route writes to disk with saveStream() and
+   * its size cap, exactly as it does a raw upload. The parser resolves once the
+   * part headers are read, so a body with no file is still a 400.
    */
   app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
-  app.addContentTypeParser(
-    /^multipart\/form-data/,
-    { parseAs: 'buffer', bodyLimit: config.storage.maxDiagnosticsBytes },
-    (_req, body, done) => done(null, body),
-  );
+  app.addContentTypeParser(/^multipart\/form-data/, (req, payload, done) => {
+    // Framing on top of the file is small; the file itself is capped by saveStream.
+    streamMultipartFile(payload, String(req.headers['content-type'] ?? ''), config.storage.maxDiagnosticsBytes + 1024 * 1024)
+      .then((file) => {
+        // The route names the stored file from `:name` (else 'diagnostics.log'); a
+        // multipart upload carries its own name, which the buffered path used.
+        const params = req.params as { name?: string };
+        if (!params.name && file.fileName) params.name = file.fileName;
+        done(null, file);
+      }, (e) => done(e as Error, undefined));
+  });
   // Any other type (a charger's text/plain or application/gzip log upload) is
   // handed through as a stream; JSON routes keep Fastify's own JSON parser.
   app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
@@ -315,7 +367,10 @@ export async function buildApi(): Promise<FastifyInstance> {
     // 4xx/5xx replies produced without throwing (an explicit reply.status(403))
     // should not persist half-finished writes either.
     if (reply.statusCode >= 400) await req.orgScope?.rollback();
-    else await req.orgScope?.commit();
+    else await req.orgScope?.commit().catch((err) => {
+      // The reply has already gone out as a success; all that is left is to say so.
+      logger.error({ err, reqId: req.id, method: req.method, url: req.url, status: reply.statusCode }, 'request transaction failed to COMMIT after a success reply was sent; its writes were lost');
+    });
   });
 
   app.setErrorHandler((err: any, req, reply) => {
@@ -793,6 +848,23 @@ export async function buildApi(): Promise<FastifyInstance> {
    * BootNotification — visible in the console, not yet able to transact — until
    * an operator activates it.
    */
+  /**
+   * Identities are platform-wide and first-come. One that has already dialled in
+   * unregistered is a real charger, possibly another operator's; only a platform
+   * operator may register or adopt it (see identitySeenUnregistered). Null = allowed.
+   */
+  async function claimProblem(req: FastifyRequest, identity: string) {
+    if (hasPlatformAdmin(req.principal)) return null;
+    const seen = await identitySeenUnregistered(identity);
+    if (seen.attempts === 0) return null;
+    return {
+      error:
+        'A charger with this identity has already tried to connect while unregistered, so it may belong to another ' +
+        'operator. Ask the platform operator to register or adopt it for you (they can confirm the unit with your installer).',
+      code: 'identity_needs_platform_approval',
+    };
+  }
+
   app.post('/v1/charge-points', async (req, reply) => {
     const b = req.body as any;
     const identity = String(b.ocppIdentity ?? '').trim();
@@ -804,6 +876,8 @@ export async function buildApi(): Promise<FastifyInstance> {
 
     const existing = await one(`SELECT id FROM charge_point WHERE ocpp_identity = $1`, [identity]);
     if (existing) return reply.status(409).send({ error: 'that identity is already registered' });
+    const claim = await claimProblem(req, identity);
+    if (claim) return reply.status(409).send(claim);
 
     // The wizard's full hardware profile and topology. All optional, so the
     // v1.2.1 two-field call still works exactly as before.
@@ -868,13 +942,15 @@ export async function buildApi(): Promise<FastifyInstance> {
     };
   });
 
-  app.post('/v1/pending-chargers/:identity/adopt', async (req) => {
+  app.post('/v1/pending-chargers/:identity/adopt', async (req, reply) => {
     const { identity } = req.params as { identity: string };
     const siteId = String((req.body as any)?.siteId ?? '');
     await ownedSite(req, siteId, 'charge_point:write');
 
     const existing = await one(`SELECT id FROM charge_point WHERE ocpp_identity = $1`, [identity]);
     if (existing) throw new BadRequestError('that identity is already registered');
+    const claim = await claimProblem(req, identity);
+    if (claim) return reply.status(409).send(claim);
 
     const row = await one<{ id: string }>(
       `INSERT INTO charge_point (site_id, ocpp_identity, status, adopted_at, first_seen_at)

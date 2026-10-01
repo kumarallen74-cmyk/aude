@@ -89,6 +89,24 @@ export interface AttemptFilter {
   orgId?: string;
 }
 
+/**
+ * The tenant filter for connection attempts: the identity belongs to one of the
+ * organisation's charge points AND the attempt was made after that charge point
+ * was registered or adopted here.
+ *
+ * Without the time bound, identities were first-come across the platform: any
+ * tenant could pre-register another operator's charger identity and then read
+ * every attempt that charger had ever made — source IPs, user agents, auth
+ * failures — from before the tenant had anything to do with it. A charge point
+ * that changes hands likewise does not bring its previous owner's history.
+ * `$n` is the organisation id.
+ */
+const OWN_ATTEMPT = (orgParam: string) => `EXISTS (
+         SELECT 1 FROM charge_point cp JOIN site s ON s.id = cp.site_id
+          WHERE cp.ocpp_identity = connection_attempt.ocpp_identity
+            AND s.org_id = ${orgParam}
+            AND connection_attempt.ts >= COALESCE(cp.adopted_at, cp.created_at))`;
+
 export async function listAttempts(f: AttemptFilter = {}) {
   const where: string[] = [];
   const params: unknown[] = [];
@@ -97,14 +115,7 @@ export async function listAttempts(f: AttemptFilter = {}) {
     where.push(clause.replace('?', `$${params.length}`));
   };
   if (f.identity) add('ocpp_identity = ?', f.identity);
-  if (f.orgId) {
-    add(
-      `ocpp_identity IN (
-         SELECT cp.ocpp_identity FROM charge_point cp JOIN site s ON s.id = cp.site_id
-          WHERE s.org_id = ?)`,
-      f.orgId,
-    );
-  }
+  if (f.orgId) add(OWN_ATTEMPT('?'), f.orgId);
   if (f.outcome) add('outcome = ?', f.outcome);
   if (f.since) add('ts >= ?', f.since);
   if (f.until) add('ts <= ?', f.until);
@@ -178,9 +189,31 @@ export async function attemptStats(sinceMinutes = 60, orgId?: string) {
             count(DISTINCT ocpp_identity)                 AS identities
        FROM connection_attempt
       WHERE ts > now() - ($1 || ' minutes')::interval
-        AND ($2::uuid IS NULL OR ocpp_identity IN (
-              SELECT cp.ocpp_identity FROM charge_point cp JOIN site s ON s.id = cp.site_id
-               WHERE s.org_id = $2))`,
+        AND ($2::uuid IS NULL OR ${OWN_ATTEMPT('$2::uuid')})`,
     [sinceMinutes, orgId ?? null],
   );
+}
+
+/**
+ * May this principal claim `identity`?
+ *
+ * An identity that has already knocked while unregistered (rejected_unknown_cp)
+ * is a real charger out in the field, and it may well be another operator's:
+ * whoever registered it first would receive it — its connection, its sessions,
+ * and its history from then on. connection_attempt records no serial number (the
+ * attempt is refused at the WebSocket upgrade, before any BootNotification), so
+ * there is nothing a tenant could present to prove the unit is theirs; such an
+ * identity is registered or adopted by a PLATFORM operator, who can check with
+ * the installer. An identity never seen on the network — the normal
+ * commissioning order, registering before the charger is configured — is
+ * unaffected.
+ */
+export async function identitySeenUnregistered(identity: string): Promise<{ attempts: number; firstSeenAt: Date | null }> {
+  const r = await one<{ n: number; first: Date | null }>(
+    `SELECT count(*)::int AS n, min(ts) AS first
+       FROM connection_attempt
+      WHERE ocpp_identity = $1 AND outcome = 'rejected_unknown_cp'`,
+    [identity],
+  );
+  return { attempts: r?.n ?? 0, firstSeenAt: r?.first ?? null };
 }

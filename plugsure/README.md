@@ -15,7 +15,7 @@ configuration, roll out firmware and manage users — no scripts or SQL. Bootstr
 with `npm run create-admin`. See [`RELEASE-NOTES-v1.3.0.md`](RELEASE-NOTES-v1.3.0.md) and
 [`docs/ACCEPTANCE-v1.3.md`](docs/ACCEPTANCE-v1.3.md).
 Deployment: [`docs/PlugSure-v1.3.0-Deployment-Guide.pdf`](docs/PlugSure-v1.3.0-Deployment-Guide.pdf).
-Final pre-deployment audit (29 Sep 2026): [`docs/FINAL-AUDIT-v1.3.0.md`](docs/FINAL-AUDIT-v1.3.0.md) ([PDF](docs/PlugSure-v1.3.0-Final-Audit.pdf)) — production build, fresh PostgreSQL 16, 571/571 unit tests, all 28 e2e suites.
+Final pre-deployment audit (29 Sep 2026): [`docs/FINAL-AUDIT-v1.3.0.md`](docs/FINAL-AUDIT-v1.3.0.md) ([PDF](docs/PlugSure-v1.3.0-Final-Audit.pdf)) — production build, fresh PostgreSQL 16, all unit tests (the current count is in CI's `npm test` output), all 28 e2e suites.
 Go-live status: [`docs/READINESS-REVIEW-v1.3.md`](docs/READINESS-REVIEW-v1.3.md)
 ([PDF](docs/PlugSure-v1.3.0-Readiness-Review.pdf)) — ready for a supervised pilot; public paid
 charging is blocked on a QRIS acquirer and an OTP provider.
