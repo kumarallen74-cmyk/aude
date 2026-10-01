@@ -263,7 +263,8 @@ try {
     unsolicited.status === 'Rejected' && unsolicited.statusInfo?.reasonCode === 'NotAllowed', unsolicited);
   const t3 = Date.now();
   const trigD = await ops('POST', `/v1/charge-points/${D}/certificate/request`);
-  const tmD = await d1.waitFor('TriggerMessage', t3);
+  // Provisioning also triggers a station-wide StatusNotification on a 2.0.1 boot: wait for the certificate one.
+  const tmD = await d1.waitFor('TriggerMessage', t3, (p) => p.requestedMessage === 'SignChargingStationCertificate');
   check('D: a certificate request to a 2.0.1 station is TriggerMessage(SignChargingStationCertificate)', trigD.status === 200 && tmD?.payload.requestedMessage === 'SignChargingStationCertificate', tmD?.payload);
   const badD = await d1.call('SignCertificate', { csr: buildCsr(name([['CN', 'NOT-ME']]), kD) });
   const t2 = Date.now();
