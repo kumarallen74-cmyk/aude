@@ -139,7 +139,9 @@ export async function recentUnknownTags(orgId: string, identity?: string) {
   return many(
     `WITH seen AS (
        SELECT f.ts, f.ocpp_identity,
-              COALESCE(f.payload->>'idTag', f.payload->'idToken'->>'idToken') AS id_tag
+              -- The frame log stores the whole OCPP-J message, [2, id, action, payload]:
+              -- the request body is element 3. (Reading the top level never matched.)
+              COALESCE(f.payload->3->>'idTag', f.payload->3->'idToken'->>'idToken') AS id_tag
          FROM ocpp_frame f
          JOIN charge_point cp ON cp.id = f.charge_point_id
          JOIN site s ON s.id = cp.site_id

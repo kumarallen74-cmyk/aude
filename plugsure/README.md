@@ -9,6 +9,11 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.4.2 — fixes (2 October 2026).** Scan from live charger finds tapped cards again, the sidebar
+shows the installed version, suspended chargers no longer offer Start, and the deployment docs are
+corrected (acceptance health check; systemd database roles). No migrations or new settings; see
+[`RELEASE-NOTES-v1.4.2.md`](RELEASE-NOTES-v1.4.2.md).
+
 **v1.4.1 — suspend and resume (2 October 2026).** Operators can suspend a charge point from the
 console or API (no new sessions, credentials kept) and resume it. Adds the hardware acceptance
 checklist [`docs/ACCEPTANCE-v1.4.md`](docs/ACCEPTANCE-v1.4.md). No migrations or new settings; see

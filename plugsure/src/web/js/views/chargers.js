@@ -343,6 +343,7 @@ function controlTab(identity) {
     if (!canCmd) { body.innerHTML = callout('info', 'Your role does not include remote commands.'); return; }
     body.innerHTML = `
       ${d.online ? '' : callout('warn', '<b>The charger is offline.</b> Commands are sent over its WebSocket, so they will fail until it reconnects.')}
+      ${d.status === 'suspended' ? callout('warn', '<b>Suspended.</b> New sessions cannot be started until it is resumed on the Overview tab. A session already running can still be stopped.') : ''}
       <div class="section" style="margin-top:6px"><h2>Per connector</h2><div class="grid two" data-guns></div></div>
       <div class="section"><h2>Station</h2><div class="card pad"><div class="row">
         <button class="btn" data-reset>${icon('reboot')} Reboot hardware…</button>
@@ -356,7 +357,7 @@ function controlTab(identity) {
       ${k.session_id ? `<div class="small" style="margin:6px 0;color:var(--info)">Transaction <span class="mono">${esc(k.ocpp_transaction_id)}</span> · ${esc(fmt.kwh(k.session_energy_wh))} · started ${esc(fmt.ago(k.session_started_at))}</div>` : '<div class="small muted" style="margin:6px 0">No session.</div>'}
       ${k.maintenance_reason ? `<div class="small" style="color:var(--warn);margin-bottom:6px">Out of service: ${esc(k.maintenance_reason)}</div>` : ''}
       <div class="row">
-        ${k.session_id ? `<button class="btn sm danger" data-a="stop">${icon('stop')} Stop</button>` : `<button class="btn sm primary" data-a="start">${icon('play')} Start</button>`}
+        ${k.session_id ? `<button class="btn sm danger" data-a="stop">${icon('stop')} Stop</button>` : d.status === 'suspended' ? '' : `<button class="btn sm primary" data-a="start">${icon('play')} Start</button>`}
         <button class="btn sm" data-a="unlock">${icon('unlock')} Unlock cable</button>
         <button class="btn sm" data-a="avail">${k.status === 'Unavailable' || k.maintenance_reason ? 'Make operative' : 'Take out of service'}</button>
       </div></div>`).join('') || callout('info', 'No connectors.');
@@ -863,7 +864,7 @@ registerView('chargers', {
             label: '',
             render: (c) => c.status === 'pending_adoption' && state.can('charge_point:write')
               ? `<button class="btn sm primary" data-act="activate">Activate</button>`
-              : canCmd && c.online ? `<div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-act="start" title="Remote start" aria-label="Remote start">${icon('play')}</button><button class="btn sm" data-act="reset" title="Reboot" aria-label="Reboot">${icon('reboot')}</button></div>` : '',
+              : canCmd && c.online ? `<div class="row" style="flex-wrap:nowrap">${c.status === 'suspended' ? '' : `<button class="btn sm" data-act="start" title="Remote start" aria-label="Remote start">${icon('play')}</button>`}<button class="btn sm" data-act="reset" title="Reboot" aria-label="Reboot">${icon('reboot')}</button></div>` : '',
           },
         ],
         rows: list,
