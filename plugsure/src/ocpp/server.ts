@@ -103,24 +103,8 @@ export async function startGateway(): Promise<GatewayHandle> {
     });
   });
 
-  await new Promise<void>((res) => http.listen(config.gateway.port, config.gateway.host, res));
-  logger.info(
-    {
-      port: config.gateway.port,
-      tls: tlsEnabled ? 'terminated here' : config.gateway.trustProxyProto ? 'expected at proxy' : 'none',
-      versions: supported,
-      minSecurityProfile: config.gateway.minSecurityProfile,
-      autoAdopt: config.gateway.autoAdopt,
-    },
-    'OCPP gateway listening',
-  );
-
-  if (config.gateway.minSecurityProfile === 0) {
-    logger.warn(
-      'OCPP_MIN_SECURITY_PROFILE=0 — unauthenticated chargers are accepted. Bench use only; production requires 2.',
-    );
-  }
-
+  // The refusals below run BEFORE listen() (v1.4.4): a gateway that will refuse to
+  // start never opens its port, not even for the moment before it exits.
   /**
    * Profile 2 requires TLS, and TLS has to come from SOMEWHERE.
    *
@@ -136,7 +120,6 @@ export async function startGateway(): Promise<GatewayHandle> {
    * it was simply missing for the global setting.
    */
   if (config.gateway.minSecurityProfile >= 2 && !tlsEnabled && !config.gateway.trustProxyProto) {
-    await new Promise<void>((res) => http.close(() => res()));
     throw new Error(
       'OCPP_MIN_SECURITY_PROFILE=2 requires TLS, and this gateway has neither its own certificate ' +
         'nor a trusted proxy to learn it from — every charger would be refused with 403. Either set ' +
@@ -157,8 +140,7 @@ export async function startGateway(): Promise<GatewayHandle> {
   const insecure = insecureGatewayProblems();
   if (insecure.length && !isRelaxedEnv()) {
     if (!config.gateway.allowInsecure) {
-      await new Promise<void>((res) => http.close(() => res()));
-      throw new Error(
+        throw new Error(
         `Refusing to start in NODE_ENV=${config.env}: ${insecure.join('; ')}. Production needs ` +
           'OCPP_MIN_SECURITY_PROFILE=2 (or 3) and OCPP_AUTO_ADOPT=false (see deploy/README.md). For a ' +
           'supervised bench only, set ALLOW_INSECURE_OCPP=true to acknowledge it.',
@@ -166,6 +148,25 @@ export async function startGateway(): Promise<GatewayHandle> {
     }
     logger.error({ problems: insecure }, 'ALLOW_INSECURE_OCPP=true: this gateway accepts chargers without proper authentication');
   }
+
+  await new Promise<void>((res) => http.listen(config.gateway.port, config.gateway.host, res));
+  logger.info(
+    {
+      port: config.gateway.port,
+      tls: tlsEnabled ? 'terminated here' : config.gateway.trustProxyProto ? 'expected at proxy' : 'none',
+      versions: supported,
+      minSecurityProfile: config.gateway.minSecurityProfile,
+      autoAdopt: config.gateway.autoAdopt,
+    },
+    'OCPP gateway listening',
+  );
+
+  if (config.gateway.minSecurityProfile === 0) {
+    logger.warn(
+      'OCPP_MIN_SECURITY_PROFILE=0 — unauthenticated chargers are accepted. Bench use only; production requires 2.',
+    );
+  }
+
 
   // ---- liveness: server-side ping, and a sweeper for silent chargers ----
   // A half-open 4G socket never emits 'close'; without a ping it lingers until

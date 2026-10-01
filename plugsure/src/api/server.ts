@@ -10,6 +10,7 @@ import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { one, many, query, enterOrgScope, runInRequestScope, afterResponse, outsideRequestScope, type OrgScopeHandle } from '../db/pool.js';
 import * as assets from '../services/assets.js';
+import { closeOutage, outageFromResume } from '../services/uptime.js';
 import * as commands from '../ocpp/commands.js';
 import * as registry from '../ocpp/registry.js';
 import { recentSessions, clearReviewAndRate, reconcileStuckSessions, PREPAID_CLAIM_WINDOW_MIN } from '../services/sessions.js';
@@ -1014,7 +1015,7 @@ export async function buildApi(): Promise<FastifyInstance> {
    * and starts (adapter16 stationRefusal); a session already running is left to
    * finish, and its MeterValues and stop are still accepted. Resume reverses it.
    */
-  app.post('/v1/charge-points/:identity/suspend', async (req) => {
+  app.post('/v1/charge-points/:identity/suspend', async (req, reply) => {
     const { identity } = req.params as { identity: string };
     const owner = await ownedChargePoint(req, identity, 'charge_point:write');
     const reason = String((req.body as any)?.reason ?? '').trim().slice(0, 500) || null;
@@ -1040,16 +1041,29 @@ export async function buildApi(): Promise<FastifyInstance> {
       after: { reason },
       ip: req.ip,
     });
-    return { ok: true };
+    // A suspension is planned downtime, not an outage: end any open outage (and its alert).
+    await closeOutage(identity);
+    // Drivers holding a reservation or a queue offer on it lose nothing: released,
+    // fee waived or refunded, queue place kept (v1.4.4).
+    // Database changes here, in this request's transaction; CancelReservation, driver
+    // notices and queue re-allocation after the response (so after the commit).
+    const released = await (await import('../driver/reservations.js')).releaseForSuspension(owner.chargePointId);
+    if (released.count) afterResponse(reply.raw, released.after, (e) => logger.warn({ cp: identity, err: e.message }, 'post-suspension release steps failed'));
+    return { ok: true, reservationsReleased: released.count };
   });
 
   app.post('/v1/charge-points/:identity/resume', async (req, reply) => {
     const { identity } = req.params as { identity: string };
     const owner = await ownedChargePoint(req, identity, 'charge_point:write');
-    // 'offline' as activation does; the next BootNotification marks it online.
+    // A unit still connected is online now: it stayed Accepted while suspended, and
+    // some firmware ignores the BootNotification trigger below. Otherwise 'offline',
+    // with any outage counted from now rather than from before the suspension.
+    const connected = registry.isOnline(identity);
     const r = await query(
-      `UPDATE charge_point SET status = 'offline' WHERE id = $1 AND status = 'suspended'`,
-      [owner.chargePointId],
+      `UPDATE charge_point SET status = $2,
+              offline_since = CASE WHEN $2 = 'online' THEN NULL ELSE now() END
+        WHERE id = $1 AND status = 'suspended'`,
+      [owner.chargePointId, connected ? 'online' : 'offline'],
     );
     if ((r.rowCount ?? 0) === 0) throw new ConflictError('this charge point is not suspended');
     await writeAudit({
@@ -1061,6 +1075,7 @@ export async function buildApi(): Promise<FastifyInstance> {
       targetId: identity,
       ip: req.ip,
     });
+    if (!connected) await outageFromResume(identity);
     // A suspended unit re-asks at its Pending interval; ask it to boot now.
     if (registry.isOnline(identity)) {
       const actor = actorOf(req);
@@ -1364,6 +1379,15 @@ export async function buildApi(): Promise<FastifyInstance> {
 
     const gate = connectorMaySellEnergy(c.tera_status as any);
     if (!gate.allowed) return reply.status(409).send({ error: gate.reason });
+    // Never sell a session the charger will refuse (v1.4.4): suspended, unadopted,
+    // decommissioned, or a connector on maintenance hold.
+    const cpState = await one<{ status: string; on_hold: boolean }>(
+      `SELECT cp.status, (SELECT maintenance_reason IS NOT NULL FROM connector WHERE id = $2) AS on_hold
+         FROM charge_point cp WHERE cp.id = $1`, [owner.chargePointId, c.id]);
+    if (cpState && assets.ADMINISTRATIVE_STATES.includes(cpState.status)) {
+      return reply.status(409).send({ error: `this charge point is ${cpState.status === 'pending_adoption' ? 'awaiting adoption' : cpState.status} and cannot sell a session` });
+    }
+    if (cpState?.on_hold) return reply.status(409).send({ error: 'this connector is on maintenance hold' });
 
     const now = new Date();
     const { tariff } = await loadTariffForConnector(c.id, c.org_id, now);

@@ -1,10 +1,19 @@
 PlugSure CSMS
-Version:   1.4.3
-Package:   plugsure-v1.4.3
-Prepared:  2026-10-02  (user-menu icon fix — see RELEASE-NOTES-v1.4.3.md)
+Version:   1.4.4
+Package:   plugsure-v1.4.4
+Prepared:  2026-10-02  (pre-deployment review fixes — see RELEASE-NOTES-v1.4.4.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP)
 API:       OpenAPI 3.1 at /openapi.json (271 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
-Status:    v1.4.3 = v1.4.2 + the user menu's icons sized correctly (style only).
+Status:    v1.4.4 = v1.4.3 + the driver app refuses suspended chargers (no payment,
+           reservation or queue offer), resume no longer backdates outages, the systemd
+           path keeps the database owner credential out of the running apps
+           (plugsure-migrate.service + root-only migrate.env), roaming cards left out of
+           Scan from live charger, gateway refusals before listening, doc corrections.
+           No migrations, no new app settings; systemd installs move the owner
+           credential to /etc/plugsure/migrate.env (RELEASE-NOTES-v1.4.4.md).
+
+v1.4.3 (2026-10-02):
+           v1.4.2 + the user menu's icons sized correctly (style only).
            No migrations, no new settings.
 
 v1.4.2 (2026-10-02):

@@ -185,6 +185,22 @@ try {
     paid4.status === 422 && /dikembalikan/.test(paid4.data.error) && s4.data.state === 'failed' && ref4?.refund_state === 'due' && ref4.refund_due_idr === TOTAL, { paid4: paid4.data, s4: s4.data, ref4 });
   delete cp.handlers.ReserveNow;
 
+  // ------------------------------------------------------------ suspended between checkout and payment: nothing held, refunded (v1.4.4)
+  const r5 = await A.post('/v1/reservations', { connectorId: c2, method: 'QRIS' });
+  await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended before the fee was paid' });
+  try {
+    mark = cp.calls.length;
+    const paid5 = await A.post(`/v1/reservations/checkout/${r5.data.checkout.id}/confirm-payment`);
+    const s5 = await A.get(`/v1/reservations/checkout/${r5.data.checkout.id}`);
+    const ref5 = await row(`SELECT pi.refund_state, pi.refund_due_idr FROM reservation_checkout co JOIN payment_intent pi ON pi.id = co.payment_intent_id WHERE co.id = $1`, [r5.data.checkout.id]);
+    check('suspended: a fee paid after the charger was suspended holds nothing (no ReserveNow) and is owed back',
+      r5.status === 200 && paid5.status === 422 && /dikembalikan/.test(paid5.data.error ?? '') && s5.data.state === 'failed'
+        && ref5?.refund_state === 'due' && ref5.refund_due_idr === TOTAL && !cp.calls.slice(mark).some((c) => c.action === 'ReserveNow'),
+      { paid5: paid5.data, s5: s5.data?.state, ref5 });
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+
   // ------------------------------------------------------------ a fleet card: on the fleet invoice
   const UID = `RFEE-FLT-${Date.now().toString().slice(-6)}`;
   const fleetName = `PT Reservasi E2E ${Date.now().toString().slice(-5)}`;

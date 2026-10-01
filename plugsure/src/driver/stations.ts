@@ -76,6 +76,7 @@ interface ConnectorRow {
   status: string;
   tera_status: string;
   in_maintenance: boolean;
+  suspended: boolean;
   ocpp_identity: string;
   display_name: string | null;
   site_id: string;
@@ -91,7 +92,7 @@ interface ConnectorRow {
 const CONNECTOR_COLUMNS = `
   c.id AS connector_id, e.evse_id AS connector_no, c.connector_type, c.current_type,
   c.max_power_w, c.status, c.tera_status, (c.maintenance_reason IS NOT NULL) AS in_maintenance,
-  cp.ocpp_identity, cp.display_name, s.id AS site_id, s.name AS site_name, s.address, s.lat, s.lon,
+  (cp.status = 'suspended') AS suspended, cp.ocpp_identity, cp.display_name, s.id AS site_id, s.name AS site_name, s.address, s.lat, s.lon,
   s.spklu_id, s.org_id, o.name AS operator
   FROM connector c
   JOIN evse e ON e.id = c.evse_uuid
@@ -119,6 +120,10 @@ function toConnectorView(r: ConnectorRow): ConnectorView {
   if (!gate.allowed) {
     status = 'Blocked';
     blockedReason = 'Sedang tidak dapat digunakan (verifikasi meter).';
+  } else if (r.suspended) {
+    // Suspended by the operator (v1.4.1): listed, but sells, reserves and queues nothing.
+    status = 'Unavailable';
+    blockedReason = 'Sementara tidak beroperasi.';
   } else if (r.in_maintenance) {
     // The operator's reason is internal ("gun 2 cable damaged"); the driver gets a plain notice.
     status = 'Maintenance';

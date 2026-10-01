@@ -359,7 +359,7 @@ export const schemas: Record<string, Schema> = {
     properties: {
       identity: { type: 'string' },
       online: { type: 'boolean' },
-      status: { type: 'string', description: 'pending_adoption, provisioning, online, offline or decommissioned.' },
+      status: { type: 'string', description: 'pending_adoption, provisioning, online, offline, suspended or decommissioned.' },
       bootCount: { type: 'integer' },
       lastSeenAt: dtN,
       lastBootAt: dtN,

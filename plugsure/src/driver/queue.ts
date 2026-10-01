@@ -75,7 +75,7 @@ export const connectorTypeOf = (type: string | null, current: string) => type ??
 // ─────────────────────────────────────────────────────────── database
 
 interface SiteRow { id: string; org_id: string; name: string; queue_enabled: boolean; queue_offer_minutes: number; queue_max_length: number; queue_max_wait_minutes: number; archived_at: Date | null }
-interface ConnRow { connector_uuid: string; connector_no: number; connector_type: string | null; current_type: string; status: string; tera_status: string; in_maintenance: boolean; charge_point_id: string; ocpp_identity: string; org_id: string; held: boolean }
+interface ConnRow { connector_uuid: string; connector_no: number; connector_type: string | null; current_type: string; status: string; tera_status: string; in_maintenance: boolean; suspended: boolean; charge_point_id: string; ocpp_identity: string; org_id: string; held: boolean }
 interface EntryRow { id: string; org_id: string; site_id: string; device_id: string; app_driver_id: string | null; fleet_token_id: string | null; fleet_uid: string | null; current_type: Current | null; connector_type: string | null; state: string; joined_at: Date; offered_at: Date | null; ended_at: Date | null; end_reason: string | null }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -87,7 +87,7 @@ const siteRow = (siteId: string) => one<SiteRow>(
 async function siteConnectors(siteId: string): Promise<ConnRow[]> {
   return many<ConnRow>(
     `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, c.connector_type, c.current_type, c.status, c.tera_status,
-            (c.maintenance_reason IS NOT NULL) AS in_maintenance, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id,
+            (c.maintenance_reason IS NOT NULL) AS in_maintenance, (cp.status = 'suspended') AS suspended, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id,
             EXISTS (SELECT 1 FROM driver_reservation r WHERE r.connector_uuid = c.id AND r.state IN ('requested','active') AND r.expires_at > now()) AS held
        FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id JOIN site s ON s.id = cp.site_id
       WHERE s.id = $1 AND cp.status NOT IN ('pending_adoption','decommissioned') AND s.archived_at IS NULL
@@ -96,7 +96,7 @@ async function siteConnectors(siteId: string): Promise<ConnRow[]> {
   );
 }
 
-const usable = (c: ConnRow) => registry.isOnline(c.ocpp_identity) && connectorMaySellEnergy(c.tera_status as any).allowed && !c.in_maintenance;
+const usable = (c: ConnRow) => registry.isOnline(c.ocpp_identity) && connectorMaySellEnergy(c.tera_status as any).allowed && !c.in_maintenance && !c.suspended;
 const isFree = (c: ConnRow) => usable(c) && c.status === 'Available' && !c.held;
 const asFree = (c: ConnRow): FreeConnector => ({ id: c.connector_uuid, current: c.current_type === 'DC' ? 'DC' : 'AC', type: connectorTypeOf(c.connector_type, c.current_type) });
 const wantOf = (e: { current_type: Current | null; connector_type: string | null; id: string }) => ({ id: e.id, current: e.current_type, type: e.connector_type });
@@ -293,6 +293,22 @@ export async function offerEnded(r: { queue_entry_id: string; site_name?: string
   const s = await siteRow(e.site_id);
   await notifyQueue(e.device_id, e.id, 'missed', s?.name ?? '', null);
   void allocate(e.site_id);
+}
+
+/**
+ * The offered connector was withdrawn by the operator (charger suspended, v1.4.4): the
+ * driver did nothing wrong, so they keep their place and wait for the next free connector.
+ */
+export async function requeueOffer(entryId: string): Promise<{ site_id: string; device_id: string } | null> {
+  // Only the row: the caller allocates (and notifies) after its transaction commits, outside
+  // the request scope — allocation sends ReserveNow and must not run inside the operator's request.
+  return one<{ site_id: string; device_id: string }>(
+    `UPDATE driver_queue_entry SET state = 'waiting', offered_at = NULL WHERE id = $1 AND state = 'offered' RETURNING site_id, device_id`, [entryId]);
+}
+
+/** Tell a driver whose offer was withdrawn by a suspension that they keep their place. */
+export async function notifyRequeued(deviceId: string, entryId: string, siteName: string): Promise<void> {
+  await notifyQueue(deviceId, entryId, 'requeued', siteName ?? '', null);
 }
 
 const running = new Map<string, Promise<void>>();

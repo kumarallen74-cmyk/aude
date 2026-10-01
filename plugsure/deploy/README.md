@@ -97,7 +97,7 @@ Two supported paths. Pick one and stay on it:
 | Path | What runs the processes | Use when |
 | --- | --- | --- |
 | **A — Docker Compose** (recommended) | `docker compose` on the VM | you want migrations, restarts and log rotation handled for you |
-| **B — systemd** | `plugsure-gateway.service`, `plugsure-api.service` | no Docker allowed on the box, or Postgres is RDS |
+| **B — systemd** | `plugsure-gateway.service`, `plugsure-api.service`, `plugsure-migrate.service` | no Docker allowed on the box, or Postgres is RDS |
 
 Both paths put **Caddy** in front for TLS. Both run **two separate processes** —
 the OCPP gateway and the API — from the same build. That separation is
@@ -252,12 +252,16 @@ openssl s_client -connect ocpp.example.id:443 -servername ocpp.example.id </dev/
 ## 4. Configuration
 
 Both paths read the same variables. Path A reads `.env` next to
-`docker-compose.yml`; Path B reads `/etc/plugsure/plugsure.env`.
+`docker-compose.yml`; Path B reads `/etc/plugsure/plugsure.env` (both app units)
+and, for migrations only, `/etc/plugsure/migrate.env` (root-only, v1.4.4).
 
 ```bash
 sudo install -d -m 0750 -o root -g plugsure /etc/plugsure
 sudo install -m 0640 -o root -g plugsure /dev/null /etc/plugsure/plugsure.env
 sudo -e /etc/plugsure/plugsure.env
+# Path B: the database OWNER's credential, read only by plugsure-migrate.service.
+sudo install -m 0600 -o root -g root /dev/null /etc/plugsure/migrate.env
+sudo -e /etc/plugsure/migrate.env
 ```
 
 ### Required secrets — the process will not start without these
@@ -288,7 +292,7 @@ openssl rand -hex 32   # -> SECRETS_KEY
 | --- | --- | --- |
 | `NODE_ENV` | `production` | anything else turns on `pino-pretty`; keep logs JSON |
 | `DATABASE_URL` | `postgresql://plugsure_app:<pw>@127.0.0.1:5432/plugsure` | The apps' connection, as the runtime role `plugsure_app` (never the owner). Path A overrides this to `@postgres:5432` inside the compose network |
-| `MIGRATION_DATABASE_URL` | `postgresql://plugsure:<pw>@127.0.0.1:5432/plugsure` | Path B only: the owner connection `plugsure-api.service` runs migrations with |
+| `DATABASE_URL` in `migrate.env` | `postgresql://plugsure:<pw>@127.0.0.1:5432/plugsure` | Path B only: the owner connection `plugsure-migrate.service` runs migrations with. It lives in the root-only `/etc/plugsure/migrate.env`, never in `plugsure.env`, so the running API and gateway do not hold the owner password (v1.4.4; earlier releases used `MIGRATION_DATABASE_URL` in `plugsure.env`). |
 | `LOG_LEVEL` | `info` | `debug` only while chasing a fault; it logs every OCPP frame |
 | `TZ` | `Asia/Jakarta` | **not cosmetic** — WBP/LWBP tariff blocks are evaluated in local time |
 | **`OCPP_MIN_SECURITY_PROFILE`** | **`2`** | **wss + HTTP Basic. The OCPP 1.6 certification baseline and the only acceptable production setting.** `0` (the code default) accepts any charger with no credential at all; `1` accepts Basic over plaintext. Setting this to `2` makes `checkAuth()` demand Basic credentials matching the stored `AuthorizationKey` for every connection. |
@@ -335,10 +339,8 @@ LOG_LEVEL=info
 # The apps connect as the restricted runtime role, never as the owner: as the
 # owner (or a superuser) row-level security would not constrain them.
 DATABASE_URL=postgresql://plugsure_app:CHANGE_ME_APP@127.0.0.1:5432/plugsure
-# The owner connection plugsure-api.service's ExecStartPre migrates with.
-MIGRATION_DATABASE_URL=postgresql://plugsure:CHANGE_ME@127.0.0.1:5432/plugsure
-# Migrations set plugsure_app's password from this; use the same value as above.
-POSTGRES_APP_PASSWORD=CHANGE_ME_APP
+# The owner connection and POSTGRES_APP_PASSWORD do NOT go here: they belong in
+# /etc/plugsure/migrate.env (below), which only plugsure-migrate.service reads.
 
 # No defaults. The process exits at boot without these — see "Required secrets".
 AUDIT_HMAC_KEY=CHANGE_ME_openssl_rand_hex_32
@@ -354,6 +356,30 @@ OCPP_HEARTBEAT_S=300
 API_PORT=9200
 API_HOST=127.0.0.1
 API_TRUSTED_PROXIES=127.0.0.1
+```
+
+Production `/etc/plugsure/migrate.env` (Path B, root:root 0600):
+
+```ini
+# The database OWNER: migrations need DDL and create/alter plugsure_app.
+DATABASE_URL=postgresql://plugsure:CHANGE_ME@127.0.0.1:5432/plugsure
+# Migrations set plugsure_app's password from this: the same value as in
+# plugsure.env's DATABASE_URL.
+POSTGRES_APP_PASSWORD=CHANGE_ME_APP
+# Optional: MIGRATION_LOCK_TIMEOUT=10s, PG_STATEMENT_TIMEOUT_MS=0 (a long data
+# migration), POSTGRES_APP_USER (only if the runtime role is not plugsure_app).
+```
+
+Write values unquoted, one `KEY=value` per line (systemd `EnvironmentFile` syntax).
+For owner commands by hand (checks, backups, troubleshooting), read the URL out of the
+file rather than sourcing it as shell code, so a password with `$`, `&` or quotes is safe:
+
+```bash
+# Path B (local Postgres or RDS alike)
+OWNER_URL=$(sudo sed -n 's/^DATABASE_URL=//p' /etc/plugsure/migrate.env)
+psql "$OWNER_URL" -c "select 1"
+# Path A (Docker Compose)
+docker compose exec postgres psql -U postgres plugsure -c "select 1"
 ```
 
 > **Read the commissioning order below before you point a charger at this.**
@@ -674,14 +700,27 @@ sudo -u postgres createdb plugsure -O plugsure
 # PostgreSQL 16 also requires the owner to hold ADMIN OPTION on it.
 #   sudo -u postgres psql -c "GRANT plugsure_app TO plugsure WITH ADMIN OPTION"
 
-sudo install -m 0644 deploy/plugsure-gateway.service deploy/plugsure-api.service /etc/systemd/system/
+sudo install -m 0644 deploy/plugsure-migrate.service deploy/plugsure-api.service \
+    deploy/plugsure-gateway.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now plugsure-api plugsure-gateway
 ```
 
-`plugsure-api.service` runs `dist/db/migrate.js` as `ExecStartPre`, so migrations
-apply on every boot before the API accepts a request. The gateway unit is ordered
-`After=plugsure-api.service` so the two can never race the migrator.
+Both `plugsure-api.service` and `plugsure-gateway.service` start the one-shot
+`plugsure-migrate.service` (a privileged `ExecStartPre=+…systemctl start`) before their
+own process, so every start or restart runs the migrator first. A failed migration fails
+that start, and `Restart=always` retries it — for example while the database is still
+coming up at boot. Only the migrate unit reads the owner credential
+(`/etc/plugsure/migrate.env`, root-only); the API and gateway load `plugsure.env` alone,
+and `InaccessiblePaths=` hides `migrate.env` and `backup.env` from them.
+
+**Upgrading a Path B install from v1.4.3 or earlier:** move `MIGRATION_DATABASE_URL`
+(as `DATABASE_URL`) and `POSTGRES_APP_PASSWORD` out of `plugsure.env` into a new
+root-only `migrate.env`, install `plugsure-migrate.service` with the updated
+`plugsure-api.service` and `plugsure-gateway.service`, then `systemctl daemon-reload`
+and `systemctl restart plugsure-api plugsure-gateway`. If you run the nightly backup, also
+make `/etc/plugsure/backup.env` root-only (`chown root:root`, `chmod 0600`): it holds the
+owner credential too.
 
 **The `cp -R src/web dist/web` step is not optional.** `src/api/server.ts`
 resolves its static root as `join(here, '../web')`, which for `dist/api/server.js`
@@ -698,8 +737,8 @@ no-op. Safe to run before every deploy.
 ```bash
 # Path A
 docker compose run --rm migrate
-# Path B
-sudo -u plugsure DATABASE_URL=... node /opt/plugsure/dist/db/migrate.js
+# Path B (reads the owner credential from /etc/plugsure/migrate.env)
+sudo systemctl start plugsure-migrate && journalctl -u plugsure-migrate -n 50 --no-pager
 # From source (dev only; tsx is a devDependency)
 npm run migrate
 ```
@@ -707,14 +746,16 @@ npm run migrate
 Check state:
 
 ```bash
-psql "$DATABASE_URL" -c "select name, applied_at from schema_migration order by name"
+# as the owner (OWNER_URL as in §4; Path A: docker compose exec postgres psql -U postgres plugsure):
+# plugsure_app is subject to row-level security and would see no rows
+psql "$OWNER_URL" -c "select name, applied_at from schema_migration order by name"
 ```
 
 Each file runs in its own transaction with `lock_timeout` = `MIGRATION_LOCK_TIMEOUT`
 (10 s): a migration that cannot get a table lock fails and rolls back instead of
 stalling the gateway's writes behind it — re-run it when the blocking transaction
 (see `pg_stat_activity`) is gone. The whole run holds an advisory lock, so a
-second migrator (another host, a manual run during an ExecStartPre) waits, then
+second migrator (another host, a manual run during a restart) waits, then
 finds everything applied. Because each file is one transaction, a migration
 cannot use `CREATE INDEX CONCURRENTLY`; an index on a large, busy table (above
 all `ocpp_frame`) is better created by hand with `CONCURRENTLY` before the
@@ -754,7 +795,8 @@ hand-editing:
 
 ```bash
 # take one before every deploy (as the OWNER — plugsure_app is subject to RLS)
-pg_dump "$MIGRATION_DATABASE_URL" -Fc -f /var/backups/plugsure/plugsure-predeploy-$(date +%F-%H%M).dump
+sudo install -d -o plugsure -g plugsure -m 0700 /var/backups/plugsure   # once; the nightly backup uses it too
+sudo -u plugsure pg_dump "$OWNER_URL" -Fc -f /var/backups/plugsure/plugsure-predeploy-$(date +%F-%H%M).dump   # OWNER_URL as in §4
 ```
 
 ### Backups and restore rehearsal
@@ -836,7 +878,7 @@ change, because it only ever writes to stdout.
 The richest fault-finding tool is the **OCPP frame log**, not the process log:
 
 ```bash
-psql "$DATABASE_URL" -c \
+psql "$OWNER_URL" -c \
   "select ts, direction, message_type, action, unique_id
      from ocpp_frame
     where ocpp_identity = '<IDENTITY>'
@@ -953,7 +995,9 @@ Handy commands:
 
 ```bash
 docker compose restart gateway            # never fixes step 1–4; only masks step 7
-psql "$DATABASE_URL" -c "select ocpp_identity, security_profile, last_seen_at from charge_point"
+# as the owner (plugsure_app is subject to row-level security and would see no rows)
+docker compose exec postgres psql -U postgres plugsure -c "select ocpp_identity, security_profile, last_seen_at from charge_point"
+# Path B: psql "$OWNER_URL" -c "…" (OWNER_URL as in §4)
 ```
 
 ---

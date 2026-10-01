@@ -251,6 +251,19 @@ try {
   const detA0 = await a.get(`/v1/connectors/${conn1}`);
   check('reserve: offered to a signed-in driver, not to a guest', detA0.data.canReserve === true && detGuest0.data.canReserve === false, { a: detA0.data.canReserve, g: detGuest0.data.canReserve });
 
+  // A suspended charger (v1.4.4) offers no reservation, and refuses one (no fee, no ReserveNow).
+  const suspMark = cp.calls.length;
+  await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended' });
+  try {
+    const sDet = await a.get(`/v1/connectors/${conn1}`);
+    const sRes = await a.post('/v1/reservations', { connectorId: conn1 });
+    check('reserve: not offered on a suspended charger, and refused (no ReserveNow sent)',
+      sDet.data.canReserve === false && sRes.status === 422 && !cp.calls.slice(suspMark).some((c: any) => c.action === 'ReserveNow'), { can: sDet.data.canReserve, res: sRes.data });
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+  await until(() => a.get(`/v1/connectors/${conn1}`), (r) => r.data.canReserve === true, 15_000);
+
   let mark = cp.calls.length;
   const r1 = await a.post('/v1/reservations', { connectorId: conn1 });
   const rn1 = await cp.waitNew('ReserveNow', mark);
@@ -285,6 +298,27 @@ try {
   check('cancel: no live reservation; the connector is free for everyone again', after.data.reservation === null && detO2.data.available === true, { after: after.data, o: detO2.data.status });
   const cx2 = await other.post(`/v1/reservations/${r1.data.reservation.id}/cancel`);
   check('cancel: another device cannot cancel someone\'s reservation (404)', cx2.status === 404, cx2.data);
+
+  // Suspending releases a live reservation: CancelReservation, no lapse into a no-show (v1.4.4)
+  mark = cp.calls.length;
+  const rs = await a.post('/v1/reservations', { connectorId: conn1 });
+  const tS = Date.now();
+  const suspR = await ops('POST', `/v1/charge-points/${ID}/suspend`, { reason: 'E2E: suspended with a live reservation' });
+  try {
+    const crs = await cp.waitNew('CancelReservation', mark);
+    const curS = await a.get('/v1/reservation');
+    check('suspend: a live reservation is released (CancelReservation sent), not left to lapse as a no-show',
+      rs.status === 200 && suspR.status === 200 && suspR.data.reservationsReleased === 1 && !!crs && curS.data.reservation === null,
+      { rs: rs.status, susp: suspR.data, cancel: !!crs, cur: curS.data.reservation });
+    // The driver is told (sent after the response; wait for it so it is not mistaken for a later notice).
+    const rel = await until(async () => pushesTo('/push/a', tS), (l) => l.length >= 1, 20_000);
+    let relMsg: any = null; try { relMsg = rel[0] && decrypt(rel[0].body, subA); } catch (e) { relMsg = { error: (e as Error).message }; }
+    check('suspend: the driver gets a "Reservasi dibatalkan" push', rel.length === 1 && relMsg?.title === 'Reservasi dibatalkan', relMsg);
+  } finally {
+    await ops('POST', `/v1/charge-points/${ID}/resume`);
+  }
+  await cp.status(1, 'Available');
+  await until(() => a.get(`/v1/connectors/${conn1}`), (r) => r.data.canReserve === true, 15_000);
 
   // A charger that refuses
   cp.handlers.ReserveNow = (p) => (p.connectorId === 2 ? { status: 'Occupied' } : { status: 'Accepted' });

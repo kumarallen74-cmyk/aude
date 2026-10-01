@@ -63,7 +63,7 @@ export const schemas: Record<string, Schema> = {
       firmware: nS,
       serial: nS,
       ocpp_version: { ...nS, description: 'ocpp1.6 | ocpp2.0.1 | ocpp2.1, as registered or last booted.' },
-      status: { ...S, description: 'pending_adoption | provisioning | online | offline | decommissioned.' },
+      status: { ...S, description: 'pending_adoption | provisioning | online | offline | suspended | decommissioned.' },
       last_seen_at: nDT,
       last_heartbeat_at: nDT,
       offline_since: nDT,
@@ -814,7 +814,7 @@ export const ops: Op[] = [
     description:
       'Generic command dispatcher; the named routes (remote-start, unlock, …) run the same code. Every command is written to the audit log with the caller. ' +
       'The configuration commands (get-configuration, change-configuration, get-diagnostics) also accept `charge_point:config`. ' +
-      'A charger that is not connected makes the call fail with 500. Remote start answers 409 when the connector’s meter verification (tera) has lapsed or is pending.',
+      'A charger that is not connected makes the call fail with 500. Remote start answers 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or is pending.',
     pathParams: {
       ...identityParam,
       command:
@@ -861,7 +861,7 @@ export const ops: Op[] = [
     summary: 'Start a session remotely',
     description:
       'Sends RemoteStartTransaction for an RFID tag or driver account, optionally capped by energy, duration or amount. ' +
-      'Refused with 409 when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` ' +
+      'Refused with 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` ' +
       '(e.g. a field technician) may only start with a technician or VIP card (403 otherwise). Audited.',
     pathParams: identityParam,
     body: {
@@ -1226,7 +1226,7 @@ export const ops: Op[] = [
     summary: 'Suspend a charge point',
     description:
       'Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, ' +
-      'and new authorisations, starts and remote starts are refused. A session already running finishes normally and is billed. ' +
+      'and new authorisations, starts and remote starts are refused; the driver app keeps it on the map but sells, reserves and queues nothing. Live driver reservations and queue offers on it are released, their fee waived or refunded and the queue place kept. A session already running finishes normally and is billed. Any open outage is closed (planned downtime). ' +
       '409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.',
     pathParams: identityParam,
     body: {
@@ -1234,7 +1234,7 @@ export const ops: Op[] = [
       schema: { type: 'object', properties: { reason: { type: 'string', maxLength: 500 } } },
       example: { reason: 'Site closed for electrical works' },
     },
-    responses: { 200: { description: 'Suspended.', schema: obj({ ok: { type: 'boolean', const: true } }, ['ok']) } },
+    responses: { 200: { description: 'Suspended.', schema: obj({ ok: { type: 'boolean', const: true }, reservationsReleased: { type: 'integer', description: 'Driver reservations and queue offers on it that were released (fee waived or refunded, queue place kept).' } }, ['ok', 'reservationsReleased']) } },
     errors: [404, 409],
   },
   {
@@ -1243,7 +1243,7 @@ export const ops: Op[] = [
     tag: 'Onboarding',
     summary: 'Resume a suspended charge point',
     description:
-      'Returns a suspended charge point to service; a connected unit is asked to boot again at once so it is Accepted without waiting. ' +
+      'Returns a suspended charge point to service: online if it is connected (and asked to boot again), otherwise offline, with any outage counted from now. ' +
       '409 when it is not suspended. Audited as charge_point.resumed.',
     pathParams: identityParam,
     responses: { 200: { description: 'Resumed.', schema: obj({ ok: { type: 'boolean', const: true } }, ['ok']) } },
@@ -1513,7 +1513,8 @@ export const ops: Op[] = [
     description:
       'Creates a QRIS payment for a fixed amount of charging on one connector and quotes the energy it buys against the most expensive block the session could reach. ' +
       'The payment can only be claimed by `startToken` (the driver’s own token, or one minted here for a walk-up). Refused with 409 when the connector’s meter ' +
-      'verification has lapsed or is pending, and 422 when the amount does not cover the fixed fees. Maximum Rp 10,000,000.',
+      'verification has lapsed or is pending, the charge point is suspended, awaiting adoption or decommissioned, or the connector is on maintenance hold; ' +
+      '422 when the amount does not cover the fixed fees. Maximum Rp 10,000,000.',
     body: {
       schema: {
         type: 'object',

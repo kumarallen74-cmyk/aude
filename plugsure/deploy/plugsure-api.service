@@ -33,17 +33,21 @@ Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--enable-source-maps
 Environment=TZ=Asia/Jakarta
 
-# --- migrations on boot -------------------------------------------------------
-# This unit is the SINGLE owner of schema migration on the systemd path;
-# plugsure-gateway.service is ordered After= this one so the two can never run
-# the migrator concurrently. dist/db/migrate.js is idempotent (it records applied
-# files in schema_migration) and exits non-zero on failure, which — because this
-# is an ExecStartPre without a '-' prefix — aborts the start instead of bringing
-# up an API against a half-migrated schema.
-# Migrations need the database OWNER (DDL, creating plugsure_app); the API itself
-# runs as the restricted plugsure_app role from DATABASE_URL. So the migrator gets its
-# own connection string, MIGRATION_DATABASE_URL, from /etc/plugsure/plugsure.env.
-ExecStartPre=/usr/bin/env DATABASE_URL=${MIGRATION_DATABASE_URL} /usr/bin/node /opt/plugsure/dist/db/migrate.js
+# --- migrations ---------------------------------------------------------------
+# Every start runs the migrator first, in its own unit (deploy/plugsure-migrate.service),
+# which alone reads the database owner's credentials from the root-only
+# /etc/plugsure/migrate.env. This unit, like the gateway's, loads only
+# /etc/plugsure/plugsure.env, where DATABASE_URL is the restricted plugsure_app role:
+# the running API never holds the owner password (v1.4.4).
+# `systemctl start` waits for the one-shot to finish and fails if it fails, so a failed
+# migration fails THIS start; Restart=always then retries it (e.g. the database not
+# up yet at boot), within StartLimitBurst. The '+' runs just this command with full
+# privileges (systemctl needs them); the API itself stays sandboxed.
+ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
+# The start timeout covers ExecStartPre, i.e. the migration (up to plugsure-migrate's
+# TimeoutStartSec=600): without this the default 90 s would report a long migration as a
+# failed deploy while it is still running.
+TimeoutStartSec=infinity
 ExecStart=/usr/bin/node /opt/plugsure/dist/apps/api.js
 
 Restart=always
@@ -91,6 +95,8 @@ RestrictNamespaces=yes
 LockPersonality=yes
 RemoveIPC=yes
 ReadWritePaths=-/var/lib/plugsure
+# The owner credentials are for the migrate and backup units only (v1.4.4).
+InaccessiblePaths=-/etc/plugsure/migrate.env -/etc/plugsure/backup.env
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 AmbientCapabilities=

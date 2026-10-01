@@ -86,17 +86,18 @@ export async function reserve(p: DriverPrincipal, connectorUuid: string, pay: Pa
   if (!config.driverApp.reservationsEnabled) return { ok: false, error: 'Reservasi tidak tersedia.' };
   if (!p.account && !p.fleet) return { ok: false, error: 'Masuk dengan nomor HP atau kartu armada untuk memesan.' };
   if (!/^[0-9a-f-]{36}$/i.test(connectorUuid)) return { ok: false, error: 'Konektor tidak ditemukan.' };
-  const c = await one<{ connector_uuid: string; connector_no: number; charge_point_id: string; ocpp_identity: string; org_id: string; status: string; tera_status: string; in_maintenance: boolean; listed: boolean; site_name: string; reservation_fee_idr: number; pkp: boolean }>(
+  const c = await one<{ connector_uuid: string; connector_no: number; charge_point_id: string; ocpp_identity: string; org_id: string; status: string; tera_status: string; in_maintenance: boolean; listed: boolean; suspended: boolean; site_name: string; reservation_fee_idr: number; pkp: boolean }>(
     `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id, c.status,
             c.tera_status, (c.maintenance_reason IS NOT NULL) AS in_maintenance, s.name AS site_name, s.reservation_fee_idr, o.pkp,
-            (cp.status NOT IN ('pending_adoption','decommissioned') AND s.archived_at IS NULL) AS listed
+            (cp.status NOT IN ('pending_adoption','decommissioned') AND s.archived_at IS NULL) AS listed,
+            (cp.status = 'suspended') AS suspended
        FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id JOIN site s ON s.id = cp.site_id
        JOIN organisation o ON o.id = s.org_id
       WHERE c.id = $1`,
     [connectorUuid],
   );
   if (!c || !c.listed) return { ok: false, error: 'Konektor tidak ditemukan.' };
-  if (!connectorMaySellEnergy(c.tera_status as any).allowed || c.in_maintenance) return { ok: false, error: 'Konektor ini sedang tidak dapat dipakai.' };
+  if (!connectorMaySellEnergy(c.tera_status as any).allowed || c.in_maintenance || c.suspended) return { ok: false, error: 'Konektor ini sedang tidak dapat dipakai.' };
   if (!registry.isOnline(c.ocpp_identity)) return { ok: false, error: 'Charger sedang luring; tidak dapat dipesan.' };
   if (c.status !== 'Available') return { ok: false, error: 'Konektor ini sedang tidak tersedia untuk dipesan.' };
   if (p.fleet && p.fleet.orgId !== c.org_id) return { ok: false, error: 'Charger ini bukan milik armada Anda.' };
@@ -194,11 +195,22 @@ export async function holdConnector(h: Holder, c: HoldTarget, minutes: number, q
   }
   if (status !== 'Accepted') {
     // Not held: no fee (a paid one is refunded by the caller).
-    await query(`UPDATE driver_reservation SET state = 'rejected', charger_status = $2, ended_at = now(), fee_state = CASE WHEN fee_state = 'none' THEN 'none' ELSE 'waived' END WHERE id = $1`, [row.id, status]);
+    // Only while still 'requested': a suspension may have cancelled it meanwhile (and owes its fee back).
+    await query(`UPDATE driver_reservation SET state = 'rejected', charger_status = $2, ended_at = now(), fee_state = CASE WHEN fee_state = 'none' THEN 'none' ELSE 'waived' END WHERE id = $1 AND state = 'requested'`, [row.id, status]);
     await retireClaimToken(row);
     return { ok: false, status };
   }
-  await query(`UPDATE driver_reservation SET state = 'active', charger_status = 'Accepted', held_at = now() WHERE id = $1`, [row.id]);
+  const activated = await one<{ id: string }>(
+    `UPDATE driver_reservation SET state = 'active', charger_status = 'Accepted', held_at = now() WHERE id = $1 AND state = 'requested' RETURNING id`, [row.id]);
+  if (!activated) {
+    // Cancelled while ReserveNow was in flight (the charger was suspended, v1.4.4): undo the hold.
+    try {
+      await cancelReservation(c.ocpp_identity, row.ocpp_reservation_id, { type: 'system' });
+    } catch (e) {
+      logger.warn({ reservation: row.id, err: (e as Error).message }, 'CancelReservation after a cancelled hold not delivered');
+    }
+    return { ok: false, status: 'Cancelled' };
+  }
   logger.info({ reservation: row.id, cp: c.ocpp_identity, connector: c.connector_no, queueEntry: queueEntryId }, queueEntryId ? 'queue offer held' : 'driver reservation accepted');
   return { ok: true, row: { ...row, state: 'active' } };
 }
@@ -226,6 +238,57 @@ export async function releaseReservation(id: string): Promise<void> {
     // The charger drops it at expiry anyway; the connector is free in PlugSure now.
     logger.warn({ reservation: id, err: (e as Error).message }, 'CancelReservation not delivered');
   }
+}
+
+/**
+ * The operator suspended the charger (v1.4.4): every live reservation on it ends, its
+ * fee is waived or refunded whatever the grace period (the driver could not have used
+ * it), and a queue offer goes back to waiting with its place kept. Not a no-show.
+ */
+export async function releaseForSuspension(chargePointId: string): Promise<{ count: number; after: () => Promise<void> }> {
+  // Database only, in the caller's transaction. One that has already lapsed (not yet swept) is
+  // left to the sweep: it ended before the suspension, as a no-show if it was one.
+  const live = await many<any>(
+    `${SELECT} WHERE r.charge_point_id = $1 AND r.state IN ('requested','active') AND r.expires_at > now()`, [chargePointId]);
+  const queue = await import('./queue.js');
+  const released: Array<{ r: any; requeued: { site_id: string; device_id: string } | null }> = [];
+  for (const r of live) {
+    const ended = await one<{ id: string }>(
+      `UPDATE driver_reservation SET state = 'cancelled', ended_at = now() WHERE id = $1 AND state IN ('requested','active') RETURNING id`, [r.id]);
+    if (!ended) continue;
+    await retireClaimToken(r);
+    if (r.fee_state && r.fee_state !== 'none') await waiveFee(r, 'Charger suspended by the operator');
+    const requeued = r.queue_entry_id ? await queue.requeueOffer(r.queue_entry_id) : null;
+    released.push({ r, requeued });
+  }
+  // Roaming partners' reservations (OCPI ReserveNow) on this charger end too.
+  const roaming = await many<{ id: number; ocpp_identity: string }>(
+    `UPDATE ocpi_reservation r SET state = 'cancelled'
+       FROM charge_point cp
+      WHERE cp.id = r.charge_point_id AND r.charge_point_id = $1 AND r.state IN ('requested','active') AND r.expires_at > now()
+      RETURNING r.id, cp.ocpp_identity`, [chargePointId]);
+  // After the commit, outside the request (the caller runs it with afterResponse): tell the
+  // charger, tell the drivers, and offer the queue the next free connector.
+  const after = async () => {
+    for (const { r, requeued } of released) {
+      try {
+        await cancelReservation(r.ocpp_identity, r.ocpp_reservation_id, { type: 'system' });
+      } catch (e) {
+        logger.warn({ reservation: r.id, err: (e as Error).message }, 'CancelReservation not delivered (the charger drops it at expiry)');
+      }
+      if (requeued) await queue.notifyRequeued(requeued.device_id, r.queue_entry_id, r.site_name).catch(() => {});
+      else await notifyReservation(r.device_id, r.id, 'released', r.site_name, new Date(r.expires_at)).catch(() => {});
+    }
+    for (const x of roaming) {
+      try {
+        await cancelReservation(x.ocpp_identity, x.id, { type: 'system' });
+      } catch (e) {
+        logger.warn({ ocpiReservation: x.id, err: (e as Error).message }, 'CancelReservation (roaming) not delivered');
+      }
+    }
+    for (const site of new Set(released.flatMap(({ requeued }) => (requeued ? [requeued.site_id] : [])))) await queue.allocate(site);
+  };
+  return { count: released.length + roaming.length, after };
 }
 
 /** A minted claim token that was never paid for must not outlive its reservation. */
@@ -344,10 +407,21 @@ export async function reservationFeePaid(intentId: string): Promise<{ ok: boolea
     }
     return null;
   }
-  const target = await one<ReserveTarget>(
-    `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id, s.name AS site_name
+  const target = await one<ReserveTarget & { sellable: boolean; tera_status: string }>(
+    `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id, cp.ocpp_identity, s.org_id, s.name AS site_name,
+            c.tera_status,
+            (cp.status NOT IN ('pending_adoption','decommissioned','suspended') AND s.archived_at IS NULL
+               AND c.maintenance_reason IS NULL) AS sellable
        FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id JOIN site s ON s.id = cp.site_id WHERE c.id = $1`,
     [co.connector_uuid]);
+  // Suspended, withdrawn, on maintenance hold or blocked by metrology since checkout (v1.4.4):
+  // hold nothing, send no ReserveNow, and owe the fee back.
+  if (target && (!target.sellable || !connectorMaySellEnergy(target.tera_status as any).allowed)) {
+    const why = 'Charger ini sementara tidak dapat dipesan.';
+    await query(`UPDATE reservation_checkout SET state = 'failed', problem = $2, ended_at = now() WHERE id = $1`, [co.id, why]);
+    await markRefundDue(intentId, co.fee_total_idr, 'Reservation fee paid but the connector is no longer in service (suspended, maintenance or metrology)');
+    return { ok: false, error: `${why} Biaya reservasi dikembalikan.` };
+  }
   const held = target ? await holdConnector(
     { orgId: co.org_id, deviceId: co.device_id, appDriverId: co.app_driver_id, fleet: null }, target, config.driverApp.reservationMinutes, null,
     { feeIdr: co.fee_idr, dpp: co.fee_dpp_idr, ppn: co.fee_ppn_idr, total: co.fee_total_idr, state: 'paid', intentId, fleetAccountId: null },
