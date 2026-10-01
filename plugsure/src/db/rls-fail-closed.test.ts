@@ -15,9 +15,24 @@ import pg from 'pg';
  * anywhere else.
  */
 const SUPER_URL = process.env.DATABASE_URL ?? '';
-const DB_OK = /\/plugsure_audit_fix(\?|$)/.test(SUPER_URL);
-const APP_URL = process.env.RLS_TEST_APP_URL ?? 'postgresql://plugsure_app:apppw@127.0.0.1:5433/plugsure_audit_fix';
-if (DB_OK) process.env.DATABASE_URL = APP_URL;
+/**
+ * The runtime role's connection: the test database's host, port and name, as
+ * POSTGRES_APP_USER (default plugsure_app) with POSTGRES_APP_PASSWORD — the
+ * password `npm run migrate` provisions. RLS_TEST_APP_URL overrides it. Without
+ * a password there is no way to connect as the runtime role: skipped, loudly.
+ */
+function appUrl(): string | null {
+  if (process.env.RLS_TEST_APP_URL) return process.env.RLS_TEST_APP_URL;
+  const password = process.env.POSTGRES_APP_PASSWORD;
+  if (!password || !SUPER_URL) return null;
+  const u = new URL(SUPER_URL);
+  u.username = process.env.POSTGRES_APP_USER ?? 'plugsure_app';
+  u.password = password;
+  return u.toString();
+}
+const APP_URL = appUrl();
+const DB_OK = /\/plugsure_audit_fix(\?|$)/.test(SUPER_URL) && APP_URL !== null;
+if (DB_OK) process.env.DATABASE_URL = APP_URL!;
 
 // Imported only now, so config.databaseUrl — and with it the pool — is the runtime role.
 const { pool, query, one, runInRequestScope, enterOrgScope, withOrg } = await import('./pool.js');
@@ -25,7 +40,12 @@ const { writeAudit, verifyChain, NIL_ORG } = await import('../services/audit.js'
 const { databaseTestLock } = await import('./test-lock.js');
 
 const dbDescribe = DB_OK ? describe : describe.skip;
-if (!DB_OK) console.warn('[rls-fail-closed.test] SKIPPED: DATABASE_URL is not the plugsure_audit_fix test database');
+if (!DB_OK) {
+  console.warn(
+    '[rls-fail-closed.test] SKIPPED: needs DATABASE_URL on the plugsure_audit_fix test database and ' +
+      'POSTGRES_APP_PASSWORD (as given to `npm run migrate`) or RLS_TEST_APP_URL to connect as the runtime role',
+  );
+}
 
 const dbLock = databaseTestLock('shared', DB_OK);
 const su = DB_OK ? new pg.Pool({ connectionString: SUPER_URL, max: 2 }) : null;

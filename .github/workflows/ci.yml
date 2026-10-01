@@ -63,6 +63,9 @@ jobs:
       # Test-only values. The audit chain tests need a key outside development.
       AUDIT_HMAC_KEY: ci-audit-hmac-key-not-a-secret-0123456789abcdef
       SECRETS_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      # `npm run migrate` gives the runtime role this password, so the RLS tests can
+      # connect as plugsure_app (src/db/rls-fail-closed.test.ts).
+      POSTGRES_APP_PASSWORD: ci-app-password
 
     steps:
       - uses: actions/checkout@v4

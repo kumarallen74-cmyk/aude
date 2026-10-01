@@ -162,7 +162,7 @@ ocpp.example.id {
 				keepalive 900s
 				keepalive_idle_conns 512
 				# No HTTP/2 to the upstream: WebSocket upgrade is HTTP/1.1 only.
-				versions h1
+				versions 1.1
 			}
 
 			# Stream frames immediately instead of buffering. Without this, OCPP
