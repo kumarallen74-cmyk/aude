@@ -421,7 +421,7 @@ registerView('alert-routing', {
       $('[data-add-contact]', body)?.addEventListener('click', () => editContact(null, refresh));
       $$('[data-del-contact]', body).forEach((b) => b.addEventListener('click', async () => {
         const c = data.contacts.find((x) => x.id === b.dataset.delContact);
-        if (!(await confirmDialog({ title: 'Remove contact?', message: `${esc(c?.name)} is also taken out of every rule and rota.`, confirmLabel: 'Remove', danger: true }))) return;
+        if (!(await confirmDialog({ title: 'Remove contact?', message: `${c?.name} is also taken out of every rule and rota.`, confirmLabel: 'Remove', danger: true }))) return;
         if (await attempt(() => api(`/v1/alert-routing/contacts/${c.id}`, { method: 'DELETE' }), { success: 'Contact removed' })) refresh();
       }));
     };

@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, tag, icon, field, callout, toast, formValues, fieldErrors, confirmDialog, options, copy,
+  $, $$, esc, api, state, registerView, pageHead, tag, icon, field, callout, toast, formValues, fieldErrors, confirmDialog, html, options, copy,
 } from '../core.js';
 
 /**
@@ -202,7 +202,7 @@ registerView('driver-app', {
         const live = data.brand.status === 'live';
         const ok = await confirmDialog({
           title: 'Remove the driver app?',
-          message: live ? `It is live at <b>${esc(data.brand.hostname)}</b>. The address stops serving it and your store apps stop working.` : 'Your drivers keep using the PlugSure app.',
+          message: live ? html`It is live at <b>${data.brand.hostname}</b>. The address stops serving it and your store apps stop working.` : 'Your drivers keep using the PlugSure app.',
           confirmLabel: 'Remove', danger: true, requireText: live ? data.brand.slug : null,
         });
         if (!ok) return;

@@ -1,5 +1,5 @@
 import {
-  $, $$, on, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, field,
+  $, $$, on, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, html, field,
   options, fieldErrors, toast, callout, kpi, sites as loadSites, download, copy, debounce, onLive, onlineTag,
 } from '../core.js';
 
@@ -683,7 +683,7 @@ export function openTracker(campaignId, { onClose } = {}) {
             const moving = jobs.filter((j) => !['pending', 'failed', 'cancelled', 'Verified'].includes(j.state)).length;
             const ok = await confirmDialog({
               title: 'Cancel this campaign?',
-              message: `<b>${esc(queued)}</b> queued ${queued === 1 ? 'charger' : 'chargers'} will not be sent the update. <b>${esc(moving)}</b> ${moving === 1 ? 'charger is' : 'chargers are'} already downloading or installing; that cannot be stopped remotely, so they finish on their own and their status keeps updating here.`,
+              message: html`<b>${queued}</b> queued ${queued === 1 ? 'charger' : 'chargers'} will not be sent the update. <b>${moving}</b> ${moving === 1 ? 'charger is' : 'chargers are'} already downloading or installing; that cannot be stopped remotely, so they finish on their own and their status keeps updating here.`,
               confirmLabel: 'Cancel campaign',
               danger: true,
             });
@@ -834,7 +834,7 @@ async function renderImages(pane, app) {
     if (b.dataset.act === 'archive') {
       const ok = await confirmDialog({
         title: 'Archive firmware image?',
-        message: `<b>${esc(i.name)}</b> <span class="mono">${esc(i.version)}</span> will no longer be offered for new campaigns${
+        message: html`<b>${i.name}</b> <span class="mono">${i.version}</span> will no longer be offered for new campaigns${
           i.source === 'upload' ? ', and this server stops serving the file to chargers: any campaign still dispatching it will fail its remaining downloads' : ''}. The record and its campaign history are kept.`,
         confirmLabel: 'Archive image',
         danger: true,

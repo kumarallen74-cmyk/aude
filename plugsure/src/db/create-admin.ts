@@ -1,6 +1,6 @@
 import { pool, one } from './pool.js';
 import { logger } from '../logger.js';
-import { ensureSystemRoles, hashPassword, generateTemporaryPassword, passwordProblem, setUserRole } from '../services/users.js';
+import { ensureSystemRoles, hashPassword, generateTemporaryPassword, passwordProblem, setUserRole, tempPasswordTtlHours } from '../services/users.js';
 
 /**
  * Bootstrap the FIRST console administrator — the one step that cannot be done
@@ -60,18 +60,25 @@ async function main() {
 
   const password = given ?? generateTemporaryPassword();
   const hash = await hashPassword(password);
-  // Match an existing account case-insensitively (the unique index on email is
-  // case-sensitive, so ON CONFLICT would miss "Ops@X" and insert a duplicate).
+  // Match an existing account case-insensitively, and always store the address in lower
+  // case: sign-in matches on lower(email), and since migration 053 so does uniqueness
+  // (app_user_email_lower_key) — the original UNIQUE(email) alone let "Ops@X" and "ops@x"
+  // coexist. A generated one-time password expires after TEMP_PASSWORD_TTL_HOURS like any
+  // other; a given --password is the account's real password and never expires.
+  const tempExpiresHours = given ? null : tempPasswordTtlHours();
   const user = existing
     ? await one<{ id: string }>(
         `UPDATE app_user SET password_hash = $2, must_change_password = $3, status = 'active',
-                failed_logins = 0, locked_until = NULL WHERE id = $1 RETURNING id`,
-        [existing.id, hash, !given],
+                failed_logins = 0, locked_until = NULL,
+                temp_password_expires_at = CASE WHEN $4::numeric IS NULL THEN NULL ELSE now() + ($4::numeric * interval '1 hour') END
+          WHERE id = $1 RETURNING id`,
+        [existing.id, hash, !given, tempExpiresHours],
       )
     : await one<{ id: string }>(
-        `INSERT INTO app_user (org_id, email, name, status, password_hash, must_change_password)
-         VALUES ($1, $2, $3, 'active', $4, $5) RETURNING id`,
-        [org!.id, email, name, hash, !given],
+        `INSERT INTO app_user (org_id, email, name, status, password_hash, must_change_password, temp_password_expires_at)
+         VALUES ($1, lower($2), $3, 'active', $4, $5,
+                 CASE WHEN $6::numeric IS NULL THEN NULL ELSE now() + ($6::numeric * interval '1 hour') END) RETURNING id`,
+        [org!.id, email, name, hash, !given, tempExpiresHours],
       );
   await setUserRole(user!.id, org!.id, 'super_admin');
   if (platformAdmin) {

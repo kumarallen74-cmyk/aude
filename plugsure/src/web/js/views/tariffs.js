@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog,
+  $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, html,
   field, options, formValues, fieldErrors, toast, callout, kpi, navigate, sites as loadSites, debounce,
 } from '../core.js';
 
@@ -542,7 +542,8 @@ export function openTariffWizard() {
       }
       const energy = (name, label, raw) => {
         const r = num(raw);
-        if (r == null || r <= 0) out.push({ name, msg: `Enter the ${label} price.` });
+        // 0 is a real price: a free tier ("first 5 kWh free"). Only a missing or negative price is refused.
+        if (r == null || r < 0) out.push({ name, msg: `Enter the ${label} price (0 for free).` });
         else if (ceil != null && r > ceil + 0.001) {
           out.push({ name, msg: `Rejected: ${idrD(r)}/kWh is ${(r / ceil).toFixed(2)}× the legal ceiling of ${idrD(ceil)}/kWh (${ceilingExplain(scheme)}). A price above the ceiling cannot be saved or billed.` });
         }
@@ -770,7 +771,7 @@ export function openTariffDrawer(tariffId, onChange = () => {}) {
     $('[data-archive]', ctx.el)?.addEventListener('click', async () => {
       const go = await confirmDialog({
         title: 'Archive tariff plan',
-        message: `Archive <b>${esc(t.name)}</b>? It stops pricing new sessions immediately. Sessions it already priced keep it, so their invoices stay reproducible. Archived plans cannot be deleted or reactivated.`,
+        message: html`Archive <b>${t.name}</b>? It stops pricing new sessions immediately. Sessions it already priced keep it, so their invoices stay reproducible. Archived plans cannot be deleted or reactivated.`,
         confirmLabel: 'Archive plan',
         danger: true,
       });
@@ -888,7 +889,7 @@ export function openTariffDrawer(tariffId, onChange = () => {}) {
             if (!a) return;
             const go = await confirmDialog({
               title: 'Remove assignment',
-              message: `Stop using <b>${esc(t.name)}</b> for <b>${esc(a.scopeName ?? a.scopeType)}</b>? New sessions there fall back to the next matching assignment, or to the regulated default (layanan khusus at N max, energy only) if none matches.`,
+              message: html`Stop using <b>${t.name}</b> for <b>${a.scopeName ?? a.scopeType}</b>? New sessions there fall back to the next matching assignment, or to the regulated default (layanan khusus at N max, energy only) if none matches.`,
               confirmLabel: 'Remove',
               danger: true,
             });
@@ -991,7 +992,7 @@ registerView('tariffs', {
       await draw();
       const go = await confirmDialog({
         title: 'Tariff plan saved',
-        message: `<b>${esc(created.name)}</b> is saved but prices no sessions until it is assigned. Assign it to all sites, a site, or a single connector now?`,
+        message: html`<b>${created.name}</b> is saved but prices no sessions until it is assigned. Assign it to all sites, a site, or a single connector now?`,
         confirmLabel: 'Assign now',
       });
       if (go && (await openAssignModal(created))) draw();

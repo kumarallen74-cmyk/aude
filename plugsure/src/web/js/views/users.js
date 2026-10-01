@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, confirmDialog, field,
+  $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, confirmDialog, html, field,
   formValues, fieldErrors, toast, callout, copy, sites as loadSites,
 } from '../core.js';
 
@@ -249,8 +249,8 @@ async function editUser(u, onDone) {
         const ok = await confirmDialog({
           title: enable ? 'Enable user' : 'Disable user',
           message: enable
-            ? `<b>${esc(u.name)}</b> will be able to sign in again with their existing password.`
-            : `<b>${esc(u.name)}</b> will be signed out and unable to sign in until re-enabled. Their audit history is kept.`,
+            ? html`<b>${u.name}</b> will be able to sign in again with their existing password.`
+            : html`<b>${u.name}</b> will be signed out and unable to sign in until re-enabled. Their audit history is kept.`,
           confirmLabel: enable ? 'Enable' : 'Disable',
           danger: !enable,
         });
@@ -263,7 +263,7 @@ async function editUser(u, onDone) {
       $('[data-reset]', form)?.addEventListener('click', async () => {
         const ok = await confirmDialog({
           title: 'Reset password',
-          message: `Issue a new one-time password for <b>${esc(u.name)}</b>? Their current password stops working immediately and they must choose a new one at next sign-in.`,
+          message: html`Issue a new one-time password for <b>${u.name}</b>? Their current password stops working immediately and they must choose a new one at next sign-in.`,
           confirmLabel: 'Reset password',
           danger: true,
         });
@@ -276,7 +276,7 @@ async function editUser(u, onDone) {
           title: 'Temporary password',
           label: `One-time password for ${u.email ?? u.name}`,
           secret: r.temporaryPassword,
-          warning: 'Share it through a secure channel. It cannot be displayed again; the user must replace it at first sign-in.',
+          warning: `Share it through a secure channel. It cannot be displayed again${r.expiresInHours ? ` and stops working after ${r.expiresInHours} hours` : ''}; the user must replace it at first sign-in.`,
         });
       });
     },
@@ -287,7 +287,9 @@ function statusTags(u) {
   return [
     u.status === 'active' ? tag('t-ok', 'active') : tag('t-mute', u.status ?? 'unknown'),
     u.locked ? tag('t-crit', 'locked', 'Temporarily locked after repeated failed sign-ins') : '',
-    u.must_change_password ? tag('t-warn', 'must change password', 'Signed in with a one-time password that has not been replaced yet') : '',
+    u.temp_password_expired
+      ? tag('t-crit', 'one-time password expired', 'The one-time password was not used in time and no longer signs in. Reset the password to issue a new one.')
+      : u.must_change_password ? tag('t-warn', 'must change password', `Signed in with a one-time password that has not been replaced yet${u.temp_password_expires_at ? ` (it stops working ${fmt.time(u.temp_password_expires_at)})` : ''}`) : '',
     u.has_password === false ? tag('t-mute', 'no password set') : '',
   ].filter(Boolean).join(' ');
 }
@@ -535,7 +537,7 @@ async function renderKeys(box) {
       if (!k) return;
       const ok = await confirmDialog({
         title: 'Revoke API key',
-        message: `Revoke <b>${esc(k.name)}</b> (<span class="mono">${esc(k.prefix)}</span>)? Every integration using it stops working immediately. This cannot be undone.`,
+        message: html`Revoke <b>${k.name}</b> (<span class="mono">${k.prefix}</span>)? Every integration using it stops working immediately. This cannot be undone.`,
         confirmLabel: 'Revoke key',
         danger: true,
       });

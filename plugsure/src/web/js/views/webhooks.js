@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, modal, confirmDialog, toast, copy, drawer,
+  $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, modal, confirmDialog, html, toast, copy, drawer,
 } from '../core.js';
 
 /**
@@ -207,7 +207,7 @@ registerView('webhooks', {
         } catch (e) { toast(e.message, 'crit'); }
       });
       $('[data-del]', d.el).addEventListener('click', async () => {
-        const ok = await confirmDialog({ title: 'Delete this endpoint?', message: `Nothing more is sent to <span class="mono">${esc(w.url)}</span>, and its delivery history is removed.`, confirmLabel: 'Delete', danger: true, requireText: 'DELETE' });
+        const ok = await confirmDialog({ title: 'Delete this endpoint?', message: html`Nothing more is sent to <span class="mono">${w.url}</span>, and its delivery history is removed.`, confirmLabel: 'Delete', danger: true, requireText: 'DELETE' });
         if (!ok) return;
         try {
           await api(`/v1/webhooks/${w.id}`, { method: 'DELETE' });
