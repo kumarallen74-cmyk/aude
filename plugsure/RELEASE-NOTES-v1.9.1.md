@@ -115,7 +115,7 @@ v1.9.1 fixes what a review of the driver apps found before their store release: 
 ## Verification
 
 - **Server:** typecheck clean; 1,475 unit and database tests, all passing. Migrations 001–077 apply from an empty database. The rollback chain 077 → 060 runs and re-applies.
-- **End-to-end, everything on:** 23 suites, 1,104 checks. They cover the driver app, the driver extras, the queue, reservation fees, the mobile API, APNs, Live Activities, white-label brands, card holds, payment methods, linked e-wallets, post-pay, integrations, onboarding, OCPI CPO and eMSP, the SDK, the API sandbox, the field suite, the console and isolation.
+- **End-to-end, everything on:** 23 suites, 959 checks. They cover the driver app, the driver extras, the queue, reservation fees, the mobile API, APNs, Live Activities, white-label brands, card holds, payment methods, linked e-wallets, post-pay, integrations, onboarding, OCPI CPO and eMSP, the SDK, the API sandbox, the field suite, the console and isolation.
   - The linked-e-wallet check was updated for `paid.js`.
   - The API sandbox suite passed when run on its own (38/38). In the long run, its rate limit answered first.
 - **Mobile app:** typecheck and lint clean; 253 tests. A production prebuild of both brands passes the new project checks.
