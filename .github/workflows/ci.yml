@@ -159,7 +159,7 @@ jobs:
           # The seed's PlugSure Mobility has MY/SG parties, which 060_down refuses (as it should); the pilot has none.
           psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -qc "DELETE FROM ocpi_party WHERE NOT is_home"
           # The chain in deploy/README.md §7.
-          for f in 075 074 073 072 060; do
+          for f in 077 075 074 073 072 060; do
             psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -1 -qf "db/rollback/${f}_down.sql"
           done
           test "$(psql "$SCRATCH_URL" -tAc "select count(*) from schema_migration where name in ('060_money_minor_rename.sql', '072_hub_core.sql', '075_mobile_app.sql')")" -eq 0

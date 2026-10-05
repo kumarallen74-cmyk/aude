@@ -1,11 +1,19 @@
 PlugSure CSMS
-Version:   1.9.0
-Package:   plugsure-v1.9.0
-Prepared:  2026-10-05  (1.9.0-dev after an independent review — see RELEASE-NOTES-v1.9.0.md)
+Version:   1.9.1
+Package:   plugsure-v1.9.1
+Prepared:  2026-10-05  (v1.9.0 + the driver app review fixes — see RELEASE-NOTES-v1.9.1.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
 API:       OpenAPI 3.1 at /openapi.json (323 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.9.0 = 1.9.0-dev + the review fixes: the public account-deletion form no longer shows a stranger an
+Status:    v1.9.1 = v1.9.0 + the fixes from a review of the driver apps (iOS, Android, web app): payments
+           are idempotent (Idempotency-Key honoured; no second charge on a retry), a paid charge is always started,
+           sign-out revokes the device, an App Review sign-in number (DRIVER_REVIEW_*), push and links for the
+           apps' preview builds, the web app's payment-screen leaks fixed and account deletion added, a nonce CSP
+           for the driver pages; the mobile app's iOS and Android store builds fixed (iOS 16.4, widget extension,
+           Android 16 notification API). Migration 077 (additive).
+
+v1.9.0 (2026-10-05):
+           v1.9.0 = 1.9.0-dev + the review fixes: the public account-deletion form no longer shows a stranger an
            account's open charges (blocker); rollback to v1.5.0 rehearsed and documented (060_down recreates the
            commercial-plan key v1.5 needs); migration 076 restores least privilege (075's blanket grant removed);
            anonymous driver-API requests limited per address; mobility:setup guards; late card holds released;

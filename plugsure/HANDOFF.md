@@ -1,6 +1,6 @@
-# PlugSure v1.9.0 — Deployment Handoff
+# PlugSure v1.9.1 — Deployment Handoff
 
-**Current release: v1.9.0** (see `VERSION` and `RELEASE-NOTES-v1.9.0.md`; earlier releases in their own release
+**Current release: v1.9.1** (see `VERSION`, `RELEASE-NOTES-v1.9.1.md` and `RELEASE-NOTES-v1.9.0.md`; earlier releases in their own release
 notes). **Upgrading the pilot from v1.5.0: follow `docs/UPGRADE-v1.5-to-v1.9.md`**, one runbook for every step from
 v1.5.1 to v1.9.0, and `deploy/README.md` §7 for the rollback. This handoff was first written for v1.3.0, the
 enterprise operator console; the sections below describe that release and are kept
