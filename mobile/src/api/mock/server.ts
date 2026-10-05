@@ -114,6 +114,7 @@ export function resetMock(): void {
   reservations.clear();
   checkouts.clear();
   queue.clear();
+  idempotent.clear();
 }
 
 const json = (status: number, body: unknown) =>
@@ -226,7 +227,34 @@ function auth(headers: Headers): Device | null {
 
 const GAP_ROUTES = [/\/rating$/, /^\/d\/v1\/reports$/];
 
+/** POSTs that honour `Idempotency-Key` (as the server does): the first answer is stored and replayed. */
+const IDEMPOTENT = /^\/d\/v1\/(charge\/(prepaid|fleet|[^/]+\/pay-unpaid)|reservations|roaming\/(charge|reservations)|memberships)$/;
+const idempotent = new Map<string, { body: string; res: { status: number; text: string } | null }>();
+
 export async function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  const key = headers.get('idempotency-key');
+  const path = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).pathname;
+  if (key && (init?.method ?? 'GET').toUpperCase() === 'POST' && IDEMPOTENT.test(path)) {
+    const scope = `${headers.get('authorization') ?? ''}|${path}|${key}`;
+    const body = String(init?.body ?? '');
+    const prev = idempotent.get(scope);
+    if (prev && prev.body !== body) return json(422, { error: 'This Idempotency-Key was used for a different request.', code: 'idempotency_key_reused' });
+    if (prev && !prev.res) return json(409, { error: 'The first request with this Idempotency-Key is still being processed.', code: 'idempotency_in_progress' });
+    if (prev?.res) return new Response(prev.res.text, { status: prev.res.status, headers: { 'content-type': 'application/json', 'idempotent-replayed': 'true' } });
+    idempotent.set(scope, { body, res: null });
+    try {
+      const res = await handle(input, init);
+      // A 5xx is not an answer: the same key may try again.
+      if (res.status >= 500) idempotent.delete(scope);
+      else idempotent.set(scope, { body, res: { status: res.status, text: await res.clone().text() } });
+      persist();
+      return res;
+    } catch (e) {
+      idempotent.delete(scope);
+      throw e;
+    }
+  }
   const res = await handle(input, init);
   if ((init?.method ?? 'GET').toUpperCase() !== 'GET' || /\/status$/.test(String(input))) persist();
   return res;
@@ -375,8 +403,10 @@ async function handle(input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return json(200, { ok: true });
   }
   if (path === '/d/v1/signout') {
+    // The device token is revoked: the next call answers 401 no_device and the app issues a fresh one.
     dev.accountId = null;
     dev.fleet = false;
+    for (const [tok, d] of devices) if (d === dev) devices.delete(tok);
     return json(200, { ok: true });
   }
 
@@ -436,6 +466,8 @@ async function handle(input: RequestInfo | URL, init?: RequestInit): Promise<Res
     }
     if (action === 'start') {
       if (!c.paidAt) return json(400, { ok: false, error: 'Payment not received yet.' });
+      // Single-use, like the server: once the session runs, a repeated start is refused.
+      if (c.startedAt && c.startedAt <= Date.now()) return json(400, { ok: false, error: 'This session has already started.' });
       // The charger answers RemoteStart and the car draws current ~2.5 s later.
       c.startedAt = Date.now() + 2500;
       persist();

@@ -104,6 +104,15 @@ describe('connection and stop', () => {
     f = reduceSession(f, { type: 'stop_requested', at: 3 });
     expect(f.stopError).toBeNull();
   });
+  it('a session the server does not know (404) is an end state: polling stops, no "Reconnecting…", no start timeout', () => {
+    let st = run(initialSession('charge', 'c1', 0), { type: 'poll_failed', at: 1000 }, { type: 'not_found', at: 2000 });
+    expect(st.missing).toBe(true);
+    expect(st.connection).toBe('online');
+    expect(pollInterval(st, true)).toBeNull();
+    st = run(initialSession('charge', 'c1', 0), { type: 'snapshot', status: hosted('awaiting_start'), at: 0 }, { type: 'not_found', at: 1 }, { type: 'tick', at: 120_000 });
+    expect(st.startTimedOut).toBe(false);
+    expect(pollInterval(st, true)).toBeNull();
+  });
   it('ignores stop outside charging', () => {
     const st = run(initialSession('charge', 'c1', 0), { type: 'snapshot', status: hosted('awaiting_start'), at: 0 }, { type: 'stop_requested', at: 1 });
     expect(st.stop).toBe('idle');

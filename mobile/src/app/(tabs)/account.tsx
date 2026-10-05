@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Linking, StyleSheet, TextInput, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
+import { Banner } from '@/components/Banner';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { Icon } from '@/components/Icon';
@@ -12,6 +13,7 @@ import { ListGroup, ListRow } from '@/components/ListRow';
 import { Logo } from '@/components/Logo';
 import { Screen, Section } from '@/components/Screen';
 import { Skeleton } from '@/components/Skeleton';
+import { useErrorText } from '@/components/StateView';
 import { Text } from '@/components/Text';
 import { appVersion, brand } from '@/config';
 import { formatPhone } from '@/lib/phone';
@@ -43,6 +45,7 @@ export default function AccountScreen() {
       void queryClient.invalidateQueries({ queryKey: qk.me });
     },
   });
+  const errText = useErrorText();
   const out = useMutation({
     mutationFn: async () => {
       await unregisterPush().catch(() => {});
@@ -135,6 +138,7 @@ export default function AccountScreen() {
 
       {account || fleet ? (
         <Section>
+          {out.error ? <Banner tone="danger" title={t('account.signOutFailed')} body={errText(out.error).body} testID="sign-out-error" /> : null}
           <ListGroup>
             <ListRow icon="logout" label={t('account.signOut')} onPress={() => out.mutate()} />
             {account ? <ListRow icon="trash" label={t('account.delete')} danger onPress={() => router.push('/delete-account')} testID="delete-account" last /> : null}

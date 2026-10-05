@@ -1,5 +1,6 @@
 import type { Http } from './http';
 import { ApiError } from './http';
+import { appIdBody } from '@/native/appId';
 
 export type PushRegistration = 'registered' | 'needs_brand';
 
@@ -18,9 +19,9 @@ export const pushApi = (http: Http) => {
     }
   };
   return {
-    registerApns: (token: string, lang: string) => brandOnly(() => http.post('/v1/push/apns', { token, lang })),
+    registerApns: (token: string, lang: string) => brandOnly(() => http.post('/v1/push/apns', { token, lang, ...appIdBody() })),
     removeApns: (token: string) => http.post('/v1/push/apns/remove', { token }).catch(() => undefined),
-    registerFcm: (token: string, lang: string) => brandOnly(() => http.post('/v1/push/fcm', { token, lang })),
+    registerFcm: (token: string, lang: string) => brandOnly(() => http.post('/v1/push/fcm', { token, lang, ...appIdBody() })),
     removeFcm: (token: string) => http.post('/v1/push/fcm/remove', { token }).catch(() => undefined),
     status: () => http.get<{ subscribed: boolean; webpush: number; apns: number; fcm: number }>('/v1/push'),
 
@@ -29,9 +30,9 @@ export const pushApi = (http: Http) => {
      * (the server sends `live_session` data messages); iOS: the Live Activity's update token, content-state v2.
      */
     registerLiveSession: (platform: 'android' | 'ios', ref: string, token: string) =>
-      brandOnly(() => http.post<{ ok: true; kind: 'charge' | 'session' | 'roaming' }>('/v1/live-sessions', { platform, ref, token, ...(platform === 'ios' ? { contentVersion: 2 } : {}) })),
+      brandOnly(() => http.post<{ ok: true; kind: 'charge' | 'session' | 'roaming' }>('/v1/live-sessions', { platform, ref, token, ...(platform === 'ios' ? { contentVersion: 2 } : {}), ...appIdBody() })),
     liveSessionEnded: (ref: string) => http.post('/v1/live-sessions/ended', { ref }).catch(() => undefined),
     /** iOS 17.2+ push-to-start token (any operator with the network brand). */
-    registerLiveActivityStartToken: (token: string) => brandOnly(() => http.post('/v1/live-activities/start-token', { token })),
+    registerLiveActivityStartToken: (token: string) => brandOnly(() => http.post('/v1/live-activities/start-token', { token, ...appIdBody() })),
   };
 };

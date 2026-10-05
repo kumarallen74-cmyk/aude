@@ -9,7 +9,7 @@ import { Card } from '@/components/Card';
 import { Icon } from '@/components/Icon';
 import { QRCode } from '@/components/QRCode';
 import { Screen } from '@/components/Screen';
-import { EmptyState } from '@/components/StateView';
+import { EmptyState, useErrorText } from '@/components/StateView';
 import { Text } from '@/components/Text';
 import { startAfterPayment } from '@/features/checkoutFlow';
 import { formatClock, formatKwh } from '@/lib/format';
@@ -40,6 +40,8 @@ export default function PayScreen() {
   const [opening, setOpening] = useState(false);
   const [simulating, setSimulating] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [simError, setSimError] = useState<unknown>(null);
+  const errText = useErrorText();
   const [saveState, setSaveState] = useState<SaveQrResult | 'rationale' | 'saving' | null>(null);
   const done = useRef(false);
   const autoOpened = useRef(false);
@@ -52,6 +54,11 @@ export default function PayScreen() {
       (pending.kind === 'unpaid' && pending.chargeId === id && kind === 'unpaid'))
       ? pending
       : null;
+  // The poll loop and the app-state listener outlive renders: they read the checkout through this ref.
+  const matchRef = useRef(match);
+  useEffect(() => {
+    matchRef.current = match;
+  });
   const raw = match ? match.result.payment : undefined;
   const payment = raw
     ? { channel: 'channel' in raw ? String(raw.channel) : 'CARD', label: 'label' in raw ? raw.label : t('pay.methods.CARD'), action: raw.action, checkoutUrl: raw.checkoutUrl, providerRef: raw.providerRef, amountMinor: raw.amountMinor, expiresAt: raw.expiresAt, hold: raw.hold }
@@ -71,7 +78,9 @@ export default function PayScreen() {
   const expired = remaining === 0;
 
   const finish = async () => {
-    if (done.current) return;
+    const match = matchRef.current;
+    // Only ever finish (and start) the charge the pending checkout describes.
+    if (done.current || !match) return;
     done.current = true;
     if (kind === 'unpaid') {
       setPendingCheckout(null);
@@ -95,7 +104,8 @@ export default function PayScreen() {
   };
 
   const check = async () => {
-    if (done.current || !id) return;
+    // No pending checkout for this id (cancelled, finished elsewhere, a stale link): nothing to poll or start.
+    if (done.current || !id || !matchRef.current) return;
     try {
       if (kind === 'unpaid') {
         const s = await api.charge.unpaidStatus(id);
@@ -109,8 +119,11 @@ export default function PayScreen() {
         }
       } else if (kind === 'roaming') {
         const s = await api.roaming.status(id);
-        if (s.state === 'rejected') setProblem(s.problem ?? t('pay.failed'));
-        else if (s.state !== 'paying') void finish();
+        if (s.state === 'rejected') {
+          // The partner refused the start (the hold is released): an end state, stop polling.
+          done.current = true;
+          setProblem(s.problem ?? t('pay.failed'));
+        } else if (s.state !== 'paying') void finish();
       } else {
         const s = await api.charge.status(id);
         if (s.state !== 'awaiting_payment') void finish();
@@ -200,11 +213,14 @@ export default function PayScreen() {
               testID="simulate-payment"
               onPress={async () => {
                 setSimulating(true);
+                setSimError(null);
                 try {
                   if (kind === 'reservation') await api.reservations.confirmDemoCheckout(id!);
                   else if (kind === 'unpaid') await api.charge.confirmUnpaidPayment(id!);
                   else await api.charge.confirmDemoPayment(id!);
                   await check();
+                } catch (e) {
+                  setSimError(e);
                 } finally {
                   setSimulating(false);
                 }
@@ -231,6 +247,7 @@ export default function PayScreen() {
       </View>
 
       {problem ? <Banner tone="danger" title={t('pay.cancelled')} body={problem} /> : null}
+      {simError ? <Banner tone="danger" title={errText(simError).title} body={errText(simError).body} testID="simulate-error" /> : null}
 
       {qr ? (
         <View style={{ alignItems: 'center', gap: space.md }}>

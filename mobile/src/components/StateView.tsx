@@ -12,6 +12,8 @@ export function useErrorText() {
   const { t } = useTranslation();
   return (e: unknown): { title: string; body: string; icon: IconName } => {
     if (e instanceof ApiError) {
+      // The server is still processing the first request with this Idempotency-Key: the same attempt, not a failure.
+      if (e.code === 'idempotency_in_progress') return { title: t('error.inProgress.title'), body: t('error.inProgress.body'), icon: 'clock' };
       switch (e.kind) {
         case 'offline':
           return { title: t('error.offline.title'), body: t('error.offline.body'), icon: 'offline' };

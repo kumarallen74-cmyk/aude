@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
+import { AttemptKey } from '@/api/idempotency';
 import type { RoamingEvse } from '@/api/types';
 import { Banner } from '@/components/Banner';
 import { Button, IconButton } from '@/components/Button';
@@ -47,10 +48,18 @@ export default function PartnerStationScreen() {
   const evse = picked ?? (p.evseUid ? (s?.evses.find((e) => e.uid === p.evseUid) ?? null) : null);
   const fav = useFavourite(s ? { partnerId: s.partnerId, countryCode: s.countryCode, partyId: s.partyId, locationId: s.locationId } : null);
 
+  // One key per attempt: a retry after a lost answer never places a second card hold ([§14 G12]).
+  const [startKey] = useState(() => new AttemptKey());
   const start = useMutation({
-    mutationFn: (savedCardId: string | null) =>
-      startRoamingCharge({ partnerId: s!.partnerId, countryCode: s!.countryCode, partyId: s!.partyId, locationId: s!.locationId, evseUid: evse!.uid, connectorId: evse!.connectors[0]?.id, savedCardId: savedCardId ?? undefined, saveCard: !savedCardId }, s!.name, s!.operator),
+    mutationFn: (savedCardId: string | null) => {
+      const req = { partnerId: s!.partnerId, countryCode: s!.countryCode, partyId: s!.partyId, locationId: s!.locationId, evseUid: evse!.uid, connectorId: evse!.connectors[0]?.id, savedCardId: savedCardId ?? undefined, saveCard: !savedCardId };
+      return startRoamingCharge(req, s!.name, s!.operator, startKey.for(req));
+    },
+    onSuccess: () => startKey.settle(),
+    onError: (e) => startKey.settle(e),
   });
+  // Every start button is off while one start is on its way (two taps would place two card holds).
+  const busy = start.isPending;
 
   if (q.isLoading) return <Screen back><SkeletonList rows={3} /></Screen>;
   if (q.error) return <Screen back><ErrorState error={q.error} onRetry={() => void q.refetch()} /></Screen>;
@@ -83,14 +92,14 @@ export default function PartnerStationScreen() {
             {!signedIn && !fleet ? (
               <Button label={t('partner.signInToCharge')} icon="phone" onPress={() => router.push('/sign-in')} />
             ) : fleet ? (
-              <Button label={t('partner.startFleet')} icon="bolt" loading={start.isPending} onPress={() => start.mutate(null)} testID="start-partner" />
+              <Button label={t('partner.startFleet')} icon="bolt" loading={busy} onPress={() => start.mutate(null)} testID="start-partner" />
             ) : s.savedCards.length ? (
               <>
-                <Button label={t('partner.startWithCard', { card: `${(s.savedCards[0]!.brand ?? '').toUpperCase()} •• ${s.savedCards[0]!.last4 ?? ''}` })} icon="bolt" loading={start.isPending} onPress={() => start.mutate(s.savedCards[0]!.id)} testID="start-partner" />
-                <Button label={t('partner.useNewCard')} variant="ghost" size="md" onPress={() => start.mutate(null)} />
+                <Button label={t('partner.startWithCard', { card: `${(s.savedCards[0]!.brand ?? '').toUpperCase()} •• ${s.savedCards[0]!.last4 ?? ''}` })} icon="bolt" loading={busy} onPress={() => start.mutate(s.savedCards[0]!.id)} testID="start-partner" />
+                <Button label={t('partner.useNewCard')} variant="ghost" size="md" disabled={busy} onPress={() => start.mutate(null)} testID="start-partner-new-card" />
               </>
             ) : (
-              <Button label={t('partner.startWithNewCard')} icon="card" loading={start.isPending} onPress={() => start.mutate(null)} testID="start-partner" />
+              <Button label={t('partner.startWithNewCard')} icon="card" loading={busy} onPress={() => start.mutate(null)} testID="start-partner" />
             )}
           </View>
         ) : undefined

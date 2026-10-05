@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
-import { ApiError, newIdempotencyKey } from '@/api/http';
+import { ApiError } from '@/api/http';
+import { AttemptKey } from '@/api/idempotency';
 import type { ConnectorDetail } from '@/api/types';
 import { Banner } from '@/components/Banner';
 import { Button } from '@/components/Button';
@@ -48,8 +49,9 @@ export default function ConnectorScreen() {
   const [promoOpen, setPromoOpen] = useState(false);
   const [pickKey, setPickKey] = useState<string | null>(null);
   const [typedPhone, setPhone] = useState<string | null>(null);
-  // One key per attempt: a network retry of the same attempt can never create a second payment ([§14 G12]).
-  const [idemKey, setIdemKey] = useState(newIdempotencyKey);
+  // One key per attempt: a retry after a lost answer can never create a second payment or hold ([§14 G12]).
+  const [startKey] = useState(() => new AttemptKey());
+  const [reserveKey] = useState(() => new AttemptKey());
   // Defaults derive from the data (the second preset, the account's phone) until the driver changes them.
   const amount = chosenAmount ?? con?.presetsMinor[1] ?? con?.presetsMinor[0] ?? null;
   const phone = typedPhone ?? me.data?.account?.phone ?? '';
@@ -81,21 +83,28 @@ export default function ConnectorScreen() {
       }
       const fee = con.reservationFee && !con.reservationFee.fleetInvoice ? con.reservationFee : null;
       if (fee && !pick) throw new ApiError('business', t('pay.noMethods'), 422);
-      return reserveConnector({ connectorId: con.connectorId, siteName: con.station.name, pay: fee && pick ? { ...pick.pay, phone: pick.needsPhone ? phone : undefined } : undefined });
+      const pay = fee && pick ? { ...pick.pay, phone: pick.needsPhone ? phone : undefined } : undefined;
+      return reserveConnector({ connectorId: con.connectorId, siteName: con.station.name, pay, idempotencyKey: reserveKey.for({ c: con.connectorId, pay }) });
     },
+    onSuccess: () => reserveKey.settle(),
+    onError: (e) => reserveKey.settle(e),
     onSettled: () => void q.refetch(),
   });
 
   const go = useMutation({
     mutationFn: async () => {
       if (!con) return;
-      if (fleet) return startFleetCharge(con.connectorId, con.station.name);
+      if (fleet) return startFleetCharge(con.connectorId, con.station.name, startKey.for({ fleet: con.connectorId }));
       if (!amount || !pick) return;
       settingsStore.set((st) => ({ lastMethod: { ...st.lastMethod, [con.currency]: pick.key } }));
-      return startHostedCharge({ connectorId: con.connectorId, siteName: con.station.name, amountMinor: amount, pay: { ...pick.pay, phone: pick.needsPhone ? phone : undefined }, promoCode: promo || undefined, idempotencyKey: idemKey });
+      const pay = { ...pick.pay, phone: pick.needsPhone ? phone : undefined };
+      const promoCode = promo || undefined;
+      return startHostedCharge({ connectorId: con.connectorId, siteName: con.station.name, amountMinor: amount, pay, promoCode, idempotencyKey: startKey.for({ c: con.connectorId, amount, pay, promoCode }) });
     },
-    onError: () => {
-      setIdemKey(newIdempotencyKey());
+    // The key is kept while the outcome is unknown (offline, timeout, 5xx, still processing) and rotated after an answer.
+    onSuccess: () => startKey.settle(),
+    onError: (e) => {
+      startKey.settle(e);
       void quote.refetch();
     },
   });
