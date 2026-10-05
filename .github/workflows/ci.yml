@@ -123,7 +123,13 @@ jobs:
           fi
           printf 'running %d test file(s):\n' "${#files[@]}"
           printf '  %s\n' "${files[@]}"
-          npx tsx --test "${files[@]}"
+          # The TAP log runs to ~12,000 lines; repeat any failure at the end, where it can be found.
+          rc=0; npx tsx --test "${files[@]}" 2>&1 | tee "$RUNNER_TEMP/unit.tap" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::failed tests"; grep -n -A40 'not ok' "$RUNNER_TEMP/unit.tap" || true; echo "::endgroup::"
+            grep -E '^\s*not ok' "$RUNNER_TEMP/unit.tap" | sed 's/^/::error::/' || true
+          fi
+          exit "$rc"
 
       # Every migration file in the tree is applied — the merged multi-country ones (059-063, 070)
       # included — and the money rename left no *_idr column behind.
