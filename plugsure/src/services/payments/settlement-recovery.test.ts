@@ -221,6 +221,30 @@ dbDescribe('2 — a notification for less than the payment is escalated, and the
     assert.equal((await one<any>(`SELECT refund_due_minor AS due FROM payment_intent WHERE id = $1`, [pi]))?.due, 10_000);
   });
 
+  test('v1.9.0: a later "paid" for the full amount on a payment voided as underpaid stays voided (not captured over the queued refund) and is raised once', async () => {
+    const ref = `ps-void-full-${randomUUID().slice(0, 8)}`;
+    const pi = await pendingIntent('prepurchase', ref);
+    await midtransNotify(hook.a, KEY_A, ref, 'settlement', 10_000);
+    alerts.length = 0;
+    await midtransNotify(hook.a, KEY_A, ref, 'settlement', 100_000);
+    assert.equal(await lastOutcome(ids.int_a!), 'paid_after_void');
+    const r = await one<any>(`SELECT state, amount_captured_minor AS captured, refund_due_minor AS due FROM payment_intent WHERE id = $1`, [pi]);
+    assert.deepEqual({ state: r.state, captured: r.captured, due: r.due }, { state: 'voided', captured: 10_000, due: 10_000 }, 'the first record and its refund stand');
+    assert.deepEqual(alerts.filter((x) => x.targetId === pi).map((x) => [x.kind, x.severity]), [['payment.amount_mismatch', 'critical']]);
+  });
+
+  test('v1.9.0: a card hold authorised after the payment was given up (failed) is released, not ignored', async () => {
+    const ref = `ps-late-hold-${randomUUID().slice(0, 8)}`;
+    const pi = await pendingIntent('preauth', ref);
+    await query(`UPDATE payment_intent SET state = 'failed' WHERE id = $1`, [pi]);
+    await midtransNotify(hook.a, KEY_A, ref, 'authorize', 100_000);
+    assert.equal(await lastOutcome(ids.int_a!), 'late_hold_released');
+    const r = await one<any>(`SELECT state, hold_state, hold_next_attempt_at IS NOT NULL AS due FROM payment_intent WHERE id = $1`, [pi]);
+    assert.deepEqual({ state: r.state, hold: r.hold_state, due: r.due }, { state: 'failed', hold: 'releasing', due: true }, 'queued for the hold sweep to release');
+    await midtransNotify(hook.a, KEY_A, ref, 'authorize', 100_000);
+    assert.equal(await lastOutcome(ids.int_a!), 'duplicate', 'a repeat is a duplicate');
+  });
+
   test('the full amount is still captured as before', async () => {
     const ref = `ps-full-qris-${randomUUID().slice(0, 8)}`;
     const pi = await pendingIntent('prepurchase', ref);

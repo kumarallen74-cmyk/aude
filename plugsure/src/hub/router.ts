@@ -236,6 +236,7 @@ export async function routeFunctional(ctx: Ctx): Promise<HubResponse> {
       if (!candidates.length) throw unknownReceiver(`${label(toH)} is not on the hub as ${cls.targetRoles.join('/')}`);
       ctx.log.route = 'direct';
       ctx.log.to = label(toH);
+      await assertCounterParty(ctx, from, candidates[0]!);
       return await routeDirect(ctx, from, candidates[0]!);
     }
     ctx.log.to = toHub ? 'HUB' : null;
@@ -260,6 +261,33 @@ export async function routeFunctional(ctx: Ctx): Promise<HubResponse> {
       return hubAnswer(e.http, envelope(undefined, e.ocpi, e.message), from, e.headers);
     }
     throw e;
+  }
+}
+
+/**
+ * Direct addressing (OCPI-to-*) of a command, charging profile or charging preference about a session or reservation:
+ * only the eMSP that session or reservation belongs to may send it (v1.9.0). Open routing already required this
+ * (resolveOpen requireCounter); addressed directly, eMSP X could STOP_SESSION or cancel eMSP Y's session or
+ * reservation, stopped only by the CPO's own check, which an external CPO may not make. An object the hub has not
+ * indexed is passed on as before (the CPO decides).
+ */
+async function assertCounterParty(ctx: Ctx, from: HubParty, target: HubParty): Promise<void> {
+  const { cls } = ctx;
+  if (target.role !== 'CPO') return;
+  const b = (ctx.body ?? {}) as Record<string, unknown>;
+  let kind: 'session' | 'reservation' | null = null;
+  let key: unknown = null;
+  if (cls.module === 'commands') {
+    if (cls.segs[0] === 'STOP_SESSION') { kind = 'session'; key = b.session_id; }
+    else if (cls.segs[0] === 'CANCEL_RESERVATION') { kind = 'reservation'; key = b.reservation_id; }
+  } else if (cls.module === 'chargingprofiles' || (cls.module === 'sessions' && cls.segs[1] === 'charging_preferences')) {
+    kind = 'session'; key = cls.segs[0];
+  }
+  if (!kind || typeof key !== 'string' || !key) return;
+  const e = await one<{ counter_party_id: string | null }>(
+    `SELECT counter_party_id FROM hub_route_index WHERE kind = $1 AND key = $2 AND owner_party_id = $3`, [kind, key, target.id]);
+  if (e?.counter_party_id && e.counter_party_id !== from.id) {
+    throw unknownReceiver(`${kind} ${key.slice(0, 40)} at ${label(target)} is not yours`);
   }
 }
 
@@ -616,7 +644,7 @@ async function routeCdrLocation(ctx: Ctx, from: HubParty): Promise<HubResponse> 
   const conn = await reachable(emsp).catch(() => null);
   if (!conn) return { status: 200, body: envelope(cb.body), headers: routingHeaders(emsp, from) };
   const r = await hubCall({
-    conn, method: 'GET', url: unseal(cb.original_url, `hub_callback:${cb.id}`), from, to: emsp, correlationId: ctx.correlationId,
+    conn, method: 'GET', url: unseal(cb.original_url, `hub_callback:${cb.id}`), secretUrl: true, from, to: emsp, correlationId: ctx.correlationId,
     requestIdIn: ctx.requestIdIn, timeoutMs: config.hub.forwardTimeoutMs, route: 'callback', module: 'cdrs',
   });
   if (!r.ok) return { status: 200, body: envelope(cb.body), headers: routingHeaders(emsp, from) };

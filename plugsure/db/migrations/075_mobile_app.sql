@@ -81,5 +81,7 @@ COMMENT ON TABLE app_driver_deletion IS
 -- The map's viewport query (GET /d/v1/map, /d/v1/stations?bbox=).
 CREATE INDEX IF NOT EXISTS site_latlon_idx ON site (lat, lon) WHERE archived_at IS NULL AND lat IS NOT NULL AND lon IS NOT NULL;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO plugsure_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO plugsure_app;
+-- No blanket GRANT (see 053/055/070: `GRANT … ON ALL TABLES` hands UPDATE/DELETE on audit_log back).
+-- The deletion record is written once and kept: insert and read only (076 also takes back what the
+-- 1.9.0-dev copy of this file granted).
+GRANT SELECT, INSERT ON app_driver_deletion TO plugsure_app;

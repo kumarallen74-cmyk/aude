@@ -1,15 +1,24 @@
 PlugSure CSMS
-Version:   1.9.0-dev
-Package:   plugsure-v1.9.0-dev (branch mobile)
-Prepared:  2026-10-04  (driver API for the PlugSure Hub mobile app — docs/MOBILE-APP-SPEC.md §15)
+Version:   1.9.0
+Package:   plugsure-v1.9.0
+Prepared:  2026-10-05  (1.9.0-dev after an independent review — see RELEASE-NOTES-v1.9.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
 API:       OpenAPI 3.1 at /openapi.json (323 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
-Status:    1.9.0-dev = v1.8.0 + the P0 backend for the native PlugSure app (MOBILE-APP-SPEC §14 G1–G8, as built §15):
+Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
+Status:    v1.9.0 = 1.9.0-dev + the review fixes: the public account-deletion form no longer shows a stranger an
+           account's open charges (blocker); rollback to v1.5.0 rehearsed and documented (060_down recreates the
+           commercial-plan key v1.5 needs); migration 076 restores least privilege (075's blanket grant removed);
+           anonymous driver-API requests limited per address; mobility:setup guards; late card holds released;
+           voided payments never captured; API keys cannot reset two-step verification; Hub direct addressing,
+           party claims and settlement fixed; Caddy routes the app's link pages; CI runs the pilot configuration
+           (30 suites, 18 newly wired) and the mobile app. Migration 076 (grants only).
+
+1.9.0-dev (2026-10-04):
+           v1.8.0 + the P0 backend for the native PlugSure app (MOBILE-APP-SPEC §14 G1–G8, as built §15):
            the PlugSure Mobility eMSP organisation and its network-scope brand (npm run mobility:setup), Android push
            over FCM HTTP v1, live sessions for Android and partner-network charges, account deletion (app and web
            form), partner stations of hosted operators shown once, app links / QR resolver, /d/v1/map and paged
-           /d/v1/stations with batched prices, and the version gate / remote configuration. Migration 075 (additive,
-           < 0.1 s on a populated copy; rollback db/rollback/075_down.sql). Operator brands and the web app unchanged.
+           /d/v1/stations with batched prices, and the version gate / remote configuration. Migration 075 (additive).
 
 v1.8.0 (2026-10-03):
            v1.8.0 = v1.7.1 + PlugSure Hub, off by default (HUB_ENABLED=false: nothing changes).

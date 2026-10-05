@@ -417,7 +417,11 @@ dbDescribe('settlement: three members, two currencies (hand-computed), idempoten
     // The platform copy is stored in the payer's organisation (no organisation row for NIL_ORG: it was dropped).
     assert.ok(overdue.every((a) => a.orgId === members.C.org_id) && !overdue.some((a) => a.orgId === NIL_ORG));
     const paid = await recordPayment(p.id, { side: 'platform' }, { amount_minor: 700, paid_at: '2000-02-01', reference: 'LATE' }, new Date(due.getTime() + 16 * 86_400_000));
-    assert.equal(paid.position.status, 'paid', 'paid late; awaiting the payee\'s confirmation');
+    // v1.9.0: a payment recorded after the due date and not yet confirmed by the payee does not settle the position:
+    // it stays overdue (reminders continue) until the payee confirms; then it is confirmed.
+    assert.equal(paid.position.status, 'overdue', 'paid late but unconfirmed: still overdue');
+    const ok = await confirmPayment(paid.payment.id, { side: 'member', memberId: p.payee_member_id }, new Date(due.getTime() + 16 * 86_400_000));
+    assert.equal(ok.position.status, 'confirmed', 'confirmed by the payee');
   });
 });
 

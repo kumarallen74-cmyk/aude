@@ -1200,7 +1200,8 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
   /**
    * Reset a user's two-step verification (lost phone and recovery codes). The user is
    * signed out everywhere and, where it is required, enrols again at next sign-in. Not on
-   * oneself: a stolen session must not be able to remove the second factor it lacks.
+   * oneself: a stolen session must not be able to remove the second factor it lacks. Not by
+   * an API key (v1.9.0).
    */
   app.post('/v1/users/:id/reset-mfa', async (req, reply) => {
     assertCan(req.principal, { permission: 'user:write' });
@@ -1209,6 +1210,12 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     const u = await one<{ org_id: string }>(`SELECT org_id FROM app_user WHERE id = $1`, [id]);
     if (!u || u.org_id !== req.principal.orgId) throw new NotFoundError('user not found');
     if (id === req.principal.userId) return clientError(reply, 400, 'you cannot reset your own two-step verification — ask another administrator');
+    // v1.9.0: a signed-in administrator only, never an API key. A key is a single factor: with this and a password
+    // reset it could turn itself into a console session without the second factor (and the console-admin host
+    // restriction does not apply to keys). Removing a second factor is a person's decision, like Microsoft sign-in.
+    if (!UUID_RE.test(req.principal.userId)) {
+      return reply.status(403).send({ error: 'only a signed-in administrator can reset two-step verification', code: 'console_user_required' });
+    }
     await assertMayManageUser(req, id);
     const before = await mfa.mfaStatus(id);
     await mfa.resetMfa(id);

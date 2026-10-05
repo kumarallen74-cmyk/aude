@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.9.0-dev";
+export const API_VERSION = "1.9.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -10339,7 +10339,7 @@ export class Operations {
   /**
    * Reset a user's two-step verification
    *
-   * For a lost phone and recovery codes: removes the authenticator secret and every recovery code and ends every session of the user. Where two-step verification is required (administrators) the user sets it up again at next sign-in. Not on yourself; within your own authority only. Audited.
+   * For a lost phone and recovery codes: removes the authenticator secret and every recovery code and ends every session of the user. Where two-step verification is required (administrators) the user sets it up again at next sign-in. Not on yourself; within your own authority only; a signed-in administrator only (403 `console_user_required` for an API key, v1.9.0). Audited.
    *
    * `POST /v1/users/{id}/reset-mfa` · needs `user:write`
    */

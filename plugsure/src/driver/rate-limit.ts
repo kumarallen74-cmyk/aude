@@ -18,3 +18,13 @@ export function ipLimitFor(path: string): number {
 export function takeDevice(deviceId: string, limitPerMin = config.driverApp.deviceRateLimitPerMin, now = Date.now()): Decision {
   return deviceBuckets.take(`dev:${deviceId}`, limitPerMin, now);
 }
+
+/**
+ * One request WITHOUT a device token (the public browse endpoints, the link resolver, minting a device token) from
+ * this address (v1.9.0). The 6000-a-minute address cap exists for phones behind carrier NAT, which all carry device
+ * tokens; without one, a request gets the API's ordinary per-address budget (`DRIVER_ANON_IP_RATE_LIMIT_PER_MIN`,
+ * 600), so one address cannot mint thousands of devices or scan the map and resolver at the NAT cap.
+ */
+export function takeAnonymous(ip: string, limitPerMin = config.driverApp.anonIpRateLimitPerMin, now = Date.now()): Decision {
+  return deviceBuckets.take(`anon:${ip}`, limitPerMin, now);
+}

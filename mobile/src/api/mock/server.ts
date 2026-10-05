@@ -621,7 +621,7 @@ async function handle(input: RequestInfo | URL, init?: RequestInit): Promise<Res
   return json(404, { message: `Route ${method}:${path} not found`, error: 'Not Found', statusCode: 404 });
 }
 
-const DELETED = ['name', 'email', 'phone (replaced by a one-way hash)', 'saved_cards', 'linked_ewallets', 'favourites', 'loyalty_membership', 'pass_auto_renewal', 'devices_signed_out', 'push_tokens', 'live_activity_tokens', 'sign_in_codes'];
+const DELETED = ['name', 'email', 'phone (pseudonymised: replaced by a keyed hash)', 'saved_cards', 'linked_ewallets', 'favourites', 'loyalty_membership', 'pass_auto_renewal', 'devices_signed_out', 'push_tokens', 'live_activity_tokens', 'sign_in_codes'];
 const RETAINED = ['charges_and_receipts (tax law: ID 10 y, MY 7 y, SG 5 y)', 'payments_and_refunds', 'invoices', 'partner_network_charge_records', 'loyalty_ledger'];
 
 /** What stops this device's account from being deleted (§15.8). */

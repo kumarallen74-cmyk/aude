@@ -242,11 +242,16 @@ export function normalisePhone(raw: string, defaultCountry: CountryCode = 'ID'):
  * burst cannot slip past, and a send that fails still counts (a failing
  * provider is retried by the driver a minute later, not hammered).
  * `limited` marks a refusal for a limit (HTTP 429).
+ *
+ * `send: false` claims every limit exactly as a real send would, then sends nothing: the
+ * account-deletion form uses it for a number with no account, so whether a number has an
+ * account shows neither in the answer nor in which limits apply (v1.9.0).
  */
 export async function sendOtp(
   phoneRaw: string,
   appName?: string,
   from: { ip?: string; deviceId?: string } = {},
+  opts: { send?: boolean } = {},
 ): Promise<{ ok: true; devCode?: string } | { ok: false; error: string; limited?: true }> {
   const phone = normalisePhone(phoneRaw);
   if (!phone) return { ok: false, error: 'Nomor telepon tidak valid.' };
@@ -285,6 +290,7 @@ export async function sendOtp(
   if (!(await claimLimit(phoneKey, lim.otpPerPhonePerDay, DAY_S, OTP_RESEND_WINDOW_S))) {
     return { ok: false, error: MSG_WAIT, limited: true };
   }
+  if (opts.send === false) return { ok: true };
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   // Sent by the provider configured in Govern → Integrations (WhatsApp / SMS, with

@@ -48,6 +48,11 @@ export async function hubCall(o: {
   module?: string | null;
   /** Log the (redacted) body: capture is on for this connection. */
   capture?: boolean;
+  /**
+   * The URL is a member's callback (a response_url or a CDR Location), sealed at rest: the routing log keeps a
+   * placeholder instead of its path, which would otherwise sit there in clear for 30 days (v1.9.0).
+   */
+  secretUrl?: boolean;
 }): Promise<HubCallResult> {
   const started = Date.now();
   const requestId = randomUUID();
@@ -58,7 +63,7 @@ export async function hubCall(o: {
     void logHub({
       correlationId: o.correlationId, requestIdIn: o.requestIdIn ?? null, requestIdOut: requestId, leg: 'out', connectionId: o.conn.id,
       from: lbl(o.from), to: lbl(o.to), route: inproc ? `${o.route}+inproc` : o.route, module: o.module ?? null, method: o.method,
-      path: safePath(o.url), httpStatus: res.httpStatus, ocpiStatus: res.ocpiStatus, ms: res.ms, error: res.error,
+      path: o.secretUrl ? '(callback URL, sealed)' : safePath(o.url), httpStatus: res.httpStatus, ocpiStatus: res.ocpiStatus, ms: res.ms, error: res.error,
       ...(o.capture && o.body !== undefined ? { body: o.body } : {}),
     });
     return res;

@@ -3,7 +3,7 @@ import { api, runtime } from '@/api/client';
 import { ApiError } from '@/api/http';
 import type { Me } from '@/api/types';
 import { createStore, useStore } from '@/lib/store';
-import { secret, KEYS } from '@/lib/storage';
+import { secret, kv, KEYS } from '@/lib/storage';
 import { qk, queryClient } from './queryClient';
 
 /**
@@ -77,6 +77,8 @@ export async function resetDevice(): Promise<void> {
   runtime.token = null;
   authStore.set({ token: null });
   await secret.remove(KEYS.deviceToken);
+  // The deleted account's local traces go too (v1.9.0): its active charge, pending checkout and push token.
+  await Promise.all([kv.remove(KEYS.activeCharge), kv.remove(KEYS.pendingCheckout), kv.remove(KEYS.pushToken)]);
   queryClient.clear();
   try {
     await issue();

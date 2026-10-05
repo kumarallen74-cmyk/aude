@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { one, query } from '../db/pool.js';
 import { logger } from '../logger.js';
+import { config } from '../config.js';
 import { setParty } from '../ocpi/store.js';
 import { checkIcon, forgetBrands, brandOf, saveApnsKey, saveFcmServiceAccount, normaliseFingerprint, HOST_RE, type Brand } from './brand.js';
 import { COUNTRIES, type CountryCode } from '../domain/country.js';
@@ -44,6 +45,11 @@ export interface MobilityOptions {
   apns?: { keyId: string; p8: string } | null;
   fcmServiceAccount?: string | null;
   joinHub?: boolean;
+  /**
+   * Turn an existing OPERATOR brand of the organisation into the network-wide PlugSure app (v1.9.0). Without it the
+   * setup refuses: converting shows every operator's chargers in that operator's app and breaks its store apps.
+   */
+  convertOperatorBrand?: boolean;
 }
 
 export interface MobilitySetup { orgId: string; created: boolean; brand: Brand; parties: string[]; hub: { joined: boolean; detail: string } }
@@ -71,6 +77,18 @@ export async function setupMobility(o: MobilityOptions = {}): Promise<MobilitySe
     `INSERT INTO organisation (name, slug, home_country_code, default_locale) VALUES ($1, $2, $3, $4) RETURNING id`, [name, slug, home, home === 'ID' ? 'id' : 'en']);
   const orgId = org!.id;
 
+  // Refused before anything is written (v1.9.0).
+  const existing = await brandOf(orgId);
+  if (existing && existing.scope !== 'network' && !o.convertOperatorBrand) {
+    throw new Error(
+      `organisation ${orgId} already has its own driver app "${existing.appName}" (${existing.slug}, ${existing.status}). Making it the PlugSure app ` +
+      'would show every operator\'s chargers in it and stop its store apps finding their brand. Use a separate organisation for ' +
+      'PlugSure Mobility, or set MOBILITY_CONVERT_BRAND=1 if converting it is really intended.',
+    );
+  }
+  if (o.joinHub && !config.hub.enabled) {
+    throw new Error('MOBILITY_JOIN_HUB needs the PlugSure Hub (HUB_ENABLED=true): with the hub off its /hub/ocpi endpoints do not exist.');
+  }
   // Another organisation's network brand would make two PlugSure apps.
   const other = await one<{ org_id: string }>(`SELECT org_id FROM driver_app_brand WHERE scope = 'network' AND org_id <> $1`, [orgId]);
   if (other) throw new Error(`organisation ${other.org_id} already owns the PlugSure app's network brand`);
@@ -156,5 +174,6 @@ export function mobilityOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): Mo
     apns: env.MOBILITY_APNS_KEY_ID && env.MOBILITY_APNS_P8_FILE ? { keyId: env.MOBILITY_APNS_KEY_ID, p8: readFileSync(env.MOBILITY_APNS_P8_FILE, 'utf8') } : null,
     fcmServiceAccount: env.MOBILITY_FCM_SA_FILE ? readFileSync(env.MOBILITY_FCM_SA_FILE, 'utf8') : null,
     joinHub: env.MOBILITY_JOIN_HUB === '1' || env.MOBILITY_JOIN_HUB === 'true',
+    convertOperatorBrand: env.MOBILITY_CONVERT_BRAND === '1' || env.MOBILITY_CONVERT_BRAND === 'true',
   };
 }

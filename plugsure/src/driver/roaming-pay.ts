@@ -206,6 +206,8 @@ export async function placeRoamingHold(h: HoldStart): Promise<{ ok: true; charge
       description: h.description, prepare,
     });
   } catch (e) {
+    // Given up here even on a timeout: if the acquirer did authorise the hold after all, its late notification
+    // releases it (registry.ts, 'late_hold_released'), so no driver's money stays blocked (v1.9.0).
     await query(`UPDATE payment_intent SET state = 'failed', updated_at = now() WHERE id = $1 AND state = 'pending'`, [intentId]);
     await query(`UPDATE driver_roaming_charge SET settled_at = now(), settle_outcome = 'not_started' WHERE id = $1`, [chargeId]);
     if (e instanceof MethodUnavailable) return { ok: false, error: e.message, ...(e.code ? { code: e.code } : {}) };

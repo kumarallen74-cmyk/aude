@@ -28,7 +28,8 @@ import type { DriverPrincipal } from './identity.js';
  *
  * Kept (tax and consumer law: ID 10 years, MY 7, SG 5 — [LEGAL] per country): charges, payments, refunds, charge
  * records and receipts, invoices, loyalty ledger entries and partner-network charge records. They stay linked to the
- * anonymised account row (no personal data left on it), which nobody can sign in to. The operators' own customer
+ * pseudonymised account row (the phone number replaced by a hash keyed with SECRETS_KEY: re-identifiable by
+ * whoever holds that key, so it is pseudonymised, not anonymised), which nobody can sign in to. The operators' own customer
  * records (the org-scoped `driver` table) are the operator's, not touched here.
  */
 
@@ -40,7 +41,7 @@ export type Blocker =
   | { code: 'in_queue' };
 
 export const DELETED: readonly string[] = Object.freeze([
-  'name', 'email', 'phone (replaced by a one-way hash)', 'saved_cards', 'linked_ewallets', 'favourites', 'loyalty_membership',
+  'name', 'email', 'phone (pseudonymised: replaced by a keyed hash)', 'saved_cards', 'linked_ewallets', 'favourites', 'loyalty_membership',
   'pass_auto_renewal', 'devices_signed_out', 'push_tokens', 'live_activity_tokens', 'sign_in_codes',
 ]);
 export const RETAINED: readonly string[] = Object.freeze([
@@ -119,19 +120,26 @@ async function accountByPhone(phoneRaw: string): Promise<{ id: string; phone: st
 }
 
 /**
- * Step 1: send the confirmation code. Signed in: to the account's number (body.phone ignored). The web form: to the
- * number given, only if it has an account (the answer does not say whether it has one).
+ * Step 1: send the confirmation code. Signed in: to the account's number (body.phone ignored), with what still
+ * blocks the deletion. The web form (not signed in): to the number given, only if it has an account; the answer and
+ * the limits applied are the same either way, and it never shows what blocks the deletion (unpaid charges, a session
+ * in progress, a reservation): those are a stranger's business only after the code proves the number is theirs, so
+ * the web form learns them from confirm's 409 (v1.9.0; 1.9.0-dev returned them here, before any code).
  */
 export async function startDeletion(p: DriverPrincipal, phoneRaw: string | null, from: { ip?: string; appName?: string }) {
   const phone = p.account?.phone ?? (phoneRaw ? normalisePhone(phoneRaw) : null);
   if (!phone) return { ok: false as const, status: 400, error: 'Nomor telepon tidak valid.' };
-  const acc = p.account ? { id: p.account.id, phone } : await accountByPhone(phone);
-  const blockers = acc ? await deletionBlockers(acc.id, p.deviceId) : [];
-  // No account behind the number: answer as if a code went out (no account enumeration), but send nothing.
-  if (!acc) return { ok: true as const, phoneMasked: maskPhone(phone), blockers: [] as Blocker[], deleted: DELETED, retained: RETAINED };
-  const r = await sendOtp(phone, from.appName, { ip: from.ip, deviceId: p.deviceId });
+  if (p.account) {
+    const blockers = await deletionBlockers(p.account.id, p.deviceId);
+    const r = await sendOtp(phone, from.appName, { ip: from.ip, deviceId: p.deviceId });
+    if (!r.ok) return { ok: false as const, status: r.limited ? 429 : 400, error: r.error };
+    return { ok: true as const, phoneMasked: maskPhone(phone), ...(r.devCode ? { devCode: r.devCode } : {}), blockers, deleted: DELETED, retained: RETAINED };
+  }
+  // No account behind the number: every limit is still claimed, nothing is sent.
+  const acc = await accountByPhone(phone);
+  const r = await sendOtp(phone, from.appName, { ip: from.ip, deviceId: p.deviceId }, { send: !!acc });
   if (!r.ok) return { ok: false as const, status: r.limited ? 429 : 400, error: r.error };
-  return { ok: true as const, phoneMasked: maskPhone(phone), ...(r.devCode ? { devCode: r.devCode } : {}), blockers, deleted: DELETED, retained: RETAINED };
+  return { ok: true as const, phoneMasked: maskPhone(phone), ...(r.devCode ? { devCode: r.devCode } : {}), blockers: [] as Blocker[], deleted: DELETED, retained: RETAINED };
 }
 
 /** Step 2: confirm with the code, and delete. */
@@ -176,7 +184,8 @@ export async function anonymise(appDriverId: string, phone: string, via: 'app' |
       loyaltyMemberships: await n(`DELETE FROM loyalty_member WHERE app_driver_id = $1`, [appDriverId]),
       passesAutoRenewOff: await n(`UPDATE subscription SET auto_renew = false WHERE app_driver_id = $1 AND auto_renew`, [appDriverId]),
       signInCodes: await n(`DELETE FROM driver_otp WHERE phone = $1 OR device_id = ANY($2::uuid[])`, [phone, devices]),
-      signInCounters: await n(`DELETE FROM driver_auth_limit WHERE position($1 in key) > 0`, [phone]),
+      // Exactly this number's counters (a substring match also reset longer numbers that start with these digits).
+      signInCounters: await n(`DELETE FROM driver_auth_limit WHERE key = 'otp-phone:' || $1 OR key LIKE 'otp-verify:' || $1 || ':%'`, [phone]),
       // Every device signed in to the account: signed out, and its device token revoked (no one holds the new hash's secret).
       devicesSignedOut: await n(
         `UPDATE driver_device SET app_driver_id = NULL, fleet_token_id = NULL, device_hash = 'revoked:' || encode(gen_random_bytes(24), 'hex'), user_agent = NULL

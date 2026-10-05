@@ -497,12 +497,21 @@ export async function listSessions(orgId: string, partnerId: string, parties: Pa
   const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null];
   const total = await one<{ n: number }>(`SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`, args);
   const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY cs.started_at, cs.id OFFSET $8 LIMIT $9`, [...args, p.offset, p.limit]);
-  return { total: total?.n ?? 0, items: rows.map((r) => buildSession(pickParty(parties, r.site_country)!, sessionIn(r), tokenRefOf(r))) };
+  // A session at a site whose country has no party of this operator cannot be published under any identity: it is
+  // left out of the page (and logged) instead of failing the whole page with a 500 (v1.9.0).
+  const items = [];
+  for (const r of rows) {
+    const party = pickParty(parties, r.site_country);
+    if (!party) { logger.warn({ session: r.id, country: r.site_country }, 'OCPI: session at a site in a country with no party; not published'); continue; }
+    items.push(buildSession(party, sessionIn(r), tokenRefOf(r)));
+  }
+  return { total: total?.n ?? 0, items };
 }
 
 async function cdrFromRow(r: SessionRowOut, parties: Party | Party[]) {
   if (!r.cdr_id) return null;
-  const party = pickParty(parties, r.site_country)!;
+  const party = pickParty(parties, r.site_country);
+  if (!party) { logger.warn({ session: r.id, country: r.site_country }, 'OCPI: CDR at a site in a country with no party; not published'); return null; }
   const d = await one<{ id: string; issued_at: Date; lines: CdrLine[]; subtotal_minor: number; local_tax_minor: number; total_minor: number; tariff_snapshot: Tariff | null; currency: string; prices_include_tax: boolean; tax_rate_bps: number; tax_scheme: string }>(
     `SELECT id, issued_at, lines, subtotal_minor, local_tax_minor, total_minor, tariff_snapshot, currency, prices_include_tax, tax_rate_bps, tax_scheme
        FROM cdr WHERE id = $1`,

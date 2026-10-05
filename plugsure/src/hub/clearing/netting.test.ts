@@ -99,3 +99,12 @@ describe('bilateral netting', () => {
     assert.deepEqual(net([], 'SGD'), { positions: [], members: [] });
   });
 });
+
+test('v1.9.0: a payment recorded but not confirmed by the payee does not settle a position past its due date', async () => {
+  const { positionStatus } = await import('./settlement.js');
+  const base = { net_minor: 1000, status: 'open', due_date: '2026-10-10' };
+  assert.equal(positionStatus({ ...base, paid_minor: 1000, confirmed_minor: 0, unconfirmed: 1 }, '2026-10-05'), 'paid', 'before the due date: paid, awaiting confirmation');
+  assert.equal(positionStatus({ ...base, paid_minor: 1000, confirmed_minor: 0, unconfirmed: 1 }, '2026-10-11'), 'overdue', 'after it: overdue until the payee confirms');
+  assert.equal(positionStatus({ ...base, paid_minor: 1000, confirmed_minor: 1000, unconfirmed: 0 }, '2026-10-11'), 'confirmed');
+  assert.equal(positionStatus({ ...base, paid_minor: 400, confirmed_minor: 400, unconfirmed: 0 }, '2026-10-05'), 'partially_paid');
+});

@@ -9,7 +9,14 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.6.0 — Sign in with Microsoft (2 October 2026), the current release.** Operator staff can sign
+**v1.9.0 — the reviewed release of the v1.6–1.9 work (5 October 2026), the current release.** 1.9.0-dev (v1.5.1,
+v1.6.0, v1.7.0/1.7.1, v1.8.0 and the native-app driver API with the Expo app in `../mobile`) after an independent
+review: the account-deletion form no longer exposes an account's open charges to strangers, a rehearsed rollback to
+v1.5.0, least privilege restored (migration 076), the driver API's anonymous rate limit, Hub routing and settlement
+fixes, and CI for the pilot's configuration and the mobile app. Pilot upgrade: [`docs/UPGRADE-v1.5-to-v1.9.md`](docs/UPGRADE-v1.5-to-v1.9.md);
+notes: [`RELEASE-NOTES-v1.9.0.md`](RELEASE-NOTES-v1.9.0.md).
+
+**v1.6.0 — Sign in with Microsoft (2 October 2026).** Operator staff can sign
 in to the console with their company Microsoft account (Microsoft Entra ID, OpenID Connect). Each
 operator organisation connects its own Entra tenant (Users & Roles → Microsoft sign-in); only
 people who already have a console user can sign in — nobody is created from Microsoft — and

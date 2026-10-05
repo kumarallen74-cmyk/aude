@@ -1,5 +1,12 @@
 # PlugSure — deployment runbook
 
+> ## Upgrading the live pilot from v1.5.0 to v1.9.0
+>
+> Follow **`docs/UPGRADE-v1.5-to-v1.9.md`**: one runbook for every step from v1.5.1 to v1.9.0 (the `NODE_ENV`
+> pre-flight, two-step verification for administrators, the migration-060 window with `rerate-compare`, the
+> settlement-recovery cut-off), and §7 below for the rollback. New features (Microsoft sign-in, Malaysia and
+> Singapore, the PlugSure Hub, the mobile app) stay off unless switched on; the guide's last section says how.
+
 > ## v1.3.0 additions (read with RELEASE-NOTES-v1.3.0.md)
 >
 > **API ↔ gateway bridge (required for the split deployment).** The API and the
@@ -823,9 +830,38 @@ numbered file.
 
 ## 7. Rollback
 
-Roll back the **code**; leave the schema alone. Migrations here are
-forward-only — there are no down-migrations, and inventing one under pressure is
-how billing data is lost.
+**Within one release line** (a patch release that adds no migration, e.g. 1.9.0 → 1.9.1), roll back the
+**code** and leave the schema alone, with the commands below.
+
+**Across the v1.5 → v1.9 upgrade the schema matters (v1.9.0).** Migration 060 renamed the 61 `*_idr` money
+columns to `*_minor`, so v1.5.0 code cannot run on a 1.9 schema: every billing, payment and receipt query
+would fail. Choose one of these:
+
+1. **Restore the pre-upgrade backup** (primary). Take a `pg_dump -Fc` as the owner right before the upgrade
+   (below), or use point-in-time recovery (`deploy/pitr/RESTORE.md`). Restore it, re-apply
+   `ALTER ROLE plugsure_app IN DATABASE plugsure SET app.rls_bypass = 'on'` (§ Backups, step 2), and
+   redeploy v1.5.0. You lose what happened after the backup, so choose this within the maintenance window.
+2. **Run the down chain** (fallback, when sessions and payments taken on 1.9 must be kept). This was rehearsed
+   for v1.9.0: a v1.5.0 database with real data was upgraded, used, rolled back this way, and v1.5.0's own
+   end-to-end suites then passed on it.
+
+   ```bash
+   sudo systemctl stop plugsure-api plugsure-gateway            # Docker: docker compose stop api gateway
+   OWNER_URL=$(sudo sed -n 's/^DATABASE_URL=//p' /etc/plugsure/migrate.env)
+   # Keep the account-deletion record (075_down drops it): the store and the regulator may ask for it.
+   sudo -u plugsure psql "$OWNER_URL" -c "\copy app_driver_deletion TO '/var/backups/plugsure/app_driver_deletion.csv' CSV HEADER"
+   for f in 075 074 073 072 060; do
+     sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -1 -f /opt/plugsure/db/rollback/${f}_down.sql || break
+   done
+   # A password-only session still waiting for its two-step code: v1.5 does not know the flag and would treat
+   # it as fully signed in.
+   sudo -u plugsure psql "$OWNER_URL" -c "DELETE FROM auth_session WHERE mfa_pending"
+   ```
+
+   Then deploy v1.5.0 (commands below; on systemd install v1.5.0's unit files too) and start it. The other
+   1.9 migrations (055, 058, 059, 061–063, 070, 071, 076) only add columns, tables and grants that v1.5.0
+   ignores. The guards refuse to run while anything would be lost: a non-IDR row, a hub-only member, rows in
+   the hub clearing ledger, a member rate with more than two decimals. Each tells you what to do first.
 
 ```bash
 # Path A — redeploy the previous image tag

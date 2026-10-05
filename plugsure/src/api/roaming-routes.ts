@@ -117,7 +117,7 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     if (current && (current.country_code !== cc || current.party_id !== pid) && (connected?.n ?? 0) > 0) {
       return bad(reply, 409, 'Partners already know you by your current party ID. Disconnect them before changing it.');
     }
-    const taken = await one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [cc, pid, org(req)]);
+    const taken = await outsideRequestScope(() => one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [cc, pid, org(req)]));
     if (taken) return bad(reply, 409, `${cc}*${pid} is already used by another organisation on this platform`);
     const party = await setParty(org(req), { country_code: cc, party_id: pid, business_name: name, website: website || null });
     await audit(req, 'roaming.identity_set', 'ocpi_party', org(req), { ...party });
@@ -145,7 +145,9 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     if (!/^[A-Z0-9]{3}$/.test(pid)) return bad(reply, 400, 'Party ID: three letters or digits, e.g. PLS');
     if (!name) return bad(reply, 400, 'Enter the business name partners will see');
     if (website && !/^https:\/\/\S+$/.test(website)) return bad(reply, 400, 'Website must start with https://');
-    const taken = await one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [country, pid, org(req)]);
+    // Across organisations, so outside the request's org scope: inside it row-level security hides other organisations'
+    // parties and the clash surfaced as a 500 from the UNIQUE constraint instead (v1.9.0).
+    const taken = await outsideRequestScope(() => one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [country, pid, org(req)]));
     if (taken) return bad(reply, 409, `${country}*${pid} is already used by another organisation on this platform`);
     const party = await setParty(org(req), { country_code: country, party_id: pid, business_name: name, website: website || null }, { home: false });
     await audit(req, 'roaming.party_set', 'ocpi_party', org(req), { ...party, country_code: country });

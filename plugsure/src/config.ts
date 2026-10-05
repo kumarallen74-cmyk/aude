@@ -48,12 +48,13 @@ export function hubDays(name: string, raw: string | undefined, dflt: number, min
   return n;
 }
 export function hubCycle(raw: string | undefined): 'monthly' | 'weekly' {
-  const v = (raw ?? 'monthly').trim().toLowerCase();
+  // Unset or empty = the default (v1.9.0: an empty HUB_CYCLE= stopped even a CSMS that does not run the hub).
+  const v = (raw?.trim() || 'monthly').toLowerCase();
   if (v !== 'monthly' && v !== 'weekly') throw new Error('HUB_CYCLE: monthly or weekly');
   return v;
 }
 export function hubEntity(raw: string | undefined): 'ID' | 'MY' | 'SG' {
-  const v = (raw ?? 'SG').trim().toUpperCase();
+  const v = (raw?.trim() || 'SG').toUpperCase();
   if (v !== 'ID' && v !== 'MY' && v !== 'SG') throw new Error('HUB_DEFAULT_ENTITY: ID, MY or SG');
   return v;
 }
@@ -523,6 +524,8 @@ export const config = {
     deviceRateLimitPerMin: num(process.env.DRIVER_DEVICE_RATE_LIMIT_PER_MIN, 600),
     /** Requests a minute per client address on /d/: an abuse cap, high enough for carrier NAT. */
     ipRateLimitPerMin: num(process.env.DRIVER_IP_RATE_LIMIT_PER_MIN, 6000),
+    /** Requests a minute per client address on /d/ WITHOUT a device token (browse, resolve, minting a token). */
+    anonIpRateLimitPerMin: num(process.env.DRIVER_ANON_IP_RATE_LIMIT_PER_MIN, 600),
   },
 
   /** Background workers (control loop, compliance sweep, FOTA scheduler). */

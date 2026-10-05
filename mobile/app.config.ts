@@ -32,6 +32,13 @@ const asset = (file: string) => {
 const idSuffix = appEnv === 'production' ? '' : appEnv === 'preview' ? '.preview' : '.dev';
 const nameSuffix = appEnv === 'production' ? '' : appEnv === 'preview' ? ' (Preview)' : ' (Dev)';
 const apiBase = process.env.API_BASE_URL?.trim() || brand.apiBase;
+// A store build must talk to a real backend over https (v1.9.0): refuse the demo data, a plain-http or local API,
+// and the EXPO_PUBLIC_API_BASE_URL override (src/config.ts) that would silently replace the brand's address.
+if (appEnv === 'production') {
+  const override = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+  if (override) throw new Error('APP_ENV=production: unset EXPO_PUBLIC_API_BASE_URL (it overrides the brand\'s API address)');
+  if (apiBase === 'mock' || !/^https:\/\//.test(apiBase)) throw new Error(`APP_ENV=production: API base must be https://… (got "${apiBase}")`);
+}
 const easProjectId = process.env.EAS_PROJECT_ID?.trim() || brand.easProjectId;
 const appleTeamId = process.env.APPLE_TEAM_ID?.trim() || brand.appleTeamId || undefined;
 

@@ -234,20 +234,30 @@ export interface PaymentActor { side: 'member' | 'platform'; memberId?: string |
 
 const METHODS = ['bank_transfer', 'stripe_connect', 'xendit', 'other'] as const;
 
-/** Position status from what was recorded (pure). */
-export function positionStatus(p: { net_minor: number; paid_minor: number; status: string; due_date: string; unconfirmed: number }, today: string): string {
+/**
+ * Position status from what was recorded (pure). `paid_minor` is everything recorded; `confirmed_minor` what the payee
+ * (or the platform) confirmed. v1.9.0: a payment the payer records and the payee never confirms no longer settles the
+ * position for good: past the due date the position is overdue (reminders continue) until the payee confirms what it
+ * received. Before, a payer could silence overdue reminders by recording a transfer that never happened.
+ */
+export function positionStatus(p: { net_minor: number; paid_minor: number; confirmed_minor?: number; status: string; due_date: string; unconfirmed: number }, today: string): string {
   if (p.status === 'written_off' || p.status === 'nothing_due') return p.status;
-  if (p.paid_minor >= p.net_minor) return p.unconfirmed === 0 ? 'confirmed' : 'paid';
+  const confirmed = p.confirmed_minor ?? (p.unconfirmed === 0 ? p.paid_minor : 0);
+  if (confirmed >= p.net_minor) return 'confirmed';
+  if (p.paid_minor >= p.net_minor) return today > p.due_date ? 'overdue' : 'paid';
   if (today > p.due_date) return 'overdue';
   return p.paid_minor > 0 ? 'partially_paid' : 'open';
 }
 
 async function recomputePosition(c: pg.PoolClient, positionId: string, now: Date) {
   const p = (await c.query(`SELECT *, to_char(due_date, 'YYYY-MM-DD') AS due FROM hub_settlement_position WHERE id = $1 FOR UPDATE`, [positionId])).rows[0];
-  const agg = (await c.query<{ paid: string; unconfirmed: number }>(
-    `SELECT COALESCE(sum(amount_minor), 0)::bigint AS paid, count(*) FILTER (WHERE confirmed_by_payee_at IS NULL)::int AS unconfirmed FROM hub_payment WHERE position_id = $1`, [positionId])).rows[0]!;
+  const agg = (await c.query<{ paid: string; confirmed: string; unconfirmed: number }>(
+    `SELECT COALESCE(sum(amount_minor), 0)::bigint AS paid,
+            COALESCE(sum(amount_minor) FILTER (WHERE confirmed_by_payee_at IS NOT NULL), 0)::bigint AS confirmed,
+            count(*) FILTER (WHERE confirmed_by_payee_at IS NULL)::int AS unconfirmed
+       FROM hub_payment WHERE position_id = $1`, [positionId])).rows[0]!;
   const today = localDateString(now, p.currency);
-  const status = positionStatus({ net_minor: Number(p.net_minor), paid_minor: Number(agg.paid), status: p.status, due_date: p.due, unconfirmed: agg.unconfirmed }, today);
+  const status = positionStatus({ net_minor: Number(p.net_minor), paid_minor: Number(agg.paid), confirmed_minor: Number(agg.confirmed), status: p.status, due_date: p.due, unconfirmed: agg.unconfirmed }, today);
   return (await c.query(`UPDATE hub_settlement_position SET paid_minor = $2, status = $3, updated_at = now(),
                                 overdue_since = CASE WHEN $3 = 'overdue' THEN COALESCE(overdue_since, due_date + 1) ELSE overdue_since END
                           WHERE id = $1 RETURNING *`, [positionId, agg.paid, status])).rows[0];
@@ -335,7 +345,7 @@ export async function markOverdue(now = new Date()): Promise<{ positions: number
   let positions = 0, reminders = 0, invoices = 0;
   const rows = await many(`SELECT p.*, to_char(p.due_date, 'YYYY-MM-DD') AS due, m.legal_name AS payer_name, n.legal_name AS payee_name
                              FROM hub_settlement_position p JOIN hub_member m ON m.id = p.payer_member_id JOIN hub_member n ON n.id = p.payee_member_id
-                            WHERE p.status IN ('open','partially_paid','overdue')`);
+                            WHERE p.status IN ('open','partially_paid','overdue','paid')`);
   for (const p of rows) {
     const today = localDateString(now, p.currency);
     if (today <= p.due) continue;
@@ -348,8 +358,11 @@ export async function markOverdue(now = new Date()): Promise<{ positions: number
       if (pos.status === 'overdue' && owed > Number(p.reminders_sent)) {
         await c.query(`UPDATE hub_settlement_position SET reminders_sent = $2 WHERE id = $1`, [p.id, owed]);
         const outstanding = Number(pos.net_minor) - Number(pos.paid_minor);
-        const msg = `Hub settlement payment overdue ${late} day(s): ${p.payer_name} owes ${p.payee_name} ${outstanding} (${p.currency} minor units), due ${p.due}.`;
+        const msg = outstanding > 0
+          ? `Hub settlement payment overdue ${late} day(s): ${p.payer_name} owes ${p.payee_name} ${outstanding} (${p.currency} minor units), due ${p.due}.`
+          : `Hub settlement payment overdue ${late} day(s): ${p.payer_name} recorded paying ${p.payee_name} in full, but ${p.payee_name} has not confirmed receipt (due ${p.due}).`;
         alert(p.payer_org_id, 'hub.payment_overdue', msg, { type: 'hub_settlement_position', id: p.id }, late >= 14 ? 'critical' : 'warning');
+        if (outstanding <= 0) alert(p.payee_org_id, 'hub.payment_overdue', `${msg} Confirm the payment if it arrived, or tell the platform if it did not.`, { type: 'hub_settlement_position', id: p.id }, late >= 14 ? 'critical' : 'warning');
         alert(null, 'hub.payment_overdue', msg, { type: 'hub_settlement_position', id: p.id }, late >= 14 ? 'critical' : 'warning');
         reminders++;
       }

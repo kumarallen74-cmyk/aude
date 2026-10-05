@@ -28,7 +28,7 @@ const { setupMobility } = await import('../services/mobility.js');
 const { emspOrgForApp } = await import('./roaming-pay.js');
 const { roamingStationsOf } = await import('./roaming.js');
 const { issueDevice, authenticateDriver } = await import('./identity.js');
-const { startDeletion, confirmDeletion, deletionBlockers, wasDeleted, withDriverLock } = await import('./account-deletion.js');
+const { startDeletion, confirmDeletion, deletionBlockers, wasDeleted, withDriverLock, anonymise } = await import('./account-deletion.js');
 const { networkBrand, forgetBrands } = await import('../services/brand.js');
 
 const TAG = randomBytes(3).toString('hex');
@@ -156,6 +156,18 @@ dbDescribe('PlugSure Mobility (G1) and duplicate stations (G5)', () => {
     assert.ok(parties.length >= 1);
   });
 
+  test('an organisation with its own operator app is refused (nothing written) unless converting is explicit (v1.9.0)', async () => {
+    const o = (await one<{ id: string }>(`INSERT INTO organisation (name, slug) VALUES ('Own App Op', $1) RETURNING id`, [`own-app-${TAG}`]))!.id;
+    await query(`INSERT INTO driver_app_brand (org_id, slug, app_name, short_name) VALUES ($1, $2, 'Own App', 'Own')`, [o, `own-${TAG}`]);
+    await assert.rejects(setupMobility({ orgId: o }), /already has its own driver app/);
+    const after = await one<{ scope: string; slug: string; roaming: unknown }>(
+      `SELECT b.scope, b.slug, o.roaming_settings->'appDrivers' AS roaming FROM driver_app_brand b JOIN organisation o ON o.id = b.org_id WHERE b.org_id = $1`, [o]);
+    assert.deepEqual([after?.scope, after?.slug, after?.roaming ?? null], ['operator', `own-${TAG}`, null], 'unchanged: still the operator\'s app');
+    assert.equal(await one(`SELECT 1 FROM ocpi_party WHERE org_id = $1`, [o]), null, 'no parties written');
+    await query(`DELETE FROM driver_app_brand WHERE org_id = $1`, [o]);
+    await query(`DELETE FROM organisation WHERE id = $1`, [o]);
+  });
+
   test('a hosted operator\'s locations that came back through the hub are left out; an external CPO\'s stay', async () => {
     partnerId = (await one<{ id: string }>(`INSERT INTO ocpi_partner (org_id, name, kind, state) VALUES ($1, $2, 'hub', 'connected') RETURNING id`, [mobilityOrg, `Hub ${TAG}`]))!.id;
     const loc = (id: string, name: string) => ({
@@ -271,10 +283,53 @@ dbDescribe('account deletion (G4)', () => {
     assert.equal(await one(`SELECT 1 FROM app_driver WHERE phone = $1`, [phone]), null);
   });
 
+  test('the web form (v1.9.0): a stranger who types a number learns nothing before the code — no blockers, the same answer and the same limits whether or not it has an account', async () => {
+    const phone = `+62814${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
+    const owner = await issueDevice('mobile-web-owner');
+    const acc = (await one<{ id: string }>(`INSERT INTO app_driver (phone) VALUES ($1) RETURNING id`, [phone]))!.id;
+    await query(`UPDATE driver_device SET app_driver_id = $2 WHERE id = $1`, [owner.deviceId, acc]);
+    await query(`INSERT INTO driver_queue_entry (org_id, site_id, device_id, app_driver_id) VALUES ($1,$2,$3,$4)`, [org, sites.a, owner.deviceId, acc]);
+    assert.deepEqual((await deletionBlockers(acc, owner.deviceId)).map((b) => b.code), ['in_queue'], 'the account does have a blocker');
+
+    const stranger = await issueDevice('mobile-web-stranger');
+    const sp = (await authenticateDriver({ authorization: `Bearer ${stranger.deviceToken}` }))!;
+    const withAcc = await startDeletion(sp, phone, {});
+    assert.ok(withAcc.ok, JSON.stringify(withAcc));
+    assert.deepEqual((withAcc as { blockers: unknown[] }).blockers, [], 'no unpaid charges, sessions or queue places before the code');
+    const none = `+62815${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
+    const noAcc = await startDeletion(sp, none, {});
+    assert.ok(noAcc.ok);
+    const shape = (r: object) => Object.keys(r).filter((k) => k !== 'devCode' && k !== 'phoneMasked').sort();
+    assert.deepEqual(shape(withAcc), shape(noAcc), 'the same answer either way');
+    // The per-number limit applies to both (a second request inside the minute is refused, account or not).
+    const again1 = await startDeletion(sp, phone, {});
+    const again2 = await startDeletion(sp, none, {});
+    assert.deepEqual([again1.ok, (again1 as { status?: number }).status, again2.ok, (again2 as { status?: number }).status], [false, 429, false, 429]);
+    // The owner's blockers come only after the code proves the number (confirm answers 409 with them).
+    const code = (withAcc as { devCode?: string }).devCode;
+    if (code) {
+      const blocked = await confirmDeletion(sp, phone, code, 'web');
+      assert.equal((blocked as { status: number }).status, 409);
+    }
+  });
+
+  test('deleting an account clears exactly its number\'s sign-in counters, not a longer number that starts with it (v1.9.0)', async () => {
+    const phone = `+62816${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`;
+    const longer = `${phone}7`;
+    const acc = (await one<{ id: string }>(`INSERT INTO app_driver (phone) VALUES ($1) RETURNING id`, [phone]))!.id;
+    const keys = [`otp-phone:${phone}`, `otp-verify:${phone}:dev-1`, `otp-phone:${longer}`, `otp-verify:${longer}:dev-2`];
+    for (const k of keys) await query(`INSERT INTO driver_auth_limit (key, hits) VALUES ($1, 3) ON CONFLICT (key) DO UPDATE SET hits = 3`, [k]);
+    await anonymise(acc, phone, 'app');
+    const left = (await many<{ key: string }>(`SELECT key FROM driver_auth_limit WHERE key = ANY($1::text[]) ORDER BY key`, [keys])).map((r) => r.key);
+    assert.deepEqual(left, [`otp-phone:${longer}`, `otp-verify:${longer}:dev-2`].sort());
+    await query(`DELETE FROM driver_auth_limit WHERE key = ANY($1::text[])`, [keys]);
+  });
+
   test('the web form: a number without an account gets the same answer and nothing is sent', async () => {
     const dev = await issueDevice('mobile-test-web');
     const p = (await authenticateDriver({ authorization: `Bearer ${dev.deviceToken}` }))!;
-    const r = await startDeletion(p, '+6289999999999', {});
+    // A fresh number each run: since v1.9.0 the per-number limit applies whether or not the number has an account.
+    const r = await startDeletion(p, `+62899${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`, {});
     assert.ok(r.ok);
     assert.equal((r as { devCode?: string }).devCode, undefined);
     assert.ok((r as { phoneMasked: string }).phoneMasked);

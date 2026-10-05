@@ -488,7 +488,7 @@ http://127.0.0.1:8080 {
 # An operator points its address at this server (DNS CNAME to the console or
 # driver hostname) and sets it in Commercial → Driver app. The certificate is
 # issued on first request (on_demand_tls above, which asks the API). Only the
-# driver app, its API and the store association files are served here; the API
+# driver app, its API, its public link pages and the store association files are served here; the API
 # picks the brand from the Host header, which reverse_proxy passes through.
 # This block must stay LAST: it catches every HTTPS name not matched above.
 https:// {
@@ -498,7 +498,9 @@ https:// {
 	@root path /
 	redir @root /app/ 302
 
-	@driver path /app /app/* /d/* /.well-known/assetlinks.json /.well-known/apple-app-site-association
+	# v1.9.0: the PlugSure app's public pages on its link domain (MOBILITY_LINK_HOST): QR and share links
+	# (/c, /s, /r), the payment return (/paid) and the account-deletion form the app stores require (/account/delete).
+	@driver path /app /app/* /d/* /.well-known/assetlinks.json /.well-known/apple-app-site-association /c/* /s/* /r/* /paid /account/delete
 	handle @driver {
 		reverse_proxy 127.0.0.1:9200 {
 			header_up X-Forwarded-Proto {http.request.scheme}

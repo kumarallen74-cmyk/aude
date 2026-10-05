@@ -735,6 +735,15 @@ async function applyNotification(r: Resolved, n: Notification): Promise<{ outcom
     const foreign = notificationAccountMismatch(intent, r);
     if (foreign) {
       logger.error({ intent: intent.id, integrationId: r.integrationId, reason: foreign }, 'payment notification from an account that did not take this payment; refused');
+      // v1.9.0: money reported taken on a refused notification was only logged; the operator is told.
+      if (n.paid || n.authorised) {
+        bus.emit('alert.raised', {
+          orgId: intent.org_id, kind: 'payment.amount_mismatch', severity: 'critical',
+          message: `${r.provider} reported payment ${n.providerRef} as ${n.paid ? 'paid' : 'authorised'} from a payment account that did not take it. ` +
+            `It was not accepted; check the payment in both accounts' dashboards and refund it there if money was taken.`,
+          targetType: 'payment_intent', targetId: intent.id,
+        });
+      }
       return { outcome: 'wrong_account', orgId: intent.org_id, detail: { reason: foreign } };
     }
     // Money in another currency than asked for is never booked (the amounts cannot even be compared).
@@ -787,6 +796,21 @@ async function applyNotification(r: Resolved, n: Notification): Promise<{ outcom
     if (intent.mode === 'preauth') {
       // A card hold. 'authorised' reserves the money; PlugSure captures what was used when the session is rated.
       if (n.authorised) {
+        // v1.9.0: a hold authorised AFTER PlugSure gave up on it (the start timed out and was marked failed, or the
+        // checkout lapsed) still blocks the driver's money. Release it instead of ignoring the notification: the
+        // hold sweep (holds.ts) releases anything 'releasing', and the release marks the payment voided.
+        if (intent.state === 'failed' || intent.state === 'expired') {
+          const late = await one<{ id: string }>(
+            `UPDATE payment_intent SET hold_state = 'releasing', hold_attempts = 0, hold_next_attempt_at = now(), authorised_at = now(),
+                    provider_payment_id = COALESCE($3, provider_payment_id), raw_events = raw_events || $2::jsonb, updated_at = now()
+              WHERE id = $1 AND state IN ('failed', 'expired') AND hold_state IS NULL RETURNING id`,
+            [intent.id, JSON.stringify([{ at: new Date(), status: n.status, paymentId: n.paymentId ?? null, late: true }]), n.paymentId ?? null],
+          );
+          if (late) {
+            logger.warn({ intent: intent.id, state: intent.state }, 'card hold authorised after the payment was given up; releasing it');
+            return { outcome: 'late_hold_released', orgId: intent.org_id };
+          }
+        }
         if (intent.state !== 'pending') return { outcome: 'duplicate', orgId: intent.org_id };
         if (n.amountMinor != null && intent.amount_authorised_minor != null && n.amountMinor < intent.amount_authorised_minor) {
           return underpaid(r, intent, n, 'hold');
@@ -807,6 +831,12 @@ async function applyNotification(r: Resolved, n: Notification): Promise<{ outcom
         const event = JSON.stringify([{ at: new Date(), status: n.status, amountMinor: n.amountMinor }]);
         if (n.amountMinor != null && intent.amount_authorised_minor != null && n.amountMinor > intent.amount_authorised_minor) {
           logger.error({ intent: intent.id, captured: n.amountMinor, authorised: intent.amount_authorised_minor }, 'capture confirmation above the hold; not reconciled');
+          bus.emit('alert.raised', {
+            orgId: intent.org_id, kind: 'payment.amount_mismatch', severity: 'critical',
+            message: `${r.provider} confirmed a capture of ${moneyText(Number(n.amountMinor), currencyOr(intent.currency), 'id')} on payment ${n.providerRef}, ` +
+              `above its hold of ${moneyText(Number(intent.amount_authorised_minor), currencyOr(intent.currency), 'id')}. Not reconciled: check it in the acquirer's dashboard.`,
+            targetType: 'payment_intent', targetId: intent.id,
+          });
           await query(`UPDATE payment_intent SET raw_events = raw_events || $2::jsonb WHERE id = $1`, [intent.id, event]);
           return { outcome: 'amount_mismatch', orgId: intent.org_id, detail: { authorised: intent.amount_authorised_minor } };
         }
@@ -848,13 +878,34 @@ async function applyNotification(r: Resolved, n: Notification): Promise<{ outcom
       return { outcome: next ?? 'not_paid', orgId: intent.org_id };
     }
     if (intent.state === 'captured') return { outcome: 'duplicate', orgId: intent.org_id };
+    if (intent.state === 'voided') {
+      // v1.9.0: voided (an underpaid payment, refund queued) stays voided. Captured here, the refund already queued
+      // would be for the short amount only and this second payment would never be paid back. Kept and raised —
+      // unless it is the same underpaid notification again (same amount as recorded): then it is a plain duplicate.
+      const v = await one<{ amount_captured_minor: number | null }>(`SELECT amount_captured_minor FROM payment_intent WHERE id = $1`, [intent.id]);
+      if (n.amountMinor == null || (v?.amount_captured_minor != null && Number(n.amountMinor) === Number(v.amount_captured_minor))) {
+        await query(`UPDATE payment_intent SET raw_events = raw_events || $2::jsonb WHERE id = $1`,
+          [intent.id, JSON.stringify([{ at: new Date(), status: n.status, amountMinor: n.amountMinor, duplicate: true }])]);
+        return { outcome: 'duplicate', orgId: intent.org_id };
+      }
+      await query(`UPDATE payment_intent SET raw_events = raw_events || $2::jsonb WHERE id = $1`,
+        [intent.id, JSON.stringify([{ at: new Date(), status: n.status, amountMinor: n.amountMinor, paidAfterVoid: true }])]);
+      logger.error({ intent: intent.id, provider: r.provider, amountMinor: n.amountMinor }, 'payment reported paid after it was voided; not captured');
+      bus.emit('alert.raised', {
+        orgId: intent.org_id, kind: 'payment.amount_mismatch', severity: 'critical',
+        message: `${r.provider} reported payment ${n.providerRef} as paid${n.amountMinor != null ? ` (${moneyText(Number(n.amountMinor), currencyOr(intent.currency), 'id')})` : ''} ` +
+          `after it had been voided as underpaid. It was not accepted; money may have been taken twice — check it in the acquirer's dashboard and refund it there.`,
+        targetType: 'payment_intent', targetId: intent.id,
+      });
+      return { outcome: 'paid_after_void', orgId: intent.org_id };
+    }
     if (n.amountMinor != null && intent.amount_authorised_minor != null && n.amountMinor < intent.amount_authorised_minor) {
       return underpaid(r, intent, n, 'payment');
     }
     await one(
       `UPDATE payment_intent SET state = 'captured', amount_captured_minor = COALESCE($2, amount_authorised_minor), captured_at = now(), updated_at = now(),
               raw_events = raw_events || $3::jsonb, provider_payment_id = COALESCE(provider_payment_id, $4)
-        WHERE id = $1 AND state <> 'captured'`,
+        WHERE id = $1 AND state NOT IN ('captured', 'voided')`,
       [intent.id, n.amountMinor, JSON.stringify([{ at: new Date(), status: n.status, paymentId: n.paymentId ?? null }]), n.paymentId ?? null],
     );
     await keepCard();

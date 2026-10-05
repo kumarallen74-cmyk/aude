@@ -872,7 +872,7 @@ Version 1 (the installed white-label widgets) is unchanged (no cost for non-IDR 
   auto-renewal (a paid pass runs to its end); every device of the account signed out and its device token revoked;
   push subscriptions, Live Activity / live-session and push-to-start tokens; pending sign-in codes and counters.
 - **Kept** (tax and consumer law — ID 10 years, MY 7, SG 5): charges, payments, refunds, charge records and receipts,
-  invoices, partner-network charge records, loyalty ledger — linked to the anonymised account row, which nobody can
+  invoices, partner-network charge records, loyalty ledger — linked to the pseudonymised account row, which nobody can
   sign in to. Operators' own customer records are theirs. Each deletion is logged in `app_driver_deletion` (counts only).
 - After `200`, the app discards its device token, issues a new one (`POST /d/v1/device`) and returns to the guest map.
 

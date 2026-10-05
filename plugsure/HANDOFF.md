@@ -1,7 +1,8 @@
-# PlugSure v1.5.1 — Deployment Handoff
+# PlugSure v1.9.0 — Deployment Handoff
 
-**Current release: v1.5.1** (see `VERSION` and `RELEASE-NOTES-v1.5.1.md`; v1.4.x and
-v1.5.0 in their own release notes). This handoff was first written for v1.3.0, the
+**Current release: v1.9.0** (see `VERSION` and `RELEASE-NOTES-v1.9.0.md`; earlier releases in their own release
+notes). **Upgrading the pilot from v1.5.0: follow `docs/UPGRADE-v1.5-to-v1.9.md`**, one runbook for every step from
+v1.5.1 to v1.9.0, and `deploy/README.md` §7 for the rollback. This handoff was first written for v1.3.0, the
 enterprise operator console; the sections below describe that release and are kept
 as the feature overview. Deployment steps that changed since are in
 `deploy/README.md` — in particular: run exactly **one** gateway (§0 notes), worker

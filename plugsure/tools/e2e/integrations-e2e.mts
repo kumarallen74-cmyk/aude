@@ -169,7 +169,10 @@ try {
   const co2 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 40_000 });
   const short = await raw(hookPath, note(co2.data.qr.providerRef, '4000.00'));
   const shortState = await intentState(co2.data.qr.providerRef);
-  check('notification for less than the payment: acknowledged but not captured', short.status === 200 && shortState.state === 'pending', shortState);
+  const shortRefund = (await pg.query(`SELECT refund_state FROM payment_intent WHERE provider_ref = $1`, [co2.data.qr.providerRef])).rows[0];
+  // Since v1.5.1 an underpaid notification is not left pending (money stranded): recorded, voided, and refunded in full.
+  check('notification for less than the payment: acknowledged, not captured — voided with a full refund of what was taken',
+    short.status === 200 && shortState.state === 'voided' && !!shortRefund?.refund_state, { shortState, shortRefund });
 
   // Refund through the acquirer.
   const pi = (await pg.query(`SELECT id FROM payment_intent WHERE provider_ref = $1`, [orderId])).rows[0].id;
@@ -232,9 +235,12 @@ try {
   const s2 = await d('POST', '/v1/otp/send', { phone: phone2 });
   const sms = callsTo(/Messages\.json$/, t5)[0];
   const code2 = sms ? /(\d{6})/.exec(new URLSearchParams(sms.body).get('Body') ?? '')?.[1] : '';
+  // Since v1.5.1 a code works only on the device that asked for it: another device is refused, the asking one signs in.
   const dev2 = (await raw('/d/v1/device', '{}')).data.deviceToken as string;
-  const v2 = await fetch(`${API}/d/v1/otp/verify`, { method: 'POST', headers: { authorization: `Bearer ${dev2}`, 'content-type': 'application/json' }, body: JSON.stringify({ phone: phone2, code: code2 }) });
-  check('fallback: WhatsApp refuses → the code goes by SMS (Twilio) and still signs in', s2.status === 200 && callsTo(/\/messages$/, t5).length === 1 && !!sms && v2.status === 200, { s2: s2.data, sms: sms?.body });
+  const other = await fetch(`${API}/d/v1/otp/verify`, { method: 'POST', headers: { authorization: `Bearer ${dev2}`, 'content-type': 'application/json' }, body: JSON.stringify({ phone: phone2, code: code2 }) });
+  const v2 = await d('POST', '/v1/otp/verify', { phone: phone2, code: code2 });
+  check('fallback: WhatsApp refuses → the code goes by SMS (Twilio) and still signs in (on the device that asked; another device is refused)',
+    s2.status === 200 && callsTo(/\/messages$/, t5).length === 1 && !!sms && other.status !== 200 && v2.status === 200, { s2: s2.data, sms: sms?.body, other: other.status, v2: v2.status });
   behaviour.whatsappStatus = 200;
   const ev = await pa('GET', '/v1/integrations/otp/events?limit=20');
   cc('/v1/integrations/{kind}/events', 'get', '200', ev.data);

@@ -201,7 +201,7 @@ async function attempt(d: DueRow): Promise<void> {
   const to = d.kind === 'clientinfo' ? null : recipient;
   const r = await hubCall({
     conn: c, method: d.method, url, body: d.body ?? undefined, from, to, correlationId: d.correlation_id,
-    timeoutMs: config.hub.forwardTimeoutMs, route: d.kind, module: d.module,
+    timeoutMs: config.hub.forwardTimeoutMs, route: d.kind, module: d.module, secretUrl: d.kind === 'callback',
     capture: !!c.capture_bodies_until && new Date(c.capture_bodies_until) > new Date(),
   });
   if (r.ok) await noteAlive(c.id);

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { logger } from '../logger.js';
 import { registerDriverCors } from './cors.js';
-import { takeDevice } from './rate-limit.js';
+import { takeDevice, takeAnonymous } from './rate-limit.js';
 import { accountStillActive, withDriverLock } from './account-deletion.js';
 import { acquirerReturnUrl, appRedirect, appReturnSlug } from './app-return.js';
 import {
@@ -18,7 +18,7 @@ import {
   signOutDevice,
   type DriverPrincipal,
 } from './identity.js';
-import { listStations, connectorDetail, resolveCode, parseBbox, encodeCursor, decodeCursor } from './stations.js';
+import { listStations, priceStations, connectorDetail, resolveCode, parseBbox, encodeCursor, decodeCursor } from './stations.js';
 import { mapQuery, parseFilters, etagOf, bboxFitsZoom, maxSpanDeg, DEFAULT_LIMIT, MAX_LIMIT } from './map.js';
 import { appConfigFor, PLATFORMS, type Platform } from './app-config.js';
 import { resolveLink, parseLink, webFallback } from './links.js';
@@ -246,8 +246,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     };
   /** Per device token (driver/rate-limit.ts): true when this request was refused (429 sent). */
   const limitDevice = (req: FastifyRequest, reply: import('fastify').FastifyReply): boolean => {
-    if (!req.driver) return false;
-    const d = takeDevice(req.driver.deviceId);
+    const d = req.driver ? takeDevice(req.driver.deviceId) : takeAnonymous(req.ip ?? 'unknown');
     if (d.allowed) return false;
     void reply.header('Retry-After', d.retryAfterS).status(429).send({ error: 'Terlalu banyak permintaan. Coba lagi sebentar lagi.', code: 'rate_limited' });
     return true;
@@ -359,10 +358,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     const tag = `st:${q.bbox ?? ''}:${loc ? `${loc.lat},${loc.lon}` : ''}`;
     const offset = decodeCursor(q.cursor, tag);
     if (offset == null) return reply.status(400).send({ error: 'cursor tidak valid.', code: 'bad_cursor' });
-    const listed = await listStations(loc, brandOrg(req), { bbox });
+    // Priced per page (v1.9.0): pricing every station in the box on each page was the expensive part, as on /d/v1/map.
+    const listed = await listStations(loc, brandOrg(req), { bbox, prices: false });
     // Paged and near a point: stations without coordinates last (the full list keeps its v1.8 order).
     const all = loc ? [...listed.filter((s) => s.distanceKm != null), ...listed.filter((s) => s.distanceKm == null)] : listed;
     const page = all.slice(offset, offset + limit);
+    await priceStations(page);
     return { stations: page, total: all.length, nextCursor: offset + limit < all.length ? encodeCursor(offset + limit, tag) : null };
   });
 

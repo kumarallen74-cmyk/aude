@@ -463,6 +463,29 @@ dbDescribe('the hub surface, in-process', () => {
     assert.equal(again.body.status_code, 1000, 'its own id again');
   });
 
+  test('v1.9.0: addressed directly (OCPI-to), a session command or charging profile from an eMSP the session is not of is refused', async () => {
+    await learn('session', `D-${TAG}`, parties['xc:CPO']!, parties['xe:EMSP']!);
+    const stop = await call('xe2', 'POST', 'receiver/commands/STOP_SESSION', { from: XE2, to: XC, body: { session_id: `D-${TAG}`, response_url: 'https://xe2.example/cb' } });
+    assert.equal(stop.body?.status_code, 4001, JSON.stringify(stop.body));
+    assert.match(stop.body?.status_message ?? '', /not yours/);
+    const prof = await call('xe2', 'PUT', `receiver/chargingprofiles/D-${TAG}`, { from: XE2, to: XC, body: { charging_profile: {}, response_url: 'https://xe2.example/cb' } });
+    assert.match(prof.body?.status_message ?? '', /not yours/);
+    // The session's own eMSP is not stopped by this check (it goes on to the agreement and the CPO).
+    const own = await call('xe', 'POST', 'receiver/commands/STOP_SESSION', { from: XE, to: XC, body: { session_id: `D-${TAG}`, response_url: 'https://xe.example/cb' } });
+    assert.doesNotMatch(own.body?.status_message ?? '', /not yours/);
+  });
+
+  test('v1.9.0: an active member\'s fresh connection (token A) may register only parties it holds or a platform admin approved', async () => {
+    const xm = (await getMember(parties['xc:CPO']!.member_id))!;
+    const id = randomUUID();
+    const conn = (await one<HubConnection>(`INSERT INTO hub_connection (id, member_id, kind, state, token_in_hash, token_in) VALUES ($1,$2,'external','pending',$3,$4) RETURNING *`,
+      [id, xm.id, tokenHash('A2-' + id), seal('A2-' + id, `hub_connection:${id}:in`)]))!;
+    const grab = { token: 'B-grab', url: `${memberUrl}/m/versions`, roles: [{ role: 'CPO', country_code: 'MY', party_id: pid('Z'), business_details: { name: 'Not yet on the hub' } }] };
+    await assert.rejects(registerMember(conn, grab, false), (e: any) => /approval/.test(e.message));
+    assert.equal(await one(`SELECT 1 FROM hub_party WHERE country_code = 'MY' AND party_id = $1`, [pid('Z')]), null, 'nothing claimed');
+    await query(`DELETE FROM hub_connection WHERE id = $1`, [id]);
+  });
+
   test('review180: a CDR goes to the eMSP of its token — addressed to another eMSP it is refused, not forwarded', async () => {
     const cdr = (tok: { cc: string; pid: string } | null) => ({ country_code: XC.cc, party_id: XC.pid, id: `RV180-${TAG}-${tok?.pid ?? 'none'}`, currency: 'MYR',
       start_date_time: '2026-10-02T01:00:00Z', end_date_time: '2026-10-02T02:00:00Z', total_cost: { excl_vat: 1 }, total_energy: 1,

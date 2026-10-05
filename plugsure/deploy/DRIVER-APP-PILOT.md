@@ -198,12 +198,12 @@ intent for the org:
 # capture the most recent pending prepaid intent (one supervised payment at a time)
 psql "$DATABASE_URL" -c "
   UPDATE payment_intent
-     SET state='captured', amount_captured_idr=amount_authorised_idr,
+     SET state='captured', amount_captured_minor=amount_authorised_minor,
          captured_at=now(), updated_at=now()
    WHERE id = (SELECT id FROM payment_intent
                 WHERE state='pending' AND mode='prepurchase'
                 ORDER BY created_at DESC LIMIT 1)
-  RETURNING id, amount_authorised_idr;"
+  RETURNING id, amount_authorised_minor;"
 ```
 
 When a real QRIS acquirer is wired, its webhook does exactly this and the manual

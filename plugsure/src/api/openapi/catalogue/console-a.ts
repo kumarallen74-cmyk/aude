@@ -1974,9 +1974,10 @@ export const ops: Op[] = [
     summary: "Reset a user's two-step verification",
     description:
       'For a lost phone and recovery codes: removes the authenticator secret and every recovery code and ends every session of the user. ' +
-      'Where two-step verification is required (administrators) the user sets it up again at next sign-in. Not on yourself; within your own authority only. Audited.',
+      'Where two-step verification is required (administrators) the user sets it up again at next sign-in. Not on yourself; within your own authority only; ' +
+      'a signed-in administrator only (403 `console_user_required` for an API key, v1.9.0). Audited.',
     pathParams: { id: 'User id (UUID).' },
     responses: { 200: { description: 'Reset.', schema: OK } },
-    errors: [400, 404],
+    errors: [400, 403, 404],
   },
 ];

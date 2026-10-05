@@ -354,6 +354,207 @@ jobs:
           for f in "$RUNNER_TEMP"/logs/*.log; do echo "::group::$f"; tail -n 300 "$f" || true; echo "::endgroup::"; done
           for p in "$RUNNER_TEMP"/*.pid; do kill "$(cat "$p")" 2>/dev/null || true; done
 
+  e2e-pilot:
+    name: end-to-end (pilot configuration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    needs: verify
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: plugsure
+          POSTGRES_DB: plugsure
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plugsure"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Owner connection: migrations and seed only.
+      OWNER_DATABASE_URL: postgresql://postgres:plugsure@127.0.0.1:5432/plugsure
+      # The runtime role the migrator provisions from POSTGRES_APP_PASSWORD.
+      POSTGRES_APP_PASSWORD: ci-app-password
+      DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+      # development: bench security profile and auto-adoption are allowed, which
+      # the simulators rely on. Test-only secrets.
+      NODE_ENV: development
+      LOG_LEVEL: warn
+      TZ: Asia/Jakarta
+      AUDIT_HMAC_KEY: ci-audit-hmac-key-not-a-secret-0123456789abcdef
+      SECRETS_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      INTERNAL_API_TOKEN: ci-internal-token-0123456789abcdef0123456789
+      OCPP_VERSIONS: ocpp1.6,ocpp2.0.1,ocpp2.1
+      OCPP_PORT: "9220"
+      API_PORT: "9200"
+      PUBLIC_BASE_URL: http://127.0.0.1:9200
+      OCPP_TRUST_PROXY_PROTO: "true"
+      GATEWAY_INTERNAL_URL: http://127.0.0.1:9220
+      EVENT_RELAY: "true"
+      STORAGE_DIR: /tmp/plugsure-ci-storage
+      SEED_ADMIN_PASSWORD: Console-Test-2026!
+      # The suites
+      E2E_API: http://127.0.0.1:9200
+      E2E_OCPP: ws://127.0.0.1:9220/ocpp
+      E2E_DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+      E2E_PASSWORD: Console-Test-2026!
+      E2E_QUICK: "1"
+      # Apple's push service: the local stand-ins the apns and live-activity suites start (test-only, not production).
+      APNS_URL_PRODUCTION: http://127.0.0.1:9296
+      APNS_URL_DEVELOPMENT: http://127.0.0.1:9297
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: plugsure/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Migrate (owner) and provision plugsure_app
+        run: DATABASE_URL="$OWNER_DATABASE_URL" npm run migrate
+
+      - name: Seed (owner)
+        run: DATABASE_URL="$OWNER_DATABASE_URL" npm run seed
+
+      - name: Country-literal ratchet
+        run: npm run check:country-literals
+
+      - name: Start gateway and API as plugsure_app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$STORAGE_DIR" "$RUNNER_TEMP/logs"
+          nohup npx tsx src/apps/gateway.ts > "$RUNNER_TEMP/logs/gateway.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gateway.pid"
+          nohup npx tsx src/apps/api.ts > "$RUNNER_TEMP/logs/api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/api.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9220/healthz >/dev/null 2>&1 && curl -fsS http://127.0.0.1:9200/healthz >/dev/null 2>&1; then
+              echo "stack up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::stack did not come up"
+          tail -n 100 "$RUNNER_TEMP/logs/gateway.log" "$RUNNER_TEMP/logs/api.log"
+          exit 1
+
+      # v1.9.0: the configuration the pilot runs (MULTI_COUNTRY, HUB_ENABLED, Microsoft sign-in and the mobile
+      # backends off), with every suite that applies to it. The job above runs with every feature on; before
+      # v1.9.0 nothing ran the default-off path, and 18 of these suites were not run by CI at all.
+      - name: Build the TypeScript SDK (the sdk suite imports it)
+        run: npm run sdk
+      - name: e2e (pilot) — pilot-fixes
+        run: npm run e2e:pilot-fixes
+      - name: e2e (pilot) — isolation
+        run: npm run e2e:isolation
+      - name: e2e (pilot) — ocpi-auth
+        run: npm run e2e:ocpi-auth
+      - name: e2e (pilot) — console
+        run: npm run e2e:console
+      - name: e2e (pilot) — console-brand
+        run: npm run e2e:console-brand
+      - name: e2e (pilot) — field
+        run: npm run e2e:field
+      - name: e2e (pilot) — driver
+        run: npm run e2e:driver
+      - name: e2e (pilot) — driver-plus
+        run: npm run e2e:driver-plus
+      - name: e2e (pilot) — queue
+        run: npm run e2e:queue
+      - name: e2e (pilot) — reservation-fees
+        run: npm run e2e:reservation-fees
+      - name: e2e (pilot) — fleet-billing
+        run: npm run e2e:fleet-billing
+      - name: e2e (pilot) — pricing
+        run: npm run e2e:pricing
+      - name: e2e (pilot) — pnc
+        run: npm run e2e:pnc
+      - name: e2e (pilot) — onboarding
+        run: npm run e2e:onboarding
+      - name: e2e (pilot) — integrations
+        run: npm run e2e:integrations
+      - name: e2e (pilot) — payment-methods
+        run: npm run e2e:payment-methods
+      - name: e2e (pilot) — card-holds
+        run: npm run e2e:card-holds
+      - name: e2e (pilot) — linked-wallets
+        run: npm run e2e:linked-wallets
+      - name: e2e (pilot) — postpay
+        run: npm run e2e:postpay
+      - name: e2e (pilot) — ocpi
+        run: npm run e2e:ocpi
+      - name: e2e (pilot) — ocpi-emsp
+        run: npm run e2e:ocpi-emsp
+      - name: e2e (pilot) — ocpi-profiles
+        run: npm run e2e:ocpi-profiles
+      - name: e2e (pilot) — sdk
+        run: npm run e2e:sdk
+      - name: e2e (pilot) — v2x
+        run: npm run e2e:v2x
+      - name: e2e (pilot) — ocmf
+        run: npm run e2e:ocmf
+      - name: e2e (pilot) — sandbox-2x
+        run: npm run e2e:sandbox-2x
+      - name: e2e (pilot) — brand
+        run: npm run e2e:brand
+      - name: e2e (pilot) — apns
+        run: npm run e2e:apns
+      - name: e2e (pilot) — live-activity
+        run: npm run e2e:live-activity
+      - name: e2e (pilot) — api-sandbox
+        run: npm run e2e:api-sandbox
+
+      - name: Stack logs
+        if: always()
+        shell: bash
+        run: |
+          for f in "$RUNNER_TEMP"/logs/*.log; do echo "::group::$f"; tail -n 300 "$f" || true; echo "::endgroup::"; done
+          for p in "$RUNNER_TEMP"/*.pid; do kill "$(cat "$p")" 2>/dev/null || true; done
+
+  # ---------------------------------------------------------------------------
+  # The Expo app (mobile/): typecheck, lint, unit and screen tests, and a production
+  # JavaScript bundle for Android (catches a broken import the typecheck cannot see).
+  # v1.9.0: before, nothing in CI built or tested the app.
+  # ---------------------------------------------------------------------------
+  mobile:
+    name: mobile app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm run test:ci
+      - name: Android bundle (production JavaScript)
+        run: npx expo export --platform android --output-dir "$RUNNER_TEMP/mobile-export"
+        env:
+          CI: "1"
+
   # ---------------------------------------------------------------------------
   # Build the production image and smoke-test BOTH roles out of it: the compiled
   # migrator against a real Postgres, then the API serving /healthz and the

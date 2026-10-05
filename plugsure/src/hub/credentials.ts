@@ -116,6 +116,18 @@ export async function registerMember(conn: HubConnection, body: any, update: boo
   const roles = parseMemberRoles(body?.roles);
   const problem = await partiesProblem(member.id, member.org_id, roles);
   if (problem) throw new HubError(400, 2001, problem);
+  if (!update && member.status === 'active') {
+    // v1.9.0: an ACTIVE member's new connection (token A, e.g. to reconnect after DELETE) registers only parties the
+    // member already holds or a platform admin approved. Its parties go CONNECTED at once (upsertParties), so without
+    // this a fresh token A let it claim any unclaimed party id (a competitor not yet on the hub) and route under it.
+    // A member still onboarding is unaffected: its parties stay PLANNED until a platform admin activates it.
+    const held = new Set((await query<{ role: string; country_code: string; party_id: string }>(
+      `SELECT role, country_code, party_id FROM hub_party WHERE member_id = $1`, [member.id])).rows.map((p) => `${p.role}:${p.country_code}*${p.party_id}`));
+    const extra = roles.filter((r) => !held.has(`${r.role}:${r.country_code}*${r.party_id}`));
+    if (extra.length) {
+      throw new HubError(400, 2001, `new parties need a platform admin's approval first: ${extra.map((r) => `${r.country_code}*${r.party_id} (${r.role})`).join(', ')}`);
+    }
+  }
   if (update) {
     // The registered parties and those a platform admin approved since (PLANNED rows of this connection).
     const allowed = new Set((await partiesOfConnection(conn.id)).map((p) => `${p.role}:${p.country_code}*${p.party_id}`));

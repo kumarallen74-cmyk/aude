@@ -251,7 +251,7 @@ try {
   const abroad = meCountries.some((c) => c.country_code !== 'ID');
   const csvHead = csv.text.split(/\r?\n/)[0] ?? '';
   check('sessions: CSV export', csv.status === 200 && csv.text.includes(sessId)
-    && (abroad ? csvHead.endsWith('gross_total_minor,currency') : csvHead.endsWith(',gross_total_idr')), { status: csv.status, abroad, csvHead });
+    && (abroad ? csvHead.endsWith('gross_total_minor,currency') : csvHead.endsWith(',gross_total_idr')), { status: csv.status, abroad, csvHead }); // legacy v1.5 header for an Indonesia-only operator
 
   // ---------------------------------------------------------------- 5 · tariffs
   const illegal = await ops.post('/v1/tariffs', { name: 'Illegal peak', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'tou', appliesToMaxPowerW: 60000,

@@ -3,6 +3,7 @@
 --   systemctl stop plugsure-api plugsure-gateway
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f db/rollback/060_down.sql
 --   redeploy v1.7.0-rc1 (or v1.6), start gateway then API
+-- From v1.9.0 back to v1.5.0, use the whole chain in deploy/README.md §7 (075…072 downs first, then this file).
 --
 -- Refuses to run while any row is in a currency other than IDR: such a row has no
 -- meaning in a *_idr column (it would be read as rupiah).
@@ -30,6 +31,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM ocpi_party GROUP BY org_id HAVING count(*) > 1) THEN
     RAISE EXCEPTION '060_down: an organisation has more than one OCPI party; remove the non-home parties first';
   END IF;
+  -- v1.9.0: member_rate goes back to two decimals below; a rate entered with more would be rounded silently.
+  SELECT count(*) INTO n FROM subscription_plan WHERE member_rate IS NOT NULL AND member_rate <> round(member_rate, 2);
+  IF n > 0 THEN RAISE EXCEPTION '060_down: subscription_plan has % member rate(s) with more than 2 decimals; v1.6 would round them', n; END IF;
 END $$;
 
 DROP INDEX IF EXISTS ocpi_party_home_uq;
@@ -39,6 +43,12 @@ ALTER TABLE ocpi_party ADD PRIMARY KEY (org_id);
 DROP INDEX IF EXISTS commission_statement_period_uq;
 CREATE UNIQUE INDEX commission_statement_period_uq
   ON commission_statement (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), period);
+
+-- v1.9.0: 063 replaced the commercial plan's version key with one that includes the currency. v1.5/v1.6 save a plan
+-- with ON CONFLICT on the old key, so without it every plan save fails ("no unique or exclusion constraint").
+-- Every row is IDR (guarded above), so the old key admits exactly the rows the new one does.
+CREATE UNIQUE INDEX IF NOT EXISTS commercial_plan_version_uq
+  ON commercial_plan (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), effective_from);
 
 DROP INDEX IF EXISTS integration_scope_kind_country_live_uq;
 CREATE UNIQUE INDEX integration_scope_kind_live_uq
