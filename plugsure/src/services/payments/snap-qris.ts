@@ -115,7 +115,7 @@ export class SnapQrisProvider implements PaymentProvider {
     const partnerReferenceNo = this.orderRef(a.referenceId);
     const body = JSON.stringify({
       partnerReferenceNo,
-      amount: { value: a.amountIdr.toFixed(2), currency: 'IDR' },
+      amount: { value: a.amountMinor.toFixed(2), currency: 'IDR' },
       merchantId: this.cfg.merchantId,
       ...(this.cfg.terminalId ? { terminalId: this.cfg.terminalId } : {}),
       validityPeriod: jakartaIso(Date.now() + validForS * 1000),
@@ -133,7 +133,7 @@ export class SnapQrisProvider implements PaymentProvider {
     if (r.status >= 300 || !j.qrContent || !String(j.responseCode ?? '').endsWith('00')) {
       throw new Error(`SNAP generate QR failed: ${r.status} ${j.responseCode ?? ''} ${j.responseMessage ?? ''}`.trim());
     }
-    return { providerRef: partnerReferenceNo, qrString: j.qrContent, amountIdr: a.amountIdr, expiresAt: new Date(Date.now() + validForS * 1000).toISOString(), status: 'pending' };
+    return { providerRef: partnerReferenceNo, qrString: j.qrContent, amountMinor: a.amountMinor, expiresAt: new Date(Date.now() + validForS * 1000).toISOString(), status: 'pending' };
   }
 
   /**
@@ -166,7 +166,7 @@ export class SnapQrisProvider implements PaymentProvider {
     // Rupiah only: an amount in another currency is not the payment PlugSure asked for.
     if (j.amount != null && String(j.amount.currency ?? '') !== 'IDR') return null;
     const st = String(j.latestTransactionStatus ?? j.transactionStatusDesc ?? '');
-    return { providerRef: String(ref), paid: st === '00', status: st, amountIdr: j.amount?.value != null ? Math.round(Number(j.amount.value)) : null, paymentId: j.originalReferenceNo ? String(j.originalReferenceNo) : undefined };
+    return { providerRef: String(ref), paid: st === '00', status: st, amountMinor: j.amount?.value != null ? Math.round(Number(j.amount.value)) : null, paymentId: j.originalReferenceNo ? String(j.originalReferenceNo) : undefined };
   }
 
   verifyWebhook(rawBody: string, headers: Record<string, string | string[] | undefined>): boolean {

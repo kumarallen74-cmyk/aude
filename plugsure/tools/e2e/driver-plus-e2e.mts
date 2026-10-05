@@ -169,7 +169,7 @@ try {
   check('setup: operator signs in to the console', login.status === 200, login.data);
   const site = await ops('POST', '/v1/sites', {
     name: 'Driver+ E2E Hub — Senayan', address: 'Jl. Asia Afrika', kabupatenKotaCode: '3171', lat: '-6.2183', lon: '106.8023',
-    gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000',
+    gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000',
   });
   const siteId = site.data.id as string;
   const ID = `DRVP-E2E-${Date.now().toString().slice(-6)}`;
@@ -279,7 +279,7 @@ try {
   const detO = await until(() => other.get(`/v1/connectors/${conn1}`), (r) => r.data.status === 'Reserved', 5_000);
   check('reserve: holder sees "reserved for you" and can charge; others see Reserved, blocked',
     detA.data.reservedForYou?.id === r1.data.reservation.id && detA.data.available === true && detO.data.status === 'Reserved' && detO.data.available === false, { a: detA.data, o: { s: detO.data.status, av: detO.data.available, why: detO.data.blockedReason } });
-  const steal = await other.post('/v1/charge/prepaid', { connectorId: conn1, amountIdr: 50000 });
+  const steal = await other.post('/v1/charge/prepaid', { connectorId: conn1, amountMinor: 50000 });
   check('reserve: another driver cannot pay for the reserved connector (422)', steal.status === 422 && /dipesan/.test(steal.data.error), steal.data);
   const two = await a.post('/v1/reservations', { connectorId: conn2 });
   check('reserve: one live reservation per driver', two.status === 422 && /sudah punya reservasi/.test(two.data.error), two.data);
@@ -331,7 +331,7 @@ try {
   const r2 = await a.post('/v1/reservations', { connectorId: conn1 });
   const rn2 = await cp.waitNew('ReserveNow', mark);
   await cp.status(1, 'Reserved');
-  const co = await a.post('/v1/charge/prepaid', { connectorId: conn1, amountIdr: 50000 });
+  const co = await a.post('/v1/charge/prepaid', { connectorId: conn1, amountMinor: 50000 });
   check('reserved charge: the holder pays; the claim token IS the idTag the charger holds',
     r2.status === 200 && co.status === 200 && co.data.startToken === rn2?.payload?.idTag, { r2: r2.data, co: co.data?.startToken, held: rn2?.payload?.idTag });
   await a.post(`/v1/charge/${co.data.chargeId}/confirm-payment`);

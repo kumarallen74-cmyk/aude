@@ -5,8 +5,10 @@ import { config, isRelaxedEnv } from '../config.js';
 import { bus } from '../services/events.js';
 import { unseal } from '../services/secrets.js';
 import { ocpiDateTime, STATUS, type Party } from './mapping.js';
-import { getParty, endpointUrl, partnerActsFor, type PartnerRow } from './store.js';
+import { getParty, endpointUrl, partnerActsFor, isActing, type ActingParty, type PartnerRow } from './store.js';
 import { ocpiCall } from './client.js';
+import { COUNTRIES, isCountry, currencyOfCountry, cdrMaxPricePerKwh } from '../domain/country.js';
+import { isCurrency as isCurrencyCode, toMinor, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
 
 /**
  * PlugSure as the e-mobility service provider (eMSP): the operator's own cards
@@ -36,10 +38,13 @@ export interface CardRow {
   holder_name: string | null;
   fleet_name: string | null;
   energy_limit_wh: number | null;
-  spend_limit_idr: number | null;
+  spend_limit_minor: number | null;
+  spend_limit_currency?: string | null;
   roaming_shared: boolean;
   contract_id: string | null;
   updated_at: Date;
+  /** 'rfid' (a fleet / company card) or 'app' (the virtual token of a signed-in app driver, OCPI APP_USER). */
+  kind?: string;
 }
 
 /** eMAID-style contract id: ID-PLS-C1A2B3C4D (country, provider, instance). */
@@ -55,14 +60,15 @@ export function contractIdFor(party: Pick<Party, 'country_code' | 'party_id'>, t
  */
 export function cardToken(party: Party, c: CardRow) {
   const expired = !!c.valid_to && new Date(c.valid_to) < new Date();
-  const limited = c.energy_limit_wh != null || c.spend_limit_idr != null;
+  const limited = c.energy_limit_wh != null || c.spend_limit_minor != null;
+  const app = c.kind === 'app';
   return {
     country_code: party.country_code,
     party_id: party.party_id,
     uid: c.uid,
-    type: 'RFID',
+    type: app ? 'APP_USER' : 'RFID',
     contract_id: c.contract_id ?? '',
-    visual_number: c.uid,
+    ...(app ? {} : { visual_number: c.uid }),
     issuer: party.business_name,
     ...(c.fleet_name ? { group_id: c.fleet_name.replace(/[^A-Za-z0-9-]/g, '').slice(0, 36) || undefined } : {}),
     valid: c.roaming_shared && c.status === 'Accepted' && !expired,
@@ -72,8 +78,8 @@ export function cardToken(party: Party, c: CardRow) {
   };
 }
 
-const CARD_COLS = `id, org_id, uid, status, valid_to, holder_name, fleet_name, energy_limit_wh, spend_limit_idr,
-                   roaming_shared, contract_id, updated_at`;
+const CARD_COLS = `id, org_id, uid, status, valid_to, holder_name, fleet_name, energy_limit_wh, spend_limit_minor, spend_limit_currency,
+                   roaming_shared, contract_id, updated_at, kind`;
 
 /** Cards CPOs should know about: shared now, or shared before (sent as valid=false). */
 export async function roamingCards(orgId: string, opts: { onlyShared?: boolean } = {}) {
@@ -109,24 +115,58 @@ export async function setShared(orgId: string, tokenIds: string[] | 'all-active'
  * Energy and money a card has used, at our chargers and on roaming networks.
  * Only accepted partner charge records count: one held for review (or rejected)
  * cannot push a card over its limit, or the card could be blocked by any partner.
+ *
+ * Money is counted in ONE currency (docs/MULTI-COUNTRY-DESIGN.md §D7): our CDRs by
+ * cdr.currency, partner CDRs by their currency, converted from the partner's
+ * major units to PlugSure minor units. Amounts in other currencies are never added
+ * (no FX); energy counts everywhere.
  */
-export async function cardUsage(tokenId: string): Promise<{ wh: number; idr: number }> {
-  const u = await one<{ wh: string; idr: string }>(
+export async function cardUsage(tokenId: string, currency: string = LEGACY_CURRENCY): Promise<{ wh: number; minor: number; currency: string }> {
+  const u = await one<{ wh: string; minor: string }>(
     `SELECT (COALESCE((SELECT sum(cs.energy_wh) FROM charging_session cs WHERE cs.token_id = $1), 0)
            + COALESCE((SELECT sum(r.total_energy * 1000) FROM ocpi_remote_cdr r WHERE r.token_id = $1 AND r.status = 'accepted'), 0))::bigint AS wh,
-            (COALESCE((SELECT sum(d.total_idr) FROM charging_session cs JOIN cdr d ON d.session_id = cs.id WHERE cs.token_id = $1), 0)
-           + COALESCE((SELECT sum(COALESCE(r.total_incl_vat, r.total_excl_vat)) FROM ocpi_remote_cdr r
-                        WHERE r.token_id = $1 AND r.currency = 'IDR' AND r.status = 'accepted'), 0))::bigint AS idr`,
-    [tokenId],
+            (COALESCE((SELECT sum(d.total_minor) FROM charging_session cs JOIN cdr d ON d.session_id = cs.id WHERE cs.token_id = $1 AND d.currency = $2), 0)
+           + COALESCE((SELECT sum(COALESCE(r.total_incl_vat, r.total_excl_vat) * power(10, cu.exponent)) FROM ocpi_remote_cdr r
+                         JOIN currency_unit cu ON cu.code = r.currency
+                        WHERE r.token_id = $1 AND r.currency = $2 AND r.status = 'accepted'), 0))::bigint AS minor`,
+    [tokenId, currency],
   );
-  return { wh: Number(u?.wh ?? 0), idr: Number(u?.idr ?? 0) };
+  return { wh: Number(u?.wh ?? 0), minor: Number(u?.minor ?? 0), currency };
 }
 
-/** Is a card over its operator-set energy or spending limit? */
-export async function overLimit(c: Pick<CardRow, 'id' | 'energy_limit_wh' | 'spend_limit_idr'>): Promise<boolean> {
-  if (c.energy_limit_wh == null && c.spend_limit_idr == null) return false;
-  const u = await cardUsage(c.id);
-  return (c.energy_limit_wh != null && u.wh >= Number(c.energy_limit_wh)) || (c.spend_limit_idr != null && u.idr >= Number(c.spend_limit_idr));
+export type LimitCard = Pick<CardRow, 'id' | 'energy_limit_wh' | 'spend_limit_minor'> & { spend_limit_currency?: string | null };
+
+/**
+ * Why a card may not charge in `currency` (null = it may): over its energy limit,
+ * over its spending limit, or — fail closed — a spending limit in another currency
+ * (a limit in rupiah says nothing about ringgit). `currency` null = unknown: a card
+ * with a spending limit is refused, one without may charge.
+ */
+export async function limitProblem(c: LimitCard, currency: string | null): Promise<'energy' | 'spend' | 'currency' | null> {
+  if (c.energy_limit_wh == null && c.spend_limit_minor == null) return null;
+  const limitCur = c.spend_limit_currency ?? LEGACY_CURRENCY;
+  if (c.spend_limit_minor != null && currency !== limitCur) return 'currency';
+  const u = await cardUsage(c.id, limitCur);
+  if (c.energy_limit_wh != null && u.wh >= Number(c.energy_limit_wh)) return 'energy';
+  if (c.spend_limit_minor != null && u.minor >= Number(c.spend_limit_minor)) return 'spend';
+  return null;
+}
+
+/** Is a card over its operator-set energy or spending limit (in `currency`, default its limit's own)? */
+export async function overLimit(c: LimitCard, currency?: string | null): Promise<boolean> {
+  return (await limitProblem(c, currency === undefined ? c.spend_limit_currency ?? LEGACY_CURRENCY : currency)) != null;
+}
+
+/**
+ * The currency a partner location charges in: its country (OCPI alpha-3) → our
+ * country table; else the party's country. null when it is not one we support.
+ */
+export function locationCurrency(loc: { country?: unknown } | null | undefined, partyCountry: string | null | undefined): CurrencyCode | null {
+  const a3 = typeof loc?.country === 'string' ? loc.country.toUpperCase() : null;
+  const byA3 = a3 ? Object.values(COUNTRIES).find((c) => c.alpha3 === a3) : undefined;
+  if (byA3) return byA3.currency;
+  if (a3) return null;
+  return isCountry(partyCountry) ? currencyOfCountry(partyCountry) : null;
 }
 
 /**
@@ -134,17 +174,35 @@ export async function overLimit(c: Pick<CardRow, 'id' | 'energy_limit_wh' | 'spe
  * Returns null for a card we do not share (the caller answers 2004).
  */
 export async function authorizeForCpo(partner: PartnerRow, party: Party, uid: string, type: string, body: any) {
-  if (type !== 'RFID') return null;
-  const c = await one<CardRow>(`SELECT ${CARD_COLS} FROM token WHERE org_id = $1 AND kind = 'rfid' AND uid = $2 AND contract_id IS NOT NULL`, [partner.org_id, uid]);
+  if (type !== 'RFID' && type !== 'APP_USER') return null;
+  const kind = type === 'RFID' ? 'rfid' : 'app';
+  const c = await one<CardRow>(`SELECT ${CARD_COLS} FROM token WHERE org_id = $1 AND kind = $3 AND uid = $2 AND contract_id IS NOT NULL`, [partner.org_id, uid, kind]);
   if (!c) return null;
   const token = cardToken(party, c);
+  // The currency of the charge: the location's country (when the CPO names it), else the partner's.
+  const locId = typeof body?.location_id === 'string' ? body.location_id : null;
+  const loc = locId
+    ? await one<{ data: any; country_code: string }>(`SELECT data, country_code FROM ocpi_remote_location WHERE partner_id = $1 AND location_id = $2 LIMIT 1`, [partner.id, locId])
+    : null;
+  const currency = locationCurrency(loc?.data, loc?.country_code ?? partner.country_code);
   let allowed: 'ALLOWED' | 'BLOCKED' | 'EXPIRED' | 'NO_CREDIT' | 'NOT_ALLOWED' = 'ALLOWED';
+  let why: string | null = null;
   if (!c.roaming_shared) allowed = 'NOT_ALLOWED';
   else if (c.status === 'Blocked') allowed = 'BLOCKED';
   else if (c.status === 'Expired' || (c.valid_to && new Date(c.valid_to) < new Date())) allowed = 'EXPIRED';
   else if (c.status !== 'Accepted') allowed = 'BLOCKED';
-  else if (await overLimit(c)) allowed = 'NO_CREDIT';
-  logger.info({ partner: partner.name, uid, allowed }, 'roaming card checked by a CPO');
+  else if (kind === 'app' && !(await openRoamingHold(c.id, currency, partner.id, locId))) {
+    // An app driver's charge is guaranteed by a card hold placed before START_SESSION; without one, nothing pays.
+    allowed = 'NO_CREDIT';
+    why = 'no open payment guarantee for this driver';
+  } else {
+    const lp = await limitProblem(c, currency);
+    if (lp) {
+      allowed = lp === 'currency' ? 'NOT_ALLOWED' : 'NO_CREDIT';
+      why = lp === 'currency' ? `the card's spending limit is in ${c.spend_limit_currency ?? LEGACY_CURRENCY}, this charge would be in ${currency ?? 'an unsupported currency'}` : null;
+    }
+  }
+  logger.info({ partner: partner.name, uid, allowed, currency, why }, 'roaming card checked by a CPO');
   // Remember the reference we gave: a charge record quoting it is one we approved.
   const ref = allowed === 'ALLOWED' ? randomUUID().replace(/-/g, '').slice(0, 20) : null;
   if (ref) {
@@ -158,8 +216,24 @@ export async function authorizeForCpo(partner: PartnerRow, party: Party, uid: st
     token,
     ...(ref ? { authorization_reference: ref } : {}),
     ...(body?.location_id ? { location: body } : {}),
-    ...(allowed !== 'ALLOWED' ? { info: { language: 'en', text: `Card ${allowed.toLowerCase().replace('_', ' ')}` } } : {}),
+    ...(allowed !== 'ALLOWED' ? { info: { language: 'en', text: why ? `Card ${allowed.toLowerCase().replace('_', ' ')}: ${why}` : `Card ${allowed.toLowerCase().replace('_', ' ')}` } } : {}),
   };
+}
+
+/**
+ * An authorised, not yet settled roaming hold for this app token, opened for THIS partner and THIS location
+ * (review fix 9: a hold placed for one partner's charger never guarantees a charge elsewhere), not yet tied to a
+ * partner session of its own, in `currency` when known. A CPO that names no location gets an answer only for a hold
+ * opened with that CPO.
+ */
+export async function openRoamingHold(tokenId: string, currency: string | null, partnerId: string, locationId: string | null): Promise<boolean> {
+  return !!(await one(
+    `SELECT 1 FROM driver_roaming_charge rc JOIN payment_intent pi ON pi.id = rc.payment_intent_id
+      WHERE rc.token_id = $1 AND rc.settled_at IS NULL AND pi.hold_state = 'held'
+        AND rc.partner_id = $3 AND ($4::text IS NULL OR rc.location_id = $4) AND rc.remote_session_id IS NULL
+        AND ($2::text IS NULL OR pi.currency = $2) LIMIT 1`,
+    [tokenId, currency, partnerId, locationId],
+  ));
 }
 
 // ─────────────────────────────────────────────── what CPOs send us
@@ -168,9 +242,15 @@ export class EmspError extends Error {
   constructor(public http: number, public ocpi: number, message: string) { super(message); }
 }
 
-/** What a CPO publishes (locations, tariffs, sessions, CDRs) only comes from that CPO, or a hub relaying for it. */
-async function mustActFor(partner: PartnerRow, cc: string, pid: string) {
-  if (!(await partnerActsFor(partner, cc, pid, 'CPO'))) throw new EmspError(403, STATUS.CLIENT_ERROR, `this connection may not publish for ${cc}*${pid}`);
+/**
+ * What a CPO publishes (locations, tariffs, sessions, CDRs) only comes from that CPO, or a hub relaying for it
+ * — and through a hub only from that CPO itself (`acting`, its OCPI-from): one CPO behind a hub never writes
+ * under another's party (v1.7.1, WP H0).
+ */
+async function mustActFor(partner: PartnerRow, cc: string, pid: string, acting: ActingParty | null = null) {
+  if (!isActing(acting, cc, pid) || !(await partnerActsFor(partner, cc, pid, 'CPO'))) {
+    throw new EmspError(403, STATUS.CLIENT_ERROR, `this connection may not publish for ${cc}*${pid}`);
+  }
 }
 
 function lastUpdatedOf(b: any): Date {
@@ -182,8 +262,8 @@ function lastUpdatedOf(b: any): Date {
 const merge = (base: any, patch: any) => ({ ...base, ...patch });
 
 /** PUT or PATCH of a location, an EVSE or a connector (OCPI Locations receiver). */
-export async function receiveLocation(partner: PartnerRow, method: 'PUT' | 'PATCH', p: { cc: string; pid: string; loc: string; evse?: string; conn?: string }, body: any) {
-  await mustActFor(partner, p.cc, p.pid);
+export async function receiveLocation(partner: PartnerRow, method: 'PUT' | 'PATCH', p: { cc: string; pid: string; loc: string; evse?: string; conn?: string }, body: any, acting: ActingParty | null = null) {
+  await mustActFor(partner, p.cc, p.pid, acting);
   if (!body || typeof body !== 'object') throw new EmspError(400, STATUS.INVALID_PARAMS, 'a JSON body is required');
   const lu = lastUpdatedOf(body);
   const cur = await one<{ data: any }>(
@@ -224,9 +304,16 @@ export async function receiveLocation(partner: PartnerRow, method: 'PUT' | 'PATC
        SET data = EXCLUDED.data, last_updated = EXCLUDED.last_updated, received_at = now()`,
     [partner.org_id, partner.id, p.cc, p.pid, p.loc, JSON.stringify(data), lu],
   );
+  forgetPartners(partner.org_id);
 }
 
-export async function getRemoteLocation(partner: PartnerRow, cc: string, pid: string, loc: string) {
+/** Drop the driver map's in-memory copy of an organisation's partner locations (driver/roaming.ts registers it). */
+let partnerInvalidator: ((orgId: string) => void) | null = null;
+export function onPartnerDataChanged(fn: (orgId: string) => void): void { partnerInvalidator = fn; }
+const forgetPartners = (orgId: string) => { try { partnerInvalidator?.(orgId); } catch { /* best effort: the version check covers it */ } };
+
+export async function getRemoteLocation(partner: PartnerRow, cc: string, pid: string, loc: string, acting: ActingParty | null = null) {
+  if (!isActing(acting, cc, pid)) return null;
   const r = await one<{ data: any }>(
     `SELECT data FROM ocpi_remote_location WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND location_id = $4`,
     [partner.id, cc, pid, loc],
@@ -234,10 +321,11 @@ export async function getRemoteLocation(partner: PartnerRow, cc: string, pid: st
   return r?.data ?? null;
 }
 
-export async function receiveTariff(partner: PartnerRow, method: 'PUT' | 'DELETE', p: { cc: string; pid: string; id: string }, body: any) {
-  await mustActFor(partner, p.cc, p.pid);
+export async function receiveTariff(partner: PartnerRow, method: 'PUT' | 'DELETE', p: { cc: string; pid: string; id: string }, body: any, acting: ActingParty | null = null) {
+  await mustActFor(partner, p.cc, p.pid, acting);
   if (method === 'DELETE') {
     await query(`DELETE FROM ocpi_remote_tariff WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND tariff_id = $4`, [partner.id, p.cc, p.pid, p.id]);
+    forgetPartners(partner.org_id);
     return;
   }
   const lu = lastUpdatedOf(body);
@@ -249,9 +337,11 @@ export async function receiveTariff(partner: PartnerRow, method: 'PUT' | 'DELETE
        SET data = EXCLUDED.data, last_updated = EXCLUDED.last_updated, received_at = now()`,
     [partner.org_id, partner.id, p.cc, p.pid, p.id, JSON.stringify({ ...body, id: p.id }), lu],
   );
+  forgetPartners(partner.org_id);
 }
 
-export async function getRemoteTariff(partner: PartnerRow, cc: string, pid: string, id: string) {
+export async function getRemoteTariff(partner: PartnerRow, cc: string, pid: string, id: string, acting: ActingParty | null = null) {
+  if (!isActing(acting, cc, pid)) return null;
   const r = await one<{ data: any }>(`SELECT data FROM ocpi_remote_tariff WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND tariff_id = $4`, [partner.id, cc, pid, id]);
   return r?.data ?? null;
 }
@@ -261,13 +351,16 @@ async function ourCard(orgId: string, party: Party, t: any): Promise<string> {
   if (!t || t.country_code !== party.country_code || t.party_id !== party.party_id) {
     throw new EmspError(400, STATUS.UNKNOWN_TOKEN, `cdr_token is not a token of ${party.country_code}*${party.party_id}`);
   }
-  const c = await one<{ id: string }>(`SELECT id FROM token WHERE org_id = $1 AND kind = 'rfid' AND uid = $2 AND contract_id IS NOT NULL`, [orgId, t.uid]);
+  const c = await one<{ id: string }>(
+    `SELECT id FROM token WHERE org_id = $1 AND kind = $3 AND uid = $2 AND contract_id IS NOT NULL`,
+    [orgId, t.uid, t.type === 'APP_USER' ? 'app' : 'rfid'],
+  );
   if (!c) throw new EmspError(404, STATUS.UNKNOWN_TOKEN, `unknown token ${t.uid}`);
   return c.id;
 }
 
-export async function receiveSession(partner: PartnerRow, party: Party, method: 'PUT' | 'PATCH', p: { cc: string; pid: string; id: string }, body: any) {
-  await mustActFor(partner, p.cc, p.pid);
+export async function receiveSession(partner: PartnerRow, party: Party, method: 'PUT' | 'PATCH', p: { cc: string; pid: string; id: string }, body: any, acting: ActingParty | null = null) {
+  await mustActFor(partner, p.cc, p.pid, acting);
   const lu = lastUpdatedOf(body);
   const cur = await one<{ data: any; token_id: string | null }>(
     `SELECT data, token_id FROM ocpi_remote_session WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND session_id = $4`,
@@ -293,7 +386,8 @@ export async function receiveSession(partner: PartnerRow, party: Party, method: 
   );
 }
 
-export async function getRemoteSession(partner: PartnerRow, cc: string, pid: string, id: string) {
+export async function getRemoteSession(partner: PartnerRow, cc: string, pid: string, id: string, acting: ActingParty | null = null) {
+  if (!isActing(acting, cc, pid)) return null;
   const r = await one<{ data: any }>(`SELECT data FROM ocpi_remote_session WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND session_id = $4`, [partner.id, cc, pid, id]);
   return r?.data ?? null;
 }
@@ -305,23 +399,24 @@ export async function getRemoteSession(partner: PartnerRow, cc: string, pid: str
  *
  *   CDR_MAX_KWH            500 kWh: more than any car or bus battery takes in one
  *                          session (the largest truck packs are around 500 kWh).
- *   CDR_MAX_PRICE_PER_KWH  per currency, a ceiling on total cost per kWh charged
- *                          (at least one kWh is assumed, so a session or parking
- *                          fee on a near-empty charge fits): IDR 25,000/kWh is
- *                          about five times the dearest public DC price in
- *                          Indonesia (2026). Other currencies are never put on a
- *                          fleet invoice or counted against a limit (both are
- *                          IDR only), so only the energy limit applies to them.
+ *   price per kWh          per currency (domain/country.ts cdrMaxPricePerKwhMajor),
+ *                          a ceiling on total cost per kWh charged (at least one
+ *                          kWh is assumed, so a session or parking fee on a
+ *                          near-empty charge fits): IDR 25,000, MYR 10.00, SGD 5.00
+ *                          — about five times the dearest public DC price in each
+ *                          country (2026). A currency PlugSure does not support is
+ *                          HELD (fail closed): it could never be checked, billed or
+ *                          counted against a limit.
  */
 export const CDR_MAX_KWH = 500;
-export const CDR_MAX_PRICE_PER_KWH: Record<string, number> = { IDR: 25_000 };
 
 /** Why a charge record's totals look wrong (it is then held), or null. */
 export function cdrPlausibilityProblem(c: { currency: string; excl: number; incl: number | null; energyKwh: number; start: Date; end: Date }): string | null {
   if (c.energyKwh > CDR_MAX_KWH) return `total_energy ${c.energyKwh} kWh is above the ${CDR_MAX_KWH} kWh plausibility limit`;
-  const cap = CDR_MAX_PRICE_PER_KWH[c.currency];
+  const cap = cdrMaxPricePerKwh(c.currency);
+  if (cap == null) return `unsupported currency ${JSON.stringify(String(c.currency).slice(0, 8))}: it cannot be checked or billed`;
   const total = c.incl ?? c.excl;
-  if (cap != null && total > cap * Math.max(c.energyKwh, 1)) {
+  if (total > cap * Math.max(c.energyKwh, 1)) {
     return `total cost ${total} ${c.currency} for ${c.energyKwh} kWh is above ${cap} ${c.currency}/kWh`;
   }
   if (c.incl != null && c.incl < c.excl) return 'total_cost incl_vat is less than excl_vat';
@@ -367,12 +462,12 @@ async function cdrLinkProblem(partner: PartnerRow, cc: string, pid: string, toke
  * plausibility limits, is stored but HELD: it stays off fleet invoices and card
  * limits until an operator accepts it (Roaming → held charge records).
  */
-export async function receiveCdr(partner: PartnerRow, party: Party, b: any): Promise<string> {
+export async function receiveCdr(partner: PartnerRow, party: Party, b: any, acting: ActingParty | null = null): Promise<string> {
   const cc = String(b?.country_code ?? '');
   const pid = String(b?.party_id ?? '');
   const id = typeof b?.id === 'string' && b.id ? b.id.slice(0, 39) : '';
   if (!id || !cc || !pid) throw new EmspError(400, STATUS.INVALID_PARAMS, 'id, country_code and party_id are required');
-  await mustActFor(partner, cc, pid);
+  await mustActFor(partner, cc, pid, acting);
   const excl = Number(b?.total_cost?.excl_vat);
   const energy = Number(b?.total_energy);
   const start = new Date(b?.start_date_time);
@@ -419,22 +514,45 @@ export async function receiveCdr(partner: PartnerRow, party: Party, b: any): Pro
     return row!.id;
   }
   logger.info({ partner: partner.name, cdr: id, excl, energy }, 'roaming CDR received for one of our cards');
-  // Tell the driver's phone(s) the receipt is ready. Never fails the CPO's request.
-  notifyCdr(tokenId, row!.id, typeof b?.cdr_location?.name === 'string' ? b.cdr_location.name : partner.name, b.currency, incl ?? excl);
+  await cdrAccepted(row!.id);
   return row!.id;
 }
 
-/** The driver's receipt push for an accepted charge record (also after an operator accepts a held one). */
+/**
+ * An accepted charge record (on receipt, or when an operator accepts a held one):
+ * settle an app driver's roaming hold, and tell the driver's phone(s) the receipt
+ * is ready. Never fails the CPO's request.
+ */
+export async function cdrAccepted(cdrRowId: string): Promise<void> {
+  const r = await one<{ id: string; token_id: string | null; currency: string; total_excl_vat: string; total_incl_vat: string | null; data: any; partner_name: string }>(
+    `SELECT r.id, r.token_id, r.currency, r.total_excl_vat, r.total_incl_vat, r.data, p.name AS partner_name
+       FROM ocpi_remote_cdr r JOIN ocpi_partner p ON p.id = r.partner_id WHERE r.id = $1 AND r.status = 'accepted'`, [cdrRowId]);
+  if (!r) return;
+  try {
+    const { settleRoamingHold } = await import('../driver/roaming-pay.js');
+    await settleRoamingHold(r.id);
+  } catch (e) {
+    logger.error({ cdr: r.id, err: (e as Error).message }, 'roaming hold settlement failed (the sweep retries)');
+  }
+  notifyCdr(r.token_id, r.id, typeof r.data?.cdr_location?.name === 'string' ? r.data.cdr_location.name : r.partner_name, r.currency, Number(r.total_incl_vat ?? r.total_excl_vat));
+}
+
+/** The driver's receipt push for an accepted charge record; `total` in the CDR's major units. */
 export function notifyCdr(tokenId: string | null, cdrId: string, site: string, currency: string, total: number): void {
   if (!tokenId) return;
+  let money: { totalMinor: number; currency: CurrencyCode } | null = null;
+  try { money = isCurrencyCode(currency) ? { totalMinor: toMinor(total, currency), currency } : null; } catch { money = null; }
   void import('../driver/notify.js')
-    .then((n) => n.notifyRoamingCdr(tokenId, cdrId, site, currency === 'IDR' ? Math.round(total) : null))
+    .then((n) => n.notifyRoamingCdr(tokenId, cdrId, site, money))
     .catch((e) => logger.warn({ err: (e as Error).message }, 'roaming CDR push failed'));
 }
 
-export async function getRemoteCdr(partner: PartnerRow, ourId: string) {
+/** A charge record we received, by our id (the Location we gave); behind a hub, only the CPO that posted it. */
+export async function getRemoteCdr(partner: PartnerRow, ourId: string, acting: ActingParty | null = null) {
   if (!/^[0-9a-f-]{36}$/i.test(ourId)) return null;
-  const r = await one<{ data: any }>(`SELECT data FROM ocpi_remote_cdr WHERE id = $1 AND partner_id = $2`, [ourId, partner.id]);
+  const r = await one<{ data: any }>(
+    `SELECT data FROM ocpi_remote_cdr WHERE id = $1 AND partner_id = $2 AND ($3::text IS NULL OR (country_code = $3 AND party_id = $4))`,
+    [ourId, partner.id, acting?.country_code ?? null, acting?.party_id ?? null]);
   return r?.data ?? null;
 }
 
@@ -491,6 +609,8 @@ export async function sendCommand(o: {
   /** RESERVE_NOW / CANCEL_RESERVATION: our id for the reservation, and (RESERVE_NOW) until when. */
   reservationId?: string; expiryDate?: Date;
   locationParty?: { country_code: string; party_id: string };
+  /** START_SESSION for an app driver: the payment intent of the hold that guarantees it (§D7). */
+  authorizationReference?: string;
 }) {
   const party = await getParty(o.orgId);
   const p = await one<PartnerRow>(`SELECT * FROM ocpi_partner WHERE id = $1 AND org_id = $2 AND state = 'connected'`, [o.partnerId, o.orgId]);
@@ -505,14 +625,14 @@ export async function sendCommand(o: {
   const responseUrl = `${base}/ocpi/2.2.1/emsp/commands/${o.command}/${id}`;
   let body: Record<string, unknown>;
   if (o.command === 'START_SESSION' || o.command === 'RESERVE_NOW') {
-    const c = await one<CardRow>(`SELECT ${CARD_COLS} FROM token WHERE id = $1 AND org_id = $2 AND kind = 'rfid'`, [o.tokenId, o.orgId]);
+    const c = await one<CardRow>(`SELECT ${CARD_COLS} FROM token WHERE id = $1 AND org_id = $2 AND kind IN ('rfid', 'app')`, [o.tokenId, o.orgId]);
     if (!c?.roaming_shared || !c.contract_id) throw new EmspError(422, STATUS.INVALID_PARAMS, 'choose a card that is shared for roaming');
     if (!o.locationId) throw new EmspError(422, STATUS.INVALID_PARAMS, 'choose a location');
     body = {
       response_url: responseUrl, token: cardToken(party, c), location_id: o.locationId,
       ...(o.evseUid ? { evse_uid: o.evseUid } : {}),
       ...(o.command === 'START_SESSION' && o.connectorId ? { connector_id: o.connectorId } : {}),
-      authorization_reference: id.replace(/-/g, '').slice(0, 20),
+      authorization_reference: o.authorizationReference ? o.authorizationReference.slice(0, 36) : id.replace(/-/g, '').slice(0, 20),
     };
     if (o.command === 'RESERVE_NOW') {
       if (!o.reservationId || !o.expiryDate) throw new EmspError(422, STATUS.INVALID_PARAMS, 'a reservation needs an id and an expiry');
@@ -529,13 +649,15 @@ export async function sendCommand(o: {
     if (!o.locationId || !o.evseUid || !o.connectorId) throw new EmspError(422, STATUS.INVALID_PARAMS, 'choose the location, EVSE and connector');
     body = { response_url: responseUrl, location_id: o.locationId, evse_uid: o.evseUid, connector_id: o.connectorId };
   }
+  const to = o.locationParty ?? { country_code: p.country_code, party_id: p.party_id };
+  // The party the command is addressed to is stored with it (not sent): through a hub only that party may
+  // post the result (receiveCommandResult).
   await query(
     `INSERT INTO ocpi_command (id, org_id, partner_id, command, token_id, request, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [id, o.orgId, p.id, o.command, o.tokenId ?? null, JSON.stringify(body), o.userId ?? null],
+    [id, o.orgId, p.id, o.command, o.tokenId ?? null, JSON.stringify({ ...body, to }), o.userId ?? null],
   );
   const r = await ocpiCall({
-    orgId: o.orgId, partnerId: p.id, method: 'POST', url: `${url}/${o.command}`, token: unseal(p.token_out), body, from: party,
-    to: o.locationParty ?? { country_code: p.country_code, party_id: p.party_id },
+    orgId: o.orgId, partnerId: p.id, method: 'POST', url: `${url}/${o.command}`, token: unseal(p.token_out), body, from: party, to,
   });
   const answer = r.ok ? String(r.data?.result ?? 'ACCEPTED') : 'FAILED';
   const message = r.ok ? (r.data?.message?.[0]?.text ?? null) : r.error;
@@ -543,15 +665,25 @@ export async function sendCommand(o: {
   return { id, response: answer, message };
 }
 
-/** The CPO posts the charger's outcome to the response_url we gave it. */
-export async function receiveCommandResult(partner: PartnerRow, command: string, id: string, b: any): Promise<boolean> {
+/**
+ * The CPO posts the charger's outcome to the response_url we gave it. Behind a hub (`acting` = the CPO in
+ * OCPI-from), only the party the command was addressed to may answer it (v1.7.1, WP H0). A command addressed
+ * to the hub itself (no CPO party known when it was sent), or stored before v1.7.1, names no CPO: any CPO
+ * the hub announced may answer it, as before.
+ */
+export async function receiveCommandResult(partner: PartnerRow, command: string, id: string, b: any, acting: ActingParty | null = null): Promise<boolean> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return false;
   const result = typeof b?.result === 'string' ? b.result.slice(0, 40) : null;
   if (!result) throw new EmspError(400, STATUS.INVALID_PARAMS, 'result is required');
   const r = await query(
     `UPDATE ocpi_command SET result = $4, message = COALESCE($5, message), result_at = now()
-      WHERE id = $1 AND partner_id = $2 AND command = $3`,
-    [id, partner.id, command, result, b?.message?.[0]?.text ?? null],
+      WHERE id = $1 AND partner_id = $2 AND command = $3
+        AND ($6::text IS NULL
+             OR request->'to'->>'country_code' IS NULL
+             OR (request->'to'->>'country_code' = $8 AND request->'to'->>'party_id' = $9)
+             OR (request->'to'->>'country_code' = $6 AND request->'to'->>'party_id' = $7))`,
+    [id, partner.id, command, result, b?.message?.[0]?.text ?? null, acting?.country_code ?? null, acting?.party_id ?? null,
+      partner.country_code ?? '', partner.party_id ?? ''],
   );
   return (r.rowCount ?? 0) > 0;
 }

@@ -1,4 +1,4 @@
-import { $, $$, esc, api, state, registerView, pageHead, icon, callout, fmt, tag, modal, confirmDialog, toast, copy, table } from '../core.js';
+import { $, $$, esc, api, state, registerView, pageHead, icon, callout, fmt, tag, modal, confirmDialog, toast, copy, table, COUNTRIES } from '../core.js';
 
 /**
  * Integrations — the third parties PlugSure talks to, connected from the
@@ -13,6 +13,27 @@ const SOURCE = {
   environment: ['t-info', 'environment variables'],
   default: ['t-mute', 'built-in default'],
 };
+/**
+ * Payments are per country (v1.7.0): Indonesia's acquirer is kinds[payments] (country_code NULL, as in v1.6);
+ * Malaysia and Singapore each have their own Stripe account, listed by the API in paymentsByCountry and
+ * addressed with countryCode on save, test and remove. The page used to show only Indonesia's card, so a
+ * Stripe account could not be connected from the console at all (the save was refused for want of a country).
+ */
+const STRIPE_METHODS = { MY: ['CARD', 'FPX', 'GRABPAY'], SG: ['CARD', 'PAYNOW', 'GRABPAY'] };
+const STRIPE_METHOD_LABEL = { CARD: 'cards', FPX: 'FPX', GRABPAY: 'GrabPay', PAYNOW: 'PayNow' };
+/** Indonesia's payments card as v1.6 named it (the catalogue's label also mentions Stripe for MY / SG). */
+const PAYMENTS_ID_LABEL = 'Payments (QRIS, e-wallets, cards)';
+/** The payments kind narrowed to one country: its providers, its accounts, its label. */
+function paymentsFor(k, cc, entry) {
+  const name = COUNTRIES[cc]?.name ?? cc;
+  const providers = k.providers
+    .filter((p) => (cc === 'ID' ? p.id !== 'stripe' : p.id === 'stripe' || p.devOnly))
+    .map((p) => (p.id !== 'stripe' ? p : { ...p, fields: p.fields.map((f) => (f.key === 'methods' && f.options ? { ...f, options: f.options.filter((o) => STRIPE_METHODS[cc].includes(o.value)) } : f)) }));
+  return cc === 'ID'
+    ? { ...k, cc, providers, label: `${PAYMENTS_ID_LABEL} — ${name}` }
+    : { ...k, cc, providers, label: `Payments (Stripe: ${STRIPE_METHODS[cc].map((m) => STRIPE_METHOD_LABEL[m] ?? m).join(', ')}) — ${name}`, own: entry?.own ?? null, platform: entry?.platform ?? null, effective: entry?.effective ?? null };
+}
+
 const OTHERS = [
   ['E-mail (SMTP) and WhatsApp alerts', 'Who is told about charger alerts, and how.', '#/alert-routing'],
   ['Outbound webhooks', 'Sessions, CDRs, charger status and refunds pushed to your systems.', '#/webhooks'],
@@ -37,21 +58,32 @@ registerView('integrations', {
 
 async function draw(box) {
   const o = await api('/v1/integrations');
-  const byKind = Object.fromEntries(o.kinds.map((k) => [k.kind, k]));
+  // Payments per country when the operator runs (or may run) sites outside Indonesia.
+  const countries = state.me?.features?.multiCountry ? ['ID', 'MY', 'SG'] : (state.me?.org?.countries ?? []).map((c) => c.country_code);
+  const perCountry = countries.some((c) => c !== 'ID');
+  // Indonesia only: one payments card as in v1.6, without Stripe (it serves Malaysia and Singapore only;
+  // the server refuses it for Indonesia).
+  const cards = o.kinds.flatMap((k) => (k.kind !== 'payments' ? [k]
+    : !perCountry ? [{ ...k, label: PAYMENTS_ID_LABEL, providers: k.providers.filter((p) => p.id !== 'stripe') }]
+    : ['ID', 'MY', 'SG'].filter((cc) => cc === 'ID' || countries.includes(cc))
+      .map((cc) => paymentsFor(k, cc, (o.paymentsByCountry ?? []).find((x) => x.countryCode === cc)))));
+  const keyOf = (k) => (k.cc && k.cc !== 'ID' ? `${k.kind}:${k.cc}` : k.kind);
+  const byKind = Object.fromEntries(cards.map((k) => [keyOf(k), k]));
   const missing = ['payments', 'otp'].filter((k) => !byKind[k].effective || (o.production && byKind[k].effective.source === 'default'));
   box.innerHTML = `
     ${missing.length && o.production ? callout('crit', `<b>Not ready for drivers:</b> ${missing.map((k) => esc(byKind[k].label)).join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not connected. Drivers cannot ${missing.includes('payments') ? 'pay' : ''}${missing.length > 1 ? ' or ' : ''}${missing.includes('otp') ? 'sign in with their phone' : ''}.`) : ''}
     ${!o.production ? callout('info', 'Development deployment: without settings, the sandbox acquirer and on-screen sign-in codes are used. They are never used in production.') : ''}
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;margin-top:12px">
-      ${o.kinds.map((k) => card(k)).join('')}
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));gap:16px;margin-top:12px">
+      ${cards.map((k) => card(k)).join('')}
     </div>
     <h3 style="margin:24px 0 10px">Managed on their own pages</h3>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
-      ${OTHERS.map(([t, d, href]) => `<a class="card section" href="${href}" style="text-decoration:none;color:inherit;display:block"><div class="cell-title">${esc(t)} ${icon('external')}</div><div class="cell-sub">${esc(d)}</div></a>`).join('')}
-      <div class="card section"><div class="cell-title">HashiCorp Vault PKI</div><div class="cell-sub">Optional issuer for Profile 3 certificates and V2G signing: ${state.me.features?.vault ? tag('t-ok', 'configured') : tag('t-mute', 'not configured')} (VAULT_ADDR / VAULT_TOKEN).</div></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:12px">
+      ${OTHERS.map(([t, d, href]) => `<a class="card pad link" href="${href}"><div class="cell-title">${esc(t)} ${icon('external')}</div><div class="cell-sub">${esc(d)}</div></a>`).join('')}
+      <div class="card pad"><div class="cell-title">HashiCorp Vault PKI</div><div class="cell-sub">Optional issuer for Profile 3 certificates and V2G signing: ${state.me.features?.vault ? tag('t-ok', 'configured') : tag('t-mute', 'not configured')} (VAULT_ADDR / VAULT_TOKEN).</div></div>
     </div>`;
   $$('[data-act]', box).forEach((b) => b.addEventListener('click', () => {
     const k = byKind[b.dataset.kind];
+    if (!k) return;
     const scope = b.dataset.scope;
     ({ configure: () => configure(k, scope, o, () => draw(box)), test: () => test(k, scope), activity: () => activity(k), remove: () => remove(k, scope, () => draw(box)) })[b.dataset.act]();
   }));
@@ -62,7 +94,9 @@ function statusOf(k) {
   const [cls, label] = SOURCE[k.effective.source] ?? ['t-mute', k.effective.source];
   const p = k.providers.find((x) => x.id === k.effective.provider);
   const sandbox = p?.devOnly ? ` ${tag('t-warn', 'test only')}` : '';
-  return `${tag(cls, label)}${sandbox}`;
+  // A Stripe account on test keys: its payments move no money (receipts marked TEST).
+  const test = (k.effective.scope === 'org' ? k.own : k.platform)?.testMode ? ` ${tag('t-warn', 'TEST')}` : '';
+  return `${tag(cls, label)}${sandbox}${test}`;
 }
 
 function providerLabel(k, id) { return k.providers.find((p) => p.id === id)?.label ?? id; }
@@ -74,30 +108,31 @@ function lastTest(c) {
 
 function card(k) {
   const eff = k.effective;
+  const key = k.cc && k.cc !== 'ID' ? `${k.kind}:${k.cc}` : k.kind;
   const isPlatformAdmin = state.can('platform:admin');
   const ownBlock = k.scope === 'org' ? `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
         <div class="lbl small" style="font-weight:600">Your account</div>
         ${k.own ? `<div>${esc(providerLabel(k, k.own.provider))} ${k.own.enabled ? '' : tag('t-mute', 'off')}</div>${lastTest(k.own)}` : '<div class="cell-sub">None — the platform\'s account is used.</div>'}
         ${state.can('org:write') ? `<div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn sm primary" data-act="configure" data-kind="${k.kind}" data-scope="org">${k.own ? 'Change' : 'Connect my account'}</button>
-          ${k.own ? `<button class="btn sm" data-act="test" data-kind="${k.kind}" data-scope="org">Test</button><button class="btn sm ghost" data-act="remove" data-kind="${k.kind}" data-scope="org">Remove</button>` : ''}</div>` : ''}
+          <button class="btn sm primary" data-act="configure" data-kind="${key}" data-scope="org">${k.own ? 'Change' : 'Connect my account'}</button>
+          ${k.own ? `<button class="btn sm" data-act="test" data-kind="${key}" data-scope="org">Test</button><button class="btn sm ghost" data-act="remove" data-kind="${key}" data-scope="org">Remove</button>` : ''}</div>` : ''}
       </div>` : '';
   const platformBlock = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
         <div class="lbl small" style="font-weight:600">${k.scope === 'org' ? 'Platform default' : 'Platform'}</div>
         ${k.platform ? `<div>${esc(providerLabel(k, k.platform.provider))} ${k.platform.enabled === false ? tag('t-mute', 'off') : ''}</div>${lastTest(k.platform)}` : `<div class="cell-sub">${eff && eff.source !== 'console' ? `From ${eff.source === 'environment' ? 'environment variables' : 'the built-in default'}: ${esc(providerLabel(k, eff.provider))}` : 'Not configured'}</div>`}
         ${isPlatformAdmin ? `<div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn sm ${k.scope === 'platform' ? 'primary' : ''}" data-act="configure" data-kind="${k.kind}" data-scope="platform">${k.platform ? 'Change' : 'Connect'}</button>
-          <button class="btn sm" data-act="test" data-kind="${k.kind}" data-scope="platform">Test</button>
-          ${k.platform ? `<button class="btn sm ghost" data-act="remove" data-kind="${k.kind}" data-scope="platform">Remove</button>` : ''}</div>` : (k.scope === 'platform' ? '<div class="cell-sub" style="margin-top:6px">Set by the platform operator.</div>' : '')}
+          <button class="btn sm ${k.scope === 'platform' ? 'primary' : ''}" data-act="configure" data-kind="${key}" data-scope="platform">${k.platform ? 'Change' : 'Connect'}</button>
+          <button class="btn sm" data-act="test" data-kind="${key}" data-scope="platform">Test</button>
+          ${k.platform ? `<button class="btn sm ghost" data-act="remove" data-kind="${key}" data-scope="platform">Remove</button>` : ''}</div>` : (k.scope === 'platform' ? '<div class="cell-sub" style="margin-top:6px">Set by the platform operator.</div>' : '')}
       </div>`;
-  return `<div class="card section">
-      <div class="row" style="align-items:flex-start;gap:10px"><div class="grow"><h3 style="margin:0">${esc(k.label)}</h3></div><div>${statusOf(k)}</div></div>
+  return `<div class="card pad">
+      <div class="row" style="align-items:flex-start;gap:6px 10px"><div style="flex:1 1 200px"><h3 style="margin:0">${esc(k.label)}</h3></div><div class="chips">${statusOf(k)}</div></div>
       <p class="cell-sub" style="margin:6px 0 0">${esc(k.description)}</p>
       <div style="margin-top:10px"><span class="lbl small">In force:</span> <b>${eff ? esc(providerLabel(k, eff.provider)) : '—'}</b></div>
       ${ownBlock}${platformBlock}
-      <div style="margin-top:10px"><button class="btn sm ghost" data-act="activity" data-kind="${k.kind}">${icon('list')} Activity</button></div>
+      <div style="margin-top:10px"><button class="btn sm ghost" data-act="activity" data-kind="${key}">${icon('list')} Activity</button></div>
     </div>`;
 }
 
@@ -122,12 +157,15 @@ function fieldHtml(f, current, hints) {
   return `<div class="field${f.type === 'url' ? ' full' : ''}"><label for="${id}">${esc(f.label)}${req}</label><input id="${id}" data-f="${f.key}" type="${f.type === 'number' ? 'number' : 'text'}" placeholder="${esc(f.placeholder ?? '')}"${f.type === 'url' ? ' inputmode="url"' : ''}>${help}</div>`;
 }
 
+/** Payments for Malaysia or Singapore address that country's account. */
+const ccBody = (k) => (k.cc && k.cc !== 'ID' ? { countryCode: k.cc } : {});
+
 function configure(k, scope, o, done) {
   const cur = scope === 'org' ? k.own : k.platform;
   let provider = cur?.provider ?? k.providers[0]?.id;
   const m = modal({
     title: `${k.label}${scope === 'org' ? ' — your account' : k.scope === 'org' ? ' — platform default' : ''}`, size: 'lg',
-    body: `<div class="field full"><div class="lbl">Provider</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px" data-providers>
+    body: `<div class="field full"><div class="lbl">Provider</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:8px" data-providers>
         ${k.providers.map((p) => `<button type="button" class="plug" style="text-align:left;padding:10px" data-p="${esc(p.id)}"><div style="font-size:13px;font-weight:600">${esc(p.label)}${p.devOnly ? ` ${tag('t-warn', 'test only')}` : ''}</div><small>${esc(p.description)}</small></button>`).join('')}
       </div></div><div data-fields style="margin-top:14px"></div>`,
     actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(ctx) {
@@ -138,7 +176,7 @@ function configure(k, scope, o, done) {
       $$('[data-secret]', ctx.body).forEach((el) => { if (el.value.trim()) secrets[el.dataset.secret] = el.value; });
       const enabled = $('[data-enabled]', ctx.body)?.checked ?? true;
       try {
-        const saved = await api(`/v1/integrations/${k.kind}`, { method: 'PUT', body: { scope, provider: p.id, settings, secrets, enabled } });
+        const saved = await api(`/v1/integrations/${k.kind}`, { method: 'PUT', body: { scope, provider: p.id, settings, secrets, enabled, ...ccBody(k) } });
         toast('Saved', 'ok');
         if (saved.webhookUrl) setTimeout(() => showWebhook(p, saved.webhookUrl), 50);
         done();
@@ -155,6 +193,7 @@ function configure(k, scope, o, done) {
       ${p.docs ? `<p class="cell-sub" style="margin:0 0 10px">Provider documentation: <a href="${esc(p.docs)}" target="_blank" rel="noopener">${esc(p.docs)}</a></p>` : ''}
       ${p.fields.length ? `<div class="form">${basic.map((f) => fieldHtml(f, current, hints)).join('')}</div>` : `<p class="cell-sub">${esc(p.description)}</p>`}
       ${adv.length ? `<details style="margin-top:10px"><summary class="small">Advanced</summary><div class="form" style="margin-top:8px">${adv.map((f) => fieldHtml(f, current, hints)).join('')}</div></details>` : ''}
+      ${cur?.testMode ? `<div style="margin-top:12px">${callout('warn', '<b>TEST mode.</b> This account runs on Stripe test keys: payments through it move no money, their receipts are marked TEST and are not tax invoices, and they are left out of revenue and commission.')}</div>` : ''}
       ${p.webhook ? `<div style="margin-top:12px">${callout('info', cur?.webhookUrl && cur.provider === provider ? `Payment notification URL (paste into the provider's dashboard): <span class="mono small" style="word-break:break-all">${esc(cur.webhookUrl)}</span>` : 'After saving, you get the payment notification URL to paste into the provider\'s dashboard.')}</div>` : ''}
       <div class="field full" style="margin-top:10px"><label class="check"><input type="checkbox" data-enabled${cur?.enabled === false ? '' : ' checked'}> <span>Enabled</span></label><div class="help">Off: the ${k.scope === 'org' && scope === 'org' ? 'platform default' : 'environment variables or default'} apply instead.</div></div>`;
     // Values are set as properties, never interpolated into HTML.
@@ -191,7 +230,7 @@ function test(k, scope) {
       const out = $('[data-out]', ctx.body);
       out.innerHTML = '<span class="spinner"></span>';
       try {
-        const r = await api(`/v1/integrations/${k.kind}/test`, { method: 'POST', body: { scope, ...(phone && $('[data-phone]', ctx.body).value ? { phone: $('[data-phone]', ctx.body).value } : {}) } });
+        const r = await api(`/v1/integrations/${k.kind}/test`, { method: 'POST', body: { scope, ...ccBody(k), ...(phone && $('[data-phone]', ctx.body).value ? { phone: $('[data-phone]', ctx.body).value } : {}) } });
         out.innerHTML = callout(r.ok ? 'ok' : 'crit', esc(r.message));
       } catch (e) { out.innerHTML = callout('crit', esc(e.message)); }
       return false;
@@ -223,6 +262,6 @@ async function remove(k, scope, done) {
     confirmLabel: 'Remove', danger: true,
   });
   if (!ok) return;
-  try { await api(`/v1/integrations/${k.kind}?scope=${scope}`, { method: 'DELETE' }); toast('Removed', 'ok'); done(); }
+  try { await api(`/v1/integrations/${k.kind}?scope=${scope}${k.cc && k.cc !== 'ID' ? `&countryCode=${k.cc}` : ''}`, { method: 'DELETE' }); toast('Removed', 'ok'); done(); }
   catch (e) { toast(e.message, 'crit'); }
 }

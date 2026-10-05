@@ -6,7 +6,7 @@ import { one, pool, query } from '../db/pool.js';
 import { databaseTestLock } from '../db/test-lock.js';
 import { hashPassword } from '../services/users.js';
 import Fastify from 'fastify';
-import { fleetLogin, issueDevice, sendOtp, verifyOtp } from './identity.js';
+import { fleetLogin, issueDevice, sendOtp, verifyOtp, FLEET_LOGIN_FAILED } from './identity.js';
 import { registerDriverApi } from './server.js';
 
 /**
@@ -54,6 +54,8 @@ async function cleanup(): Promise<void> {
     await query(`DELETE FROM driver_auth_limit WHERE split_part(key, ':', 2) = ANY($1)`, [phones]);
   }
   await query(`DELETE FROM driver_auth_limit WHERE key LIKE '%:198.51.100.%'`);
+  // Card budgets are keyed by what was typed (organisation slug + serial), not by the row.
+  await query(`DELETE FROM driver_auth_limit WHERE key LIKE 'pin-card:${SLUG}:%' OR key LIKE 'pin-card:no-such-org-auth-limits:%'`);
 }
 
 /** A live code for `phone` whose value we know, without going through the sender. */
@@ -100,7 +102,7 @@ dbDescribe('OTP verification under a parallel burst', () => {
     assert.equal(rs.filter((r) => r.ok).length, 1);
   });
 
-  test('a new code does not reset the number: 10 wrong codes a day, then no verifying or sending', async () => {
+  test('a new code does not reset the number: 10 wrong codes a day from one device, then no verifying or sending for it', async () => {
     const phone = newPhone();
     for (let i = 0; i < 2; i++) {
       await plantCode(phone, '999999');
@@ -111,7 +113,7 @@ dbDescribe('OTP verification under a parallel burst', () => {
     const r = await verifyOtp(deviceId, phone, '777777');
     assert.equal(r.ok, false);
     if (!r.ok) { assert.match(r.error, /besok/); assert.equal(r.limited, true); }
-    const s = await sendOtp(phone, undefined, { ip: '198.51.100.9' });
+    const s = await sendOtp(phone, undefined, { ip: '198.51.100.9', deviceId });
     assert.equal(s.ok, false);
     if (!s.ok) assert.equal(s.limited, true);
   });
@@ -174,7 +176,8 @@ dbDescribe('fleet PIN under a parallel burst', () => {
     assert.equal(t!.locked, true);
     const right = await fleetLogin(deviceId, SLUG, 'BURST-01', '482913');
     assert.equal(right.ok, false);
-    if (!right.ok) assert.match(right.error, /Terlalu banyak/);
+    // Locked answers exactly like a wrong PIN: the lock must not mark the card as real.
+    if (!right.ok) assert.equal(right.error, FLEET_LOGIN_FAILED);
   });
 
   test('a right PIN clears the counter', async () => {
@@ -256,6 +259,88 @@ dbDescribe('driver API: limits answer 429; OCPI response_url never from the Host
     } finally {
       await query(`DELETE FROM driver_device WHERE device_hash = $1`, [sha256(deviceToken.slice(4))]);
       await app.close();
+    }
+  });
+});
+
+dbDescribe('a stranger who knows a driver\'s number cannot lock it out (codes are bound to the requesting device)', () => {
+  test('ten wrong guesses from another device leave the driver\'s own device able to ask for and use a code', async () => {
+    const phone = newPhone();
+    const attacker = (await issueDevice('auth-limits.test attacker')).deviceId;
+    try {
+      // The attacker asks for codes for the victim's number and guesses wrong, ten times.
+      for (let i = 0; i < 2; i++) {
+        await query(`INSERT INTO driver_otp (phone, code_hash, expires_at, device_id) VALUES ($1, $2, now() + interval '5 minutes', $3)`, [phone, sha256('999999'), attacker]);
+        for (let j = 0; j < 5; j++) assert.equal((await verifyOtp(attacker, phone, '000000')).ok, false);
+        await query(`UPDATE driver_otp SET consumed_at = now() WHERE phone = $1`, [phone]);
+      }
+      const locked = await verifyOtp(attacker, phone, '000000');
+      assert.equal(locked.ok, false);
+      if (!locked.ok) assert.equal(locked.limited, true, 'the attacker\'s own device is out of guesses');
+
+      // The driver's device asks for a code and signs in.
+      const s = await sendOtp(phone, undefined, { ip: '198.51.100.90', deviceId });
+      assert.equal(s.ok, true, JSON.stringify(s));
+      const v = await verifyOtp(deviceId, phone, (s as { devCode: string }).devCode);
+      assert.equal(v.ok, true, JSON.stringify(v));
+    } finally {
+      await query(`DELETE FROM driver_otp WHERE device_id = $1`, [attacker]);
+      await query(`DELETE FROM driver_device WHERE id = $1`, [attacker]);
+    }
+  });
+
+  test('a code can be verified only by the device that asked for it', async () => {
+    const phone = newPhone();
+    const other = (await issueDevice('auth-limits.test other')).deviceId;
+    try {
+      const s = await sendOtp(phone, undefined, { ip: '198.51.100.91', deviceId });
+      assert.equal(s.ok, true);
+      const code = (s as { devCode: string }).devCode;
+      const stolen = await verifyOtp(other, phone, code);
+      assert.equal(stolen.ok, false, 'the right code from another device is not accepted');
+      const row = await one<{ attempts: number }>(`SELECT attempts FROM driver_otp WHERE phone = $1`, [phone]);
+      assert.equal(row!.attempts, 0, 'and it did not spend one of the code\'s five attempts');
+      assert.equal((await verifyOtp(deviceId, phone, code)).ok, true);
+    } finally {
+      await query(`DELETE FROM driver_device WHERE id = $1`, [other]);
+    }
+  });
+});
+
+dbDescribe('fleet sign-in gives one answer for every failure', () => {
+  test('unknown organisation, unknown, blocked, expired and unactivated card, and wrong PIN answer the same', async () => {
+    const pin = await hashPassword('314159');
+    await query(`INSERT INTO token (org_id, kind, uid, status, pin_hash) VALUES ($1, 'rfid', 'UNI-OK-01', 'Accepted', $2)`, [orgId, pin]);
+    await query(`INSERT INTO token (org_id, kind, uid, status, pin_hash) VALUES ($1, 'rfid', 'UNI-BLK-01', 'Blocked', $2)`, [orgId, pin]);
+    await query(`INSERT INTO token (org_id, kind, uid, status, pin_hash, valid_to) VALUES ($1, 'rfid', 'UNI-EXP-01', 'Accepted', $2, now() - interval '1 day')`, [orgId, pin]);
+    await query(`INSERT INTO token (org_id, kind, uid, status) VALUES ($1, 'rfid', 'UNI-NOPIN-01', 'Accepted')`, [orgId]);
+    const rs = await Promise.all([
+      fleetLogin(deviceId, 'no-such-org-auth-limits', 'UNI-OK-01', '314159'),
+      fleetLogin(deviceId, SLUG, 'UNI-NOPE-01', '314159'),
+      fleetLogin(deviceId, SLUG, 'UNI-BLK-01', '314159'),
+      fleetLogin(deviceId, SLUG, 'UNI-EXP-01', '314159'),
+      fleetLogin(deviceId, SLUG, 'UNI-NOPIN-01', '314159'),
+      fleetLogin(deviceId, SLUG, 'UNI-OK-01', '000000'),
+    ]);
+    for (const r of rs) {
+      assert.equal(r.ok, false);
+      if (!r.ok) { assert.equal(r.error, FLEET_LOGIN_FAILED); assert.equal(r.limited, undefined); }
+    }
+    assert.equal((await fleetLogin(deviceId, SLUG, 'UNI-OK-01', '314159')).ok, true);
+  });
+
+  test('a made-up card runs out of its daily attempts exactly like a real one', async () => {
+    process.env.DRIVER_PIN_ATTEMPTS_PER_CARD_PER_DAY = '3';
+    try {
+      await query(`INSERT INTO token (org_id, kind, uid, status, pin_hash) VALUES ($1, 'rfid', 'UNI-DAY-01', 'Accepted', $2)`, [orgId, await hashPassword('271828')]);
+      const run = async (uid: string) => {
+        const out = [];
+        for (let i = 0; i < 4; i++) out.push(await fleetLogin(deviceId, SLUG, uid, '000000', `198.51.100.${120 + i}`));
+        return out.map((r) => (r.ok ? 'ok' : `${r.limited ? 'limited' : 'refused'}:${r.error}`));
+      };
+      assert.deepEqual(await run('UNI-DAY-01'), await run('UNI-DAY-FAKE-01'));
+    } finally {
+      delete process.env.DRIVER_PIN_ATTEMPTS_PER_CARD_PER_DAY;
     }
   });
 });

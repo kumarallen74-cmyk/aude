@@ -1,0 +1,13 @@
+{
+  "_status": "v1.1 scaffolding — missing keys fall back to English. Translate before enabling ms in a brand's locales for store release.",
+  "common": { "back": "Kembali", "cancel": "Batal", "close": "Tutup", "loading": "Memuatkan…", "retry": "Cuba lagi", "save": "Simpan", "edit": "Edit", "contactSupport": "Hubungi sokongan" },
+  "tabs": { "map": "Peta", "activity": "Aktiviti", "account": "Akaun", "scan": "Imbas", "scanHint": "Buka kamera untuk mengimbas kod QR pada pengecas" },
+  "onboarding": {
+    "skip": "Langkau", "next": "Seterusnya", "start": "Mula mengecas",
+    "networks": { "title": "Cas di setiap rangkaian", "body": "Satu aplikasi untuk pengecas di Indonesia, Malaysia dan Singapura." },
+    "pay": { "title": "Bayar seperti biasa", "body": "QRIS, PayNow, FPX, GrabPay atau kad. Tiada tambah nilai." }
+  },
+  "map": { "nearby": "Berdekatan", "showList": "Senarai", "showMap": "Peta", "searchPlaceholder": "Cari stesen atau kod pengecas" },
+  "session": { "charging": "Sedang mengecas", "stop": "Hentikan pengecasan", "completed": "Pengecasan selesai" },
+  "account": { "title": "Akaun", "signIn": "Log masuk dengan telefon", "signOut": "Log keluar", "delete": "Padam akaun" }
+}

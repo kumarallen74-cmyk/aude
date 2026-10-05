@@ -10,9 +10,9 @@
 // operator). The mock partners listen on E2E_OCPI_MOCK_PORT (9313).
 //     npx tsx tools/e2e/ocpi-profiles-e2e.mts
 // NEVER point this at production.
-import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
+import { MockSpAndHub, type PeerGot } from './lib/ocpi-fakes.mts';
 
 const API = process.env.E2E_API ?? 'http://127.0.0.1:9200';
 const OCPP = process.env.E2E_OCPP ?? 'ws://127.0.0.1:9220/ocpp';
@@ -42,13 +42,14 @@ async function ops(method: string, path: string, body?: unknown) {
   return { status: r.status, data: d };
 }
 
-async function ocpi(method: string, url: string, token: string | null, body?: unknown) {
+async function ocpi(method: string, url: string, token: string | null, body?: unknown, headers: Record<string, string> = {}) {
   const r = await fetch(url.startsWith('http') ? url : API + url, {
     method,
     headers: {
       ...(token ? { authorization: `Token ${b64(token)}` } : {}),
       'x-request-id': randomUUID(), 'x-correlation-id': randomUUID(),
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -57,59 +58,18 @@ async function ocpi(method: string, url: string, token: string | null, body?: un
 }
 
 // ─────────────────────────────────────────── the mock partners
-interface Got { method: string; path: string; body: any; at: number }
-const got: Got[] = [];
+type Got = PeerGot;
 const TOKEN_SP = 'mock-sp-token-B-' + randomUUID();   // what PlugSure presents to the eMSP
 const TOKEN_HUB = 'mock-hub-token-B-' + randomUUID(); // what PlugSure presents to the hub
-const decode = (h?: string) => (h?.startsWith('Token ') ? Buffer.from(h.slice(6), 'base64').toString() : '');
-const envelope = (data: unknown, status = 1000) => JSON.stringify({ ...(data === undefined ? {} : { data }), status_code: status, timestamp: new Date().toISOString() });
 const HUB_LIST_AT = '2026-09-01T00:00:00Z';
-let hubClients = [
+const mock = new MockSpAndHub({ port: MOCK_PORT, tokenSp: TOKEN_SP, tokenHub: TOKEN_HUB, hubClients: [
   { country_code: 'NL', party_id: 'ABC', role: 'EMSP', status: 'CONNECTED', last_updated: HUB_LIST_AT },
   { country_code: 'NL', party_id: 'DEF', role: 'EMSP', status: 'SUSPENDED', last_updated: HUB_LIST_AT },
-];
-
-const mock = http.createServer((req, res) => {
-  const chunks: Buffer[] = [];
-  req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
-    const [path, qs] = (req.url ?? '').split('?') as [string, string | undefined];
-    let body: any = null; try { body = JSON.parse(Buffer.concat(chunks).toString() || 'null'); } catch {}
-    got.push({ method: req.method!, path: req.url!, body, at: Date.now() });
-    const send = (status: number, data: unknown, extra: Record<string, string> = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...extra }); res.end(envelope(data)); };
-    const auth = decode(req.headers.authorization);
-    if (path.startsWith('/sp/')) {
-      if (auth !== TOKEN_SP) return send(401, undefined);
-      if (path === '/sp/versions') return send(200, [{ version: '2.2.1', url: `${MOCK}/sp/2.2.1` }]);
-      if (path === '/sp/2.2.1') return send(200, { version: '2.2.1', endpoints: [
-        { identifier: 'credentials', role: 'RECEIVER', url: `${MOCK}/sp/2.2.1/credentials` },
-        { identifier: 'sessions', role: 'RECEIVER', url: `${MOCK}/sp/2.2.1/sessions` },
-        { identifier: 'chargingprofiles', role: 'SENDER', url: `${MOCK}/sp/2.2.1/chargingprofiles` },
-      ] });
-      return send(200, undefined);
-    }
-    if (path.startsWith('/hub/')) {
-      if (auth !== TOKEN_HUB) return send(401, undefined);
-      if (path === '/hub/versions') return send(200, [{ version: '2.2.1', url: `${MOCK}/hub/2.2.1` }]);
-      if (path === '/hub/2.2.1') return send(200, { version: '2.2.1', endpoints: [
-        { identifier: 'credentials', role: 'RECEIVER', url: `${MOCK}/hub/2.2.1/credentials` },
-        { identifier: 'hubclientinfo', role: 'SENDER', url: `${MOCK}/hub/2.2.1/clientinfo` },
-      ] });
-      if (path === '/hub/2.2.1/clientinfo') {
-        // One party per page, so PlugSure has to follow the Link header.
-        const offset = Number(new URLSearchParams(qs ?? '').get('offset') ?? 0);
-        const next = offset + 1 < hubClients.length ? { link: `<${MOCK}/hub/2.2.1/clientinfo?offset=${offset + 1}&limit=1>; rel="next"` } : {};
-        return send(200, hubClients.slice(offset, offset + 1), { 'x-total-count': String(hubClients.length), 'x-limit': '1', ...next });
-      }
-      return send(200, undefined);
-    }
-    if (path.startsWith('/cp/')) return send(200, undefined); // charging profile results (response_url)
-    send(404, undefined);
-  });
-});
-await new Promise<void>((r) => mock.listen(MOCK_PORT, '127.0.0.1', () => r()));
-const received = (pred: (g: Got) => boolean, after = 0) => got.find((g) => g.at >= after && pred(g));
-const waitReceived = (pred: (g: Got) => boolean, after = 0, ms = 20_000) => until(() => received(pred, after), (v) => !!v, ms, 250);
+] });
+const got = mock.got;
+await mock.start();
+const received = (pred: (g: Got) => boolean, after = 0) => mock.received(pred, after);
+const waitReceived = (pred: (g: Got) => boolean, after = 0, ms = 20_000) => mock.waitReceived(pred, after, ms);
 
 // ─────────────────────────────────────────── a raw OCPP 1.6 charger
 class Raw {
@@ -164,7 +124,7 @@ try {
     if (String(p.name).startsWith('E2E Smart')) await ops('DELETE', `/v1/roaming/partners/${p.id}`);
   }
   const site = await ops('POST', '/v1/sites', { name: `Smart Roaming ${RUN}`, address: 'Jl. M.H. Thamrin No. 1', city: 'Jakarta Pusat', postalCode: '10310',
-    lat: '-6.1950', lon: '106.8230', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+    lat: '-6.1950', lon: '106.8230', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const siteId = site.data.id as string;
   const ID = `SMART-${RUN}`;
   const reg = await ops('POST', '/v1/charge-points', { ocppIdentity: ID, siteId, displayName: 'Smart DC', ocppVersion: 'ocpp1.6',
@@ -275,7 +235,9 @@ try {
   const byParty = (rows: any[], pid: string) => rows.find((c) => c.party_id === pid);
   check('hub: after registering, PlugSure pulls the parties behind it, following the Link header (2 pages)',
     byParty(pulled.data ?? [], 'ABC')?.status === 'CONNECTED' && byParty(pulled.data ?? [], 'DEF')?.status === 'SUSPENDED' && got.filter((g) => g.path.startsWith('/hub/2.2.1/clientinfo')).length >= 2, pulled.data);
-  const tok = (cc: string, pid: string, uid: string) => ocpi('PUT', `${ep('tokens', 'RECEIVER')}/${cc}/${pid}/${uid}`, TOKEN_H, tokenFor(uid, cc, pid));
+  // Through a hub every functional request names the party behind it that sends it (OCPI-from, v1.7.1).
+  const fromH = (cc: string, pid: string) => ({ 'ocpi-from-country-code': cc, 'ocpi-from-party-id': pid });
+  const tok = (cc: string, pid: string, uid: string) => ocpi('PUT', `${ep('tokens', 'RECEIVER')}/${cc}/${pid}/${uid}`, TOKEN_H, tokenFor(uid, cc, pid), fromH(cc, pid));
   const tAbc = await tok('NL', 'ABC', `HUB-A-${RUN}`);
   const tDef = await tok('NL', 'DEF', `HUB-D-${RUN}`);
   const tXyz = await tok('NL', 'XYZ', `HUB-X-${RUN}`);
@@ -294,11 +256,15 @@ try {
   check('hub: a body that does not match the URL is refused (400)', mismatch.status === 400 && /match the URL/.test(mismatch.body.status_message), mismatch.body);
   const notHub = await ocpi('PUT', HI('NL', 'ABC'), TOKEN_C, { country_code: 'NL', party_id: 'ABC', role: 'EMSP', status: 'OFFLINE', last_updated: iso() });
   check('hub: a partner that is not a hub cannot send client info (403)', notHub.status === 403, notHub.body);
-  const hubProfile = await ocpi('PUT', CP(), TOKEN_H, { charging_profile: profile(5000), response_url: `${MOCK}/cp/x` });
+  const hubProfile = await ocpi('PUT', CP(), TOKEN_H, { charging_profile: profile(5000), response_url: `${MOCK}/cp/x` }, fromH('NL', 'DEF'));
   check('hub: a partner cannot limit another partner\'s session (UNKNOWN_SESSION)', hubProfile.body.data?.result === 'UNKNOWN_SESSION', hubProfile.body);
+  const noFrom = await ocpi('PUT', CP(), TOKEN_H, { charging_profile: profile(5000), response_url: `${MOCK}/cp/x` });
+  check('hub isolation: a hub request without OCPI-from headers is refused (400 / 2001)', noFrom.status === 400 && noFrom.body.status_code === 2001, noFrom.body);
+  const tWrong = await ocpi('PUT', `${ep('tokens', 'RECEIVER')}/NL/DEF/HUB-W-${RUN}`, TOKEN_H, tokenFor(`HUB-W-${RUN}`, 'NL', 'DEF'), fromH('NL', 'ABC'));
+  check('hub isolation: ABC cannot push a token for DEF through the same hub (403)', tWrong.status === 403, tWrong.body);
 
   // A fresh pull: ABC has left the hub; DEF's newer push survives the older list.
-  hubClients = hubClients.filter((c) => c.party_id !== 'ABC');
+  mock.hubClients = mock.hubClients.filter((c) => c.party_id !== 'ABC');
   const refresh = await ops('POST', `/v1/roaming/partners/${hub.data.partner.id}/hub-clients/refresh`);
   const afterPull = await ops('GET', `/v1/roaming/partners/${hub.data.partner.id}/hub-clients`);
   check('hub: refreshing forgets a party the hub no longer lists and keeps the newer status of another',
@@ -316,6 +282,37 @@ try {
   await sleep(5200);
   const ended = await ocpi('PUT', CP(), TOKEN_C, { charging_profile: profile(5000), response_url: `${MOCK}/cp/x` });
   check('end: once the session has ended, a limit answers UNKNOWN_SESSION', ended.body.data?.result === 'UNKNOWN_SESSION', ended.body);
+  // ─────────────────────────────────────────── isolation of the parties behind the hub (v1.7.1, WP H0)
+  const abcBack = await ocpi('PUT', HI('NL', 'ABC'), TOKEN_H, { country_code: 'NL', party_id: 'ABC', role: 'EMSP', status: 'CONNECTED', last_updated: iso() });
+  const ISO_UID = `HUBISO-A-${RUN}`;
+  const tIso = await tok('NL', 'ABC', ISO_UID);
+  check('hub isolation: ABC rejoins the hub and pushes its driver\'s token', abcBack.status === 200 && tIso.status === 200, { a: abcBack.body, t: tIso.body });
+  const txH = await charger.call('StartTransaction', { connectorId: 1, idTag: ISO_UID, meterStart: 6_000_000, timestamp: iso() });
+  await charger.call('StatusNotification', { connectorId: 1, errorCode: 'NoError', status: 'Charging', timestamp: iso() });
+  const SESS = ep('sessions', 'SENDER');
+  const pull = (pid: string) => ocpi('GET', `${SESS}?date_from=${encodeURIComponent(iso(-3600))}`, TOKEN_H, undefined, fromH('NL', pid));
+  const abcSess = await until(() => pull('ABC'), (r) => (r.body.data ?? []).some((x: any) => x.cdr_token?.uid === ISO_UID), 10_000, 300);
+  const hubSessionId = (abcSess.body.data ?? []).find((x: any) => x.cdr_token?.uid === ISO_UID)?.id as string;
+  check('hub isolation: ABC\'s driver charges; ABC pulls its session (and only ABC\'s)',
+    txH.idTagInfo?.status === 'Accepted' && !!hubSessionId && (abcSess.body.data ?? []).every((x: any) => x.cdr_token?.party_id === 'ABC'), abcSess.body);
+  const defSess = await pull('DEF');
+  check('hub isolation: DEF behind the same hub does not see ABC\'s session', defSess.status === 200 && !(defSess.body.data ?? []).some((x: any) => x.id === hubSessionId), defSess.body);
+  const defTok = await ocpi('GET', `${ep('tokens', 'RECEIVER')}/NL/ABC/${ISO_UID}`, TOKEN_H, undefined, fromH('NL', 'DEF'));
+  check('hub isolation: DEF cannot read ABC\'s token (404 / 2004)', defTok.status === 404 && defTok.body.status_code === 2004, defTok.body);
+  const defStop = await ocpi('POST', `${ep('commands', 'RECEIVER')}/STOP_SESSION`, TOKEN_H, { response_url: `${MOCK}/cp/def-stop`, session_id: hubSessionId }, fromH('NL', 'DEF'));
+  check('hub isolation: DEF cannot stop ABC\'s session (UNKNOWN_SESSION)', defStop.body.data?.result === 'UNKNOWN_SESSION', defStop.body);
+  const defCp = await ocpi('PUT', CP(hubSessionId), TOKEN_H, { charging_profile: profile(3000), response_url: `${MOCK}/cp/def-set` }, fromH('NL', 'DEF'));
+  check('hub isolation: DEF cannot limit ABC\'s session (UNKNOWN_SESSION)', defCp.body.data?.result === 'UNKNOWN_SESSION', defCp.body);
+  const stranger = await pull('ZZZ');
+  check('hub isolation: a party the hub never announced is refused (403)', stranger.status === 403, stranger.body);
+  mark = Date.now();
+  const abcClear = await ocpi('DELETE', `${CP(hubSessionId)}?response_url=${encodeURIComponent(`${MOCK}/cp/abc-clear`)}`, TOKEN_H, undefined, fromH('NL', 'ABC'));
+  const abcResult = await waitReceived((g) => g.path === '/cp/abc-clear', mark);
+  check('hub isolation: ABC manages its own session; the result goes back addressed to ABC (OCPI-to), not to the hub',
+    abcClear.body.data?.result === 'ACCEPTED' && abcResult?.headers['ocpi-to-country-code'] === 'NL' && abcResult?.headers['ocpi-to-party-id'] === 'ABC', { c: abcClear.body, h: abcResult?.headers });
+  await charger.call('StopTransaction', { transactionId: txH.transactionId, meterStop: 6_001_000, timestamp: iso(), reason: 'EVDisconnected' });
+  await charger.call('StatusNotification', { connectorId: 1, errorCode: 'NoError', status: 'Available', timestamp: iso() });
+
   const pushes = await ops('GET', `/v1/roaming/partners/${sp.data.partner.id}/pushes`);
   check('outbox: every charging-profile result was delivered', (pushes.data ?? []).filter((p: any) => p.module === 'chargingprofiles').length >= 5 && !(pushes.data ?? []).some((p: any) => p.state === 'failed'), (pushes.data ?? []).filter((p: any) => p.module === 'chargingprofiles').map((p: any) => p.state));
 } catch (e) {

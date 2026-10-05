@@ -11,8 +11,8 @@
 // E2E_OCPI_CPO_PORT (9312).
 //     npx tsx tools/e2e/ocpi-emsp-e2e.mts
 // NEVER point this at production.
-import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { MockCpoPartner, decodeToken as decode, type PeerGot } from './lib/ocpi-fakes.mts';
 
 const API = process.env.E2E_API ?? 'http://127.0.0.1:9200';
 const PORT = Number(process.env.E2E_OCPI_CPO_PORT ?? 9312);
@@ -55,12 +55,9 @@ async function ocpi(method: string, url: string, token: string | null, body?: un
 }
 
 // ─────────────────────────────────────────── the mock CPO
-interface Got { method: string; path: string; headers: http.IncomingHttpHeaders; body: any; at: number }
-const got: Got[] = [];
+type Got = PeerGot;
 const TOKEN_B = 'mock-cpo-token-B-' + randomUUID();   // what PlugSure presents to the mock CPO
 let TOKEN_C = '';                                     // what the mock CPO presents to PlugSure
-const decode = (h?: string) => (h?.startsWith('Token ') ? Buffer.from(h.slice(6), 'base64').toString() : '');
-const env = (data: unknown, status = 1000) => JSON.stringify({ ...(data === undefined ? {} : { data }), status_code: status, timestamp: nowIso() });
 const RUN = Date.now().toString().slice(-6);
 // Earlier runs leave their shared cards behind; pulls ask only for what changed since this run began.
 const RUN_STARTED = new Date(Date.now() - 60_000).toISOString();
@@ -71,46 +68,12 @@ const location = (n: number, status = 'AVAILABLE') => ({
   operator: { name: 'Mock CPO' }, last_updated: nowIso(),
 });
 const mockTariff = { country_code: 'ID', party_id: 'CPX', id: `CPX-T-${RUN}`, currency: 'IDR', elements: [{ price_components: [{ type: 'ENERGY', price: 2500, vat: 11, step_size: 1 }] }], last_updated: nowIso() };
-const pendingResults: Array<{ url: string; result: string }> = [];
-
-const mock = http.createServer((req, res) => {
-  const chunks: Buffer[] = [];
-  req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
-    const u = new URL(req.url ?? '/', MOCK);
-    const path = u.pathname;
-    let body: any = null; try { body = JSON.parse(Buffer.concat(chunks).toString() || 'null'); } catch {}
-    got.push({ method: req.method!, path: req.url!, headers: req.headers, body, at: Date.now() });
-    const send = (status: number, data: unknown, ocpiStatus = 1000, extra: Record<string, string> = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...extra }); res.end(env(data, ocpiStatus)); };
-    if (decode(req.headers.authorization) !== TOKEN_B) return send(401, undefined, 2000);
-    if (path === '/cpo/versions') return send(200, [{ version: '2.2.1', url: `${MOCK}/cpo/2.2.1` }]);
-    if (path === '/cpo/2.2.1') return send(200, { version: '2.2.1', endpoints: [
-      { identifier: 'credentials', role: 'RECEIVER', url: `${MOCK}/cpo/2.2.1/credentials` },
-      { identifier: 'locations', role: 'SENDER', url: `${MOCK}/cpo/2.2.1/locations` },
-      { identifier: 'tariffs', role: 'SENDER', url: `${MOCK}/cpo/2.2.1/tariffs` },
-      { identifier: 'tokens', role: 'RECEIVER', url: `${MOCK}/cpo/2.2.1/tokens` },
-      { identifier: 'commands', role: 'RECEIVER', url: `${MOCK}/cpo/2.2.1/commands` },
-    ] });
-    if (path === '/cpo/2.2.1/locations') {
-      // Two pages of one, to prove the Link header is followed.
-      const offset = Number(u.searchParams.get('offset') ?? 0);
-      const all = [location(1), location(2)];
-      const extra: Record<string, string> = { 'x-total-count': '2', 'x-limit': '1' };
-      if (offset === 0) extra.link = `<${MOCK}/cpo/2.2.1/locations?offset=1&limit=1>; rel="next"`;
-      return send(200, all.slice(offset, offset + 1), 1000, extra);
-    }
-    if (path === '/cpo/2.2.1/tariffs') return send(200, [mockTariff]);
-    const cmd = /^\/cpo\/2\.2\.1\/commands\/([A-Z_]+)$/.exec(path);
-    if (cmd && req.method === 'POST') {
-      pendingResults.push({ url: body.response_url, result: 'ACCEPTED' });
-      return send(200, { result: 'ACCEPTED', timeout: 30 });
-    }
-    return send(200, undefined);
-  });
-});
-await new Promise<void>((r) => mock.listen(PORT, '127.0.0.1', () => r()));
-const received = (pred: (g: Got) => boolean, after = 0) => got.find((g) => g.at >= after && pred(g));
-const waitReceived = (pred: (g: Got) => boolean, after = 0, ms = 20_000) => until(() => received(pred, after), (v) => !!v, ms, 250);
+const mock = new MockCpoPartner({ port: PORT, tokenB: TOKEN_B, locations: () => [location(1), location(2)], tariff: mockTariff });
+const got = mock.got;
+const pendingResults = mock.pendingResults;
+await mock.start();
+const received = (pred: (g: Got) => boolean, after = 0) => mock.received(pred, after);
+const waitReceived = (pred: (g: Got) => boolean, after = 0, ms = 20_000) => mock.waitReceived(pred, after, ms);
 /** The mock CPO posts the charger's outcome of the queued commands back to PlugSure. */
 async function flushResults() {
   const out = [];
@@ -134,7 +97,7 @@ try {
   // Four cards: a normal fleet card, one with a spending limit, one we will block, one never shared.
   const card = async (uid: string, extra: Record<string, unknown> = {}) => (await ops('POST', '/v1/tokens', { uid, holderName: `Driver ${uid.slice(-2)}`, accountType: 'fleet', fleetName: 'Armada Nusantara', ...extra })).data;
   const OK = await card(`EMSP-OK-${RUN}`, { holderName: '=HYPERLINK("http://x")', pin: '2468' });
-  const LIM = await card(`EMSP-LIM-${RUN}`, { spendLimitIdr: 50000 });
+  const LIM = await card(`EMSP-LIM-${RUN}`, { spendLimitMinor: 50000 });
   const BLK = await card(`EMSP-BLK-${RUN}`);
   const NOT = await card(`EMSP-NOT-${RUN}`, { pin: '1357' });
   check('setup: four fleet cards', [OK, LIM, BLK, NOT].every((c) => c?.id), [OK, LIM, BLK, NOT]);
@@ -154,7 +117,7 @@ try {
   const eps = details.body.data?.endpoints ?? [];
   const ep = (id: string, role: string) => eps.find((e: any) => e.identifier === id && e.role === role)?.url as string;
   check('register: we offer the eMSP side too (locations/tariffs/sessions/cdrs RECEIVER, tokens/commands SENDER)',
-    ['locations', 'tariffs', 'sessions', 'cdrs'].every((m) => ep(m, 'RECEIVER')?.includes('/emsp/')) && ep('tokens', 'SENDER')?.includes('/emsp/') && ep('commands', 'SENDER'), eps);
+    !!(['locations', 'tariffs', 'sessions', 'cdrs'].every((m) => ep(m, 'RECEIVER')?.includes('/emsp/')) && ep('tokens', 'SENDER')?.includes('/emsp/') && ep('commands', 'SENDER')), eps);
   const creds = await ocpi('POST', ep('credentials', 'RECEIVER'), TOKEN_A, { token: TOKEN_B, url: `${MOCK}/cpo/versions`, roles: [{ role: 'CPO', country_code: 'ID', party_id: 'CPX', business_details: { name: 'Mock CPO' } }] });
   TOKEN_C = creds.body.data?.token;
   const roles = (creds.body.data?.roles ?? []).map((r: any) => r.role);
@@ -271,7 +234,7 @@ try {
 
   // ─────────────────────────────────────────── what the operator sees and bills
   const cardsAfter = (await ops('GET', '/v1/roaming/cards')).data ?? [];
-  check('console: each card shows its roaming charges', Number(cardsAfter.find((c: any) => c.id === OK.id)?.roaming_idr) === 44_400 && cardsAfter.find((c: any) => c.id === LIM.id)?.roaming_cdrs === 1);
+  check('console: each card shows its roaming charges', Number(cardsAfter.find((c: any) => c.id === OK.id)?.roaming_minor) === 44_400 && cardsAfter.find((c: any) => c.id === LIM.id)?.roaming_cdrs === 1);
   const ab = await ops('GET', '/v1/roaming/abroad');
   const row = (ab.data.cdrs ?? []).find((c: any) => c.cdr_id === C1.id);
   check('console: the charge record lists partner, location, card, holder and totals', row?.partner_name === 'E2E CPO' && row.location_name === 'Mock Mall 1' && row.uid === OK.uid && Number(row.total_incl_vat) === 44_400, row);
@@ -294,7 +257,7 @@ try {
   const m1 = (rs.data.stations ?? []).find((s: any) => s.locationId === loc1.id);
   const m3 = (rs.data.stations ?? []).find((s: any) => s.locationId === L3.id);
   check('app: partner stations are listed with availability, distance, operator and the operator\'s energy price',
-    rs.data.enabled === true && m1?.name === 'Mock Mall 1' && m1.availableCount === 1 && m1.distanceKm != null && m1.distanceKm < 5 && m1.operator === 'Mock CPO' && m1.priceFromIdr === 2500 && m1.vatPercent === 11,
+    rs.data.enabled === true && m1?.name === 'Mock Mall 1' && m1.availableCount === 1 && m1.distanceKm != null && m1.distanceKm < 5 && m1.operator === 'Mock CPO' && m1.priceFromMinor === 2500 && m1.vatPercent === 11,
     { enabled: rs.data.enabled, m1 });
   check('app: a partner charger in use shows as not available', m3 && m3.evses[0].status === 'Charging' && m3.evses[0].available === false, m3?.evses);
   const devNot = await device();
@@ -333,7 +296,7 @@ try {
   check('app: after stopping, the app waits for the operator\'s bill', st3.data.state === 'finishing' && st3.data.energyKwh === 9, st3.data);
   await ocpi('POST', ep('cdrs', 'RECEIVER'), TOKEN_C, cdr(`CPX-CDR2-${RUN}`, OK.uid, cOK.contract_id, 30_000, 33_300, 9, S2, loc2));
   const st4 = await drv('GET', `/v1/roaming/charge/${chargeId}/status`, dev);
-  check('app: once the charge record arrives the charge is complete, with the total incl. tax', st4.data.state === 'billed' && st4.data.totalIdr === 33_300 && !!st4.data.cdrId, st4.data);
+  check('app: once the charge record arrives the charge is complete, with the total incl. tax', st4.data.state === 'billed' && st4.data.totalMinor === 33_300 && !!st4.data.cdrId, st4.data);
   const rc = await drv('GET', `/v1/roaming/cdr/${st4.data.cdrId}`, dev);
   check('app: the charge details show the site, energy, totals before and after tax', rc.status === 200 && rc.data.siteName === 'Mock Mall 2' && rc.data.energyKwh === 9 && rc.data.totalExclVat === 30_000 && rc.data.totalInclVat === 33_300, rc.data);
   const rcOther = await drv('GET', `/v1/roaming/cdr/${st4.data.cdrId}`, devNot);
@@ -341,7 +304,7 @@ try {
   const hist2 = await drv('GET', '/v1/history', dev);
   const hRoam = (hist2.data.charges ?? []).filter((c: any) => c.kind === 'roaming');
   check('app: history lists the app-started charge and the card-tap charge from the partner network',
-    hRoam.some((c: any) => c.chargeId === chargeId && c.state === 'rated' && c.totalIdr === 33_300) && hRoam.some((c: any) => c.chargeId == null && c.totalIdr === 44_400), hRoam);
+    hRoam.some((c: any) => c.chargeId === chargeId && c.state === 'rated' && c.totalMinor === 33_300) && hRoam.some((c: any) => c.chargeId == null && c.totalMinor === 44_400), hRoam);
 
   // ─────────────────────────────────────────── the driver app: reserving a partner charger
   const at = (s: any) => ({ partnerId, countryCode: 'ID', partyId: 'CPX', locationId: s.id, evseUid: s.evses[0].uid });

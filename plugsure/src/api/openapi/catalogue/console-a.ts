@@ -46,6 +46,8 @@ const WEBHOOK_EVENTS = [
 ];
 const ROLE_NAMES = ['super_admin', 'cpo_operations_manager', 'site_host_landlord', 'field_technician', 'financial_auditor', 'site_owner', 'fleet_customer'];
 
+/** Statements are per currency (IDR, MYR, SGD): one each, never added across currencies. */
+const currencyQuery = { name: 'currency', description: 'Statement currency: IDR (default), MYR or SGD.', schema: { type: 'string', enum: ['IDR', 'MYR', 'SGD'] } };
 const monthQuery = {
   name: 'month',
   description: 'Statement month, YYYY-MM. Defaults to the current month in the billing time zone (Asia/Jakarta). Anything else is a 400.',
@@ -55,14 +57,52 @@ const monthQuery = {
 // ─────────────────────────────────────────── component schemas
 
 export const schemas: Record<string, Schema> = {
+  OrgSettings: obj(
+    {
+      name: str,
+      homeCountry: { ...str, description: 'ID, MY or SG.' },
+      timezone: { ...str, description: 'Reporting time zone (IANA).' },
+      defaultLocale: { ...str, enum: ['id', 'en'] },
+      multiCountry: { ...bool, description: 'Whether Malaysia and Singapore are enabled on this platform.' },
+      indonesiaPkp: obj({ registered: bool, npwp: strN }, ['registered', 'npwp'], { description: 'Indonesia: the PKP status billing applies (organisation record), shown when no registration row exists.' }),
+      sitesByCountry: { type: 'object', additionalProperties: int, description: 'Active sites per country code.' },
+      countries: arrayOf(obj({ code: str, name: str, currency: str, timezones: arrayOf(str), scheme: str, displayPricesInclTax: bool })),
+      taxRegistrations: arrayOf(obj({
+        id: uuid, countryCode: str, scheme: { ...str, description: 'ID_PKP, MY_SST or SG_GST.' }, registrationNo: strN, registered: bool, evChargingTaxable: bool,
+        rateBps: intN, effectiveFrom: { ...str, format: 'date' }, effectiveTo: nullable('string', { format: 'date' }), createdAt: dt, createdBy: strN,
+      }, ['id', 'countryCode', 'scheme', 'registered', 'effectiveFrom'])),
+    },
+    ['homeCountry', 'timezone', 'defaultLocale', 'countries', 'taxRegistrations'],
+  ),
   // ---- auth
   AuthLoginResult: obj(
     {
       ok: { type: 'boolean', const: true },
       user: obj({ id: uuid, name: str, email: str }, ['id', 'name', 'email']),
       mustChangePassword: { type: 'boolean', description: 'True after an administrator issued a one-time password; every other route answers 403 until it is changed.' },
+      mfaRequired: {
+        type: 'boolean',
+        description: 'The password was right and the account has two-step verification: the session is pending, and only POST /v1/auth/mfa/verify (and sign-out) answer until the code is given.',
+      },
     },
     ['ok', 'user', 'mustChangePassword'],
+  ),
+  MfaStatus: obj(
+    {
+      enabled: bool,
+      enabledAt: strN,
+      recoveryCodesLeft: int,
+      required: { type: 'boolean', description: 'Two-step verification is required for this account (an administrator, with CONSOLE_MFA_REQUIRED on).' },
+    },
+    ['enabled', 'enabledAt', 'recoveryCodesLeft', 'required'],
+  ),
+  MfaEnrolment: obj(
+    {
+      secret: { type: 'string', description: 'The TOTP secret, base32 — for typing into an app that cannot scan.' },
+      uri: { type: 'string', description: 'otpauth://totp/… (SHA1, 6 digits, 30 s).' },
+      qrDataUrl: { type: 'string', description: 'The URI as a PNG QR code (data: URL).' },
+    },
+    ['secret', 'uri', 'qrDataUrl'],
   ),
   AuthMe: obj(
     {
@@ -72,11 +112,20 @@ export const schemas: Record<string, Schema> = {
           name: str,
           email: strN,
           mustChangePassword: bool,
+          mfa: { anyOf: [ref('MfaStatus'), { type: 'null' }], description: 'Two-step verification of the signed-in operator.' },
+          mfaEnrolmentRequired: { type: 'boolean', description: 'Required and not set up: every route but enrolment answers 403 until it is.' },
+          mfaViaMicrosoft: { type: 'boolean', description: 'This session signed in with Microsoft and Microsoft reported multi-factor authentication: the console’s two-step verification counts as done.' },
+          signedInWith: { ...nullable('string'), enum: ['password', 'microsoft', null], description: 'How this console session signed in (null for an API key).' },
         },
         ['id', 'name', 'email'],
         { description: 'The signed-in operator. For an API key or the development bypass: a synthetic user with a null email.' },
       ),
-      org: obj({ id: uuid, name: str, pkp: bool, npwp: strN }, ['id']),
+      org: obj({
+        id: uuid, name: str, pkp: bool, npwp: strN,
+        homeCountry: { type: 'string', enum: ['ID', 'MY', 'SG'], description: 'The organisation\'s home country (default for new sites).' },
+        timezone: { type: 'string', description: 'The organisation\'s reporting time zone (IANA), e.g. Asia/Jakarta.' },
+        defaultLocale: { type: 'string', enum: ['id', 'en'] },
+      }, ['id']),
       roles: arrayOf(
         obj(
           {
@@ -94,6 +143,7 @@ export const schemas: Record<string, Schema> = {
       fleets: { ...arrayOf(obj({ id: uuid, name: str, legal_name: strN }, ['id', 'name'])), description: 'Fleet customer portal: the fleet accounts this user belongs to (the console then shows only the portal).' },
       features: obj(
         {
+          multiCountry: { ...bool, description: 'MULTI_COUNTRY: Malaysian and Singapore sites may be created.' },
           vault: bool,
           bridge: bool,
           publicBaseUrl: strN,
@@ -104,6 +154,7 @@ export const schemas: Record<string, Schema> = {
           wbp: obj({ start: str, end: str }, ['start', 'end']),
           env: str,
           version: { type: 'string', description: 'The installed PlugSure release (package.json version).' },
+          microsoftSignIn: { type: 'boolean', description: '“Sign in with Microsoft” is configured on this installation (MS_CLIENT_ID).' },
         },
         ['vault', 'bridge', 'supportedVersions', 'minSecurityProfile', 'effectivePpnPct', 'wbp', 'env', 'version'],
       ),
@@ -164,13 +215,13 @@ export const schemas: Record<string, Schema> = {
       today: {
         ...nullable('object'),
         description: 'Today (Asia/Jakarta) so far. Null when the caller lacks session:read.',
-        properties: { sessions: int, energy_wh: int, revenue_idr: int, active: int },
-        required: ['sessions', 'energy_wh', 'revenue_idr', 'active'],
+        properties: { sessions: int, energy_wh: int, revenue_minor: int, active: int },
+        required: ['sessions', 'energy_wh', 'revenue_minor', 'active'],
       },
       series: arrayOf(
         obj(
-          { day: { type: 'string', format: 'date' }, energy_wh: int, revenue_idr: int, sessions: int },
-          ['day', 'energy_wh', 'revenue_idr', 'sessions'],
+          { day: { type: 'string', format: 'date' }, energy_wh: int, revenue_minor: int, sessions: int },
+          ['day', 'energy_wh', 'revenue_minor', 'sessions'],
         ),
       ),
       alerts: obj({ critical: int, warning: int }, ['critical', 'warning']),
@@ -185,25 +236,26 @@ export const schemas: Record<string, Schema> = {
       kind: { type: 'string', enum: ['card_hold', 'postpay'], description: 'card_hold: a card pre-authorisation; postpay: a linked e-wallet charged after the session (nothing held at the acquirer).' },
       channel: strN,
       state: { type: 'string', enum: ['held', 'capturing', 'captured', 'capture_failed', 'releasing', 'released', 'release_failed'] },
-      heldIdr: intN, captureIdr: intN, capturedIdr: intN, attempts: int, error: strN, nextAttemptAt: dtN, authorisedAt: dtN, settledAt: dtN,
+      heldMinor: intN, captureMinor: intN, capturedMinor: intN, attempts: int, error: strN, nextAttemptAt: dtN, authorisedAt: dtN, settledAt: dtN,
       expired: { type: 'boolean', description: 'The card authorisation expired at the acquirer before it was captured: nothing was taken from the card and it cannot be retried. The driver can pay it in the app (paidInApp), or the operator collects it another way or writes it off.' },
       paidInApp: { type: 'boolean', description: 'An expired card hold, or a post-pay session whose e-wallet link ended, that the driver has since paid in the app.' },
       provider: str, providerRef: strN, createdAt: dt, sessionId: { type: ['string', 'null'], format: 'uuid' }, site: strN, charger: strN,
     },
-    ['id', 'kind', 'state', 'heldIdr', 'attempts', 'provider', 'createdAt'],
+    ['id', 'kind', 'state', 'heldMinor', 'attempts', 'provider', 'createdAt'],
   ),
 
   // ---- refunds
   RefundSummary: obj(
-    { due_count: int, due_idr: int, failed_count: int, refunded_30d_idr: int },
-    ['due_count', 'due_idr', 'failed_count', 'refunded_30d_idr'],
+    { due_count: int, due_minor: { ...int, description: 'Rupiah (IDR); other currencies are in by_currency.' }, failed_count: int, refunded_30d_minor: int,
+      by_currency: arrayOf(obj({ currency: str, due_minor: int, refunded_30d_minor: int })) },
+    ['due_count', 'due_minor', 'failed_count', 'refunded_30d_minor'],
   ),
   RefundRow: obj(
     {
       id: uuid,
       refund_state: { type: 'string', enum: ['due', 'processing', 'refunded', 'failed'] },
-      refund_due_idr: intN,
-      refunded_idr: intN,
+      refund_due_minor: intN,
+      refunded_minor: intN,
       refund_reason: strN,
       refund_method: { type: ['string', 'null'], enum: ['provider', 'manual', null] },
       refund_ref: strN,
@@ -213,7 +265,7 @@ export const schemas: Record<string, Schema> = {
       provider: str,
       provider_ref: strN,
       method: str,
-      amount_captured_idr: intN,
+      amount_captured_minor: intN,
       paid_at: dt,
       session_id: uuidN,
       site_name: strN,
@@ -249,12 +301,13 @@ export const schemas: Record<string, Schema> = {
       longestOutageMin: int,
       sessions: int,
       energyKwh: num,
-      revenueIdr: num,
+      revenueMinor: num,
+      currency: { ...str, description: 'The site\'s currency (IDR, MYR or SGD).' },
       utilisationPct: { ...nullable('number'), description: 'Connector-time in sessions over connector-time in the window, percent.' },
     },
     [
       'chargePointId', 'ocppIdentity', 'displayName', 'siteId', 'siteName', 'connectors', 'online', 'uptimePct',
-      'outages', 'offlineMinutes', 'longestOutageMin', 'sessions', 'energyKwh', 'revenueIdr', 'utilisationPct',
+      'outages', 'offlineMinutes', 'longestOutageMin', 'sessions', 'energyKwh', 'revenueMinor', 'utilisationPct',
     ],
   ),
   AvailabilityReport: obj(
@@ -462,19 +515,19 @@ export const schemas: Record<string, Schema> = {
   ),
 
   // ---- statements
-  StatementTier: obj({ name: str, upToIdr: nullable('number'), rateBps: int }, ['name', 'upToIdr', 'rateBps']),
+  StatementTier: obj({ name: str, upToMinor: nullable('number'), rateBps: int }, ['name', 'upToMinor', 'rateBps']),
   StatementPlan: obj(
     {
       tiers: arrayOf(ref('StatementTier')),
       tierMode: { type: 'string', enum: ['whole', 'marginal'] },
-      minPerChargerAcIdr: num,
-      minPerChargerDcIdr: num,
-      privateFeeAcIdr: num,
-      privateFeeDcIdr: num,
+      minPerChargerAcMinor: num,
+      minPerChargerDcMinor: num,
+      privateFeeAcMinor: num,
+      privateFeeDcMinor: num,
       mdrBorneBy: { type: 'string', enum: ['platform', 'site_owner'] },
       prorate: bool,
     },
-    ['tiers', 'tierMode', 'minPerChargerAcIdr', 'minPerChargerDcIdr', 'privateFeeAcIdr', 'privateFeeDcIdr', 'mdrBorneBy', 'prorate'],
+    ['tiers', 'tierMode', 'minPerChargerAcMinor', 'minPerChargerDcMinor', 'privateFeeAcMinor', 'privateFeeDcMinor', 'mdrBorneBy', 'prorate'],
   ),
   StatementPlanInput: obj(
     {
@@ -482,14 +535,14 @@ export const schemas: Record<string, Schema> = {
         type: 'array',
         minItems: 1,
         maxItems: 10,
-        items: obj({ name: str, upToIdr: nullable('number'), rateBps: { type: 'integer', minimum: 0, maximum: 5000 } }, ['rateBps']),
-        description: 'Ascending upper bounds (exclusive); the last tier has upToIdr null.',
+        items: obj({ name: str, upToMinor: nullable('number'), rateBps: { type: 'integer', minimum: 0, maximum: 5000 } }, ['rateBps']),
+        description: 'Ascending upper bounds (exclusive); the last tier has upToMinor null.',
       },
       tierMode: { type: 'string', enum: ['whole', 'marginal'] },
-      minPerChargerAcIdr: { type: 'number', minimum: 0 },
-      minPerChargerDcIdr: { type: 'number', minimum: 0 },
-      privateFeeAcIdr: { type: 'number', minimum: 0 },
-      privateFeeDcIdr: { type: 'number', minimum: 0 },
+      minPerChargerAcMinor: { type: 'number', minimum: 0 },
+      minPerChargerDcMinor: { type: 'number', minimum: 0 },
+      privateFeeAcMinor: { type: 'number', minimum: 0 },
+      privateFeeDcMinor: { type: 'number', minimum: 0 },
       mdrBorneBy: { type: 'string', enum: ['platform', 'site_owner'] },
       prorate: bool,
     },
@@ -507,17 +560,17 @@ export const schemas: Record<string, Schema> = {
       activeDays: num,
       sessions: int,
       energyWh: num,
-      gtvIdr: num,
-      pbjtIdr: num,
-      ppnIdr: num,
-      grossIdr: num,
-      mdrIdr: num,
+      gtvMinor: num,
+      localTaxMinor: num,
+      taxMinor: num,
+      grossMinor: num,
+      mdrMinor: num,
       inReview: int,
-      commissionIdr: num,
-      minimumIdr: num,
-      topUpIdr: num,
-      privateFeeIdr: num,
-      feeIdr: num,
+      commissionMinor: num,
+      minimumMinor: num,
+      topUpMinor: num,
+      privateFeeMinor: num,
+      feeMinor: num,
     },
     ['chargePointId', 'ocppIdentity', 'siteId', 'kind', 'sessions'],
   ),
@@ -530,18 +583,18 @@ export const schemas: Record<string, Schema> = {
       rateBps: nullable('number'),
       sessions: int,
       energyKwh: num,
-      gtvIdr: num,
-      pbjtIdr: num,
-      ppnIdr: num,
-      grossIdr: num,
-      commissionIdr: num,
-      minimumTopUpIdr: num,
-      privateFeeIdr: num,
-      feeIdr: num,
-      mdrIdr: num,
-      mdrCreditIdr: num,
-      platformShareIdr: num,
-      ownerShareIdr: num,
+      gtvMinor: num,
+      localTaxMinor: num,
+      taxMinor: num,
+      grossMinor: num,
+      commissionMinor: num,
+      minimumTopUpMinor: num,
+      privateFeeMinor: num,
+      feeMinor: num,
+      mdrMinor: num,
+      mdrCreditMinor: num,
+      platformShareMinor: num,
+      ownerShareMinor: num,
       warnings: arrayOf(str),
       chargers: arrayOf(ref('StatementChargerLine')),
     },
@@ -551,25 +604,25 @@ export const schemas: Record<string, Schema> = {
     {
       sessions: int,
       energyKwh: num,
-      gtvIdr: num,
-      pbjtIdr: num,
-      ppnCollectedIdr: num,
-      grossCollectedIdr: num,
-      commissionIdr: num,
-      minimumTopUpIdr: num,
-      privateFeeIdr: num,
-      feesIdr: num,
-      mdrEstimateIdr: num,
-      mdrCreditIdr: num,
-      netIdr: num,
-      dppIdr: num,
-      ppnIdr: num,
-      totalIdr: num,
-      pph23Idr: num,
-      platformShareIdr: num,
-      ownerShareIdr: num,
+      gtvMinor: num,
+      localTaxMinor: num,
+      ppnCollectedMinor: num,
+      grossCollectedMinor: num,
+      commissionMinor: num,
+      minimumTopUpMinor: num,
+      privateFeeMinor: num,
+      feesMinor: num,
+      mdrEstimateMinor: num,
+      mdrCreditMinor: num,
+      netMinor: num,
+      taxBaseMinor: num,
+      taxMinor: num,
+      totalMinor: num,
+      pph23Minor: num,
+      platformShareMinor: num,
+      ownerShareMinor: num,
     },
-    ['sessions', 'gtvIdr', 'netIdr', 'ppnIdr', 'totalIdr'],
+    ['sessions', 'gtvMinor', 'netMinor', 'taxMinor', 'totalMinor'],
   ),
   StatementParty: obj({ name: str, npwp: strN, address: strN }, ['name']),
   Statement: obj(
@@ -602,18 +655,18 @@ export const schemas: Record<string, Schema> = {
     {
       period: month,
       number: str,
-      gtv_idr: int,
-      commission_idr: int,
-      minimum_topup_idr: int,
-      private_fee_idr: int,
-      mdr_credit_idr: int,
-      net_idr: int,
-      ppn_idr: int,
-      total_idr: int,
-      owner_share_idr: intN,
+      gtv_minor: int,
+      commission_minor: int,
+      minimum_topup_minor: int,
+      private_fee_minor: int,
+      mdr_credit_minor: int,
+      net_minor: int,
+      tax_minor: int,
+      total_minor: int,
+      owner_share_minor: intN,
       finalised_at: dt,
     },
-    ['period', 'number', 'gtv_idr', 'commission_idr', 'net_idr', 'ppn_idr', 'total_idr', 'finalised_at'],
+    ['period', 'number', 'gtv_minor', 'commission_minor', 'net_minor', 'tax_minor', 'total_minor', 'finalised_at'],
   ),
   StatementWithHistory: {
     allOf: [ref('Statement'), obj({ history: arrayOf(ref('StatementFinalisedRow')) }, ['history'])],
@@ -651,13 +704,13 @@ export const schemas: Record<string, Schema> = {
     chargers: int,
     sessions: num,
     energyKwh: num,
-    grossIdr: num,
-    pbjtIdr: num,
-    ppnIdr: num,
-    baseIdr: num,
-    mdrIdr: num,
-    ownerShareIdr: num,
-    platformShareIdr: num,
+    grossMinor: num,
+    localTaxMinor: num,
+    taxMinor: num,
+    baseMinor: num,
+    mdrMinor: num,
+    ownerShareMinor: num,
+    platformShareMinor: num,
   }),
   BillingOwnerRow: {
     allOf: [
@@ -671,8 +724,8 @@ export const schemas: Record<string, Schema> = {
           customPlan: bool,
           status: { type: 'string', enum: ['draft', 'final'] },
           number: strN,
-          platformPpnIdr: num,
-          invoiceTotalIdr: num,
+          platformPpnMinor: num,
+          invoiceTotalMinor: num,
           warnings: { type: 'integer', description: 'Number of statement warnings.' },
         },
         ['ownerId', 'name', 'legalName', 'archived', 'customPlan', 'status', 'number', 'sites', 'chargers'],
@@ -766,6 +819,9 @@ export const schemas: Record<string, Schema> = {
       locked: bool,
       has_password: bool,
       must_change_password: bool,
+      mfa_enabled: { type: 'boolean', description: 'Two-step verification (authenticator app) is on.' },
+      microsoft_bound: { type: 'boolean', description: 'Bound to a Microsoft account (“Sign in with Microsoft” finds the user by it).' },
+      microsoft_bound_at: dtN,
       roles: arrayOf(
         obj(
           { role: str, scopeType: { type: 'string', description: 'org, site or owner' }, scopeId: uuidN, siteName: strN, ownerName: strN },
@@ -821,13 +877,13 @@ const orgIdPath = { orgId: 'Customer organisation id (UUID).' };
 const planExample = {
   plan: {
     tiers: [
-      { name: 'Standard', upToIdr: 150000000, rateBps: 750 },
-      { name: 'Volume', upToIdr: 500000000, rateBps: 600 },
-      { name: 'Network', upToIdr: null, rateBps: 450 },
+      { name: 'Standard', upToMinor: 150000000, rateBps: 750 },
+      { name: 'Volume', upToMinor: 500000000, rateBps: 600 },
+      { name: 'Network', upToMinor: null, rateBps: 450 },
     ],
     tierMode: 'whole',
-    minPerChargerAcIdr: 150000,
-    minPerChargerDcIdr: 350000,
+    minPerChargerAcMinor: 150000,
+    minPerChargerDcMinor: 350000,
     mdrBorneBy: 'platform',
   },
   effectiveFrom: '2026-10',
@@ -854,12 +910,130 @@ export const ops: Op[] = [
   },
   {
     method: 'POST',
+    path: '/v1/auth/mfa/verify',
+    tag: 'Console session',
+    summary: 'Complete sign-in with a two-step verification code',
+    description:
+      'The second step for an account with two-step verification, on the pending session the password step set: a six-digit code from the authenticator app ' +
+      '(accepted once per 30-second step: a code cannot be replayed) or one of the recovery codes (each works once). On success the pending session is replaced by a full one (new cookie). ' +
+      'A wrong code answers 400 and counts towards the same lockout as wrong passwords; once the lock engages the pending session ends and the answer is 401. Audited.',
+    body: { required: true, schema: obj({ code: { type: 'string' } }, ['code']), example: { code: '492039' } },
+    responses: {
+      200: {
+        description: 'Signed in.',
+        schema: obj({ ok: { type: 'boolean', const: true }, mustChangePassword: bool, recoveryCodesLeft: int }, ['ok', 'mustChangePassword']),
+      },
+    },
+    errors: [400, 401],
+    internal: AUTH_INTERNAL,
+  },
+  {
+    method: 'GET',
+    path: '/v1/auth/mfa',
+    tag: 'Console session',
+    summary: 'Get your two-step verification status',
+    description: 'Whether two-step verification is on, how many recovery codes are left, and whether it is required for this account.',
+    responses: { 200: { description: 'Status.', schema: ref('MfaStatus') } },
+    errors: [400],
+    internal: AUTH_INTERNAL,
+  },
+  {
+    method: 'POST',
+    path: '/v1/auth/mfa/enrol',
+    tag: 'Console session',
+    summary: 'Start setting up two-step verification',
+    description:
+      'Generates a new authenticator secret (kept sealed until confirmed) and answers it as an otpauth:// URI and a QR code. Refused while two-step verification is already on ' +
+      '(an administrator resets it). Required for administrator accounts: until it is set up they can reach nothing but this, the confirmation, who-am-I and sign-out.',
+    responses: { 200: { description: 'The secret to scan.', schema: ref('MfaEnrolment') } },
+    errors: [400],
+    internal: AUTH_INTERNAL,
+  },
+  {
+    method: 'POST',
+    path: '/v1/auth/mfa/enrol/confirm',
+    tag: 'Console session',
+    summary: 'Confirm two-step verification with a code',
+    description:
+      'Proves the app holds the secret and turns two-step verification on. Answers ten recovery codes, shown only in this response (only their hashes are kept). ' +
+      'Every other session of the account ends. Audited.',
+    body: { required: true, schema: obj({ code: { type: 'string' } }, ['code']), example: { code: '492039' } },
+    responses: { 200: { description: 'On; the recovery codes.', schema: obj({ ok: { type: 'boolean', const: true }, recoveryCodes: arrayOf(str) }, ['ok', 'recoveryCodes']) } },
+    errors: [400],
+    internal: AUTH_INTERNAL,
+  },
+  {
+    method: 'POST',
     path: '/v1/auth/logout',
     tag: 'Console session',
     summary: 'Sign out of the console',
-    description: 'Revokes the session in the cookie (if any) and clears the cookie.',
+    description: 'Revokes the session the request was made with — the cookie or a `Bearer pss_…` token — and clears the cookie.',
     responses: { 200: { description: 'Signed out.', schema: OK } },
     internal: AUTH_INTERNAL,
+  },
+  {
+    method: 'GET',
+    path: '/v1/countries',
+    tag: 'Reference data',
+    summary: 'List the countries PlugSure operates in',
+    description: 'Indonesia, Malaysia and Singapore: currency, the time zones a site there may use (first = default), whether consumer prices are shown including tax, and the default language.',
+    responses: {
+      200: {
+        description: 'Countries.',
+        schema: obj({
+          countries: arrayOf(obj({
+            code: { ...str, description: 'ISO 3166-1 alpha-2: ID, MY or SG.' }, name: str, currency: { ...str, description: 'ISO 4217: IDR, MYR or SGD.' },
+            timezones: arrayOf(str), displayPricesInclTax: bool, defaultLocale: { ...str, enum: ['id', 'en'] },
+          }, ['code', 'name', 'currency', 'timezones', 'displayPricesInclTax', 'defaultLocale'])),
+        }, ['countries']),
+      },
+    },
+  },
+  {
+    method: 'GET',
+    path: '/v1/org/settings',
+    tag: 'Compliance',
+    summary: 'Get the organisation\'s country settings',
+    description: 'Home country (default for new sites, the roaming identity), reporting time zone (statements, alerts, console times), default language, the sites per country, and the tax registrations per country (effective-dated: PKP in Indonesia, service tax in Malaysia, GST in Singapore).',
+    responses: { 200: { description: 'Settings.', schema: ref('OrgSettings') } },
+  },
+  {
+    method: 'PUT',
+    path: '/v1/org/settings',
+    tag: 'Compliance',
+    summary: 'Change the home country, reporting time zone or default language',
+    description: 'Fields left out keep their value. The time zone is one of a country the organisation is in (home or a site\'s). Malaysia and Singapore as home country need MULTI_COUNTRY. 422 with `errors` per field. Audited.',
+    body: {
+      required: true,
+      schema: obj({ homeCountry: { ...str, enum: ['ID', 'MY', 'SG'] }, timezone: { ...str, description: 'IANA zone, e.g. Asia/Singapore.' }, defaultLocale: { ...str, enum: ['id', 'en'] } }),
+      example: { homeCountry: 'SG', timezone: 'Asia/Singapore', defaultLocale: 'en' },
+    },
+    responses: { 200: { description: 'The settings now.', schema: ref('OrgSettings') } },
+    errors: [422],
+  },
+  {
+    method: 'POST',
+    path: '/v1/org/tax-registrations',
+    tag: 'Compliance',
+    summary: 'Record a tax registration in a country',
+    description:
+      'From the date given, sessions in that country are taxed by it; the registration in force there before ends that day (409 when the new date is not after its start). ' +
+      '`registered: false` records that the organisation is not registered from that date. Malaysia: service tax is charged on EV charging only with `evChargingTaxable: true`. ' +
+      'An Indonesian registration in force today also sets the organisation\'s PKP / NPWP. Audited.',
+    body: {
+      required: true,
+      schema: obj({
+        countryCode: { ...str, enum: ['ID', 'MY', 'SG'] },
+        registered: { ...bool, description: 'Default true.' },
+        registrationNo: { ...strN, description: 'NPWP (15–16 digits), SST or GST registration number. Required when registered.' },
+        effectiveFrom: { ...str, format: 'date' },
+        evChargingTaxable: { ...bool, description: 'Malaysia only.' },
+        rateBps: { ...intN, description: 'Basis points; empty for the statutory rate (SST 8 %, GST 9 %).' },
+      }, ['countryCode', 'effectiveFrom']),
+      example: { countryCode: 'SG', registered: true, registrationNo: 'M90000000X', effectiveFrom: '2026-10-01' },
+    },
+    responses: { 201: { description: 'The settings now.', schema: ref('OrgSettings') } },
+    errors: [409, 422],
   },
   {
     method: 'GET',
@@ -964,7 +1138,7 @@ export const ops: Op[] = [
       200: {
         description: 'Holds and a summary.',
         schema: obj(
-          { holds: arrayOf(ref('CardHold')), summary: obj({ held: int, inProgress: int, failed: int, heldIdr: int, expired: int, expiredIdr: int }, ['held', 'inProgress', 'failed', 'heldIdr']) },
+          { holds: arrayOf(ref('CardHold')), summary: obj({ held: int, inProgress: int, failed: int, heldMinor: { ...int, description: 'Rupiah (IDR).' }, expired: int, expiredMinor: { ...int, description: 'Rupiah (IDR).' }, expiredByCurrency: { type: 'object', additionalProperties: int } }, ['held', 'inProgress', 'failed', 'heldMinor']) },
           ['holds', 'summary'],
         ),
       },
@@ -1434,6 +1608,7 @@ export const ops: Op[] = [
       "The month's statement: frozen if finalised, otherwise a live draft (the current month projects minimums and fees to month end), plus the list of finalised statements. " +
       "Org-wide finance staff get the organisation's statement from the platform, or one site owner's with `ownerId`; a Site Owner portal user always gets its own owner's.",
     query: [
+      currencyQuery,
       monthQuery,
       { name: 'ownerId', description: 'A site owner of the organisation (UUID). Site Owner users may only name their own.', schema: uuid },
     ],
@@ -1449,6 +1624,7 @@ export const ops: Op[] = [
     description:
       'The same statement as GET /v1/billing/statement, one row per charger, as a UTF-8 CSV (with BOM) sent as an attachment named plugsure-statement-<org>-<YYYY-MM>.csv.',
     query: [
+      currencyQuery,
       monthQuery,
       { name: 'ownerId', description: 'A site owner of the organisation (UUID).', schema: uuid },
     ],
@@ -1463,6 +1639,7 @@ export const ops: Op[] = [
     summary: 'Get a printable statement',
     description: 'The same statement as GET /v1/billing/statement, as a self-contained printable HTML page.',
     query: [
+      currencyQuery,
       monthQuery,
       { name: 'ownerId', description: 'A site owner of the organisation (UUID).', schema: uuid },
     ],
@@ -1478,7 +1655,7 @@ export const ops: Op[] = [
     description:
       "Every site owner's month — charging units, gross, taxes, commission base, the owner's and the operator's shares, statement status — plus the operator's own sites and totals. " +
       'Computes a statement per owner, so it can be slow for many owners.',
-    query: [monthQuery],
+    query: [monthQuery, currencyQuery],
     responses: { 200: { description: 'Owners overview.', schema: ref('BillingOwnersOverview') } },
     errors: [400],
   },
@@ -1597,7 +1774,7 @@ export const ops: Op[] = [
     tag: 'Platform administration',
     summary: 'Get billing across customer organisations',
     description: 'Every customer organisation with sites: its statement status, number, totals and whether it has a custom plan, for one month.',
-    query: [monthQuery],
+    query: [monthQuery, currencyQuery],
     responses: {
       200: {
         description: 'Platform overview.',
@@ -1614,7 +1791,7 @@ export const ops: Op[] = [
     summary: "Get a customer organisation's billing",
     description: "The organisation's statement for the month, the plan in force and its history, and its active sites with their billing model.",
     pathParams: orgIdPath,
-    query: [monthQuery],
+    query: [monthQuery, currencyQuery],
     responses: { 200: { description: 'Organisation billing.', schema: ref('PlatformOrgBilling') } },
     errors: [400, 404],
     internal: PLATFORM_INTERNAL,
@@ -1626,7 +1803,7 @@ export const ops: Op[] = [
     summary: "Get a customer organisation's printable statement",
     description: "The organisation's statement for the month as printable HTML.",
     pathParams: orgIdPath,
-    query: [monthQuery],
+    query: [monthQuery, currencyQuery],
     responses: { 200: { description: 'HTML page.', contentType: 'text/html', schema: { type: 'string' } } },
     errors: [400, 404],
     internal: PLATFORM_INTERNAL,
@@ -1638,7 +1815,7 @@ export const ops: Op[] = [
     summary: "Download a customer organisation's statement as CSV",
     description: "The organisation's statement for the month, one row per charger, as a UTF-8 CSV attachment.",
     pathParams: orgIdPath,
-    query: [monthQuery],
+    query: [monthQuery, currencyQuery],
     responses: { 200: { description: 'CSV file.', contentType: 'text/csv', schema: { type: 'string' } } },
     errors: [400, 404],
     internal: PLATFORM_INTERNAL,
@@ -1789,5 +1966,18 @@ export const ops: Op[] = [
     pathParams: { id: 'User id (UUID).' },
     responses: { 200: { description: 'New one-time password.', schema: ref('UserPasswordReset') } },
     errors: [404],
+  },
+  {
+    method: 'POST',
+    path: '/v1/users/:id/reset-mfa',
+    tag: 'Users and roles',
+    summary: "Reset a user's two-step verification",
+    description:
+      'For a lost phone and recovery codes: removes the authenticator secret and every recovery code and ends every session of the user. ' +
+      'Where two-step verification is required (administrators) the user sets it up again at next sign-in. Not on yourself; within your own authority only; ' +
+      'a signed-in administrator only (403 `console_user_required` for an API key, v1.9.0). Audited.',
+    pathParams: { id: 'User id (UUID).' },
+    responses: { 200: { description: 'Reset.', schema: OK } },
+    errors: [400, 403, 404],
   },
 ];

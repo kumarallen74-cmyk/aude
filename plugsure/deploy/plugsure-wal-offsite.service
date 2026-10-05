@@ -1,0 +1,33 @@
+# PlugSure — check WAL archiving and copy the WAL archive off the host; run every
+# 5 minutes by plugsure-wal-offsite.timer. Fails (unit "failed") when archive_mode
+# is off or archive_command is failing — alert on it: a failing archive_command
+# also fills pg_wal until the database stops. Install and configure with
+# plugsure-basebackup.service (same /etc/plugsure/pitr.env; WAL_OFFSITE_CMD).
+
+[Unit]
+Description=PlugSure WAL archive check and off-host copy
+Documentation=file:/opt/plugsure/deploy/pitr/RESTORE.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+EnvironmentFile=-/etc/plugsure/pitr.env
+ExecStart=/opt/plugsure/tools/backup/wal-offsite.sh
+Nice=10
+TimeoutStartSec=30min
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plugsure-wal-offsite
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/backups/plugsure-pitr
+# If the copy tool keeps a cache or state under the postgres home (e.g. rclone's
+# config, aws cli's ~/.aws/cli/cache), add: ReadWritePaths=/var/lib/postgresql/.cache
+UMask=0077

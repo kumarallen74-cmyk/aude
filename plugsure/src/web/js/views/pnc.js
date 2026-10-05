@@ -56,13 +56,13 @@ async function renderOverview(box, show) {
     </div>
     ${o.pki.mode === 'mock' ? callout('warn', '<b>Test PKI.</b> Certificates come from PlugSure\'s built-in test PKI — for development and sandboxes only. Production needs your V2G PKI provider (PNC_PKI=http).') : ''}
     ${o.pki.problem && o.pki.mode !== 'mock' ? callout('warn', esc(o.pki.problem)) : ''}
-    <div class="grid" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;align-items:start">
-      <div class="card section"><h3 style="margin-top:0">Set-up</h3>
+    <div class="grid split even">
+      <div class="card pad"><h3 style="margin:0 0 10px">Set-up</h3>
         <ol class="plain" style="padding-left:0;list-style:none;display:grid;gap:10px;margin:0">
-          ${steps.map(([ok, t, d, tab]) => `<li style="display:flex;gap:10px;align-items:flex-start"><span style="color:var(${ok ? '--accent' : '--warn'});display:inline-flex;width:18px;height:18px;flex:none;margin-top:1px">${icon(ok ? 'check' : 'warn').replace('<svg ', '<svg width="18" height="18" ')}</span><div><b>${esc(t)}</b><div class="cell-sub">${esc(d ?? '')}${tab ? ` · <a href="#/pnc/${tab}" data-go="${tab}">open</a>` : ''}</div></div></li>`).join('')}
+          ${steps.map(([ok, t, d, tab]) => `<li style="display:flex;gap:10px;align-items:flex-start"><span style="color:var(${ok ? '--accent' : '--warn'});display:inline-flex;width:18px;height:18px;flex:none;margin-top:1px">${icon(ok ? 'check' : 'warn')}</span><div><b>${esc(t)}</b><div class="cell-sub">${esc(d ?? '')}${tab ? ` · <a href="#/pnc/${tab}" data-go="${tab}">open</a>` : ''}</div></div></li>`).join('')}
         </ol>
       </div>
-      <div class="card section"><h3 style="margin-top:0">Settings</h3>
+      <div class="card pad"><h3 style="margin:0 0 10px">Settings</h3>
         <form data-settings class="form" style="grid-template-columns:1fr">
           <div class="field full"><label class="check"><input type="checkbox" name="enabled"${o.settings.enabled ? ' checked' : ''}${canOrg ? '' : ' disabled'}> <span>Plug & Charge on</span></label></div>
           <div class="field full"><label class="check"><input type="checkbox" name="acceptWhenOcspUnavailable"${o.settings.acceptWhenOcspUnavailable ? ' checked' : ''}${canOrg ? '' : ' disabled'}> <span>Accept a contract when its OCSP responder cannot be reached</span></label>
@@ -221,7 +221,7 @@ function manage(c, reload) {
 
 function installedTable(list, canCmd) {
   if (!list.length) return '<div class="cell-sub">Not read yet, or none installed.</div>';
-  return `<div class="table-wrap"><table class="table"><thead><tr><th>Type</th><th>Serial</th><th>Issuer key hash</th>${canCmd ? '<th></th>' : ''}</tr></thead><tbody>${list.map((x) => {
+  return `<div class="table-wrap"><table class="t"><thead><tr><th>Type</th><th>Serial</th><th>Issuer key hash</th>${canCmd ? '<th></th>' : ''}</tr></thead><tbody>${list.map((x) => {
     const h = x.certificateHashData ?? {};
     return `<tr><td>${esc(KIND_LABEL[x.certificateType] ?? x.certificateType ?? '')}</td><td class="mono">${esc(h.serialNumber ?? '')}</td><td class="mono cell-sub">${esc(String(h.issuerKeyHash ?? '').slice(0, 16))}…</td>${canCmd ? `<td><button class="btn sm" type="button" data-del='${esc(JSON.stringify(h))}'>Delete</button></td>` : ''}</tr>`;
   }).join('')}</tbody></table></div>`;

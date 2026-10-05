@@ -37,7 +37,7 @@ export interface ConnectorRow {
   status: string;
   tera_status: string;
   tera_due_at: string | null;
-  pbjt_rate_bps: number;
+  local_tax_rate_bps: number;
   timezone: string;
 }
 
@@ -204,7 +204,7 @@ export async function getConnector(chargePointId: string, connectorNo: number): 
     `SELECT c.id, c.evse_uuid, c.connector_id, e.evse_id AS evse_no,
             cp.id AS charge_point_id, s.id AS site_id, s.org_id,
             c.max_power_w, c.current_type, c.phases, c.status,
-            c.tera_status, c.tera_due_at, s.pbjt_rate_bps, s.timezone
+            c.tera_status, c.tera_due_at, s.local_tax_rate_bps, s.timezone
        FROM connector c
        JOIN evse e ON e.id = c.evse_uuid
        JOIN charge_point cp ON cp.id = e.charge_point_id

@@ -41,6 +41,9 @@ Group=plugsure
 WorkingDirectory=/opt/plugsure
 
 EnvironmentFile=/etc/plugsure/plugsure.env
+# NODE_ENV is forced on the command line below as well: an EnvironmentFile= OVERRIDES
+# Environment=, so a NODE_ENV=development copied into the env file used to win and run
+# production with development behaviour. `env` sets it for the process whatever the file says.
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--enable-source-maps
 # Time-of-use tariff windows (WBP 17:00-22:00) are evaluated in local time.
@@ -52,7 +55,7 @@ ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
 # TimeoutStartSec=600): without this the default 90 s would report a long migration as a
 # failed deploy while it is still running.
 TimeoutStartSec=infinity
-ExecStart=/usr/bin/node /opt/plugsure/dist/apps/gateway.js
+ExecStart=/usr/bin/env NODE_ENV=production /usr/bin/node /opt/plugsure/dist/apps/gateway.js
 # Deliberately NO ExecReload. The gateway installs no SIGHUP handler, and node's
 # default action for SIGHUP is to terminate: an `ExecReload=/bin/kill -HUP` here made
 # `systemctl reload plugsure-gateway` kill the process, dropping every charger

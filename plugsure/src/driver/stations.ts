@@ -1,9 +1,12 @@
 import { one, many } from '../db/pool.js';
 import * as registry from '../ocpp/registry.js';
-import { loadTariffForConnector } from '../services/tariff-store.js';
+import { loadTariffForConnector, headlinePrices } from '../services/tariff-store.js';
 import { plnEnergyRate, type Tariff } from '../services/tariff.js';
 import { connectorMaySellEnergy } from '../services/compliance.js';
-import { feeTax } from '../services/benefits.js';
+import { feeTaxerFor } from '../services/benefits.js';
+import { profileFor } from '../services/regulatory/index.js';
+import { countryOf } from '../domain/country.js';
+import { rateToMinor, type CurrencyCode } from '../domain/money.js';
 import { chargingClassForPowerW } from '../domain/spklu.js';
 import { config } from '../config.js';
 import { reservationOn } from './reservations.js';
@@ -64,7 +67,15 @@ export interface StationView {
   totalCount: number;
   maxPowerKw: number;
   fastest: string; // e.g. "60 kW DC"
-  priceFromIdr: number | null; // headline Rp/kWh, energy only
+  /** Headline energy price per kWh: the rate in major units (priceFromMajor) and in minor units (IDR: the rupiah rate, as before). */
+  priceFromMinor: number | null;
+  priceFromMajor: number | null;
+  /** The site's currency and country (every amount for this station is in that currency). */
+  currency: CurrencyCode;
+  countryCode: string;
+  timezone: string | null;
+  /** Prices include the tax (Singapore GST, Malaysia): the price shown is what the driver pays per kWh. */
+  pricesIncludeTax: boolean;
 }
 
 interface ConnectorRow {
@@ -87,13 +98,15 @@ interface ConnectorRow {
   spklu_id: string | null;
   org_id: string;
   operator: string;
+  country_code: string;
+  timezone: string | null;
 }
 
 const CONNECTOR_COLUMNS = `
   c.id AS connector_id, e.evse_id AS connector_no, c.connector_type, c.current_type,
   c.max_power_w, c.status, c.tera_status, (c.maintenance_reason IS NOT NULL) AS in_maintenance,
   (cp.status = 'suspended') AS suspended, cp.ocpp_identity, cp.display_name, s.id AS site_id, s.name AS site_name, s.address, s.lat, s.lon,
-  s.spklu_id, s.org_id, o.name AS operator
+  s.spklu_id, s.org_id, o.name AS operator, s.country_code, s.timezone
   FROM connector c
   JOIN evse e ON e.id = c.evse_uuid
   JOIN charge_point cp ON cp.id = e.charge_point_id
@@ -111,7 +124,8 @@ const PUBLICLY_LISTED = `cp.status NOT IN ('pending_adoption', 'decommissioned')
 
 function toConnectorView(r: ConnectorRow): ConnectorView {
   const online = registry.isOnline(r.ocpp_identity);
-  const gate = connectorMaySellEnergy(r.tera_status as any);
+  // Tera (meter verification) gates Indonesian connectors only (the country's regulatory profile).
+  const gate = profileFor(r.country_code ?? 'ID').connectorMaySell(r.tera_status);
 
   let status: string;
   let available = false;
@@ -169,7 +183,7 @@ function toConnectorView(r: ConnectorRow): ConnectorView {
   };
 }
 
-function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
+export function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
   const R = 6371;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
   const dLon = ((bLon - aLon) * Math.PI) / 180;
@@ -179,11 +193,16 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): nu
   return Math.round(2 * R * Math.asin(Math.sqrt(s)) * 10) / 10;
 }
 
-/** Headline energy price (Rp/kWh) for a connector, or null if none is set. */
+/** Headline energy price (per kWh, major units of the tariff's currency) for a connector, or null if none is set. */
 export async function connectorEnergyPrice(connectorUuid: string, orgId: string): Promise<number | null> {
+  return (await connectorPricing(connectorUuid, orgId))?.rate ?? null;
+}
+
+/** The headline energy rate and whether the tariff's prices include the tax. */
+async function connectorPricing(connectorUuid: string, orgId: string): Promise<{ rate: number | null; inclusive: boolean } | null> {
   try {
     const { tariff } = await loadTariffForConnector(connectorUuid, orgId, new Date());
-    return energyRateOf(tariff);
+    return { rate: energyRateOf(tariff), inclusive: tariff.pricesIncludeTax === true };
   } catch {
     return null;
   }
@@ -195,16 +214,78 @@ function energyRateOf(t: Tariff): number | null {
   return plnEnergyRate(t);
 }
 
+/** A map viewport: west, south, east, north (degrees). West > east crosses the antimeridian. */
+export type BBox = readonly [number, number, number, number];
+
+/** Parse `w,s,e,n`; null when absent or malformed. */
+export function parseBbox(raw: unknown): BBox | null {
+  if (raw == null || raw === '') return null;
+  const p = String(raw).split(',').map((x) => Number(x.trim()));
+  if (p.length !== 4 || p.some((x) => !Number.isFinite(x))) return null;
+  const [w, s, e, n] = p as [number, number, number, number];
+  if (s < -90 || n > 90 || s > n || w < -180 || w > 180 || e < -180 || e > 180) return null;
+  return [w, s, e, n];
+}
+
+/** SQL for "the site is in the viewport" with the box at $idx (w, s, e, n as $idx..$idx+3). */
+export function bboxSql(alias: string, idx: number): string {
+  const [w, s, e, n] = [idx, idx + 1, idx + 2, idx + 3].map((i) => `$${i}::float8`);
+  return `(${alias}.lat BETWEEN ${s} AND ${n} AND (CASE WHEN ${w} <= ${e} THEN ${alias}.lon BETWEEN ${w} AND ${e} ELSE (${alias}.lon >= ${w} OR ${alias}.lon <= ${e}) END))`;
+}
+
+/**
+ * Headline prices one connector at a time (two queries each) — what listStations did before v1.9. Kept for the
+ * equivalence test and the benchmark (tools/bench/stations-bench.mts); listStations uses headlinePrices.
+ */
+export async function pricesOneByOne(connectors: ReadonlyArray<{ connectorId: string; orgId: string }>): Promise<Map<string, { rate: number | null; inclusive: boolean } | null>> {
+  const out = new Map<string, { rate: number | null; inclusive: boolean } | null>();
+  for (const c of connectors) out.set(c.connectorId, await connectorPricing(c.connectorId, c.orgId));
+  return out;
+}
+
+export interface ListOptions {
+  /** Only sites inside this viewport. */
+  bbox?: BBox | null;
+  /** false: no headline prices (priceFrom* null) — the map prices only the stations it returns (`priceStations`). */
+  prices?: boolean;
+  /** false: no ordering (the map orders the merged list itself). */
+  sort?: boolean;
+}
+
+/** Fill in the headline price of these stations (one batch for all their connectors). */
+export async function priceStations(stations: StationView[]): Promise<void> {
+  if (!stations.length) return;
+  let prices: Map<string, { rate: number | null; inclusive: boolean }>;
+  try {
+    prices = await headlinePrices(stations.flatMap((s) => s.connectors.map((c) => c.connectorId)), new Date());
+  } catch {
+    return;
+  }
+  for (const st of stations) {
+    let priceFrom: number | null = null;
+    let inclusive = false;
+    for (const c of st.connectors) {
+      const p = prices.get(c.connectorId);
+      if (p?.rate != null && (priceFrom == null || p.rate < priceFrom)) { priceFrom = p.rate; inclusive = p.inclusive; }
+    }
+    st.priceFromMinor = priceFrom == null ? null : rateToMinor(priceFrom, st.currency);
+    st.priceFromMajor = priceFrom;
+    st.pricesIncludeTax = inclusive;
+  }
+}
+
 /**
  * Every station, with live availability and a headline price, nearest first when
  * a location is given. orgId: a white-label app, which shows its operator's only.
+ * bbox: only the viewport (the map, G7). Prices are resolved for all connectors in one batch (headlinePrices).
  */
-export async function listStations(loc?: { lat: number; lon: number }, orgId: string | null = null): Promise<StationView[]> {
+export async function listStations(loc?: { lat: number; lon: number }, orgId: string | null = null, opts: ListOptions = {}): Promise<StationView[]> {
+  const box = opts.bbox ?? null;
   const rows = await many<ConnectorRow>(
     `SELECT ${CONNECTOR_COLUMNS}
-      WHERE ${PUBLICLY_LISTED} AND ($1::uuid IS NULL OR s.org_id = $1)
+      WHERE ${PUBLICLY_LISTED} AND ($1::uuid IS NULL OR s.org_id = $1)${box ? ` AND ${bboxSql('s', 2)}` : ''}
       ORDER BY s.name, cp.ocpp_identity, e.evse_id`,
-    [orgId],
+    box ? [orgId, ...box] : [orgId],
   );
 
   const bySite = new Map<string, { info: ConnectorRow; connectors: ConnectorView[] }>();
@@ -214,18 +295,28 @@ export async function listStations(loc?: { lat: number; lon: number }, orgId: st
     bySite.set(r.site_id, g);
   }
 
+  // Every connector's headline price in one go (it was two queries per connector).
+  let prices: Map<string, { rate: number | null; inclusive: boolean }>;
+  try {
+    prices = opts.prices === false ? new Map() : await headlinePrices(rows.map((r) => r.connector_id), new Date());
+  } catch {
+    prices = new Map();
+  }
+
   const stations: StationView[] = [];
   for (const { info, connectors } of bySite.values()) {
     const available = connectors.filter((c) => c.available).length;
     const maxKw = Math.max(0, ...connectors.map((c) => c.maxPowerKw));
     const fastestConn = connectors.reduce((a, b) => (b.maxPowerW > a.maxPowerW ? b : a), connectors[0]!);
 
-    // Cheapest headline price across the site's connectors.
+    // Cheapest headline price across the site's connectors, in the site's currency.
     let priceFrom: number | null = null;
+    let inclusive = false;
     for (const c of connectors) {
-      const p = await connectorEnergyPrice(c.connectorId, info.org_id);
-      if (p != null && (priceFrom == null || p < priceFrom)) priceFrom = p;
+      const p = prices.get(c.connectorId);
+      if (p?.rate != null && (priceFrom == null || p.rate < priceFrom)) { priceFrom = p.rate; inclusive = p.inclusive; }
     }
+    const country = countryOf(info.country_code);
 
     stations.push({
       siteId: info.site_id,
@@ -242,11 +333,16 @@ export async function listStations(loc?: { lat: number; lon: number }, orgId: st
       totalCount: connectors.length,
       maxPowerKw: maxKw,
       fastest: `${fastestConn.maxPowerKw} kW ${fastestConn.current}`,
-      priceFromIdr: priceFrom,
+      priceFromMinor: priceFrom == null ? null : rateToMinor(priceFrom, country.currency),
+      priceFromMajor: priceFrom,
+      currency: country.currency,
+      countryCode: country.code,
+      timezone: info.timezone,
+      pricesIncludeTax: inclusive,
     });
   }
 
-  stations.sort((a, b) => {
+  if (opts.sort !== false) stations.sort((a, b) => {
     if (a.distanceKm != null && b.distanceKm != null) return a.distanceKm - b.distanceKm;
     // Available stations first, then by name.
     if ((b.availableCount > 0 ? 1 : 0) !== (a.availableCount > 0 ? 1 : 0)) {
@@ -257,16 +353,36 @@ export async function listStations(loc?: { lat: number; lon: number }, orgId: st
   return stations;
 }
 
+/** Opaque paging cursor: an offset into a stable ordering (tagged so a cursor from another query is refused). */
+export function encodeCursor(offset: number, tag: string): string {
+  return Buffer.from(JSON.stringify({ o: offset, t: tag })).toString('base64url');
+}
+export function decodeCursor(raw: unknown, tag: string): number | null {
+  if (raw == null || raw === '') return 0;
+  try {
+    const v = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8')) as { o?: unknown; t?: unknown };
+    return Number.isSafeInteger(v.o) && (v.o as number) >= 0 && v.t === tag ? (v.o as number) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** One connector in full, with pricing and the tariff's fixed fees. */
 export async function connectorDetail(connectorUuid: string, principal?: DriverPrincipal | null, orgId: string | null = null): Promise<
   | (ConnectorView & {
       station: { siteId: string; name: string; address: string | null; operator: string; spkluId: string | null };
-      energyPriceIdr: number | null;
+      energyPriceMinor: number | null;
+      currency: CurrencyCode;
+      countryCode: string;
+      timezone: string | null;
+      pricesIncludeTax: boolean;
+      presetsMinor: number[];
+      maxPrepaidMinor: number;
       fees: Array<{ kind: string; label: string; rate: number }>;
       reservedForYou: { id: string; expiresAt: string } | null;
       canReserve: boolean;
       /** The site's reservation fee (with PPN where the operator is PKP); null = free. */
-      reservationFee: { feeIdr: number; ppnIdr: number; totalIdr: number; fleetInvoice: boolean } | null;
+      reservationFee: { feeMinor: number; taxMinor: number; totalMinor: number; fleetInvoice: boolean; currency: CurrencyCode } | null;
       /** A fee paid in the app: how the driver can pay it (as for a charge). */
       reservationPay: Record<string, unknown> | null;
     })
@@ -304,15 +420,18 @@ export async function connectorDetail(connectorUuid: string, principal?: DriverP
     }
   }
   const canReserve = config.driverApp.reservationsEnabled && !!principal && !!(principal.account || principal.fleet) && view.available && !held;
-  const feeRow = await one<{ fee: number; pkp: boolean }>(`SELECT s.reservation_fee_idr AS fee, o.pkp FROM site s JOIN organisation o ON o.id = s.org_id WHERE s.id = $1`, [r.site_id]);
-  const tax = feeRow && feeRow.fee > 0 ? feeTax(feeRow.fee, feeRow.pkp) : null;
-  const reservationFee = tax ? { feeIdr: feeRow!.fee, ppnIdr: tax.ppn, totalIdr: tax.total, fleetInvoice: !!principal?.fleet } : null;
-  const reservationPay = tax && canReserve && principal && !principal.fleet ? await (await import('./charge.js')).paymentSetupFor(r.org_id, principal) : null;
+  const country = countryOf(r.country_code);
+  const feeRow = await one<{ fee: number; pkp: boolean }>(`SELECT s.reservation_fee_minor AS fee, o.pkp FROM site s JOIN organisation o ON o.id = s.org_id WHERE s.id = $1`, [r.site_id]);
+  const tax = feeRow && feeRow.fee > 0 ? (await feeTaxerFor(r.org_id, country.currency, feeRow.pkp))(feeRow.fee) : null;
+  const reservationFee = tax ? { feeMinor: feeRow!.fee, taxMinor: tax.ppn, totalMinor: tax.total, fleetInvoice: !!principal?.fleet, currency: country.currency } : null;
+  const reservationPay = tax && canReserve && principal && !principal.fleet ? await (await import('./charge.js')).paymentSetupFor(r.org_id, principal, country.code) : null;
   let energyPrice: number | null = null;
+  let pricesIncludeTax = false;
   const fees: Array<{ kind: string; label: string; rate: number }> = [];
   try {
     const { tariff } = await loadTariffForConnector(r.connector_id, r.org_id, new Date());
     energyPrice = energyRateOf(tariff);
+    pricesIncludeTax = tariff.pricesIncludeTax === true;
     const FEE_LABEL: Record<string, string> = {
       session: 'Biaya layanan',
       admin: 'Biaya admin',
@@ -337,7 +456,15 @@ export async function connectorDetail(connectorUuid: string, principal?: DriverP
       operator: r.operator,
       spkluId: r.spklu_id,
     },
-    energyPriceIdr: energyPrice,
+    energyPriceMinor: energyPrice,
+    /** Every amount above is in this currency (rates per kWh / minute in major units; fees in minor units). */
+    currency: country.currency,
+    countryCode: country.code,
+    timezone: r.timezone,
+    pricesIncludeTax,
+    /** The amounts the app offers for a pre-purchase, and the largest, in `currency` minor units (the country's). */
+    presetsMinor: [...country.prepaidPresetsMinor],
+    maxPrepaidMinor: country.maxPrepaidMinor,
     fees,
     reservedForYou,
     canReserve,

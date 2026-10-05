@@ -1,5 +1,10 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { routePath, underPrefix } from './route-path.js';
+import { upgradeLegacyKeys, moneyText, LEGACY_CURRENCY } from '../domain/money.js';
+import { routePath, underPrefix, isStaticAsset } from './route-path.js';
+import { isCountry, COUNTRY_CODES, currencyOfCountry, type CountryCode } from '../domain/country.js';
+import { defaultTimezone, isValidTimezoneFor } from '../domain/timezone.js';
+import { resolveTaxContext } from '../services/tax/index.js';
+import { addLegacyMoneyAliases, acceptLegacyMoneyKeys, liveEventForClient, LegacyKeyConflict, LegacyKeyCurrency, DEPRECATION_LINK } from './legacy-money.js';
 import { limitParam } from './paging.js';
 import fastifyStatic from '@fastify/static';
 import { contentSecurityPolicy } from './csp.js';
@@ -51,12 +56,22 @@ import {
   revokeApiKey,
 } from '../services/auth.js';
 import { verifyChain, writeAudit } from '../services/audit.js';
+import { sessionHold } from './session-holds.js';
+import { registerMicrosoftRoutes, isPublicMicrosoftRoute } from './microsoft-routes.js';
+import { assertMicrosoftConfigured } from '../services/microsoft-signin.js';
+import { watchLiveStream } from './stream-guard.js';
 import { listAttempts, pendingChargers, attemptStats, suggestMatches, identitySeenUnregistered } from '../services/connections.js';
 import { issueAuthorizationKey, setSecurityProfile, setClientCertFingerprint } from '../services/chargepoint-keys.js';
 import { listQuirkProfiles } from '../ocpp/quirks.js';
 import { bus, eventVisibleTo } from '../services/events.js';
 import { registerDriverApi } from '../driver/server.js';
 import { registerOcpiApi } from '../ocpi/server.js';
+import { registerHubApi } from '../hub/server.js';
+import { registerHubRoutes } from './hub-routes.js';
+import { registerHubClearingRoutes } from './hub-clearing-routes.js';
+import { registerRoamingHubClearingRoutes } from './roaming-hub-routes.js';
+import { setInprocApp, isInprocRequest } from '../hub/transport.js';
+import { HUB_ONLY_MESSAGE, hubOnlyAllowed, isHubOnlyOrg } from './hub-only.js';
 import { registerRoamingRoutes } from './roaming-routes.js';
 import { registerSandboxRoutes } from './sandbox-routes.js';
 import { registerFleetRoutes } from './fleet-routes.js';
@@ -70,9 +85,11 @@ import { registerConsoleBrandRoutes } from './console-brand-routes.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
 import { isSandboxOrg } from '../sandbox/provision.js';
 import { sandboxCall } from '../ocpp/bridge.js';
+import { fetchWorkerHealth } from '../services/worker-health.js';
 import { v2xView } from '../services/v2x.js';
 import { signedDataFor, transparencyXml } from '../services/signed-metering.js';
 import { streamMultipartFile } from './multipart-stream.js';
+import { ipLimitFor } from '../driver/rate-limit.js';
 import { takeKeyToken, rateLimitHeaders, tooManyFailures, recordFailure, recordUsage, startUsageFlush, stopUsageFlush, flushUsage } from '../services/ratelimit.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -87,6 +104,10 @@ declare module 'fastify' {
     orgScope?: OrgScopeHandle;
     /** The API key that made this request, for its usage counts. */
     apiKey?: { id: string; orgId: string };
+    /** A console session's sign-in method (password or Microsoft); undefined for API keys. */
+    authMethod?: import('../services/auth.js').AuthMethod;
+    /** The session's second factor was done by Microsoft (amr "mfa"); see services/microsoft-signin.ts. */
+    idpMfa?: boolean;
   }
 }
 
@@ -122,6 +143,8 @@ export const registeredRoutes: Array<{ method: string; url: string }> = [];
 
 export async function buildApi(): Promise<FastifyInstance> {
   assertAuthConfigured();
+  // A half-configured "Sign in with Microsoft" stops the API here, not at a user's first sign-in.
+  assertMicrosoftConfigured();
 
   // Trust X-Forwarded-For only from named proxies. `trustProxy: true` trusts it
   // from anyone, which made req.ip attacker-controlled — and req.ip is both the
@@ -168,6 +191,32 @@ export async function buildApi(): Promise<FastifyInstance> {
     reply.header('Referrer-Policy', 'no-referrer');
     reply.header('Content-Security-Policy', contentSecurityPolicy(req.url, TILE_ORIGIN, framable));
     return payload;
+  });
+
+  /**
+   * Money rename compatibility (docs/MULTI-COUNTRY-DESIGN.md §D2): v1.6 clients
+   * read and send `totalIdr` / `total_idr` (v1.6 names). Responses of the operator API and the
+   * driver API get the legacy name next to every renamed amount whose currency is
+   * IDR (deprecated, marked by the Deprecation header); request bodies may use
+   * the legacy names.
+   */
+  const moneyCompat = (req: FastifyRequest) => underPrefix(req, '/v1/') || underPrefix(req, '/d/');
+  app.addHook('preValidation', async (req) => {
+    if (!moneyCompat(req) || req.body == null || typeof req.body !== 'object') return;
+    try {
+      const used: string[] = [];
+      req.body = acceptLegacyMoneyKeys(req.body, used);
+      if (used.length) (req as FastifyRequest & { legacyMoneyKeys?: string[] }).legacyMoneyKeys = used;
+    } catch (e) {
+      if (e instanceof LegacyKeyConflict || e instanceof LegacyKeyCurrency) throw new BadRequestError(e.message);
+      throw e;
+    }
+  });
+  app.addHook('preSerialization', async (req, reply, payload) => {
+    if (!moneyCompat(req) || payload == null || typeof payload !== 'object') return payload;
+    const r = addLegacyMoneyAliases(payload);
+    if (r.added) reply.header('Deprecation', 'true').header('Link', DEPRECATION_LINK);
+    return r.body;
   });
 
   /**
@@ -228,6 +277,10 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.addHook('onClose', async () => { stopUsageFlush(); await flushUsage(); });
   app.addHook('onRequest', async (req, reply) => {
     if (req.url === '/healthz') return;
+    // The console's and the driver app's own files are not API calls (see isStaticAsset).
+    if (isStaticAsset(req)) return;
+    // In-process OCPI calls (hub ⇄ tenants, hub/transport.ts): not network traffic; the hub limits per connection.
+    if (config.hub.enabled && isInprocRequest(req.headers as Record<string, unknown>)) return;
     const key = req.ip ?? 'unknown';
     const now = Date.now();
     // An address that keeps sending keys that do not authenticate loses that exemption:
@@ -236,7 +289,7 @@ export async function buildApi(): Promise<FastifyInstance> {
     const slot = hits.get(key);
     if (!slot || slot.resetAt < now) {
       hits.set(key, { n: 1, resetAt: now + 60_000 });
-    } else if (++slot.n > config.api.rateLimitPerMin) {
+    } else if (++slot.n > ipLimitFor(req.url)) {
       reply.header('Retry-After', Math.ceil((slot.resetAt - now) / 1000));
       return reply.status(429).send({ error: 'rate limit exceeded' });
     }
@@ -252,11 +305,17 @@ export async function buildApi(): Promise<FastifyInstance> {
     // Under the prefix by the matched route OR the raw target (see underPrefix).
     const route = routePath(req);
     if (!underPrefix(req, '/v1/')) return;
-    // The one unauthenticated /v1 route: you cannot present a session you do not have yet.
+    // The unauthenticated /v1 routes: you cannot present a session you do not have yet.
+    // Password sign-in, and the two legs of "Sign in with Microsoft", which the BROWSER
+    // navigates to (no CSRF header, and the SameSite=Strict session cookie does not come back
+    // on the redirect from Microsoft); they authenticate by their own means (microsoft-routes.ts).
     if (route === '/v1/auth/login' && req.method === 'POST') return;
+    if (isPublicMicrosoftRoute(route, req.method)) return;
     try {
       const auth = await authenticate(req.headers as Record<string, unknown>);
       req.principal = auth.principal;
+      req.authMethod = auth.authMethod;
+      req.idpMfa = auth.idpMfa === true;
       // Each API key has its own limit (a token bucket; RateLimit-* headers on every answer).
       if (auth.kind === 'api_key') {
         const d = await takeKeyToken(auth.credentialId, auth.rateLimitPerMin ?? config.api.keyRateLimitPerMin);
@@ -277,23 +336,17 @@ export async function buildApi(): Promise<FastifyInstance> {
         return reply.status(403).send({ error: 'missing CSRF header' });
       }
       /**
-       * A one-time password (issued at invitation or reset, and typically sent
-       * over chat or e-mail) is good for ONE thing: choosing a real password.
-       * Until the user has, the API serves only who-am-I, reference data, the
-       * password change and sign-out. Before, only the console enforced this; the
-       * one-time password worked indefinitely against the API itself.
+       * What this credential may not do yet: an administrator's session on a host outside
+       * CONSOLE_ADMIN_HOSTS, a sign-in still waiting for its two-step verification code, a
+       * one-time password still to be replaced, an administrator still to enrol in two-step
+       * verification. See api/session-holds.ts.
        */
-      if (auth.mustChangePassword) {
-        const path = routePath(req);
-        const allowed =
-          (req.method === 'GET' && (path === '/v1/auth/me' || path === '/v1/meta')) ||
-          (req.method === 'POST' && (path === '/v1/auth/change-password' || path === '/v1/auth/logout'));
-        if (!allowed) {
-          return reply.status(403).send({
-            error: 'Choose a new password first: your administrator issued a one-time password.',
-            code: 'password_change_required',
-          });
-        }
+      const hold = sessionHold(auth, req.method, routePath(req), req.headers.host);
+      if (hold) return reply.status(hold.status).send(hold.body);
+      // An external hub member's organisation (hub_only) has no CSMS: its sessions and API keys reach only the
+      // hub, users, API keys and webhooks (api/hub-only.ts). Enforced here, not only by the console's menu.
+      if (await isHubOnlyOrg(auth.principal.orgId) && !hubOnlyAllowed(req.method, route || req.url)) {
+        return reply.status(403).send({ error: HUB_ONLY_MESSAGE, code: 'hub_only' });
       }
     } catch (e) {
       if (e instanceof UnauthenticatedError) {
@@ -429,14 +482,46 @@ export async function buildApi(): Promise<FastifyInstance> {
 
   // ---------------------------------------------------------------- health
 
-  app.get('/healthz', async () => {
+  // 503 when the database does not answer. It used to answer 200 with {ok:false}:
+  // the Docker HEALTHCHECK, the compose healthcheck and any load balancer or uptime
+  // monitor judge by the STATUS, so an API that could serve nothing stayed "healthy".
+  // (The gateway's /healthz already answered 503.)
+  app.get('/healthz', async (_req, reply) => {
     let db = true;
     try {
       await query('SELECT 1');
     } catch {
       db = false;
     }
+    if (!db) reply.code(503);
     return { ok: db, db, connectedChargePoints: registry.all().length, time: new Date().toISOString() };
+  });
+
+  /**
+   * Platform health for the platform operator: this API's database, and the
+   * background workers' health (failure streaks, last success, open worker
+   * alerts, the HEARTBEAT_URL ping) — from the gateway over the bridge in the
+   * split deployment. Not on /healthz, which is unauthenticated: worker names
+   * and error messages are for the operator only. Always 200; read `ok`.
+   */
+  app.get('/v1/platform/health', async (req) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    let db = true;
+    try {
+      await query('SELECT 1');
+    } catch {
+      db = false;
+    }
+    const workers = await fetchWorkerHealth();
+    const workersOk = (workers?.report as { ok?: boolean } | null | undefined)?.ok;
+    return {
+      ok: db && workersOk !== false && !workers?.error,
+      db,
+      version: config.version,
+      connectedChargePoints: registry.all().length,
+      workers,
+      time: new Date().toISOString(),
+    };
   });
 
   // ---------------------------------------------------------------- fleet
@@ -1121,9 +1206,10 @@ export async function buildApi(): Promise<FastifyInstance> {
     assertCan(req.principal, { permission: 'session:read', orgId: owner.orgId, siteId: owner.siteId });
 
     const s = await one(
-      `SELECT cs.*, d.lines, d.subtotal_idr, d.pbjt_idr, d.pbjt_rate_bps, d.ppn_dpp_idr,
-              d.ppn_idr, d.total_idr, d.tariff_snapshot, d.regulatory_flags
-         FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id
+      `SELECT cs.*, d.lines, d.subtotal_minor, d.local_tax_minor, d.local_tax_rate_bps, d.tax_base_minor,
+              d.tax_minor, d.total_minor, d.tariff_snapshot, d.regulatory_flags,
+              d.tax_scheme, d.tax_rate_bps, d.prices_include_tax, si.timezone AS site_timezone, si.country_code, COALESCE(d.test_mode, false) AS test_mode
+         FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id LEFT JOIN site si ON si.id = cs.site_id
         WHERE cs.id = $1`,
       [id],
     );
@@ -1134,7 +1220,9 @@ export async function buildApi(): Promise<FastifyInstance> {
     // ISO 15118 needs, energy given back and the driver's consent (bidirectional charging).
     // soc_percent is NUMERIC in Postgres (a string on the wire from pg): the API documents a number.
     const soc = (s as any)?.soc_percent;
-    return { ...(s as object), soc_percent: soc == null ? null : Number(soc), meterValues: mv, v2x: await v2xView(id) };
+    // CDR lines frozen before 1.7 say amountIdr: served with the current names (the alias layer adds the legacy ones back).
+    const lines = (s as any)?.lines;
+    return { ...(s as object), ...(lines ? { lines: upgradeLegacyKeys(lines) } : {}), soc_percent: soc == null ? null : Number(soc), meterValues: mv, v2x: await v2xView(id) };
   });
 
   // Signed meter data (OCMF): what the meter signed for this session, and how it checked out.
@@ -1265,7 +1353,17 @@ export async function buildApi(): Promise<FastifyInstance> {
         flags: [{ code: 'MDR_SURCHARGE_PROHIBITED', severity: 'violation', message: 'MDR surcharging is prohibited' }],
       });
     }
+    // The tariff's country (absent = Indonesia): its regulation, tax and currency.
+    if (b.countryCode != null && !isCountry(b.countryCode)) {
+      return reply.status(400).send({ error: `countryCode must be one of ${COUNTRY_CODES.join(', ')}` });
+    }
+    const countryCode = (b.countryCode ?? 'ID') as CountryCode;
+    if (countryCode !== 'ID' && !config.features.multiCountry) {
+      return reply.status(422).send({ error: 'Malaysian and Singapore tariffs need MULTI_COUNTRY=true on this installation.' });
+    }
     const result = await createTariff({
+      countryCode,
+      ...(b.pricesIncludeTax != null ? { pricesIncludeTax: b.pricesIncludeTax === true } : {}),
       orgId: req.principal.orgId,
       name: String(b.name ?? 'Untitled'),
       plnScheme: b.plnScheme,
@@ -1293,7 +1391,7 @@ export async function buildApi(): Promise<FastifyInstance> {
       action: 'tariff.created',
       targetType: 'tariff',
       targetId: result.tariffId!,
-      after: { name: b.name, components: b.components },
+      after: { name: b.name, components: b.components, country_code: countryCode, currency: currencyOfCountry(countryCode) },
       ip: req.ip,
     });
     return result;
@@ -1348,13 +1446,20 @@ export async function buildApi(): Promise<FastifyInstance> {
   app.post('/v1/tariffs/preview', async (req) => {
     assertCan(req.principal, { permission: 'tariff:read' });
     const b = req.body as any;
+    // The tariff's country decides regulation, tax and the default zone (absent = Indonesia).
+    const country = isCountry(b.tariff?.countryCode) ? b.tariff.countryCode : 'ID';
+    const startedAt = new Date(b.startedAt ?? Date.now() - 3600_000);
+    const timezone = typeof b.timezone === 'string' && isValidTimezoneFor(country, b.timezone) ? b.timezone : defaultTimezone(country);
     return rateSession(b.tariff, {
-      startedAt: new Date(b.startedAt ?? Date.now() - 3600_000),
+      startedAt,
       endedAt: new Date(b.endedAt ?? Date.now()),
       energyWh: Number(b.energyWh ?? 20_000),
       connectorMaxPowerW: Number(b.connectorMaxPowerW ?? 60_000),
-      pbjtRateBps: Number(b.pbjtRateBps ?? 500),
+      localTaxRateBps: Number(b.localTaxRateBps ?? 500),
       idleMinutes: Number(b.idleMinutes ?? 0),
+      timezone,
+      currency: currencyOfCountry(country),
+      tax: await resolveTaxContext({ orgId: req.principal.orgId, country, at: startedAt, timezone }),
     });
   });
 
@@ -1368,15 +1473,20 @@ export async function buildApi(): Promise<FastifyInstance> {
 
   app.post('/v1/checkout/qris', async (req, reply) => {
     const b = req.body as any;
-    const amountIdr = Number(b.amountIdr);
-    if (!Number.isFinite(amountIdr) || amountIdr <= 0) throw new BadRequestError('amountIdr required');
-    if (amountIdr > QRIS_MAX_TRANSACTION_IDR) {
-      throw new BadRequestError(`QRIS per-transaction ceiling is Rp ${QRIS_MAX_TRANSACTION_IDR}`);
+    const amountMinor = Number(b.amountMinor);
+    if (!Number.isFinite(amountMinor) || amountMinor <= 0) throw new BadRequestError('amountMinor required');
+    if (amountMinor > QRIS_MAX_TRANSACTION_IDR) {
+      throw new BadRequestError(`QRIS per-transaction ceiling is ${moneyText(QRIS_MAX_TRANSACTION_IDR, LEGACY_CURRENCY, 'plain')}`);
     }
 
     const owner = await ownedChargePoint(req, String(b.ocppIdentity), 'payment:write');
     const c = await assets.getConnector(owner.chargePointId, Number(b.connectorId ?? 1));
     if (!c) throw new NotFoundError('connector not found');
+    // QRIS is an Indonesian rail (rupiah): a Malaysian or Singapore charger is paid in the driver app instead.
+    const siteCountry = await one<{ country_code: string }>(`SELECT s.country_code FROM charge_point cp JOIN site s ON s.id = cp.site_id WHERE cp.id = $1`, [owner.chargePointId]);
+    if (siteCountry && currencyOfCountry(siteCountry.country_code) !== LEGACY_CURRENCY) {
+      return reply.status(409).send({ error: `QRIS takes rupiah only; this charger is in ${siteCountry.country_code} (${currencyOfCountry(siteCountry.country_code)}). Drivers pay in the app.`, code: 'qris_not_in_country' });
+    }
 
     const gate = connectorMaySellEnergy(c.tera_status as any);
     if (!gate.allowed) return reply.status(409).send({ error: gate.reason });
@@ -1396,11 +1506,11 @@ export async function buildApi(): Promise<FastifyInstance> {
     // expensive ToU block the session could reach, plus the idle fee it could
     // accrue. Quoting the best case under-collected by up to Rp 58,552 a session
     // from walk-up guests who have no card on file.
-    const allowanceWh = conservativeAllowanceWh(tariff, amountIdr, {
+    const allowanceWh = conservativeAllowanceWh(tariff, amountMinor, {
       startedAt: now,
       endedAt: new Date(now.getTime() + 45 * 60_000),
       connectorMaxPowerW: c.max_power_w,
-      pbjtRateBps: c.pbjt_rate_bps,
+      localTaxRateBps: c.local_tax_rate_bps,
       timezone: c.timezone,
     });
 
@@ -1410,13 +1520,13 @@ export async function buildApi(): Promise<FastifyInstance> {
     if (allowanceWh <= 0) {
       return reply.status(422).send({
         error:
-          `Rp ${amountIdr.toLocaleString('id-ID')} does not cover this connector's fixed fees, ` +
+          `${moneyText(amountMinor, LEGACY_CURRENCY, 'id')} does not cover this connector's fixed fees, ` +
           'so it would buy no energy. Choose a higher amount.',
-        minimumViableIdr: minimumViable(tariff, {
+        minimumViableMinor: minimumViable(tariff, {
           startedAt: now,
           endedAt: new Date(now.getTime() + 45 * 60_000),
           connectorMaxPowerW: c.max_power_w,
-          pbjtRateBps: c.pbjt_rate_bps,
+          localTaxRateBps: c.local_tax_rate_bps,
           timezone: c.timezone,
         }),
       });
@@ -1429,7 +1539,7 @@ export async function buildApi(): Promise<FastifyInstance> {
     }
     const charge = await acq.provider.createQrisCharge({
       referenceId: `${owner.chargePointId}:${c.id}:${Date.now()}`,
-      amountIdr,
+      amountMinor,
       description: `PlugSure ${b.ocppIdentity} connector ${b.connectorId ?? 1}`,
     });
 
@@ -1475,22 +1585,22 @@ export async function buildApi(): Promise<FastifyInstance> {
 
     const intent = await one<{ id: string }>(
       `INSERT INTO payment_intent
-         (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr,
+         (org_id, provider, provider_ref, method, mode, state, amount_authorised_minor,
           idem_key, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted, expires_at, integration_id)
        VALUES ($1,$8,$2,'qris','prepurchase','pending',$3,$2,$4,$5,$6,$7, now() + interval '30 minutes', $9)
        RETURNING id`,
-      [c.org_id, charge.providerRef, amountIdr, allowanceWh, c.id, claimTag, minted, acq.provider.name, acq.resolved.integrationId],
+      [c.org_id, charge.providerRef, amountMinor, allowanceWh, c.id, claimTag, minted, acq.provider.name, acq.resolved.integrationId],
     );
 
-    await logPaymentCreated(acq.resolved, c.org_id, charge.providerRef, amountIdr, 'console checkout');
+    await logPaymentCreated(acq.resolved, c.org_id, charge.providerRef, amountMinor, 'console checkout');
     return {
       paymentIntentId: intent?.id,
       provider: acq.provider.name,
       qr: charge,
       allowanceWh,
       allowanceKwh: Math.round(allowanceWh / 10) / 100,
-      estimatedMdrIdr: estimateQrisMdrIdr(amountIdr),
-      inZeroMdrBand: estimateQrisMdrIdr(amountIdr) === 0,
+      estimatedMdrMinor: estimateQrisMdrIdr(amountMinor),
+      inZeroMdrBand: estimateQrisMdrIdr(amountMinor) === 0,
       /** Show this to the driver. Only this token can start the session they paid for. */
       startToken: claimTag,
       startTokenMinted: minted,
@@ -1508,7 +1618,7 @@ export async function buildApi(): Promise<FastifyInstance> {
     if (!charge) throw new NotFoundError('unknown charge');
     await query(
       `UPDATE payment_intent
-          SET state = 'captured', amount_captured_idr = amount_authorised_idr,
+          SET state = 'captured', amount_captured_minor = amount_authorised_minor,
               captured_at = now(), updated_at = now()
         WHERE provider_ref = $1 AND org_id = $2 AND provider = 'mock'`,
       [providerRef, req.principal.orgId],
@@ -1808,12 +1918,19 @@ export async function buildApi(): Promise<FastifyInstance> {
      */
     const send = (e: { kind: string; payload: unknown }) => {
       if (!eventVisibleTo(e, orgId)) return;
-      reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
+      // The stream is written raw (no preSerialization hook): add the v1.6 rupiah names here, as for responses.
+      reply.raw.write(`data: ${JSON.stringify(liveEventForClient(e))}\n\n`);
     };
     const off = bus.onAny(send);
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
+    // Signed out, disabled, reset or revoked since the stream opened: end it (stream-guard.ts).
+    const unwatch = watchLiveStream(req, {
+      stillAllowed: (p) => p.orgId === orgId && can(p, { permission: 'site:read' }),
+      close: () => reply.raw.end(),
+    });
     req.raw.on('close', () => {
       clearInterval(ping);
+      unwatch();
       off();
     });
   });
@@ -1832,6 +1949,15 @@ export async function buildApi(): Promise<FastifyInstance> {
 
   // Roaming: the OCPI 2.2.1 endpoints partners call, and the console's roaming page.
   await registerOcpiApi(app);
+  // PlugSure Hub (docs/HUB-DESIGN.md): only with HUB_ENABLED; otherwise nothing under /hub exists.
+  if (config.hub.enabled) {
+    await registerHubApi(app);
+    setInprocApp(app);
+  }
+  // The platform's hub routes (/v1/hub/*) are always registered and answer 404 while the hub is off.
+  await registerHubRoutes(app);
+  await registerHubClearingRoutes(app);
+  await registerRoamingHubClearingRoutes(app);
   await registerRoamingRoutes(app);
   await registerSandboxRoutes(app);
   await registerFleetRoutes(app);
@@ -1842,6 +1968,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerIntegrationRoutes(app);
   await registerBrandRoutes(app);
   await registerConsoleBrandRoutes(app);
+  await registerMicrosoftRoutes(app);
 
   return app;
 }

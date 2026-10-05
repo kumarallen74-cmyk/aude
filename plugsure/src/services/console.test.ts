@@ -46,15 +46,15 @@ describe('site validation', () => {
   });
   test('a valid site passes; the TR/TM cliff is a warning, not an error', () => {
     const v = validateSite(
-      siteInputFrom({ name: 'Hub', kabupatenKotaCode: '3171', connectedKva: '250', powerFactor: '0.95', spkluId: '01.POSO.20.3171.011', spkluScheme: 'POSO', pbjtRateBps: '1000' }),
+      siteInputFrom({ name: 'Hub', kabupatenKotaCode: '3171', connectedKva: '250', powerFactor: '0.95', spkluId: '01.POSO.20.3171.011', spkluScheme: 'POSO', localTaxRateBps: '1000' }),
       true,
     );
     assert.deepEqual(v.errors, {});
     assert.equal(v.warnings.length, 1);
   });
   test('malformed SPKLU ID, bad PF, PBJT above 10% and scheme mismatch are errors', () => {
-    const v = validateSite({ name: 'x', spkluId: '01.XXXX.20.3171.011', powerFactor: 1.4, pbjtRateBps: 1500 }, true);
-    assert.ok(v.errors.spkluId && v.errors.powerFactor && v.errors.pbjtRateBps);
+    const v = validateSite({ name: 'x', spkluId: '01.XXXX.20.3171.011', powerFactor: 1.4, localTaxRateBps: 1500 }, true);
+    assert.ok(v.errors.spkluId && v.errors.powerFactor && v.errors.localTaxRateBps);
     const m = validateSite({ name: 'x', spkluId: '01.POSO.20.3171.011', spkluScheme: 'ROSO' }, true);
     assert.ok(m.errors.spkluScheme);
   });
@@ -177,26 +177,26 @@ describe('invoice breakdown (acceptance criterion 4)', () => {
     const b = breakdown({
       cdr_id: 'x',
       lines: [
-        { kind: 'energy', amountIdr: 49_350 },
-        { kind: 'session', amountIdr: 21_000 },
-        { kind: 'admin', amountIdr: 4_000 },
-        { kind: 'idle', amountIdr: 5_000 },
+        { kind: 'energy', amountMinor: 49_350 },
+        { kind: 'session', amountMinor: 21_000 },
+        { kind: 'admin', amountMinor: 4_000 },
+        { kind: 'idle', amountMinor: 5_000 },
       ],
-      pbjt_idr: 2468, ppn_dpp_idr: 70_000, ppn_idr: 8_400, total_idr: 150_000, payment_method: 'qris',
+      local_tax_minor: 2468, tax_base_minor: 70_000, tax_minor: 8_400, total_minor: 150_000, payment_method: 'qris',
     });
-    assert.equal(b.energySubtotalIdr, 49_350);
-    assert.equal(b.serviceFeeIdr, 25_000);
-    assert.equal(b.idleFeeIdr, 5_000);
-    assert.equal(b.mdrIdr, 1_050, 'QRIS above Rp 100,000 at the standard 0.7% MDR');
-    assert.equal(breakdown({ cdr_id: 'x', lines: [], total_idr: 150_000, payment_method: 'fleet' }).mdrIdr, 0);
+    assert.equal(b.energySubtotalMinor, 49_350);
+    assert.equal(b.serviceFeeMinor, 25_000);
+    assert.equal(b.idleFeeMinor, 5_000);
+    assert.equal(b.mdrMinor, 1_050, 'QRIS above Rp 100,000 at the standard 0.7% MDR');
+    assert.equal(breakdown({ cdr_id: 'x', lines: [], total_minor: 150_000, payment_method: 'fleet' }).mdrMinor, 0);
   });
   test('PPN can be disabled for a non-PKP tariff without touching PBJT', () => {
-    const on = computeTax({ subtotalIdr: 100_000, energyIdr: 80_000, pbjtRateBps: 500 });
-    const off = computeTax({ subtotalIdr: 100_000, energyIdr: 80_000, pbjtRateBps: 500, ppnApplies: false });
-    assert.equal(on.pbjtIdr, off.pbjtIdr);
-    assert.ok(on.ppnIdr > 0);
-    assert.equal(off.ppnIdr, 0);
-    assert.equal(off.ppnDppIdr, 0);
-    assert.equal(off.totalIdr, 100_000 + off.pbjtIdr);
+    const on = computeTax({ subtotalMinor: 100_000, energyMinor: 80_000, localTaxRateBps: 500 });
+    const off = computeTax({ subtotalMinor: 100_000, energyMinor: 80_000, localTaxRateBps: 500, ppnApplies: false });
+    assert.equal(on.localTaxMinor, off.localTaxMinor);
+    assert.ok(on.taxMinor > 0);
+    assert.equal(off.taxMinor, 0);
+    assert.equal(off.taxBaseMinor, 0);
+    assert.equal(off.totalMinor, 100_000 + off.localTaxMinor);
   });
 });

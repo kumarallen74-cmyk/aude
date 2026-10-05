@@ -50,7 +50,7 @@ if (DB_OK) {
     await query(`INSERT INTO app_user (org_id, email, name, status, password_hash, locked_until) VALUES ($1, 'll-locked@plugsure.test', 'Locked', 'active', $2, now() + interval '15 minutes')`, [orgId, h]);
     await query(`INSERT INTO app_user (org_id, email, name) VALUES ($1, 'll-invited@plugsure.test', 'Invited')`, [orgId]);
     await query(`INSERT INTO app_user (org_id, email, name, status, password_hash) VALUES ($1, 'll-burst@plugsure.test', 'Burst', 'active', $2)`, [orgId, h]);
-    const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'LL Hub', 1000) RETURNING id`, [orgId]))!.id;
+    const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'LL Hub', 1000) RETURNING id`, [orgId]))!.id;
     const cp = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity, ocpp_version, status) VALUES ($1, $2, 'ocpp1.6', 'online') RETURNING id`, [site, IDENT]))!.id;
     imageId = (await one<{ id: string }>(
       `INSERT INTO firmware_image (org_id, name, version, source, storage_path, file_name, download_token)

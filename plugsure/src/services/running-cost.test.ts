@@ -58,7 +58,7 @@ if (DB_OK) {
       `INSERT INTO organisation (name, slug) VALUES ('Running Cost Test', $1)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
     siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Running Cost Hub', 1000) RETURNING id`, [orgId]))!.id;
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Running Cost Hub', 1000) RETURNING id`, [orgId]))!.id;
     cpId = (await one<{ id: string }>(
       `INSERT INTO charge_point (site_id, ocpp_identity, ocpp_version, status) VALUES ($1, $2, 'ocpp1.6', 'online') RETURNING id`, [siteId, IDENT]))!.id;
     const e = await one<{ id: string }>(`INSERT INTO evse (charge_point_id, evse_id, max_power_w) VALUES ($1, 1, 22000) RETURNING id`, [cpId]);
@@ -119,8 +119,8 @@ async function charge(uid: string) {
 }
 
 async function billOf(sessionId: string) {
-  return one<{ total_idr: number; subtotal_idr: number; pbjt_idr: number; ppn_idr: number }>(
-    `SELECT total_idr, subtotal_idr, pbjt_idr, ppn_idr FROM cdr WHERE session_id = $1`, [sessionId]);
+  return one<{ total_minor: number; subtotal_minor: number; local_tax_minor: number; tax_minor: number }>(
+    `SELECT total_minor, subtotal_minor, local_tax_minor, tax_minor FROM cdr WHERE session_id = $1`, [sessionId]);
 }
 
 dbDescribe('the cost during the charge is the bill', () => {
@@ -134,22 +134,22 @@ dbDescribe('the cost during the charge is the bill', () => {
     assert.equal(atStop.final, false);
     assert.equal(atStop.energyWh, 8_000);
     assert.equal(atStop.idleMinutes, 22, 'idle counted from the last sample that still drew energy');
-    assert.ok(atStop.idleFeeIdr > early.idleFeeIdr && early.idleFeeIdr > 0, `idle fee rises while the car sits full (${early.idleFeeIdr} → ${atStop.idleFeeIdr})`);
-    assert.ok(atStop.totalIdr > early.totalIdr, 'so does the total, with no energy delivered');
-    assert.equal(atStop.taxIdr > 0, true);
+    assert.ok(atStop.idleFeeMinor > early.idleFeeMinor && early.idleFeeMinor > 0, `idle fee rises while the car sits full (${early.idleFeeMinor} → ${atStop.idleFeeMinor})`);
+    assert.ok(atStop.totalMinor > early.totalMinor, 'so does the total, with no energy delivered');
+    assert.equal(atStop.taxTotalMinor > 0, true);
     // 8 kWh × 2,400 + 5,000 service + (22 − 5) min × 1,000 idle = 41,200 before tax: the operator tariff, not the fallback.
-    assert.equal(atStop.subtotalIdr, 41_200);
+    assert.equal(atStop.subtotalMinor, 41_200);
 
     await c.stop();
     await rateAndCreateCdr(c.sessionId);
     const bill = await billOf(c.sessionId);
     assert.ok(bill, 'charge record issued');
-    assert.equal(Number(bill.total_idr), atStop.totalIdr, 'the running cost at the stop is the bill');
-    assert.equal(Number(bill.subtotal_idr), atStop.subtotalIdr);
-    assert.equal(Number(bill.pbjt_idr) + Number(bill.ppn_idr), atStop.taxIdr);
+    assert.equal(Number(bill.total_minor), atStop.totalMinor, 'the running cost at the stop is the bill');
+    assert.equal(Number(bill.subtotal_minor), atStop.subtotalMinor);
+    assert.equal(Number(bill.local_tax_minor) + Number(bill.tax_minor), atStop.taxTotalMinor);
 
     const after = await runningCost(c.sessionId);
-    assert.deepEqual([after!.final, after!.totalIdr], [true, Number(bill.total_idr)], 'once rated: the bill itself');
+    assert.deepEqual([after!.final, after!.totalMinor], [true, Number(bill.total_minor)], 'once rated: the bill itself');
   });
 
   test('with a promotion: the discount is in the running cost, exactly as billed', async () => {
@@ -160,11 +160,11 @@ dbDescribe('the cost during the charge is the bill', () => {
     const c = await charge('RC-PROMO');
     const atStop = await runningCost(c.sessionId, new Date(c.stopAt));
     assert.ok(atStop);
-    assert.equal(atStop.discountIdr, 3_840, '20% of 8 kWh × Rp 2,400');
+    assert.equal(atStop.discountMinor, 3_840, '20% of 8 kWh × Rp 2,400');
     await c.stop();
     await rateAndCreateCdr(c.sessionId);
     const bill = await billOf(c.sessionId);
-    assert.equal(Number(bill!.total_idr), atStop.totalIdr, 'promotion priced identically during and after');
+    assert.equal(Number(bill!.total_minor), atStop.totalMinor, 'promotion priced identically during and after');
   });
 
   test('reads only: pricing the charge writes no charge record and leaves the session untouched', async () => {

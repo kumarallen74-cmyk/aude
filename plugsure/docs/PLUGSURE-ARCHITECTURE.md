@@ -164,15 +164,29 @@ Start as a **modular monolith** with hard internal module boundaries, plus **one
 └───────────────────────────────────────────────────────────────┘
 ```
 
+> **As built (v1.5.1):** the stack above is the original design. What runs today has no Redis and no BullMQ: one OCPP gateway process (sockets, connection registry and the background workers, as timers in-process, the money-moving ones behind Postgres advisory locks), an API process that reaches the gateway over an authenticated internal HTTP bridge, and Postgres `LISTEN/NOTIFY` for events to the console. See §4.3 for what this means for scaling.
+
 **Why not microservices on day one:** a 6-person team shipping in 6 months does not have the operational budget for 12 services. The module boundaries are what matter; the deployment boundary can follow later. The gateway is split out because its *lifecycle* differs, not because its domain does.
 
 ### 4.3 Connection ownership and horizontal scale
 
 Each charge point holds one long-lived WebSocket to one gateway node. To send a command from the API to a charger, the API must reach the node that owns that socket.
 
-- Gateway nodes register `cp:{chargePointId} → node:{nodeId}` in Redis with a TTL refreshed on heartbeat.
-- Commands are published to `cmd:{nodeId}` (Redis pub/sub); the owning node picks them up, issues the OCPP CALL, and publishes the CALLRESULT to `cmdres:{correlationId}`.
-- The API awaits the correlated result with a timeout (default 30 s; `Reset` and `UpdateFirmware` get longer).
+**Current reality (v1.5.1): exactly ONE gateway process.** The Redis routing below was designed but never built. What exists is the dependency-free bridge in `src/ocpp/bridge.ts`:
+
+- The charger sockets, the connection registry and the event bus live in the one gateway's memory.
+- The API sends commands to the gateway over HTTP (`POST /internal/call` on `GATEWAY_INTERNAL_URL`, authenticated with `INTERNAL_API_TOKEN`), and mirrors which chargers are online by polling `GET /internal/connections` every 3 s.
+- Events reach the API's live stream via Postgres `NOTIFY plugsure_events` (`EVENT_RELAY=true`).
+- The background workers run in the gateway (`RUN_WORKERS=true`); the ones that move money or message people also take a Postgres advisory lock per worker (`exclusive()` in `src/services/workers.ts`).
+
+Because the API knows ONE gateway URL, a second gateway would hold sockets the API cannot reach: its chargers would show offline and refuse every command, and load management would see only part of each site. **Do not run a second gateway, with or without `RUN_WORKERS=false`**, until the routing below exists. The API may run several replicas (it holds no charger state). Availability today is a fast restart of the one gateway; chargers reconnect on their own.
+
+**Planned design (not built):**
+
+- Gateway nodes register `cp:{chargePointId} → node:{nodeId}` (Redis, or a Postgres table) with a TTL refreshed on heartbeat.
+- Commands are published to `cmd:{nodeId}`; the owning node picks them up, issues the OCPP CALL, and publishes the CALLRESULT to `cmdres:{correlationId}`. (Equivalently: the API looks up the owner and calls that node's `/internal/call`.)
+- The API awaits the correlated result with a timeout (default 30 s; `Reset` and `UpdateFirmware` get longer), and builds its online view from the registrations instead of polling one node.
+- Per-site work (load management, FOTA) runs on the node that holds the site's chargers, or moves to commands routed as above.
 - On node loss the charger reconnects (Autel units retry automatically) and re-registers elsewhere. **Design assumption: any gateway node may die at any time and the only cost is a reconnect.**
 
 ---

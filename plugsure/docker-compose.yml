@@ -135,8 +135,14 @@ services:
     environment:
       NODE_ENV: production
       # Forwarding and client-certificate headers are believed only from these peers.
-      # A Caddy on the host reaches the container through the Docker bridge (172.16/12).
-      OCPP_TRUSTED_PROXIES: ${OCPP_TRUSTED_PROXIES:-127.0.0.1,::1,172.16.0.0/12}
+      # Caddy runs on the HOST (deploy/README.md, both paths) and reaches this container
+      # through the published port, so its connections arrive from the gateway address of
+      # the project network below — fixed by its ipam config, and the only address trusted.
+      # This used to trust all of 172.16.0.0/12: every container on every Docker bridge
+      # network of the host could claim TLS and present a Profile 3 charger's certificate
+      # fingerprint. (Behind a Caddy CONTAINER instead, give it a fixed ipv4_address on
+      # this network and list that address here.)
+      OCPP_TRUSTED_PROXIES: ${OCPP_TRUSTED_PROXIES:-127.0.0.1,::1,${PLUGSURE_NET_GATEWAY:-172.31.253.1}}
       # NOT the superuser. assertRlsPosture() refuses to start in production as a
       # role that bypasses row-level security, so pointing the app services at
       # POSTGRES_USER meant the container path could never come up at all.
@@ -269,6 +275,21 @@ services:
           memory: 1g
         reservations:
           memory: 256m
+
+# The project's network, with a FIXED subnet so the address the host's Caddy appears
+# from (the bridge gateway) is known in advance and is the gateway's only trusted proxy
+# (OCPP_TRUSTED_PROXIES above). Every service joins it as its default network. Docker's
+# address pools start at 172.17.0.0/16 and are handed out in order, so 172.31.253.0/24 is
+# rarely taken; if `docker compose up` reports an overlapping pool, choose another free
+# /24 with PLUGSURE_NET_SUBNET and its .1 as PLUGSURE_NET_GATEWAY. Named, so an upgrade
+# creates it afresh instead of tripping over the old auto-created `plugsure_default`.
+networks:
+  default:
+    name: plugsure-net
+    ipam:
+      config:
+        - subnet: ${PLUGSURE_NET_SUBNET:-172.31.253.0/24}
+          gateway: ${PLUGSURE_NET_GATEWAY:-172.31.253.1}
 
 volumes:
   pgdata:

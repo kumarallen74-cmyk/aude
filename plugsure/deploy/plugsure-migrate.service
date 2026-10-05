@@ -45,11 +45,14 @@ WorkingDirectory=/opt/plugsure
 
 # Read by systemd as root before dropping to the plugsure user: the file can stay root-only.
 EnvironmentFile=/etc/plugsure/migrate.env
+# NODE_ENV is forced on the command line below as well: an EnvironmentFile= OVERRIDES
+# Environment=, so a NODE_ENV=development copied into the env file used to win and run
+# production with development behaviour. `env` sets it for the process whatever the file says.
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--enable-source-maps
 Environment=TZ=Asia/Jakarta
 
-ExecStart=/usr/bin/node /opt/plugsure/dist/db/migrate.js
+ExecStart=/usr/bin/env NODE_ENV=production /usr/bin/node /opt/plugsure/dist/db/migrate.js
 # A migration that waits on a lock fails after MIGRATION_LOCK_TIMEOUT; this bounds the rest.
 TimeoutStartSec=600
 

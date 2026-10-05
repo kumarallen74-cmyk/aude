@@ -63,7 +63,7 @@ export async function registerFleetPortalRoutes(app: FastifyInstance): Promise<v
   app.get('/v1/fleet-portal/:accountId/statement', async (req, reply) =>
     run(reply, async () => {
       const q = (req.query ?? {}) as Record<string, string>;
-      const st = await fb.statementFor(org(req), account(req), String(q.period || portal.thisPeriod()));
+      const st = await fb.statementFor(org(req), account(req), String(q.period || portal.thisPeriod()), q.currency);
       if (st.status === 'void') throw new fb.FleetBillingError(404, 'statement not found');
       return portal.forCustomer(st);
     }));

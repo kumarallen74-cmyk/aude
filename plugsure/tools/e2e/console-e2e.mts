@@ -17,6 +17,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import WebSocket from 'ws';
+// The authenticator app, for the two-step verification checks (pure RFC 6238, no database).
+import { base32Decode, hotp, timeStep } from '../../src/services/totp.js';
 
 const API = process.env.E2E_API ?? 'http://127.0.0.1:9200';
 const OCPP = process.env.E2E_OCPP ?? 'ws://127.0.0.1:9220/ocpp';
@@ -128,7 +130,7 @@ try {
   const site = await ops.post('/v1/sites', {
     name: 'Star Charger Hub — Thamrin (E2E)', address: 'Jl. M.H. Thamrin 1', postalCode: '10310', kabupatenKotaCode: '3171',
     lat: '-6.1935', lon: '106.823', gridTariffGroup: 'L/TM', connectedKva: '250', powerFactor: '0.95', phases: '3',
-    spkluId: '01.POSO.20.3171.011', spkluScheme: 'POSO', pbjtRateBps: '1000', sloNumber: 'SLO/E2E/1', sloIssuer: 'PT LIT', sloIssuedAt: '2026-01-01', sloExpiresAt: '2030-01-01',
+    spkluId: '01.POSO.20.3171.011', spkluScheme: 'POSO', localTaxRateBps: '1000', sloNumber: 'SLO/E2E/1', sloIssuer: 'PT LIT', sloIssuedAt: '2026-01-01', sloExpiresAt: '2030-01-01',
   });
   check('sites: create site (250 kVA, TM cliff warning returned)', site.status === 200 && site.data.warnings?.length === 1, site.data);
   const siteId = site.data.id as string;
@@ -233,17 +235,23 @@ try {
   check('cockpit: session ended by the platform at the energy preset', ended.data?.state !== 'active' && ended.data?.energy_wh >= 900 && ended.data?.energy_wh < 1900, { state: ended.data?.state, energy: ended.data?.energy_wh, reason: ended.data?.stop_reason });
 
   // ---------------------------------------------------------------- 8 · sessions, receipt (acceptance 4)
-  const rated = await until(() => ops.get(`/v1/sessions/${sessId}`), (r) => r.data?.total_idr != null, 30_000, 1000);
-  check('billing: session rated into a CDR', rated.data?.total_idr > 0, { total: rated.data?.total_idr, review: rated.data?.review_reason });
+  const rated = await until(() => ops.get(`/v1/sessions/${sessId}`), (r) => r.data?.total_minor != null, 30_000, 1000);
+  check('billing: session rated into a CDR', rated.data?.total_minor > 0, { total: rated.data?.total_minor, review: rated.data?.review_reason });
   const rcpt = await ops.get(`/v1/sessions/${sessId}/receipt`);
   check('billing: receipt shows DPP, PPN and PBJT-TL', rcpt.status === 200 && /DPP nilai lain/.test(rcpt.text) && /PPN 12% × DPP \(efektif 11%/.test(rcpt.text) && /PBJT-TL/.test(rcpt.text), rcpt.status);
   const search = await ops.get(`/v1/sessions/search?identity=${ID}`);
   const row = search.data.rows?.[0];
-  check('sessions: explorer row with meter start/end and tax breakdown', row && row.meter_stop_wh != null && row.breakdown?.ppnIdr > 0 && row.breakdown?.pbjtIdr > 0, row?.breakdown);
+  check('sessions: explorer row with meter start/end and tax breakdown', row && row.meter_stop_wh != null && row.breakdown?.taxMinor > 0 && row.breakdown?.localTaxMinor > 0, row?.breakdown);
   const badF = await ops.get('/v1/sessions/search?from=notadate');
   check('sessions: invalid filter is a 400 not a 500', badF.status === 400, badF.status);
   const csv = await ops.get(`/v1/sessions.csv?identity=${ID}`);
-  check('sessions: CSV export', csv.status === 200 && csv.text.includes('gross_total_idr') && csv.text.includes(sessId), csv.status);
+  // v1.5 (legacy) column names while every site of the org is in Indonesia; the v1.7 *_minor + currency columns once
+  // it has a site abroad (multi-country-e2e adds MY/SG sites to the seed org, so the suite order must not matter).
+  const meCountries: Array<{ country_code: string }> = (await ops.get('/v1/auth/me')).data?.org?.countries ?? [];
+  const abroad = meCountries.some((c) => c.country_code !== 'ID');
+  const csvHead = csv.text.split(/\r?\n/)[0] ?? '';
+  check('sessions: CSV export', csv.status === 200 && csv.text.includes(sessId)
+    && (abroad ? csvHead.endsWith('gross_total_minor,currency') : csvHead.endsWith(',gross_total_idr')), { status: csv.status, abroad, csvHead }); // legacy v1.5 header for an Indonesia-only operator
 
   // ---------------------------------------------------------------- 5 · tariffs
   const illegal = await ops.post('/v1/tariffs', { name: 'Illegal peak', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'tou', appliesToMaxPowerW: 60000,
@@ -386,6 +394,24 @@ try {
   check('users: a one-time password is held to the password change by the API', tHeld.status === 403 && tHeld.data?.code === 'password_change_required', tHeld.data);
   const tcpw = await tech.post('/v1/auth/change-password', { current: tinv.data.temporaryPassword, next: 'TechPass-2026!x' });
   check('users: technician sets its own password', tcpw.status === 200, tcpw.data);
+
+  // Two-step verification (optional for a technician; required for administrators outside
+  // development/test). Set up from the user menu, then a sign-in needs the code.
+  const tmfa = await tech.post('/v1/auth/mfa/enrol');
+  check('2FA: set-up answers an otpauth:// URI and a QR code', tmfa.status === 200 && /^otpauth:\/\/totp\//.test(tmfa.data.uri) && /^data:image\/png;base64,/.test(tmfa.data.qrDataUrl), tmfa.status);
+  const tsecret = base32Decode(String(tmfa.data.secret ?? ''));
+  const tstep = timeStep(Date.now());
+  const tconf = await tech.post('/v1/auth/mfa/enrol/confirm', { code: hotp(tsecret, tstep) });
+  check('2FA: confirmed with a code from the app; ten recovery codes, once', tconf.status === 200 && tconf.data.recoveryCodes?.length === 10, tconf.data);
+  await tech.post('/v1/auth/logout');
+  const t2 = await tech.post('/v1/auth/login', { email: temail, password: 'TechPass-2026!x' });
+  const t2held = await tech.get('/v1/sites');
+  check('2FA: the right password alone opens only the code step', t2.status === 200 && t2.data.mfaRequired === true && t2held.status === 403 && t2held.data?.code === 'mfa_required', { login: t2.data, held: t2held.data });
+  const treplay = await tech.post('/v1/auth/mfa/verify', { code: hotp(tsecret, tstep) });
+  check('2FA: the code used at set-up cannot be replayed', treplay.status === 400, treplay.data);
+  const tver = await tech.post('/v1/auth/mfa/verify', { code: tconf.data.recoveryCodes?.[0] });
+  const tme = await tech.get('/v1/auth/me');
+  check('2FA: a recovery code completes the sign-in (nine left)', tver.status === 200 && tver.data.recoveryCodesLeft === 9 && tme.status === 200 && tme.data.user?.mfa?.enabled === true, { v: tver.data, me: tme.status });
   // Real permission refusals, not the password hold.
   const notHeld = (r: any) => r.data?.code !== 'password_change_required';
   const tstart = await tech.post(`/v1/charge-points/${ID}/remote-start`, { connectorId: 2, idTag: 'ID-RFID-0001' });
@@ -399,8 +425,16 @@ try {
   const dis = await ops.put(`/v1/users/${tinv.data.id}`, { status: 'disabled' });
   const afterDis = await tech.get('/v1/auth/me');
   check('users: disabling a user ends their session immediately', dis.status === 200 && afterDis.status === 401, afterDis.status);
+  const tres = await ops.post(`/v1/users/${tinv.data.id}/reset-mfa`);
+  const tlist = (await ops.get('/v1/users')).data.find((u: any) => u.id === tinv.data.id);
+  check('2FA: an administrator resets a user\'s two-step verification', tres.status === 200 && tlist?.mfa_enabled === false, { r: tres.data, mfa: tlist?.mfa_enabled });
+  const ownRes = await ops.post(`/v1/users/${me.data.user.id}/reset-mfa`);
+  check('2FA: but never their own', ownRes.status === 400, ownRes.data);
 
   // ---------------------------------------------------------------- misc
+  // "Sign in with Microsoft" (v1.6.0): the sign-in page asks whether to show the button.
+  const signInOpts = await new Client().get('/console-sign-in.json');
+  check('sign-in page: Microsoft button availability is published', signInOpts.status === 200 && typeof signInOpts.data?.microsoft === 'boolean', signInOpts.data);
   const dash = await ops.get('/v1/dashboard');
   check('dashboard: KPIs', dash.status === 200 && dash.data.chargers.total >= 3 && Array.isArray(dash.data.series) && dash.data.series.length === 14, dash.data.chargers);
   const audit = await ops.get('/v1/audit');
@@ -410,6 +444,13 @@ try {
   const logout = await ops.post('/v1/auth/logout');
   const post = await ops.get('/v1/auth/me');
   check('auth: logout revokes the session', logout.status === 200 && post.status === 401, post.status);
+  // Sign-out revokes a Bearer session too (it used to revoke only the cookie's).
+  const bl = await new Client().post('/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
+  const btok = decodeURIComponent(String(bl.headers.get('set-cookie') ?? '').split(';')[0]!.split('=')[1] ?? '');
+  const bearer = new Client();
+  const bOut = await bearer.req('POST', '/v1/auth/logout', {}, { csrf: false, headers: { authorization: `Bearer ${btok}` } });
+  const bMe = await bearer.req('GET', '/v1/auth/me', undefined, { headers: { authorization: `Bearer ${btok}` } });
+  check('auth: logout with a Bearer pss_ token revokes it', /^pss_/.test(btok) && bOut.status === 200 && bMe.status === 401, { out: bOut.status, me: bMe.status });
 } catch (e) {
   check('UNEXPECTED EXCEPTION', false, String((e as Error)?.stack ?? e));
 } finally {

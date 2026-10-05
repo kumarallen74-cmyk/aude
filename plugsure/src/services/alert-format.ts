@@ -1,3 +1,6 @@
+import { tzLabel } from '../domain/timezone.js';
+import { phoneToE164 } from '../domain/phone.js';
+import type { CountryCode } from '../domain/country.js';
 /**
  * Alert notifications — the pure part: which rule matches, quiet hours, phone
  * numbers, and what the e-mail and the WhatsApp message say. No I/O here, so it
@@ -28,6 +31,8 @@ export const ALERT_KINDS: Record<string, string> = {
   'security.key_rotation_due': 'Charger key rotation due',
   'firmware.failed': 'Firmware update failed',
   'webhook.disabled': 'Webhook disabled',
+  'platform.worker_failing': 'Background worker failing',
+  'platform.microsoft_tenant_linked': 'Microsoft tenant connected',
 };
 
 export const titleOf = (kind: string) =>
@@ -96,15 +101,14 @@ export function quietEndsAt(d: Date, end: string, tz: string): Date {
   return t;
 }
 
-const TZ_ABBR: Record<string, string> = { 'Asia/Jakarta': 'WIB', 'Asia/Pontianak': 'WIB', 'Asia/Makassar': 'WITA', 'Asia/Jayapura': 'WIT' };
 
 // Fixed names: ICU's short month differs between versions ("Sep" vs "Sept").
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** "27 Sep 2026 14:05 WIB" */
+/** "27 Sep 2026 14:05 WIB" (WITA, WIT, MYT, SGT: domain/timezone tzLabel) */
 export function formatTime(d: Date, tz: string): string {
   const p = localParts(d, tz);
-  return `${p.day} ${MONTHS[Number(p.month) - 1]} ${p.year} ${p.hour}:${p.minute} ${TZ_ABBR[tz] ?? tz}`;
+  return `${p.day} ${MONTHS[Number(p.month) - 1]} ${p.year} ${p.hour}:${p.minute} ${tzLabel(tz)}`;
 }
 
 // ─────────────────────────────────────────── addresses
@@ -113,8 +117,10 @@ export function formatTime(d: Date, tz: string): string {
  * WhatsApp wants the full international number, digits only. Indonesian
  * numbers are usually written 0812…, +62 812…, 62-812…, or 812….
  */
-export function normaliseWhatsApp(raw: string | null | undefined): string | null {
+export function normaliseWhatsApp(raw: string | null | undefined, homeCountry: CountryCode = 'ID'): string | null {
   if (!raw) return null;
+  // Malaysia / Singapore operators: local numbers are theirs (stored as digits with the country code, like Indonesia's).
+  if (homeCountry !== 'ID' && !/^\s*(\+|00)/.test(raw)) return phoneToE164(raw, homeCountry)?.slice(1) ?? null;
   let d = String(raw).replace(/[^\d+]/g, '');
   if (d.startsWith('+')) d = d.slice(1);
   else if (d.startsWith('00')) d = d.slice(2);

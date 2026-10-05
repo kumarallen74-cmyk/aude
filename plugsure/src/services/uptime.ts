@@ -1,4 +1,5 @@
 import { one, many, query } from '../db/pool.js';
+import { LEGACY_CURRENCY } from '../domain/money.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { bus } from './events.js';
@@ -158,7 +159,9 @@ export interface AvailabilityRow {
   longestOutageMin: number;
   sessions: number;
   energyKwh: number;
-  revenueIdr: number;
+  revenueMinor: number;
+  /** The site's currency (a charger's revenue is in one currency). */
+  currency: string;
   utilisationPct: number | null;
 }
 
@@ -174,6 +177,7 @@ export async function availabilityReport(orgId: string, days: number, siteIds: s
     `WITH w AS (SELECT now() - make_interval(days => $2::int) AS ws, now() AS we),
      cps AS (
        SELECT cp.id, cp.ocpp_identity, cp.display_name, cp.status, s.id AS site_id, s.name AS site_name,
+              (SELECT co.currency FROM country co WHERE co.code = s.country_code) AS currency,
               GREATEST((SELECT ws FROM w), COALESCE(cp.commissioned_at, cp.created_at)) AS since,
               (SELECT count(*) FROM evse e JOIN connector c ON c.evse_uuid = e.id WHERE e.charge_point_id = cp.id)::int AS connectors
          FROM charge_point cp JOIN site s ON s.id = cp.site_id
@@ -192,7 +196,7 @@ export async function availabilityReport(orgId: string, days: number, siteIds: s
                         FROM charge_point_outage o WHERE o.charge_point_id = cps.id AND COALESCE(o.came_online_at, now()) > cps.since), 0) AS longest_s,
             (SELECT count(*) FROM charging_session cs WHERE cs.charge_point_id = cps.id AND cs.site_id = cps.site_id AND cs.started_at >= cps.since)::int AS sessions,
             COALESCE((SELECT sum(cs.energy_wh) FROM charging_session cs WHERE cs.charge_point_id = cps.id AND cs.site_id = cps.site_id AND cs.started_at >= cps.since), 0) AS energy_wh,
-            COALESCE((SELECT sum(d.total_idr) FROM charging_session cs JOIN cdr d ON d.session_id = cs.id WHERE cs.charge_point_id = cps.id AND cs.site_id = cps.site_id AND cs.started_at >= cps.since), 0) AS revenue_idr,
+            COALESCE((SELECT sum(d.total_minor) FROM charging_session cs JOIN cdr d ON d.session_id = cs.id WHERE cs.charge_point_id = cps.id AND cs.site_id = cps.site_id AND cs.started_at >= cps.since), 0) AS revenue_minor,
             COALESCE((SELECT sum(GREATEST(0, EXTRACT(EPOCH FROM (LEAST(COALESCE(cs.ended_at, now()), (SELECT we FROM w)) - GREATEST(cs.started_at, cps.since)))))
                         FROM charging_session cs WHERE cs.charge_point_id = cps.id AND cs.site_id = cps.site_id AND COALESCE(cs.ended_at, now()) > cps.since), 0) AS busy_s
        FROM cps
@@ -220,7 +224,8 @@ export async function availabilityReport(orgId: string, days: number, siteIds: s
         longestOutageMin: Math.round(Number(r.longest_s) / 60),
         sessions: Number(r.sessions),
         energyKwh: Math.round(Number(r.energy_wh) / 10) / 100,
-        revenueIdr: Number(r.revenue_idr),
+        revenueMinor: Number(r.revenue_minor),
+        currency: r.currency ?? LEGACY_CURRENCY,
         utilisationPct: windowS > 0 && Number(r.connectors) > 0 ? pct(Math.min(1, Math.max(0, Number(r.busy_s)) / (windowS * Number(r.connectors)))) : null,
       };
     }),

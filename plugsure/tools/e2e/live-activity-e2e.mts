@@ -195,7 +195,7 @@ try {
     fin?.body);
   const finE = fin?.body?.aps?.['content-state']?.estimateIdr;
   await db.query(
-    `INSERT INTO cdr (session_id, org_id, lines, subtotal_idr, pbjt_rate_bps, pbjt_idr, ppn_dpp_idr, ppn_rate_bps, ppn_idr, total_idr, tariff_snapshot)
+    `INSERT INTO cdr (session_id, org_id, lines, subtotal_minor, local_tax_rate_bps, local_tax_minor, tax_base_minor, tax_rate_bps, tax_minor, total_minor, tariff_snapshot)
      VALUES ($1,$2,'[]'::jsonb,27000,1000,2700,24750,1200,2970,31450,'{}'::jsonb)`, [A.s, org]);
   await db.query(`UPDATE charging_session SET state = 'rated' WHERE id = $1`, [A.s]);
   const end = (await until(() => sentTo(LA_A), (h) => h.length >= 4, 15_000))[3];

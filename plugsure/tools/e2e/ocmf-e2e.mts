@@ -84,7 +84,7 @@ try {
   const login = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   check('setup: operator signs in', login.status === 200, login.data);
   const site = await ops('POST', '/v1/sites', { name: `Eichrecht Hub ${RUN}`, address: 'Jl. Gatot Subroto 1', city: 'Jakarta Selatan', postalCode: '12930',
-    lat: '-6.2300', lon: '106.8200', kabupatenKotaCode: '3174', gridTariffGroup: 'B-2/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+    lat: '-6.2300', lon: '106.8200', kabupatenKotaCode: '3174', gridTariffGroup: 'B-2/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const siteId = site.data.id as string;
   const tariff = await ops('POST', '/v1/tariffs', { name: `OCMF DC ${RUN}`, plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${siteId}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
@@ -123,8 +123,8 @@ try {
   // ─────────────────────────────────────────── verified
   const good = await session16(1_000_000, 1_006_000, [signed16(sign('B', 1_000_000, UID), 'Transaction.Begin'), signed16(sign('E', 1_006_000, UID), 'Transaction.End')]);
   check('1.6: signed start and end readings verify against the registered key and match the bill (6 kWh); the session is billed',
-    good.s.signed_status === 'verified' && Number(good.s.signed_energy_wh) === 6000 && Number(good.s.energy_wh) === 6000 && good.s.total_idr != null,
-    { st: good.s.signed_status, d: good.s.signed_detail, e: good.s.energy_wh, t: good.s.total_idr });
+    good.s.signed_status === 'verified' && Number(good.s.signed_energy_wh) === 6000 && Number(good.s.energy_wh) === 6000 && good.s.total_minor != null,
+    { st: good.s.signed_status, d: good.s.signed_detail, e: good.s.energy_wh, t: good.s.total_minor });
   const sd = await ops('GET', `/v1/sessions/${good.sid}/signed-data`);
   check('api: the signed data lists both readings, each valid against the registered key, with the meter and its key',
     sd.data.values?.length === 2 && sd.data.values.every((v: any) => v.verifyStatus === 'valid' && v.keySource === 'registered') && sd.data.meterSerial === SERIAL && sd.data.meterPublicKey === meterHex
@@ -143,7 +143,7 @@ try {
   const endText = sign('E', 1_012_000, UID);
   const tampered = await session16(1_006_000, 1_012_000, [signed16(sign('B', 1_006_000, UID), 'Transaction.Begin'), signed16(endText.replace('"RV":1012', '"RV":1013'), 'Transaction.End')]);
   check('tamper: a reading changed after signing is "invalid" and flagged, the session still billed (record policy)',
-    tampered.s.signed_status === 'invalid' && /does not match the data/.test(tampered.s.signed_detail) && (tampered.s.flags ?? []).some((f: any) => f.code === 'SIGNED_METER_INVALID' && f.severity === 'warning') && tampered.s.total_idr != null,
+    tampered.s.signed_status === 'invalid' && /does not match the data/.test(tampered.s.signed_detail) && (tampered.s.flags ?? []).some((f: any) => f.code === 'SIGNED_METER_INVALID' && f.severity === 'warning') && tampered.s.total_minor != null,
     { st: tampered.s.signed_status, d: tampered.s.signed_detail, f: tampered.s.flags });
   const mismatch = await session16(1_012_000, 1_018_000, [signed16(sign('B', 1_012_000, UID), 'Transaction.Begin'), signed16(sign('E', 1_019_000, UID), 'Transaction.End')]);
   check('mismatch: signed readings that say 7 kWh against a 6 kWh bill are "mismatch", with both figures',
@@ -154,7 +154,7 @@ try {
   const onlyEnd = await session16(1_020_000, 1_021_000, [signed16(sign('E', 1_021_000, UID), 'Transaction.End')]);
   check('incomplete: without the signed start reading the session is "incomplete"', onlyEnd.s.signed_status === 'incomplete' && /the start/.test(onlyEnd.s.signed_detail), { st: onlyEnd.s.signed_status, d: onlyEnd.s.signed_detail });
   const plain = await session16(1_021_000, 1_022_000, []);
-  check('no signing: a session without signed readings is not assessed under the default policy, and billed', plain.s.signed_status === null && plain.s.total_idr != null, { st: plain.s.signed_status });
+  check('no signing: a session without signed readings is not assessed under the default policy, and billed', plain.s.signed_status === null && plain.s.total_minor != null, { st: plain.s.signed_status });
 
   // ─────────────────────────────────────────── require
   const pol = await ops('PUT', `/v1/sites/${siteId}`, { signedMeterPolicy: 'require' });
@@ -162,12 +162,12 @@ try {
   check('policy: the site requires verified signed readings (an unknown policy is refused)', pol.status === 200 && badPol.status === 422, { p: pol.data, b: badPol.data });
   const missing = await session16(1_022_000, 1_023_000, []);
   check('require: a session without signed readings is parked for review, with no invoice',
-    missing.s.signed_status === 'missing' && missing.s.needs_review === true && missing.s.review_reason === 'SIGNED_METER_MISSING' && missing.s.total_idr == null,
-    { st: missing.s.signed_status, r: missing.s.review_reason, t: missing.s.total_idr });
+    missing.s.signed_status === 'missing' && missing.s.needs_review === true && missing.s.review_reason === 'SIGNED_METER_MISSING' && missing.s.total_minor == null,
+    { st: missing.s.signed_status, r: missing.s.review_reason, t: missing.s.total_minor });
   const mm2 = await session16(1_023_000, 1_025_000, [signed16(sign('B', 1_023_000, UID), 'Transaction.Begin'), signed16(sign('E', 1_026_000, UID), 'Transaction.End')]);
-  check('require: signed readings that do not match are parked too', mm2.s.needs_review === true && mm2.s.review_reason === 'SIGNED_METER_MISMATCH' && mm2.s.total_idr == null, { r: mm2.s.review_reason });
+  check('require: signed readings that do not match are parked too', mm2.s.needs_review === true && mm2.s.review_reason === 'SIGNED_METER_MISMATCH' && mm2.s.total_minor == null, { r: mm2.s.review_reason });
   const ok2 = await session16(1_025_000, 1_027_000, [signed16(sign('B', 1_025_000, UID), 'Transaction.Begin'), signed16(sign('E', 1_027_000, UID), 'Transaction.End')]);
-  check('require: a verified session is billed as usual', ok2.s.signed_status === 'verified' && ok2.s.needs_review === false && ok2.s.total_idr != null, { st: ok2.s.signed_status });
+  check('require: a verified session is billed as usual', ok2.s.signed_status === 'verified' && ok2.s.needs_review === false && ok2.s.total_minor != null, { st: ok2.s.signed_status });
   await ops('PUT', `/v1/sites/${siteId}`, { signedMeterPolicy: 'record' });
 
   // ─────────────────────────────────────────── OCPP 2.0.1: signedMeterValue, with the key the station sends

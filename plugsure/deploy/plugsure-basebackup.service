@@ -1,0 +1,47 @@
+# PlugSure weekly base backup for point-in-time recovery — run by plugsure-basebackup.timer.
+#
+# Needs WAL archiving on (deploy/pitr/postgresql-pitr.conf) and is installed with it;
+# the whole procedure is in deploy/pitr/RESTORE.md:
+#   install -o root -g root -m 0755 tools/backup/pg-basebackup.sh tools/backup/wal-archive.sh \
+#       tools/backup/wal-restore.sh tools/backup/wal-offsite.sh /opt/plugsure/tools/backup/
+#   install -o root -g root -m 0644 deploy/plugsure-basebackup.service deploy/plugsure-basebackup.timer \
+#       deploy/plugsure-wal-offsite.service deploy/plugsure-wal-offsite.timer /etc/systemd/system/
+#   install -o root -g root -m 0600 /dev/null /etc/plugsure/pitr.env     # then edit (may hold cloud credentials)
+#   systemctl daemon-reload && systemctl enable --now plugsure-basebackup.timer plugsure-wal-offsite.timer
+#   systemctl start plugsure-basebackup     # the first base backup NOW: PITR starts from it
+#
+# /etc/plugsure/pitr.env (all optional):
+#   PITR_DIR=/var/backups/plugsure-pitr
+#   BASEBACKUP_KEEP=4
+#   BACKUP_OFFSITE_CMD=aws s3 sync "$PITR_DIR/base" s3://<bucket>/plugsure-pitr/base/ --only-show-errors
+#   WAL_OFFSITE_CMD=aws s3 sync "$WAL_ARCHIVE_DIR" s3://<bucket>/plugsure-pitr/wal/ --only-show-errors
+#
+# Runs as the postgres OS user over the local socket (peer authentication; the
+# postgres role has REPLICATION). A failed run leaves the unit "failed"; alert on it.
+
+[Unit]
+Description=PlugSure base backup (pg_basebackup, for point-in-time recovery)
+Documentation=file:/opt/plugsure/deploy/pitr/RESTORE.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+EnvironmentFile=-/etc/plugsure/pitr.env
+ExecStart=/opt/plugsure/tools/backup/pg-basebackup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plugsure-basebackup
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/plugsure-pitr
+UMask=0077

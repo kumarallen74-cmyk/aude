@@ -27,39 +27,39 @@ describe('splitting an amount that includes PPN', () => {
   test('price + PPN = amount, PPN = 12% of DPP (11/12 of price)', () => {
     for (const amount of [111_000, 500_000, 1_234_567, 99_999, 1]) {
       const s = splitInclusive(amount, TAX);
-      assert.equal(s.dppIdr, dppOf(s.taxBaseIdr, TAX));
-      assert.equal(s.ppnIdr, ppnOf(s.dppIdr, TAX));
-      assert.ok(Math.abs(s.amountIdr - amount) <= 1, `${amount} → ${s.amountIdr}`);
+      assert.equal(s.taxBaseMinor, dppOf(s.taxableMinor, TAX));
+      assert.equal(s.taxMinor, ppnOf(s.taxBaseMinor, TAX));
+      assert.ok(Math.abs(s.amountMinor - amount) <= 1, `${amount} → ${s.amountMinor}`);
     }
-    assert.deepEqual(splitInclusive(111_000, TAX), { amountIdr: 111_000, taxBaseIdr: 100_000, dppIdr: 91_667, ppnIdr: 11_000 });
+    assert.deepEqual(splitInclusive(111_000, TAX), { amountMinor: 111_000, taxableMinor: 100_000, taxBaseMinor: 91_667, taxMinor: 11_000 });
   });
 });
 
 describe('credit note arithmetic', () => {
-  const inv = { totalIdr: 1_000_000, dppIdr: 800_000, ppnIdr: 96_000 }; // taxed gross ≈ 872,727 + 96,000; the rest is partner networks
+  const inv = { totalMinor: 1_000_000, taxBaseMinor: 800_000, taxMinor: 96_000 }; // taxed gross ≈ 872,727 + 96,000; the rest is partner networks
   const bad = (fn: () => unknown, status: number, re: RegExp) =>
     assert.throws(fn, (e: unknown) => e instanceof FleetBillingError && e.status === status && re.test(e.message));
 
   test('full credit takes back exactly what is left', () => {
     const c = computeCredit(inv, true, { full: true }, TAX, 'FLT/2026/08/0001');
-    assert.deepEqual([c.totalIdr, c.dppIdr, c.ppnIdr, c.lines.length], [1_000_000, 800_000, 96_000, 1]);
+    assert.deepEqual([c.totalMinor, c.taxBaseMinor, c.taxMinor, c.lines.length], [1_000_000, 800_000, 96_000, 1]);
     assert.match(c.lines[0]!.description, /Full credit of invoice FLT\/2026\/08\/0001/);
   });
   test('lines with PPN are split like invoice lines; lines without carry none', () => {
-    const c = computeCredit(inv, true, { lines: [{ description: 'Disputed session 12 Aug', amountIdr: 111_000 }, { description: 'Partner fee refund', amountIdr: 5_000, taxed: false }] }, TAX, 'X');
-    assert.equal(c.totalIdr, 116_000);
-    assert.equal(c.ppnIdr, 11_000);
-    assert.equal(c.dppIdr, 91_667);
+    const c = computeCredit(inv, true, { lines: [{ description: 'Disputed session 12 Aug', amountMinor: 111_000 }, { description: 'Partner fee refund', amountMinor: 5_000, taxed: false }] }, TAX, 'X');
+    assert.equal(c.totalMinor, 116_000);
+    assert.equal(c.taxMinor, 11_000);
+    assert.equal(c.taxBaseMinor, 91_667);
   });
   test('refused: nothing left, too much, too much PPN, untaxed beyond the untaxed part, PPN on an invoice without', () => {
-    bad(() => computeCredit({ totalIdr: 0, dppIdr: 0, ppnIdr: 0 }, true, { full: true }, TAX, 'X'), 409, /already been credited/);
-    bad(() => computeCredit(inv, true, { lines: [{ description: 'Too much', amountIdr: 1_000_001, taxed: false }] }, TAX, 'X'), 422, /left to credit/);
-    bad(() => computeCredit({ totalIdr: 1_000_000, dppIdr: 10_000, ppnIdr: 1_200 }, true, { lines: [{ description: 'Too much PPN', amountIdr: 200_000 }] }, TAX, 'X'), 422, /PPN is left/);
-    bad(() => computeCredit(inv, true, { lines: [{ description: 'No PPN please', amountIdr: 200_000, taxed: false }] }, TAX, 'X'), 422, /carries no PPN; credit the rest with PPN/);
-    bad(() => computeCredit({ totalIdr: 50_000, dppIdr: 0, ppnIdr: 0 }, false, { lines: [{ description: 'With PPN', amountIdr: 10_000, taxed: true }] }, TAX, 'X'), 422, /carries no PPN, so a credit cannot/);
+    bad(() => computeCredit({ totalMinor: 0, taxBaseMinor: 0, taxMinor: 0 }, true, { full: true }, TAX, 'X'), 409, /already been credited/);
+    bad(() => computeCredit(inv, true, { lines: [{ description: 'Too much', amountMinor: 1_000_001, taxed: false }] }, TAX, 'X'), 422, /left to credit/);
+    bad(() => computeCredit({ totalMinor: 1_000_000, taxBaseMinor: 10_000, taxMinor: 1_200 }, true, { lines: [{ description: 'Too much PPN', amountMinor: 200_000 }] }, TAX, 'X'), 422, /PPN is left/);
+    bad(() => computeCredit(inv, true, { lines: [{ description: 'No PPN please', amountMinor: 200_000, taxed: false }] }, TAX, 'X'), 422, /carries no PPN; credit the rest with PPN/);
+    bad(() => computeCredit({ totalMinor: 50_000, taxBaseMinor: 0, taxMinor: 0 }, false, { lines: [{ description: 'With PPN', amountMinor: 10_000, taxed: true }] }, TAX, 'X'), 422, /carries no PPN, so a credit cannot/);
     bad(() => computeCredit(inv, true, { lines: [] }, TAX, 'X'), 422, /at least one line/);
-    bad(() => computeCredit(inv, true, { lines: [{ description: 'x', amountIdr: 10 }] }, TAX, 'X'), 422, /say what is credited/);
-    bad(() => computeCredit(inv, true, { lines: [{ description: 'Half rupiah', amountIdr: 10.5 }] }, TAX, 'X'), 422, /whole number/);
+    bad(() => computeCredit(inv, true, { lines: [{ description: 'x', amountMinor: 10 }] }, TAX, 'X'), 422, /say what is credited/);
+    bad(() => computeCredit(inv, true, { lines: [{ description: 'Half rupiah', amountMinor: 10.5 }] }, TAX, 'X'), 422, /whole number/);
   });
 });
 
@@ -69,13 +69,13 @@ describe('fleet documents as PDF', () => {
   const st = {
     status: 'issued', number: 'FLT/2026/09/0007', issuedDate: '2026-09-01', dueDate: '2026-09-15', period: '2026-08', periodLabel: 'August 2026',
     seller, buyer, paymentInstructions: 'BCA 123-456-7890 a.n. PT Nusantara Charge', efakturNumber: '04002600000123',
-    sites: [{ siteName: 'Grand Indonesia', sessions: 12, energyWh: 250_500, subtotalIdr: 900_000, pbjtIdr: 90_000, dppIdr: 907_500, ppnIdr: 108_900, totalIdr: 1_098_900, untaxedSessions: 0 }],
-    roaming: [], fees: [], cards: [{ uid: 'ARM-0001', holder: 'Budi', sessions: 12, energyWh: 250_500, totalIdr: 1_098_900, roamingIdr: 0 }],
-    sessions: Array.from({ length: 60 }, (_, i) => ({ startedAt: '2026-08-12T02:00:00Z', siteName: 'Grand Indonesia', ocppIdentity: 'GI-DC-01', cardUid: 'ARM-0001', holder: 'Budi', energyWh: 20_875, totalIdr: 91_575 + i })),
-    totals: { sessions: 12, energyWh: 250_500, subtotalIdr: 900_000, pbjtIdr: 90_000, taxBaseIdr: 990_000, dppIdr: 907_500, ppnIdr: 108_900, ownTotalIdr: 1_098_900, roamingSessions: 0, roamingIdr: 0, feesIdr: 0, totalIdr: 1_098_900, receiptsTotalIdr: 1_098_900, roundingIdr: 0 },
-    priorCredits: [{ number: 'FLT-CN/2026/08/0002', invoiceNumber: 'FLT/2026/08/0005', totalIdr: 50_000 }],
-    creditNotes: [{ number: 'FLT-CN/2026/09/0001', status: 'issued', settlement: 'invoice', reason: 'Disputed session', totalIdr: 111_000 }],
-    balanceIdr: 1_098_900 - 50_000 - 111_000,
+    sites: [{ siteName: 'Grand Indonesia', sessions: 12, energyWh: 250_500, subtotalMinor: 900_000, localTaxMinor: 90_000, taxBaseMinor: 907_500, taxMinor: 108_900, totalMinor: 1_098_900, untaxedSessions: 0 }],
+    roaming: [], fees: [], cards: [{ uid: 'ARM-0001', holder: 'Budi', sessions: 12, energyWh: 250_500, totalMinor: 1_098_900, roamingMinor: 0 }],
+    sessions: Array.from({ length: 60 }, (_, i) => ({ startedAt: '2026-08-12T02:00:00Z', siteName: 'Grand Indonesia', ocppIdentity: 'GI-DC-01', cardUid: 'ARM-0001', holder: 'Budi', energyWh: 20_875, totalMinor: 91_575 + i })),
+    totals: { sessions: 12, energyWh: 250_500, subtotalMinor: 900_000, localTaxMinor: 90_000, taxableMinor: 990_000, taxBaseMinor: 907_500, taxMinor: 108_900, ownTotalMinor: 1_098_900, roamingSessions: 0, roamingMinor: 0, feesMinor: 0, totalMinor: 1_098_900, receiptsTotalMinor: 1_098_900, roundingMinor: 0 },
+    priorCredits: [{ number: 'FLT-CN/2026/08/0002', invoiceNumber: 'FLT/2026/08/0005', totalMinor: 50_000 }],
+    creditNotes: [{ number: 'FLT-CN/2026/09/0001', status: 'issued', settlement: 'invoice', reason: 'Disputed session', totalMinor: 111_000 }],
+    balanceMinor: 1_098_900 - 50_000 - 111_000,
   };
 
   test('invoice: number, parties, lines, credits and amount due, appendix, page footers', () => {
@@ -103,10 +103,10 @@ describe('fleet documents as PDF', () => {
   test('credit note: what it credits, the tax reversed and how it is settled', () => {
     const cn = {
       id: 'x', number: 'FLT-CN/2026/09/0001', status: 'issued', settlement: 'refund', reason: 'Charger fault: session billed twice',
-      lines: [{ description: 'Session 12 Aug billed twice', amountIdr: 111_000, taxed: true, taxBaseIdr: 100_000, dppIdr: 91_667, ppnIdr: 11_000 }],
-      dppIdr: 91_667, ppnIdr: 11_000, totalIdr: 111_000, issuedAt: '2026-09-20T03:00:00Z', issuedDate: '2026-09-20', issuedBy: 'u', refundedAt: null, refundReference: null,
+      lines: [{ description: 'Session 12 Aug billed twice', amountMinor: 111_000, taxed: true, taxableMinor: 100_000, taxBaseMinor: 91_667, taxMinor: 11_000 }],
+      taxBaseMinor: 91_667, taxMinor: 11_000, totalMinor: 111_000, issuedAt: '2026-09-20T03:00:00Z', issuedDate: '2026-09-20', issuedBy: 'u', refundedAt: null, refundReference: null,
       appliedInvoice: null, voidedAt: null, voidReason: null, sentAt: null, sentTo: null,
-      invoice: { id: 'i', number: 'FLT/2026/09/0007', issuedDate: '2026-09-01', periodLabel: 'August 2026', totalIdr: 1_098_900, efakturNumber: '04002600000123', status: 'paid' },
+      invoice: { id: 'i', number: 'FLT/2026/09/0007', issuedDate: '2026-09-01', periodLabel: 'August 2026', totalMinor: 1_098_900, efakturNumber: '04002600000123', status: 'paid' },
       accountId: 'a', seller, buyer,
     } as any;
     const txt = pdfText(creditNotePdf(cn));

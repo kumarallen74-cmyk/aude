@@ -1,3 +1,4 @@
+import { upgradeLegacyKeys, moneyText, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
 /**
  * Platform commission and fee statement — the arithmetic.
  *
@@ -30,15 +31,15 @@
  * commission-calc.test.ts.
  */
 
-export interface Tier { name: string; upToIdr: number | null; rateBps: number }
+export interface Tier { name: string; upToMinor: number | null; rateBps: number }
 
 export interface Plan {
   tiers: Tier[];
   tierMode: 'whole' | 'marginal';
-  minPerChargerAcIdr: number;
-  minPerChargerDcIdr: number;
-  privateFeeAcIdr: number;
-  privateFeeDcIdr: number;
+  minPerChargerAcMinor: number;
+  minPerChargerDcMinor: number;
+  privateFeeAcMinor: number;
+  privateFeeDcMinor: number;
   /** Who bears the payment gateway's MDR: the platform (credited back, per the pricing page) or the site owner. */
   mdrBorneBy: 'platform' | 'site_owner';
   prorate: boolean;
@@ -46,49 +47,80 @@ export interface Plan {
 
 export const DEFAULT_PLAN: Plan = {
   tiers: [
-    { name: 'Standard', upToIdr: 150_000_000, rateBps: 800 },
-    { name: 'Volume', upToIdr: 500_000_000, rateBps: 650 },
-    { name: 'Network', upToIdr: null, rateBps: 500 },
+    { name: 'Standard', upToMinor: 150_000_000, rateBps: 800 },
+    { name: 'Volume', upToMinor: 500_000_000, rateBps: 650 },
+    { name: 'Network', upToMinor: null, rateBps: 500 },
   ],
   tierMode: 'whole',
   // AC is lower: at Rp 350,000 almost every public AC charger paid the minimum
   // (commission only passes it above ~37% utilisation on 7 kW).
-  minPerChargerAcIdr: 150_000,
-  minPerChargerDcIdr: 350_000,
-  privateFeeAcIdr: 250_000,
-  privateFeeDcIdr: 450_000,
+  minPerChargerAcMinor: 150_000,
+  minPerChargerDcMinor: 350_000,
+  privateFeeAcMinor: 250_000,
+  privateFeeDcMinor: 450_000,
   mdrBorneBy: 'platform',
   prorate: true,
 };
 
+/**
+ * The published plan per currency (§D9). Tier bounds, minimums and private-site fees are
+ * amounts in the currency's minor units (sen / cents). The MYR and SGD figures are
+ * PLACEHOLDERS scaled from the rupiah plan: TODO(commercial) — the ringgit and
+ * Singapore-dollar prices are a commercial decision, not set here.
+ */
+export const DEFAULT_PLANS: Readonly<Record<CurrencyCode, Plan>> = Object.freeze({
+  IDR: DEFAULT_PLAN,
+  // TODO(commercial): placeholder ringgit plan (≈ Rp 3,500 per RM).
+  MYR: {
+    ...DEFAULT_PLAN,
+    tiers: [
+      { name: 'Standard', upToMinor: 4_300_000, rateBps: 800 },
+      { name: 'Volume', upToMinor: 14_300_000, rateBps: 650 },
+      { name: 'Network', upToMinor: null, rateBps: 500 },
+    ],
+    minPerChargerAcMinor: 4_300, minPerChargerDcMinor: 10_000, privateFeeAcMinor: 7_100, privateFeeDcMinor: 12_900,
+  },
+  // TODO(commercial): placeholder Singapore-dollar plan (≈ Rp 12,000 per S$).
+  SGD: {
+    ...DEFAULT_PLAN,
+    tiers: [
+      { name: 'Standard', upToMinor: 1_250_000, rateBps: 800 },
+      { name: 'Volume', upToMinor: 4_200_000, rateBps: 650 },
+      { name: 'Network', upToMinor: null, rateBps: 500 },
+    ],
+    minPerChargerAcMinor: 1_250, minPerChargerDcMinor: 2_900, privateFeeAcMinor: 2_100, privateFeeDcMinor: 3_750,
+  },
+});
+
 const money = (v: unknown) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1e13;
 
 /** Validate a plan coming from the platform console. Returns the clean plan or an error. */
-export function normalisePlan(raw: any): { plan: Plan } | { error: string } {
-  const p = { ...DEFAULT_PLAN, ...(raw ?? {}) };
+export function normalisePlan(raw: any, currency: CurrencyCode = LEGACY_CURRENCY): { plan: Plan } | { error: string } {
+  // A plan frozen before 1.7 (or a legacy API body) names its amounts *Idr.
+  const p = { ...DEFAULT_PLANS[currency], ...upgradeLegacyKeys(raw ?? {}) };
   if (!Array.isArray(p.tiers) || p.tiers.length < 1 || p.tiers.length > 10) return { error: 'Give between 1 and 10 tiers.' };
   const tiers: Tier[] = [];
   let prev = 0;
   for (const [i, t] of p.tiers.entries()) {
     const last = i === p.tiers.length - 1;
-    const upTo = t?.upToIdr === null || t?.upToIdr === undefined || t?.upToIdr === '' ? null : Number(t.upToIdr);
+    const upTo = t?.upToMinor === null || t?.upToMinor === undefined || t?.upToMinor === '' ? null : Number(t.upToMinor);
     if (!last && (upTo === null || !money(upTo) || upTo <= prev)) return { error: 'Each tier but the last needs an upper bound above the previous one.' };
     if (last && upTo !== null) return { error: 'The last tier has no upper bound.' };
     const rate = Number(t?.rateBps);
     if (!Number.isInteger(rate) || rate < 0 || rate > 5000) return { error: 'Commission rates are 0–50% (in basis points, 800 = 8%).' };
-    tiers.push({ name: String(t?.name ?? `Tier ${i + 1}`).slice(0, 40) || `Tier ${i + 1}`, upToIdr: upTo, rateBps: rate });
+    tiers.push({ name: String(t?.name ?? `Tier ${i + 1}`).slice(0, 40) || `Tier ${i + 1}`, upToMinor: upTo, rateBps: rate });
     if (upTo !== null) prev = upTo;
   }
   if (!['whole', 'marginal'].includes(p.tierMode)) return { error: 'Tier mode is whole or marginal.' };
   if (!['platform', 'site_owner'].includes(p.mdrBorneBy)) return { error: 'MDR is borne by the platform or the site owner.' };
-  for (const k of ['minPerChargerAcIdr', 'minPerChargerDcIdr', 'privateFeeAcIdr', 'privateFeeDcIdr'] as const) {
-    if (!money(p[k])) return { error: `${k} must be a rupiah amount.` };
+  for (const k of ['minPerChargerAcMinor', 'minPerChargerDcMinor', 'privateFeeAcMinor', 'privateFeeDcMinor'] as const) {
+    if (!money(p[k])) return { error: currency === LEGACY_CURRENCY ? `${k} must be a rupiah amount.` : `${k} must be an amount in ${currency} minor units.` };
   }
   return {
     plan: {
       tiers, tierMode: p.tierMode, mdrBorneBy: p.mdrBorneBy, prorate: p.prorate !== false,
-      minPerChargerAcIdr: Math.round(Number(p.minPerChargerAcIdr)), minPerChargerDcIdr: Math.round(Number(p.minPerChargerDcIdr)),
-      privateFeeAcIdr: Math.round(Number(p.privateFeeAcIdr)), privateFeeDcIdr: Math.round(Number(p.privateFeeDcIdr)),
+      minPerChargerAcMinor: Math.round(Number(p.minPerChargerAcMinor)), minPerChargerDcMinor: Math.round(Number(p.minPerChargerDcMinor)),
+      privateFeeAcMinor: Math.round(Number(p.privateFeeAcMinor)), privateFeeDcMinor: Math.round(Number(p.privateFeeDcMinor)),
     },
   };
 }
@@ -99,7 +131,7 @@ export function normalisePlan(raw: any): { plan: Plan } | { error: string } {
  * into Network (5%) because the bound was exclusive.
  */
 export function tierFor(plan: Plan, gtv: number): Tier {
-  return plan.tiers.find((t) => t.upToIdr === null || gtv <= t.upToIdr) ?? plan.tiers[plan.tiers.length - 1]!;
+  return plan.tiers.find((t) => t.upToMinor === null || gtv <= t.upToMinor) ?? plan.tiers[plan.tiers.length - 1]!;
 }
 
 /**
@@ -124,18 +156,18 @@ export function commissionFor(plan: Plan, gtv: number): number {
   if (plan.tierMode === 'whole') {
     let out = (gtv * tierFor(plan, gtv).rateBps) / 10_000;
     for (const t of plan.tiers) {
-      if (t.upToIdr === null || t.upToIdr >= gtv) break;
-      out = Math.max(out, (t.upToIdr * t.rateBps) / 10_000);
+      if (t.upToMinor === null || t.upToMinor >= gtv) break;
+      out = Math.max(out, (t.upToMinor * t.rateBps) / 10_000);
     }
     return out;
   }
   let rest = gtv, floor = 0, out = 0;
   for (const t of plan.tiers) {
-    const band = t.upToIdr === null ? rest : Math.min(rest, t.upToIdr - floor);
+    const band = t.upToMinor === null ? rest : Math.min(rest, t.upToMinor - floor);
     if (band <= 0) break;
     out += (band * t.rateBps) / 10_000;
     rest -= band;
-    if (t.upToIdr !== null) floor = t.upToIdr;
+    if (t.upToMinor !== null) floor = t.upToMinor;
     if (rest <= 0) break;
   }
   return out;
@@ -152,11 +184,11 @@ export interface ChargerInput {
   sessions: number;
   energyWh: number;
   /** Commission base: CDR subtotals (energy, service, admin, idle), excl. PBJT and PPN. */
-  gtvIdr: number;
-  pbjtIdr: number;
-  ppnIdr: number;
-  grossIdr: number;
-  mdrIdr: number;
+  gtvMinor: number;
+  localTaxMinor: number;
+  taxMinor: number;
+  grossMinor: number;
+  mdrMinor: number;
   inReview: number;
 }
 
@@ -164,11 +196,11 @@ export interface SiteInput { siteId: string; name: string; model: 'public' | 'pr
 
 export interface ChargerLine extends ChargerInput {
   activeDays: number;
-  commissionIdr: number;
-  minimumIdr: number;
-  topUpIdr: number;
-  privateFeeIdr: number;
-  feeIdr: number;
+  commissionMinor: number;
+  minimumMinor: number;
+  topUpMinor: number;
+  privateFeeMinor: number;
+  feeMinor: number;
 }
 
 export interface SiteLine {
@@ -179,21 +211,21 @@ export interface SiteLine {
   rateBps: number | null;
   sessions: number;
   energyKwh: number;
-  gtvIdr: number;
-  pbjtIdr: number;
-  ppnIdr: number;
-  grossIdr: number;
-  commissionIdr: number;
-  minimumTopUpIdr: number;
-  privateFeeIdr: number;
-  feeIdr: number;
-  mdrIdr: number;
+  gtvMinor: number;
+  localTaxMinor: number;
+  taxMinor: number;
+  grossMinor: number;
+  commissionMinor: number;
+  minimumTopUpMinor: number;
+  privateFeeMinor: number;
+  feeMinor: number;
+  mdrMinor: number;
   /** MDR credited back against this site's fee (platform bears MDR), capped at the fee. */
-  mdrCreditIdr: number;
+  mdrCreditMinor: number;
   /** The platform's share: fee less MDR credit, before PPN. */
-  platformShareIdr: number;
+  platformShareMinor: number;
   /** The owner's share: commission base less the platform's share and the MDR the gateway takes. */
-  ownerShareIdr: number;
+  ownerShareMinor: number;
   warnings: string[];
   chargers: ChargerLine[];
 }
@@ -206,42 +238,50 @@ export interface Statement {
   totals: {
     sessions: number;
     energyKwh: number;
-    gtvIdr: number;
-    pbjtIdr: number;
-    ppnCollectedIdr: number;
-    grossCollectedIdr: number;
-    commissionIdr: number;
-    minimumTopUpIdr: number;
-    privateFeeIdr: number;
-    feesIdr: number;
-    mdrEstimateIdr: number;
-    mdrCreditIdr: number;
-    netIdr: number;
-    dppIdr: number;
-    ppnIdr: number;
-    totalIdr: number;
+    gtvMinor: number;
+    localTaxMinor: number;
+    ppnCollectedMinor: number;
+    grossCollectedMinor: number;
+    commissionMinor: number;
+    minimumTopUpMinor: number;
+    privateFeeMinor: number;
+    feesMinor: number;
+    mdrEstimateMinor: number;
+    mdrCreditMinor: number;
+    netMinor: number;
+    taxBaseMinor: number;
+    taxMinor: number;
+    totalMinor: number;
     /** PPh 23 (2%) the customer may withhold on the service fee, if it is a withholding agent. */
-    pph23Idr: number;
-    /** The platform's share before PPN (= netIdr). */
-    platformShareIdr: number;
+    pph23Minor: number;
+    /** The platform's share before PPN (= netMinor). */
+    platformShareMinor: number;
     /** The owner's share: commission base less the platform's share and MDR. */
-    ownerShareIdr: number;
+    ownerShareMinor: number;
   };
   warnings: string[];
+  /** Every amount is in this currency (one statement per organisation, owner, month and currency). */
+  currency: CurrencyCode;
+  /** Why no tax is on the fee (MY/SG until the platform's tax on its fee is settled, V6); null = taxed. */
+  taxNote: string | null;
 }
 
 export interface TaxRates { ppnRateBps: number; dppNum: number; dppDen: number }
 
 const r = Math.round;
-const idr = (n: number) => `Rp ${r(n).toLocaleString('id-ID')}`;
 
-export function computeStatement(plan: Plan, period: string, daysInMonth: number, sites: SiteInput[], chargers: ChargerInput[], tax: TaxRates): Statement {
+/**
+ * `tax` null: the platform's fee is issued WITHOUT tax, and the statement says so (MY/SG:
+ * which PlugSure entity bills, and the tax on that cross-border service, is open — V6).
+ */
+export function computeStatement(plan: Plan, period: string, daysInMonth: number, sites: SiteInput[], chargers: ChargerInput[], tax: TaxRates | null, currency: CurrencyCode = LEGACY_CURRENCY): Statement {
+  const idr = (n: number) => moneyText(r(n), currency, 'id');
   const out: SiteLine[] = [];
   for (const s of sites) {
     const cs = chargers.filter((c) => c.siteId === s.siteId);
     if (!cs.length) continue;
     const sum = (k: keyof ChargerInput) => cs.reduce((a, c) => a + Number(c[k]), 0);
-    const gtv = sum('gtvIdr');
+    const gtv = sum('gtvMinor');
     const warnings: string[] = [];
     let tier: Tier | null = null, siteCommission = 0;
     if (s.model === 'public') {
@@ -253,51 +293,54 @@ export function computeStatement(plan: Plan, period: string, daysInMonth: number
     const lines: ChargerLine[] = cs.map((c) => {
       const frac = plan.prorate ? Math.min(1, Math.max(0, c.activeFraction)) : c.activeFraction > 0 ? 1 : 0;
       // A charger's share of the site's commission, in proportion to its turnover.
-      const commission = s.model === 'public' && gtv > 0 ? r((siteCommission * c.gtvIdr) / gtv) : 0;
-      const minimum = s.model === 'public' ? r((c.kind === 'DC' ? plan.minPerChargerDcIdr : plan.minPerChargerAcIdr) * frac) : 0;
-      const privateFee = s.model === 'private' ? r((c.kind === 'DC' ? plan.privateFeeDcIdr : plan.privateFeeAcIdr) * frac) : 0;
+      const commission = s.model === 'public' && gtv > 0 ? r((siteCommission * c.gtvMinor) / gtv) : 0;
+      const minimum = s.model === 'public' ? r((c.kind === 'DC' ? plan.minPerChargerDcMinor : plan.minPerChargerAcMinor) * frac) : 0;
+      const privateFee = s.model === 'private' ? r((c.kind === 'DC' ? plan.privateFeeDcMinor : plan.privateFeeAcMinor) * frac) : 0;
       const topUp = Math.max(0, minimum - commission);
-      return { ...c, activeDays: r(frac * daysInMonth), commissionIdr: commission, minimumIdr: minimum, topUpIdr: topUp, privateFeeIdr: privateFee, feeIdr: commission + topUp + privateFee };
+      return { ...c, activeDays: r(frac * daysInMonth), commissionMinor: commission, minimumMinor: minimum, topUpMinor: topUp, privateFeeMinor: privateFee, feeMinor: commission + topUp + privateFee };
     });
     const lineSum = (k: keyof ChargerLine) => lines.reduce((a, l) => a + Number(l[k]), 0);
     const inReview = sum('inReview');
     if (inReview) warnings.push(`${inReview} session${inReview === 1 ? '' : 's'} awaiting operator review ${inReview === 1 ? 'is' : 'are'} included at the current rating.`);
-    const fee = lineSum('feeIdr');
-    const mdr = s.model === 'public' ? sum('mdrIdr') : 0;
+    const fee = lineSum('feeMinor');
+    const mdr = s.model === 'public' ? sum('mdrMinor') : 0;
     // The credit can only reduce what the platform charges, never create a payout.
     const credit = plan.mdrBorneBy === 'platform' ? Math.min(mdr, fee) : 0;
     const platformShare = fee - credit;
     out.push({
       siteId: s.siteId, name: s.name, model: s.model,
       tier: tier?.name ?? null,
-      rateBps: s.model === 'public' ? (gtv > 0 ? r((lineSum('commissionIdr') / gtv) * 10_000) : tier!.rateBps) : null,
+      rateBps: s.model === 'public' ? (gtv > 0 ? r((lineSum('commissionMinor') / gtv) * 10_000) : tier!.rateBps) : null,
       sessions: sum('sessions'), energyKwh: Math.round(sum('energyWh') / 10) / 100,
-      gtvIdr: gtv, pbjtIdr: sum('pbjtIdr'), ppnIdr: sum('ppnIdr'), grossIdr: sum('grossIdr'),
-      commissionIdr: lineSum('commissionIdr'), minimumTopUpIdr: lineSum('topUpIdr'), privateFeeIdr: lineSum('privateFeeIdr'),
-      feeIdr: fee, mdrIdr: mdr, mdrCreditIdr: credit, platformShareIdr: platformShare,
+      gtvMinor: gtv, localTaxMinor: sum('localTaxMinor'), taxMinor: sum('taxMinor'), grossMinor: sum('grossMinor'),
+      commissionMinor: lineSum('commissionMinor'), minimumTopUpMinor: lineSum('topUpMinor'), privateFeeMinor: lineSum('privateFeeMinor'),
+      feeMinor: fee, mdrMinor: mdr, mdrCreditMinor: credit, platformShareMinor: platformShare,
       // base = owner + platform + gateway (MDR); negative for a private site that sold nothing.
-      ownerShareIdr: gtv - platformShare - mdr,
+      ownerShareMinor: gtv - platformShare - mdr,
       warnings, chargers: lines,
     });
   }
   const T = (k: keyof SiteLine) => out.reduce((a, s) => a + Number(s[k]), 0);
-  const fees = T('feeIdr');
-  const mdrEstimate = T('mdrIdr');
-  const mdrCredit = T('mdrCreditIdr');
+  const fees = T('feeMinor');
+  const mdrEstimate = T('mdrMinor');
+  const mdrCredit = T('mdrCreditMinor');
   const net = fees - mdrCredit;
-  const dpp = r((net * tax.dppNum) / tax.dppDen);
-  const ppn = r((dpp * tax.ppnRateBps) / 10_000);
+  const dpp = tax ? r((net * tax.dppNum) / tax.dppDen) : 0;
+  const ppn = tax ? r((dpp * tax.ppnRateBps) / 10_000) : 0;
   return {
     period, daysInMonth, plan, sites: out,
     totals: {
       sessions: T('sessions'), energyKwh: Math.round(T('energyKwh') * 100) / 100,
-      gtvIdr: T('gtvIdr'), pbjtIdr: T('pbjtIdr'), ppnCollectedIdr: T('ppnIdr'), grossCollectedIdr: T('grossIdr'),
-      commissionIdr: T('commissionIdr'), minimumTopUpIdr: T('minimumTopUpIdr'), privateFeeIdr: T('privateFeeIdr'),
-      feesIdr: fees, mdrEstimateIdr: mdrEstimate, mdrCreditIdr: mdrCredit, netIdr: net, dppIdr: dpp, ppnIdr: ppn, totalIdr: net + ppn,
-      pph23Idr: r(net * 0.02),
-      platformShareIdr: net,
-      ownerShareIdr: T('ownerShareIdr'),
+      gtvMinor: T('gtvMinor'), localTaxMinor: T('localTaxMinor'), ppnCollectedMinor: T('taxMinor'), grossCollectedMinor: T('grossMinor'),
+      commissionMinor: T('commissionMinor'), minimumTopUpMinor: T('minimumTopUpMinor'), privateFeeMinor: T('privateFeeMinor'),
+      feesMinor: fees, mdrEstimateMinor: mdrEstimate, mdrCreditMinor: mdrCredit, netMinor: net, taxBaseMinor: dpp, taxMinor: ppn, totalMinor: net + ppn,
+      // PPh 23 is Indonesian withholding.
+      pph23Minor: currency === LEGACY_CURRENCY ? r(net * 0.02) : 0,
+      platformShareMinor: net,
+      ownerShareMinor: T('ownerShareMinor'),
     },
     warnings: out.flatMap((s) => s.warnings.map((w) => `${s.name}: ${w}`)),
+    currency,
+    taxNote: tax ? null : 'Issued without tax: the tax on the platform fee for operators outside Indonesia is not settled yet (to be confirmed).',
   };
 }

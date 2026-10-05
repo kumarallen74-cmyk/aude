@@ -112,7 +112,7 @@ try {
   const login = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   check('setup: operator signs in', login.status === 200, login.data);
   const site = await ops('POST', '/v1/sites', { name: `V2G Depot ${RUN}`, address: 'Jl. Raya Bekasi Km 21', city: 'Jakarta Timur', postalCode: '13920',
-    lat: '-6.1800', lon: '106.9300', kabupatenKotaCode: '3175', gridTariffGroup: 'B-2/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+    lat: '-6.1800', lon: '106.9300', kabupatenKotaCode: '3175', gridTariffGroup: 'B-2/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const siteId = site.data.id as string;
   const tariff = await ops('POST', '/v1/tariffs', { name: `V2G DC ${RUN}`, plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true,
     components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
@@ -124,12 +124,12 @@ try {
   const badHours = await ops('PUT', `/v1/sites/${siteId}`, { v2xEnabled: true, v2xWindows: '25:00-26:00' });
   const badFloor = await ops('PUT', `/v1/sites/${siteId}`, { v2xMinSocPercent: 5 });
   check('programme: impossible hours or floor are refused', badHours.status === 422 && /Discharge hours|HH:MM/.test(badHours.data.error) && badFloor.status === 422, { h: badHours.data, f: badFloor.data });
-  const prog = await ops('PUT', `/v1/sites/${siteId}`, { v2xEnabled: true, v2xWindows: '00:00-00:00', v2xMinSocPercent: 40, v2xCreditIdrPerKwh: 2000, v2xAllowExport: false });
+  const prog = await ops('PUT', `/v1/sites/${siteId}`, { v2xEnabled: true, v2xWindows: '00:00-00:00', v2xMinSocPercent: 40, v2xCreditMinorPerKwh: 2000, v2xAllowExport: false });
   const exportWarn = await ops('PUT', `/v1/sites/${siteId}`, { v2xAllowExport: true });
   await ops('PUT', `/v1/sites/${siteId}`, { v2xAllowExport: false });
   const siteRow = (await ops('GET', `/v1/sites/${siteId}`)).data;
   check('programme: switched on all day, floor 40 %, Rp 2,000 / kWh, no export (allowing export warns about PLN)',
-    prog.status === 200 && (exportWarn.data.warnings ?? []).some((w: string) => /PLN/.test(w)) && siteRow?.v2x_enabled === true && siteRow.v2x_credit_idr_per_kwh === 2000 && siteRow.v2x_allow_export === false && siteRow.v2x_windows?.[0]?.from === '00:00',
+    prog.status === 200 && (exportWarn.data.warnings ?? []).some((w: string) => /PLN/.test(w)) && siteRow?.v2x_enabled === true && siteRow.v2x_credit_minor_per_kwh === 2000 && siteRow.v2x_allow_export === false && siteRow.v2x_windows?.[0]?.from === '00:00',
     { p: prog.data, w: exportWarn.data, s: siteRow && { e: siteRow.v2x_enabled, w: siteRow.v2x_windows } });
 
   const ID = `V2G-${RUN}`;
@@ -170,7 +170,7 @@ try {
   const detA = await until(() => ops('GET', `/v1/sessions/${sidA}`), (r) => r.data?.v2x?.discharging === true, 8000);
   const vA = detA.data?.v2x;
   check('console: the session shows the car\'s needs, the fleet\'s consent (floor 50 %) and 11 kW going back',
-    vA?.consent === true && vA.consentSource === 'fleet' && vA.minSocPercent === 50 && vA.creditIdrPerKwh === 2000 && vA.dischargeW === 11000
+    vA?.consent === true && vA.consentSource === 'fleet' && vA.minSocPercent === 50 && vA.creditMinorPerKwh === 2000 && vA.dischargeW === 11000
       && vA.needs?.requestedTransfer === 'DC_BPT' && vA.needs.bidirectional === true && vA.needs.maxDischargePowerW === 11000 && vA.needs.evCapacityWh === 64000,
     vA);
 
@@ -199,7 +199,7 @@ try {
   await st.call('NotifyEVChargingNeeds', needs(2, { dcChargingParameters: { stateOfCharge: 75, evEnergyCapacity: 58000 } }));
   const offered = await until(() => drv.get(`/v1/charge/${co.data.chargeId}/status`), (r) => r.data?.v2x?.canOffer === true, 10_000);
   check('app: a started 2.1 charge offers the driver to give energy back, with the credit and the site floor',
-    fl.status === 200 && startCmd.status === 200 && offered.data.v2x?.canOffer === true && offered.data.v2x.consent === false && offered.data.v2x.creditIdrPerKwh === 2000 && offered.data.v2x.siteMinSocPercent === 40,
+    fl.status === 200 && startCmd.status === 200 && offered.data.v2x?.canOffer === true && offered.data.v2x.consent === false && offered.data.v2x.creditMinorPerKwh === 2000 && offered.data.v2x.siteMinSocPercent === 40,
     { fl: fl.data, start: startCmd.data, v: offered.data.v2x });
   const noB = txPeriod(st, 2, mark);
   check('safety: without the driver\'s consent their car is never asked to discharge', !noB || noB.period?.operationMode !== 'CentralSetpoint', noB);
@@ -254,13 +254,13 @@ try {
   // ─────────────────────────────────────────── billing the fleet car
   await st.call('TransactionEvent', { eventType: 'Ended', timestamp: iso(), triggerReason: 'EVDeparted', seqNo: 4,
     transactionInfo: { transactionId: txA, chargingState: 'Idle', stoppedReason: 'EVDisconnected' }, evse: { id: 1, connectorId: 1 }, meterValue: meter(6000, 3000, 72) });
-  const billed = await until(() => ops('GET', `/v1/sessions/${sidA}`), (r) => r.data?.total_idr != null, 15_000);
+  const billed = await until(() => ops('GET', `/v1/sessions/${sidA}`), (r) => r.data?.total_minor != null, 15_000);
   const lines = billed.data?.lines ?? [];
-  const credit = lines.filter((l: any) => l.adjustment?.source === 'v2x').reduce((a: number, l: any) => a + l.amountIdr, 0);
-  const energy = lines.filter((l: any) => l.kind === 'energy' && !l.adjustment).reduce((a: number, l: any) => a + l.amountIdr, 0);
+  const credit = lines.filter((l: any) => l.adjustment?.source === 'v2x').reduce((a: number, l: any) => a + l.amountMinor, 0);
+  const energy = lines.filter((l: any) => l.kind === 'energy' && !l.adjustment).reduce((a: number, l: any) => a + l.amountMinor, 0);
   check('billing: 5 kWh charged at Rp 2,400; 3 kWh given back credited Rp 6,000 before tax (PBJT-TL and PPN on the rest)',
-    Number(billed.data?.energy_wh) === 5000 && energy === 12000 && credit === -6000 && billed.data.subtotal_idr === 6000 && billed.data.v2x?.creditIdr === 6000,
-    { lines, sub: billed.data?.subtotal_idr, total: billed.data?.total_idr, v: billed.data?.v2x });
+    Number(billed.data?.energy_wh) === 5000 && energy === 12000 && credit === -6000 && billed.data.subtotal_minor === 6000 && billed.data.v2x?.creditMinor === 6000,
+    { lines, sub: billed.data?.subtotal_minor, total: billed.data?.total_minor, v: billed.data?.v2x });
   const endedV = billed.data?.v2x;
   check('console: after the session, what it gave back stays on record', endedV?.exportWh === 3000 && endedV.discharging === false && endedV.canOffer === false, endedV);
   await st.call('TransactionEvent', { eventType: 'Ended', timestamp: iso(), triggerReason: 'EVDeparted', seqNo: 1,

@@ -6,6 +6,7 @@ import { logger } from '../logger.js';
 import { query } from '../db/pool.js';
 import { bus } from '../services/events.js';
 import * as registry from './registry.js';
+import { workerHealthReport } from '../services/worker-health.js';
 
 /**
  * API <-> gateway bridge for the SPLIT deployment.
@@ -131,6 +132,12 @@ export function handleInternalRequest(req: IncomingMessage, res: ServerResponse)
         connectedAt: r.connectedAt.toISOString(),
       })),
     );
+    return true;
+  }
+
+  // Background workers' health (they run here), for the API's platform health route.
+  if (req.method === 'GET' && url === '/internal/workers') {
+    send(200, workerHealthReport());
     return true;
   }
 

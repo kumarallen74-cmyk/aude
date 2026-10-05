@@ -86,7 +86,9 @@ input{font-family:inherit}
 
 /* top bar */
 .top{display:flex;align-items:center;gap:12px;padding:calc(18px + env(safe-area-inset-top)) 2px 14px;position:sticky;top:0;
-     background:linear-gradient(var(--bg) 70%, transparent);z-index:5}
+     /* solid behind the title and its sub-line, fading only in the bottom padding: at 70% a two-line title's
+        sub-line sat over the scrolled content (UI sweep v1.7.0) */
+     background:linear-gradient(var(--bg) calc(100% - 12px), transparent);z-index:5}
 .top h1{font-family:var(--f-num);font-weight:700;font-size:20px;color:var(--ink);margin:0;letter-spacing:-.02em}
 .top .sub{font-size:12.5px;color:var(--muted);margin-top:1px}
 .top .back{width:42px;height:42px;border-radius:12px;background:var(--raised);
@@ -185,7 +187,7 @@ input{font-family:inherit}
 .custom-in{margin-top:10px;display:flex;align-items:center;gap:10px;background:var(--surface);
            border:1.5px solid var(--line);border-radius:14px;padding:4px 14px}
 .custom-in span{font-family:var(--f-num);font-weight:700;color:var(--muted);font-size:16px}
-.custom-in input{flex:1;border:0;background:none;color:var(--ink);font-family:var(--f-num);
+.custom-in input{flex:1;min-width:0;border:0;background:none;color:var(--ink);font-family:var(--f-num);
                  font-weight:700;font-size:19px;padding:12px 0;outline:none;font-variant-numeric:tabular-nums}
 .quote-line{margin-top:14px;padding:14px;border-radius:14px;background:var(--raised);
             border:1px dashed var(--line-2);display:flex;align-items:center;justify-content:space-between}
@@ -487,8 +489,12 @@ input{font-family:inherit}
 (function(){
   var stored=null; try{ stored=localStorage.getItem('ps_lang'); }catch(e){}
   var dev=(navigator.language||'id').toLowerCase();
-  window.LANG = stored || (dev.indexOf('en')===0 ? 'en' : 'id');
+  // The driver's choice; else an English device; else the operator's default (English in Malaysia and Singapore), else Indonesian.
+  var op=document.documentElement.getAttribute('data-default-lang');
+  window.LANG = stored || (dev.indexOf('en')===0 ? 'en' : op==='en' ? 'en' : 'id');
   try{ document.documentElement.lang = window.LANG; }catch(e){}
+  // The acquirer's return page (/app/paid.html) speaks the same language.
+  try{ localStorage.setItem('ps_lang_now', window.LANG); }catch(e){}
 
   // Exact whole-text-node labels (trimmed) → English.
   var DICT = {
@@ -526,6 +532,8 @@ input{font-family:inherit}
     'Tampilkan QR, lalu pindai dengan aplikasi bank atau e-wallet apa pun.':'Shows a QR to scan with any bank or e-wallet app.',
     'Tagihan dikirim ke aplikasi OVO; setujui di sana.':'The bill is sent to your OVO app; approve it there.',
     'Anda diarahkan ke halaman kartu yang aman (3-D Secure). Nomor kartu tidak disimpan PlugSure.':'You go to a secure card page (3-D Secure). PlugSure never stores card numbers.',
+    // The card note with holds on is both sentences in one text node (methodPicker): translated as one.
+    'Kartu Anda hanya ditahan sebesar jumlah yang dipilih. Setelah selesai, yang ditagih hanya biaya pemakaian; sisanya langsung dilepas. Anda diarahkan ke halaman kartu yang aman (3-D Secure). Nomor kartu tidak disimpan PlugSure.':'Your card is only held for the amount you choose. When charging ends, only what you used is charged; the rest is released at once. You go to a secure card page (3-D Secure). PlugSure never stores card numbers.',
     'Halaman kartu yang aman (3-D Secure)':'Secure card page (3-D Secure)','Pembayaran Kartu':'Card payment',
     'Setelah membayar, kembali ke sini: langganan langsung aktif.':'After paying, come back here: the pass is active at once.',
     'Sekali bayar, berlaku 30 hari, tidak diperpanjang otomatis. Harga member otomatis berlaku saat mengisi di operator tersebut.':'One payment, valid 30 days, no automatic renewal. Member prices apply automatically when charging with that operator.',
@@ -571,6 +579,7 @@ input{font-family:inherit}
     'Batas biaya kartu armada Anda sudah tercapai.':'Your fleet card has reached its spend limit.',
     'Kartu ini sudah kedaluwarsa. Hubungi admin armada Anda.':'This card has expired. Contact your fleet admin.',
     'Terlalu banyak PIN salah. Coba lagi nanti atau hubungi admin armada Anda.':'Too many wrong PINs. Try again later or contact your fleet admin.',
+    'Organisasi, nomor kartu, atau PIN salah. Setelah 5 kali salah, kartu dikunci 15 menit. Jika masih gagal, hubungi admin armada Anda.':'Wrong organisation, card number or PIN. After 5 wrong tries the card is locked for 15 minutes. If it still fails, contact your fleet admin.',
     'Dana sedang dikembalikan':'Refund in progress','Dana dikembalikan':'Refunded','Pengembalian dana diproses':'Refund in progress',
     'Pengisian tidak dimulai, jadi pembayaran Anda dikembalikan penuh.':'Charging never started, so your payment is being refunded in full.',
     'Kembali ke beranda':'Back to home','Sudah dikembalikan.':'Already refunded.','Sedang diproses.':'In progress.',
@@ -679,12 +688,38 @@ input{font-family:inherit}
     'Setelah membayar, kembali ke sini: charger langsung menahan konektor untuk Anda.':'After paying, come back here: the charger holds the connector for you at once.',
     'Pembayaran tidak selesai. Konektor tidak dipesan.':'The payment did not complete. The connector was not reserved.',
     'Biaya reservasi dibayar dengan kartu tersimpan Anda.':'The reservation fee is paid with your saved card.',
-    'Ditagih langsung dari e-wallet Anda yang terhubung sebesar biaya reservasi, tanpa membuka aplikasinya.':'The reservation fee is charged straight to your linked e-wallet, without opening its app.'
+    'Ditagih langsung dari e-wallet Anda yang terhubung sebesar biaya reservasi, tanpa membuka aplikasinya.':'The reservation fee is charged straight to your linked e-wallet, without opening its app.',
+    // Partner networks for app drivers (a card hold in the partner's currency); other countries' tax
+    'Charger mitra. Sesi dibayar dengan kartu Anda sesuai tarif operator.':'Partner charger. You pay with your card at the operator’s prices.',
+    'Yang ditagih hanya tagihan operator; sisanya dilepas.':'Only the operator’s bill is charged; the rest is released.',
+    'Kartu baru':'New card','Pajak':'Tax','(termasuk)':'(included)','(termasuk pajak)':'(incl. tax)',
+    'Harga sudah termasuk pajak.':'Prices include tax.','Pajak ditambahkan saat sesi selesai.':'Tax is added when the session ends.',
+    'Selesaikan penahanan di kartu Anda; charger mulai setelah itu.':'Finish the hold on your card; the charger starts after that.',
+    'Lanjutkan pembayaran':'Continue to payment','Dibayar dengan kartu Anda':'Paid with your card',
+    'Ditahan di kartu':'Held on your card','Ditagih dari kartu':'Charged to your card',
+    'Menurut catatan tagihan operator. Sisa dana yang ditahan sudah dilepas.':'From the operator’s billing record. The rest of the hold has been released.',
+    'Belum tersedia dengan metode pembayaran Anda.':'Not available with your payment method yet.',
+    'Masuk untuk mengisi di jaringan mitra.':'Sign in to charge on partner networks.',
+    'Operator menolak permintaan. Dana yang ditahan sudah dilepas.':'The operator refused the request. The hold has been released.',
+    'Charger tidak dapat dimulai. Dana yang ditahan sudah dilepas.':'The charger couldn’t be started. The hold has been released.',
+    'Pembayaran tidak selesai. Tidak ada yang ditagih.':'The payment did not complete. Nothing was charged.',
+    // PayNow, FPX and GrabPay (Malaysia, Singapore)
+    'Perbankan online':'Online banking','Pindai dengan aplikasi bank Anda':'Scan with your banking app',
+    'Tampilkan QR PayNow, lalu pindai dengan aplikasi bank Anda.':'Shows a PayNow QR to scan with your banking app.',
+    'Pilih bank Anda di halaman pembayaran yang aman, lalu setujui di perbankan online Anda.':'Choose your bank on the secure payment page, then approve in your online banking.',
+    'Pilih bank Anda di halaman yang aman':'Choose your bank on the secure page',
+    'Setelah membayar, kembali ke sini: charger mulai mengisi sesuai saldo Anda dan berhenti. Sisa saldo yang tidak terpakai dikembalikan ke rekening bank Anda.':'After paying, come back here: the charger charges up to your balance and stops. Any unused balance is refunded to your bank account.',
+    'Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank Anda.':'Paying from this phone? Save the QR, then pick the image from your gallery in your banking app.',
+    'Petunjuk pembayaran':'Payment instructions','Tagihan jaringan mitra belum dibayar':'Partner network charge unpaid'
   };
   // Substring patterns for interpolated / multi-fragment strings.
   var PATTERNS = [
     // Cost during the charge. Before the single-word "menit" and "dibayar" patterns below.
-    [/^Biaya sejauh ini (Rp [\d.]+) dari (Rp [\d.]+) dibayar$/g,'Cost so far $1 of $2 paid'],[/^Termasuk pajak (Rp [\d.]+)$/g,'Incl. tax $1'],[/^Hemat (Rp [\d.]+)$/g,'You save $1'],
+    [/^Biaya sejauh ini (Rp [\d.]+) dari (Rp [\d.]+) dibayar$/g,'Cost so far $1 of $2 paid'],
+    // Partner networks for app drivers: the card hold.
+    [/^Sebelum mulai, kartu Anda ditahan (Rp [\d.]+)\.$/g,'Before starting, $1 is held on your card.'],
+    [/^Ditahan di kartu (Rp [\d.]+)$/g,'Held on your card: $1'],[/^Ditagih dari kartu (Rp [\d.]+)$/g,'Charged to your card: $1'],
+    [/^Batas biaya kartu armada Anda dalam ([A-Z]{3}); (?:charger|jaringan) ini menagih dalam (\S+)\.$/g,'Your fleet card’s spending limit is in $1; this charger bills in $2.'],[/^Termasuk pajak (Rp [\d.]+)$/g,'Incl. tax $1'],[/^Hemat (Rp [\d.]+)$/g,'You save $1'],
     [/^Biaya parkir (Rp [\d.]+): mobil tidak mengisi selama (\d+) menit\. Cabut untuk menghentikannya\.$/g,'Idle fee $1: the car hasn’t charged for $2 minutes. Unplug to stop it.'],
     // Bidirectional charging. Before the generic word patterns below.
     [/^Kredit (Rp [\d.]+) per kWh\. Baterai tidak turun di bawah (\d+)%, dan tidak dalam satu jam sebelum Anda pergi\.$/g,'Credit $1 per kWh. The battery never goes below $2%, nor in the hour before you leave.'],
@@ -700,7 +735,7 @@ input{font-family:inherit}
     [/Kode dikirim ke/g,'Code sent to'],
     [/Perkiraan ±/g,'Est. ±'],
     [/Pengembalian/g,'Refund'],
-    [/Dari /g,'From '],[/ dibayar,/g,' paid,'],[/ terpakai\./g,' used.'],
+    [/Dari /g,'From '],[/ dibayar,/g,' paid,'],[/ terpakai\./g,' used.'],[/ Sedang diproses\.$/g,' In progress.'],[/ Sudah dikembalikan\.$/g,' Already refunded.'],
     [/\/mnt/g,'/min'],[/\bmenit\b/g,'minutes'],
     [/(\d)\s*tersedia/g,'$1 available'],[/\bPenuh\b/g,'Full'],
     [/jam sibuk/g,'peak'],[/luar peak/g,'off-peak'],[/\bmnt\b/g,'min'],
@@ -722,8 +757,8 @@ input{font-family:inherit}
     [/^Harga member berlaku sampai /g,'Member prices apply until '],[/^Anda masih berlangganan paket lain di /g,'You still have another plan with '],
     [/Operator menolak permintaan \(/g,'The operator refused the request ('],[/\)\. Coba tempelkan kartu Anda di charger\./g,'). Try tapping your card on the charger.'],
     // E-wallet / card payment screens.
-    [/^Anda diarahkan ke aplikasi (.+) untuk membayar\./g,'You go to the $1 app to pay.'],[/^Pembayaran (GoPay|ShopeePay|OVO|DANA|LinkAja)$/g,'$1 payment'],
-    [/^Setujui di aplikasi /g,'Approve in the '],[/^Lanjutkan di aplikasi /g,'Continue in the '],[/^Lanjutkan ke /g,'Continue to '],[/^Buka simulasi /g,'Open simulated '],
+    [/^Anda diarahkan ke aplikasi (.+) untuk membayar\./g,'You go to the $1 app to pay.'],[/^Pembayaran (GoPay|ShopeePay|OVO|DANA|LinkAja|PayNow|FPX|GrabPay)$/g,'$1 payment'],[/^(PayNow|QRIS) · biaya reservasi$/g,'$1 · reservation fee'],[/^(PayNow|QRIS) · sesi pengisian$/g,'$1 · charging session'],[/^QR berlaku sampai (.+)\.$/g,'QR valid until $1.'],
+    [/^Setujui di aplikasi (\S+)$/g,'Approve in the $1 app'],[/^Lanjutkan di aplikasi (\S+)$/g,'Continue in the $1 app'],[/^Setujui di aplikasi /g,'Approve in the '],[/^Lanjutkan di aplikasi /g,'Continue in the '],[/^Lanjutkan ke /g,'Continue to '],[/^Buka simulasi /g,'Open simulated '],
     [/^Buka aplikasi /g,'Open the '],[/ dan setujui pembayaran /g,' app and approve the payment of '],[/^Bayar langganan · /g,'Pay for pass · '],
     [/^Setelah membayar, kembali ke sini: charger mulai mengisi sesuai saldo Anda dan berhenti\. Sisa saldo yang tidak terpakai dikembalikan ke /g,'After paying, come back here: the charger fills to your balance and stops. Unused balance is refunded to '],
     [/^Langganan aktif\. Harga member berlaku sampai /g,'Pass active. Member prices apply until '],[/ tidak tersedia di operator ini\./g,' is not available with this operator.'],
@@ -753,6 +788,11 @@ input{font-family:inherit}
     [/\b1 sesi\b/g,'1 session'],[/\b(\d+) sesi\b/g,'$1 sessions'],
     [/\bsesi\b/g,'session'],[/Kartu /g,'Card '],[/\bBayar /g,'Pay ']
   ];
+  // Amounts in any currency the app shows: "Rp 12.345" (as before), "RM 12.34", "S$ 1,234.50".
+  PATTERNS = PATTERNS.map(function(p){
+    var src=p[0].source.split('(Rp [\\d.]+)').join('((?:Rp|RM|S\\$) [\\d.,]+)');
+    return src===p[0].source?p:[new RegExp(src,p[0].flags),p[1]];
+  });
 
   function tText(node){
     var raw=node.nodeValue; if(!raw) return; var key=raw.trim(); if(!key) return;
@@ -790,7 +830,7 @@ input{font-family:inherit}
   window.tstr=function(s){ if(window.LANG!=='en'||s==null) return s; if(DICT[s]!==undefined) return DICT[s];
     var v=String(s); for(var i=0;i<PATTERNS.length;i++){ if(PATTERNS[i][0].test(v)) v=v.replace(PATTERNS[i][0],PATTERNS[i][1]); } return v; };
   window.setLang=function(l){
-    window.LANG=l; try{ localStorage.setItem('ps_lang',l); document.documentElement.lang=l; }catch(e){}
+    window.LANG=l; try{ localStorage.setItem('ps_lang',l); localStorage.setItem('ps_lang_now',l); document.documentElement.lang=l; }catch(e){}
     if(typeof render==='function') render();      // rebuild Indonesian DOM; observer re-translates if 'en'
   };
   function boot(){ connect(); if(window.LANG==='en') tTree(document.body); }
@@ -841,9 +881,27 @@ const BRAND_ICON='<svg class="brand-badge" viewBox="0 0 120 120" aria-label="Plu
 //────────────────────────────────────────────────────────── util
 const $=(s,r=document)=>r.querySelector(s);
 const el=(h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstElementChild;};
-const rp=(n)=>'Rp '+Math.round(Number(n||0)).toLocaleString('id-ID');
-const kwh=(n)=>Number(n||0).toLocaleString('id-ID',{minimumFractionDigits:2,maximumFractionDigits:2});
-const kwhQ=(n)=>Number(n||0).toLocaleString('id-ID',{maximumFractionDigits:2});
+// Money (domain/money.ts): rupiah exactly as before (Rp 12.345); ringgit and Singapore dollars
+// with their cents (RM 12.34, S$ 12.34). Every amount is in its station's / session's currency:
+// a screen sets it (useCur) from what it shows, and rp() formats in it unless told otherwise.
+const RUPIAH='IDR', ID_LOCALE='id-ID';
+const CURS={[RUPIAH]:{sym:'Rp',exp:0},MYR:{sym:'RM',exp:2},SGD:{sym:'S$',exp:2}};
+let CUR=RUPIAH;
+const useCur=(c)=>(c?(CUR=CURS[c]?c:RUPIAH):CUR);
+const rp=(n,cur)=>{ const c=cur||CUR;
+  if(c===RUPIAH) return CURS[RUPIAH].sym+' '+Math.round(Number(n||0)).toLocaleString(ID_LOCALE);
+  const u=CURS[c]||{sym:c,exp:2};
+  return u.sym+' '+(Number(n||0)/10**u.exp).toLocaleString('en-US',{minimumFractionDigits:u.exp,maximumFractionDigits:u.exp}); };
+/** A price per kWh / minute in major units: rupiah as before; RM 0.455, S$ 0.65. */
+const rate=(major,cur)=>{ const c=cur||CUR; if(c===RUPIAH) return rp(major,c);
+  return (CURS[c]||{sym:c}).sym+' '+Number(major||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}); };
+/** Major units typed by the driver (12.50) to minor units of `cur` (rupiah: whole rupiah). */
+const toMinor=(x,cur)=>Math.round(Number(x)*10**((CURS[cur||CUR]||{exp:2}).exp));
+/** Dates and times: Indonesian as before; English in English. */
+const dloc=()=>window.LANG==='en'?'en-GB':ID_LOCALE;
+// Energy in the app's language: 30,78 kWh (Indonesian, as before) / 30.78 kWh (English).
+const kwh=(n)=>Number(n||0).toLocaleString(dloc(),{minimumFractionDigits:2,maximumFractionDigits:2});
+const kwhQ=(n)=>Number(n||0).toLocaleString(dloc(),{maximumFractionDigits:2});
 const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function haptic(){try{navigator.vibrate&&navigator.vibrate(12);}catch(e){}}
 
@@ -865,6 +923,8 @@ async function api(path,opts={}){
   if(DEVICE) h['Authorization']='Bearer '+DEVICE;
   // A white-label app (window.BRAND): stations, codes and history are scoped to its operator.
   if(window.BRAND) h['X-Driver-Brand']=window.BRAND.slug;
+  // The server answers its messages in the app's language (driver/i18n.ts).
+  h['X-Driver-Lang']=window.LANG==='en'?'en':'id';
   const r=await fetch('/d'+path,{...opts,headers:{...h,...(opts.headers||{})}});
   let body=null; try{body=await r.json();}catch(e){}
   if(!r.ok){ const err=new Error((body&&(body.error||body.message))||('HTTP '+r.status)); err.status=r.status; err.body=body; throw err; }
@@ -905,10 +965,10 @@ async function fetchStations(){
   const q=loc?`?lat=${loc.lat}&lon=${loc.lon}`:'';
   return (await api('/v1/stations'+q)).stations;
 }
-/** Partner operators' stations, for a fleet driver whose card may roam; [] otherwise. */
+/** Partner operators' stations: for a fleet driver whose card may roam, or a signed-in app driver (a card hold); [] otherwise. */
 async function fetchRoaming(loc){
-  if(!(state.me&&state.me.fleet)) return [];
-  try{ const q=loc?`?lat=${loc.lat}&lon=${loc.lon}`:''; const r=await api('/v1/roaming/stations'+q); return r.enabled?r.stations:[]; }
+  if(!(state.me&&(state.me.fleet||state.me.account))) return [];
+  try{ const q=loc?`?lat=${loc.lat}&lon=${loc.lon}`:''; const r=await api('/v1/roaming/stations'+q); state._roamMode=r.mode||'fleet'; return r.enabled?r.stations:[]; }
   catch(e){ return []; }
 }
 function roamRow(s,i){
@@ -918,13 +978,13 @@ function roamRow(s,i){
     <div style="min-width:0;flex:1">
       <div class="nm">${esc(s.name)}</div>
       <div class="meta">
-        <span class="avail ${av?'av-yes':'av-no'}"><span class="ind"></span>${av?s.availableCount+' tersedia':'Penuh'}</span>
+        <span class="avail ${av?'av-yes':'av-no'}"><span class="ind"></span>${av?s.availableCount+' tersedia':stnOffline(s)?'Luring':'Penuh'}</span>
         ${s.fastest?`<span class="dot"></span><b>${esc(s.fastest)}</b>`:''}
         ${s.distanceKm!=null?`<span class="dot"></span>${s.distanceKm} km`:''}
       </div>
       <div class="small muted" style="margin-top:3px">Mitra · ${esc(s.operator)}</div>
     </div>
-    ${s.priceFromIdr!=null?`<div class="pricetag"><div class="p">${rp(s.priceFromIdr)}</div><div class="u">/kWh</div></div>`:''}
+    ${s.priceFromMinor!=null?`<div class="pricetag"><div class="p">${s.priceFromMajor!=null?rate(s.priceFromMajor,s.priceCurrency||s.currency):rp(s.priceFromMinor,s.priceCurrency||s.currency)}</div><div class="u">/kWh</div></div>`:''}
   </button>`;
 }
 function roamSectionHtml(list){
@@ -1083,7 +1143,7 @@ async function offerPush(slot,what='charge'){
 
 //────────────────────────────────────────────────────────── reservation countdown
 const mmss=(ms)=>{ const s=Math.max(0,Math.round(ms/1000)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
-const hhmm=(iso)=>new Date(iso).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+const hhmm=(iso)=>new Date(iso).toLocaleTimeString(dloc(),{hour:'2-digit',minute:'2-digit'});
 // One ticker for every countdown on screen ([data-until] = an ISO time).
 setInterval(()=>{ document.querySelectorAll('[data-until]').forEach(e=>{ const ms=new Date(e.dataset.until).getTime()-Date.now(); e.textContent=mmss(ms);
   if(ms<=0&&!e.dataset.done){ e.dataset.done='1'; if(['home','connector'].includes(state.view)) setTimeout(render,1500); } }); },1000);
@@ -1411,13 +1471,20 @@ async function loadUnpaid(slot){
   try{
     const {unpaid}=await api('/v1/unpaid'); if(!unpaid||!unpaid.length||!slot.isConnected) return;
     // One notice, however many: the total, and "Bayar" opens the latest; paid, the next one shows.
-    const u=unpaid[0], total=unpaid.reduce((s,x)=>s+(x.owedIdr||0),0);
-    const when=new Date(u.endedAt).toLocaleDateString('id-ID',{day:'numeric',month:'short'});
+    const u=unpaid[0], cur=u.currency||RUPIAH, total=unpaid.filter((x)=>(x.currency||RUPIAH)===cur).reduce((s,x)=>s+(x.owedMinor||0),0);
+    const when=new Date(u.endedAt).toLocaleDateString(dloc(),{day:'numeric',month:'short'});
     slot.innerHTML=`<div class="rescard" style="border-color:var(--amber)"><div class="ic">${svg(I.info)}</div>
-        <div style="flex:1;min-width:0"><div class="k">${unpaid.length>1?unpaid.length+' sesi belum dibayar':'Sesi belum dibayar'}</div><div class="v">${rp(total)}</div>
+        <div style="flex:1;min-width:0"><div class="k">${unpaid.length>1?unpaid.length+' sesi belum dibayar':u.kind==='roaming'?'Tagihan jaringan mitra belum dibayar':'Sesi belum dibayar'}</div><div class="v">${rp(total,cur)}</div>
           <div class="s">${unpaid.length>1?'Terbaru: ':''}${esc(u.site)} · ${when}</div></div>
         <button class="cta" id="payunpaidhome" style="width:auto;padding:0 16px;flex:none">Bayar</button></div>`;
-    $('#payunpaidhome').onclick=()=>{ haptic(); go('receipt',{chargeId:u.chargeId,_back:()=>go('home')}); };
+    $('#payunpaidhome').onclick=async()=>{ haptic();
+      // A partner network charge the card hold did not cover: paid here (it has no receipt of ours to pay from).
+      if(u.kind==='roaming'){ const b=$('#payunpaidhome'); b.disabled=true;
+        try{ const r=await api('/v1/charge/'+u.chargeId+'/pay-unpaid',{method:'POST',body:'{}'});
+          if(r.paid){ alertBanner('Pembayaran berhasil. Terima kasih.'); return go('home'); }
+          state._spay={...r,chargeId:u.chargeId,kind:'roaming'}; rememberCheckout('spay',state._spay); go('spay',{_back:()=>go('home')}); }
+        catch(e){ alertBanner(e.message); b.disabled=false; } return; }
+      go('receipt',{chargeId:u.chargeId,_back:()=>go('home')}); };
   }catch(e){}
 }
 
@@ -1569,6 +1636,8 @@ async function loadNearby(box){
   }catch(e){ box.innerHTML=`<div class="banner b-err">${svg(I.warn)}<div>Gagal memuat stasiun.</div></div>`; }
 }
 
+/** Every connector of the station is offline: say so, not "Full" (which reads as all in use). */
+const stnOffline=(s)=>Array.isArray(s.connectors)&&s.connectors.length>0&&s.connectors.every((c)=>c.status==='Offline');
 function stationRow(s){
   const av=s.availableCount>0;
   const initials=s.name.replace(/[^A-Za-z ]/g,'').split(' ').filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase()||'PS';
@@ -1577,12 +1646,12 @@ function stationRow(s){
     <div style="min-width:0;flex:1">
       <div class="nm">${esc(s.name)}</div>
       <div class="meta">
-        <span class="avail ${av?'av-yes':'av-no'}"><span class="ind"></span>${av?s.availableCount+' tersedia':'Penuh'}</span>
+        <span class="avail ${av?'av-yes':'av-no'}"><span class="ind"></span>${av?s.availableCount+' tersedia':stnOffline(s)?'Luring':'Penuh'}</span>
         <span class="dot"></span><b>${esc(s.fastest)}</b>
         ${s.distanceKm!=null?`<span class="dot"></span>${s.distanceKm} km`:''}
       </div>
     </div>
-    ${s.priceFromIdr!=null?`<div class="pricetag"><div class="p">${rp(s.priceFromIdr)}</div><div class="u">/kWh</div></div>`:''}
+    ${s.priceFromMinor!=null?`<div class="pricetag"><div class="p">${s.priceFromMajor!=null?rate(s.priceFromMajor,s.priceCurrency||s.currency):rp(s.priceFromMinor,s.priceCurrency||s.currency)}</div><div class="u">/kWh</div></div>`:''}
   </button>`;
 }
 
@@ -1679,10 +1748,17 @@ const rstatusCls=(s)=>s==='Available'?'sp-ok':s==='Charging'||s==='Occupied'?'sp
 VIEWS.rstation=async(v)=>{
   const s=state._rstation; if(!s){return go('stations');}
   v.className='view';
+  useCur(s.priceCurrency||s.currency);
+  // An app driver pays with a card hold in the partner's currency; a fleet driver's company is billed.
+  const app=s.holdMinor!=null||state._roamMode==='app';
+  const cards=s.savedCards||[];
   v.innerHTML=topbar(s.name,s.operator,{back:1,right:favBtnHtml(s)})+
     `${s.address?`<div class="card soft small muted" style="display:flex;gap:9px;align-items:flex-start">${svg(I.pin,'')}<div>${esc(s.address)}</div></div>`:''}
-     <div class="banner b-info">${svg(I.fleet)}<div><div>Charger mitra. Sesi ditagihkan ke perusahaan Anda sesuai tarif operator.</div>
-       ${s.priceFromIdr!=null?`<div class="small" style="margin-top:4px">Energi <b>${rp(s.priceFromIdr)}</b> <span>/kWh, belum termasuk pajak</span></div>`:''}</div></div>
+     <div class="banner b-info">${svg(app?I.card:I.fleet)}<div><div>${app?'Charger mitra. Sesi dibayar dengan kartu Anda sesuai tarif operator.':'Charger mitra. Sesi ditagihkan ke perusahaan Anda sesuai tarif operator.'}</div>
+       ${s.priceFromMinor!=null?`<div class="small" style="margin-top:4px">Energi <b>${s.priceFromMajor!=null?rate(s.priceFromMajor):rp(s.priceFromMinor)}</b> <span>/kWh, belum termasuk pajak</span></div>`:''}
+       ${app&&s.holdMinor!=null?`<div class="small" style="margin-top:4px"><span>Sebelum mulai, kartu Anda ditahan ${rp(s.holdMinor)}.</span> <span>Yang ditagih hanya tagihan operator; sisanya dilepas.</span></div>`:''}</div></div>
+     ${s.startable===false?`<div class="banner b-warn">${svg(I.warn)}<div>${esc(s.reason||'Charger ini sedang tidak tersedia.')}</div></div>`:''}
+     ${app&&s.startable!==false&&cards.length?`<div class="seclabel">Kartu</div><div class="card" id="rcards">${cards.map((k,i)=>`<label class="rc-line" style="cursor:pointer"><span class="d"><input type="radio" name="rcard" value="${esc(k.id)}"${i===0?' checked':''}> ${esc((k.brand||'Kartu')+(k.last4?' ··'+k.last4:''))}</span></label>`).join('')}<label class="rc-line" style="cursor:pointer"><span class="d"><input type="radio" name="rcard" value=""> <span>Kartu baru</span></span></label></div>`:''}
      <div class="seclabel">Charger</div>
      <div id="revs"></div>`;
   const box=$('#revs');
@@ -1699,7 +1775,7 @@ VIEWS.rstation=async(v)=>{
         <div class="nm">${esc(c.typeLabel||'—')}${c.maxPowerKw!=null?` · ${c.maxPowerKw} kW ${c.current}`:''}</div>
         <div class="meta">${mine?`<span class="statuspill sp-ok">Dipesan untuk Anda</span>`:`<span class="statuspill ${rstatusCls(e.status)}">${RSTATUS_LABEL[e.status]||e.status}</span>`}<span class="small muted" style="margin-left:8px">${esc(e.evseId)}</span></div>
       </div>
-      ${e.available||mine?`<button class="cta" style="width:auto;padding:10px 14px;min-height:0" data-rstart="${i}">${svg(I.bolt)} Mulai isi</button>`:''}
+      ${(e.available||mine)&&s.startable!==false?`<button class="cta" style="width:auto;padding:10px 14px;min-height:0" data-rstart="${i}">${svg(I.bolt)} Mulai isi</button>`:''}
       ${mine?`<div class="resrow" style="width:100%"><div class="small muted" style="flex:1;align-self:center">${held.state==='requested'?'Menunggu jawaban charger…':`<span>Mulai isi sebelum ${hhmm(held.expiresAt)}</span>`}</div>
           <button class="cta ghost" style="width:auto;padding:8px 14px;min-height:0" data-rcancel>Batalkan</button></div>`
         :e.available&&canReserve&&!held?`<div style="width:100%;margin-top:8px"><button class="cta ghost" style="padding:8px 14px;min-height:0" data-rreserve="${i}">${svg(I.hold)} Pesan ${mins} menit</button></div>`:''}
@@ -1722,7 +1798,10 @@ VIEWS.rstation=async(v)=>{
     catch(err){ alertBanner(err.message); rc.disabled=false; } };
   box.querySelectorAll('[data-rstart]').forEach(b=>b.onclick=async()=>{
     haptic(); const e=s.evses[Number(b.dataset.rstart)]; b.disabled=true; b.innerHTML='<span class="spinner"></span>';
-    try{ const r=await api('/v1/roaming/charge',{method:'POST',body:JSON.stringify({partnerId:s.partnerId,countryCode:s.countryCode,partyId:s.partyId,locationId:s.locationId,evseUid:e.uid,connectorId:(e.connectors[0]||{}).id})});
+    const card=(document.querySelector('input[name=rcard]:checked')||{}).value||'';
+    try{ const r=await api('/v1/roaming/charge',{method:'POST',body:JSON.stringify({partnerId:s.partnerId,countryCode:s.countryCode,partyId:s.partyId,locationId:s.locationId,evseUid:e.uid,connectorId:(e.connectors[0]||{}).id,...(card?{savedCardId:card}:{})})});
+      // A new card: the acquirer's card page places the hold, then the charge starts (the return page brings the driver back).
+      if(r.payment&&r.payment.checkoutUrl&&r.payment.action!=='done'){ rememberCheckout('rsession',{chargeId:r.chargeId,payment:r.payment}); location.href=r.payment.checkoutUrl; return; }
       go('rsession',{chargeId:r.chargeId,_back:()=>go('home')});
     }catch(err){ alertBanner(err.message); b.disabled=false; b.innerHTML=svg(I.bolt)+' Mulai isi'; }
   });
@@ -1735,7 +1814,8 @@ VIEWS.rsession=async(v)=>{
   v.innerHTML=topbar('Sesi di jaringan mitra','',{back:1})+`<div id="live"><div class="center-loading"><span class="spinner"></span></div></div>`;
   const paint=(s)=>{
     const live=$('#live'); if(!live)return;
-    const label={starting:'Menghubungi charger…',rejected:'Tidak dapat dimulai',charging:'Sedang mengisi',finishing:'Menunggu tagihan operator…',billed:'Selesai'}[s.state]||s.state;
+    useCur(s.currency||(s.hold&&s.hold.currency));
+    const label={paying:'Menunggu pembayaran',starting:'Menghubungi charger…',rejected:'Tidak dapat dimulai',charging:'Sedang mengisi',finishing:'Menunggu tagihan operator…',billed:'Selesai'}[s.state]||s.state;
     const active=s.state==='charging';
     const R=104, C=2*Math.PI*R, off=s.state==='billed'?0:C*0.0001;
     live.innerHTML=`
@@ -1752,11 +1832,12 @@ VIEWS.rsession=async(v)=>{
         </div>
         <div class="livestats">
           <div class="lstat"><div class="v">${s.durationMin}</div><div class="k">menit</div></div>
-          <div class="lstat"><div class="v" style="font-size:15px">${s.totalIdr!=null?rp(s.totalIdr):'—'}</div><div class="k">${s.state==='billed'?'Total':'perkiraan'}</div></div>
+          <div class="lstat"><div class="v" style="font-size:15px">${s.totalMinor!=null?rp(s.totalMinor):'—'}</div><div class="k">${s.state==='billed'?'Total':'perkiraan'}</div></div>
         </div>
         <div class="card soft small" style="margin-top:14px">
           <div style="display:flex;justify-content:space-between;gap:10px"><span class="muted">${esc(s.siteName)}</span><span>${esc(s.connectorLabel)}</span></div>
           <div class="muted" style="margin-top:4px">Mitra · ${esc(s.operator)}</div>
+          ${s.hold?`<div class="muted" style="margin-top:4px">${s.hold.capturedMinor!=null&&s.state==='billed'?`<span>Ditagih dari kartu ${rp(s.hold.capturedMinor,s.hold.currency)}</span>`:`<span>Ditahan di kartu ${rp(s.hold.amountMinor,s.hold.currency)}</span>`}</div>`:''}
         </div>
         <div id="sessact" style="margin-top:16px"></div>
       </div>`;
@@ -1771,6 +1852,10 @@ VIEWS.rsession=async(v)=>{
         <button class="cta ghost" id="home" style="margin-top:12px">Kembali ke beranda</button>`;
       $('#home').onclick=()=>go('home');
       stopPoll();
+    } else if(s.state==='paying'){
+      act.innerHTML=`<div class="banner b-info">${svg(I.card)}<div>Selesaikan penahanan di kartu Anda; charger mulai setelah itu.</div></div>
+        ${s.hold&&s.hold.checkoutUrl?`<button class="cta" id="rpaygo" style="margin-top:12px">${svg(I.card)} Lanjutkan pembayaran</button>`:''}`;
+      if($('#rpaygo')) $('#rpaygo').onclick=()=>{ rememberCheckout('rsession',{chargeId:id,payment:{action:'redirect'}}); location.href=s.hold.checkoutUrl; };
     } else if(s.state==='starting'){
       act.innerHTML=`<div class="banner b-info">${svg(I.info)}<div>Jika charger tidak mulai dalam satu menit, tempelkan kartu Anda di charger.</div></div>`;
     } else if(s.canStop){
@@ -1786,7 +1871,7 @@ VIEWS.rsession=async(v)=>{
   const first=await tick();
   state.poll=setInterval(()=>tick().catch(()=>{}),4000);
   // The operator's bill can take a while; a notification brings the driver back to it.
-  if(['starting','charging','finishing'].includes(first.state)){ $('#live').insertAdjacentHTML('afterend','<div id="pushoffer"></div>'); offerPush($('#pushoffer')); }
+  if(['paying','starting','charging','finishing'].includes(first.state)){ $('#live').insertAdjacentHTML('afterend','<div id="pushoffer"></div>'); offerPush($('#pushoffer')); }
 };
 
 VIEWS.rreceipt=async(v)=>{
@@ -1794,20 +1879,22 @@ VIEWS.rreceipt=async(v)=>{
   const id=state.params.cdrId;
   v.innerHTML=topbar('Rincian tagihan','',{back:1})+`<div class="center-loading"><span class="spinner"></span></div>`;
   const r=await api('/v1/roaming/cdr/'+id);
-  const money=(n)=>r.currency==='IDR'?rp(n):`${esc(r.currency)} ${Number(n).toLocaleString('id-ID',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  useCur(r.currency);
+  // Partner amounts are in major units of the partner's currency (rupiah as before).
+  const money=(n)=>r.currency===RUPIAH?rp(n,RUPIAH):CURS[r.currency]?rp(toMinor(n,r.currency),r.currency):`${esc(r.currency)} ${Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const when=new Date(r.startedAt);
   v.innerHTML=topbar('Rincian tagihan',r.operator,{back:1})+
     `<div class="receipt">
       <div class="rc-head">
         <div class="chk">${svg(I.globe)}</div>
-        <div class="muted small">Ditagihkan ke armada</div>
+        <div class="muted small">${r.hold?'Dibayar dengan kartu Anda':'Ditagihkan ke armada'}</div>
         <div class="rc-total">${money(r.totalInclVat!=null?r.totalInclVat:r.totalExclVat)}</div>
         <div class="muted small" style="margin-top:4px">${kwh(r.energyKwh)} kWh · ${r.durationMin} menit</div>
       </div>
       <div class="rc-body">
         <div class="rc-line small muted"><span>${esc(r.siteName)}</span></div>
         ${r.address?`<div class="rc-line small muted"><span>${esc(r.address)}</span></div>`:''}
-        <div class="rc-line small muted"><span>${esc(when.toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'})+' · '+when.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}))}</span></div>
+        <div class="rc-line small muted"><span>${esc(when.toLocaleDateString(dloc(),{day:'numeric',month:'short',year:'numeric'})+' · '+when.toLocaleTimeString(dloc(),{hour:'2-digit',minute:'2-digit'}))}</span></div>
         ${r.evseId?`<div class="rc-line small muted"><span>EVSE</span><span class="a" style="font-weight:500">${esc(r.evseId)}</span></div>`:''}
         <div class="rc-line small muted"><span>No.</span><span class="a" style="font-weight:500">${esc(r.reference)}</span></div>
         <div class="rc-sep"></div>
@@ -1817,7 +1904,12 @@ VIEWS.rreceipt=async(v)=>{
         ${r.totalInclVat!=null?`<div class="rc-line tot"><span class="d">Total termasuk pajak</span><span class="a">${money(r.totalInclVat)}</span></div>`:''}
       </div>
     </div>
-    <div class="card soft small muted" style="margin-top:14px">Menurut catatan tagihan operator. Ditagihkan ke perusahaan Anda.</div>
+    ${r.hold?`<div class="card soft small" style="margin-top:14px">
+        <div class="rc-line small"><span class="d">Ditahan di kartu</span><span class="a">${rp(r.hold.amountMinor,r.hold.currency)}</span></div>
+        ${r.hold.capturedMinor!=null?`<div class="rc-line small"><span class="d">Ditagih dari kartu</span><span class="a">${rp(r.hold.capturedMinor,r.hold.currency)}</span></div>`:''}
+        ${r.hold.shortfallMinor?`<div class="rc-line small"><span class="d">Belum terbayar</span><span class="a">${rp(r.hold.shortfallMinor,r.hold.currency)}</span></div>`:''}
+        <div class="small muted" style="margin-top:6px">Menurut catatan tagihan operator. Sisa dana yang ditahan sudah dilepas.</div></div>`
+      :`<div class="card soft small muted" style="margin-top:14px">Menurut catatan tagihan operator. Ditagihkan ke perusahaan Anda.</div>`}
     <button class="cta ghost" id="done" style="margin-top:14px">Selesai</button>`;
   $('.rc-head .chk svg')&&($('.rc-head .chk svg').style.cssText='width:28px;height:28px');
   $('#done').onclick=()=>go('home');
@@ -1880,10 +1972,11 @@ VIEWS.connector=async(v)=>{
   v.innerHTML=topbar('Memuat…','',{back:1})+`<div class="center-loading"><span class="spinner"></span></div>`;
   const c=await api('/v1/connectors/'+id);
   state._con=c;
+  useCur(c.currency);
   const fleet=state.me&&state.me.fleet;
   const cls=c.status==='Available'?'sp-ok':c.status==='Charging'||c.status==='Occupied'||c.status==='Reserved'||c.status==='Queued'?'sp-busy':'sp-block';
   const stLabel={Available:'Tersedia',Charging:'Sedang dipakai',Occupied:'Sedang disiapkan',Reserved:'Sedang dipesan',Queued:'Antrean',Offline:'Charger luring',Blocked:'Terkunci',Faulted:'Bermasalah',Maintenance:'Dalam perawatan',Unavailable:'Tidak tersedia'}[c.status]||c.status;
-  const feeRows=(c.fees||[]).map(f=>`<div class="rc-line"><span class="d">${esc(f.label)}</span><span class="a">${rp(f.rate)}${f.kind==='idle'||f.kind==='time'?'/mnt':''}</span></div>`).join('');
+  const feeRows=(c.fees||[]).map(f=>`<div class="rc-line"><span class="d">${esc(f.label)}</span><span class="a">${rate(f.rate)}${f.kind==='idle'||f.kind==='time'?'/mnt':''}</span></div>`).join('');
   v.innerHTML=topbar(c.station.name,c.station.operator,{back:1})+
     `<div class="conhead">
        <div class="contype">${svg(c.current==='DC'?I.dc:I.ac)}</div>
@@ -1895,7 +1988,7 @@ VIEWS.connector=async(v)=>{
      </div>
      <div class="speclist">
        <div class="spec"><div class="k">Daya maksimum</div><div class="v">${c.maxPowerKw} <small>kW ${c.current}</small></div></div>
-       <div class="spec"><div class="k">Harga energi</div><div class="v">${c.energyPriceIdr!=null?rp(c.energyPriceIdr):'—'} <small>/kWh</small></div></div>
+       <div class="spec"><div class="k">Harga energi</div><div class="v">${c.energyPriceMinor!=null?rate(c.energyPriceMinor):'—'} <small>/kWh</small></div></div>
      </div>
      ${!c.available?`<div class="banner b-warn">${svg(I.warn)}<div>${esc(c.blockedReason||'Konektor ini belum bisa dipakai saat ini.')}</div></div>`:''}
      <div id="resbox"></div>
@@ -1915,7 +2008,7 @@ VIEWS.connector=async(v)=>{
     const fee=c.reservationFee;
     const label=`${svg(I.hold)} Pesan konektor ${mins} menit`;
     rb.innerHTML=`<div id="rmethods"></div><button class="cta ghost" id="reserve" style="margin-top:14px">${label}</button>
-      ${fee?`<div class="small muted" style="text-align:center;margin-top:6px"><span>Biaya reservasi ${rp(fee.totalIdr)}</span>${fee.ppnIdr?' <span>(termasuk PPN)</span>':''}</div>
+      ${fee?`<div class="small muted" style="text-align:center;margin-top:6px"><span>Biaya reservasi ${rp(fee.totalMinor)}</span>${fee.taxMinor?(CUR===RUPIAH?' <span>(termasuk PPN)</span>':' <span>(termasuk pajak)</span>'):''}</div>
         <div class="small muted" style="text-align:center;margin-top:4px">${fee.fleetInvoice?'Ditagihkan ke perusahaan Anda.':'Dibayar sekarang.'} Tidak dikembalikan setelah konektor ditahan, kecuali dibatalkan dalam 2 menit.</div>`
         :`<div class="small muted" style="text-align:center;margin-top:6px">Gratis. Charger menahan konektor ini untuk Anda.</div>`}`;
     // A fee paid in the app: choose how first (like a charge), then the same button pays.
@@ -1923,13 +2016,13 @@ VIEWS.connector=async(v)=>{
     let pick=null;
     $('#reserve').onclick=async()=>{ haptic(); const b=$('#reserve');
       if(po){ const list=po.paymentMethods||[], saved=(list.some((m)=>m.channel==='CARD')?(po.savedCards||[]):[]).concat(po.linkedWallets||[]);
-        if(!pick&&list.length+saved.length>1){ pick=methodPicker($('#rmethods'),list,{savedCards:po.savedCards,canSaveCard:po.canSaveCard,linkedWallets:po.linkedWallets,fee:true}); b.innerHTML=svg(I.hold)+' Bayar '+rp(fee.totalIdr); return; } }
+        if(!pick&&list.length+saved.length>1){ pick=methodPicker($('#rmethods'),list,{savedCards:po.savedCards,canSaveCard:po.canSaveCard,linkedWallets:po.linkedWallets,fee:true}); b.innerHTML=svg(I.hold)+' Bayar '+rp(fee.totalMinor); return; } }
       b.disabled=true; b.innerHTML='<span class="spinner"></span>';
       const m=po?(pick?pick.value():((po.paymentMethods||[])[0]?{method:po.paymentMethods[0].channel}:{})):{};
       try{ const r=await api('/v1/reservations',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,...m})});
         if(r.reservation){ alertBanner('Konektor dipesan.'); return go('connector',{...state.params}); }
         state._rpay={...r,connectorId:c.connectorId}; rememberCheckout('rpay',state._rpay); go('rpay',{_back:()=>go('connector',{...state.params})}); }
-      catch(e){ alertBanner(e.message); b.disabled=false; b.innerHTML=pick?svg(I.hold)+' Bayar '+rp(fee.totalIdr):label; } };
+      catch(e){ alertBanner(e.message); b.disabled=false; b.innerHTML=pick?svg(I.hold)+' Bayar '+rp(fee.totalMinor):label; } };
   } else if(c.status==='Queued'){
     // Drivers are waiting at this site: the way in is the queue on the station page.
     rb.innerHTML=`<button class="cta ghost" id="toqueue" style="margin-top:14px">${svg(I.queue)} Lihat antrean</button>`;
@@ -1948,12 +2041,12 @@ VIEWS.connector=async(v)=>{
   // guest / account: choose amount
   box.innerHTML=`
     <div class="seclabel" style="margin-top:20px">Pilih jumlah</div>
-    <div class="amounts" id="amts">${PRESETS.map(a=>`<button class="chip" data-a="${a}">${(a/1000)}<small>ribu</small></button>`).join('')}</div>
-    <div class="custom-in"><span>Rp</span><input id="custom" inputmode="numeric" placeholder="Jumlah lain" /></div>
+    <div class="amounts" id="amts">${(c.presetsMinor||PRESETS).map(a=>`<button class="chip" data-a="${a}">${CUR===RUPIAH?`${(a/1000)}<small>ribu</small>`:esc(rp(a))}</button>`).join('')}</div>
+    <div class="custom-in"><span>${esc(CURS[CUR].sym)}</span><input id="custom" inputmode="${CUR===RUPIAH?'numeric':'decimal'}" placeholder="Jumlah lain" /></div>
     <div class="custom-in promo-in"><span>${svg(I.gift)}</span><input id="promo" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="30" placeholder="Kode promo (opsional)" /></div>
     <div class="quote-line" id="quote" style="display:none"></div>
     <div id="methodbox"></div>
-    ${feeRows?`<div class="seclabel" style="margin-top:20px">Rincian biaya</div><div class="card">${feeRows}<div class="rc-line small muted" style="padding-top:6px">Harga sudah termasuk PBJT & PPN saat sesi selesai.</div></div>`:''}
+    ${feeRows?`<div class="seclabel" style="margin-top:20px">Rincian biaya</div><div class="card">${feeRows}<div class="rc-line small muted" style="padding-top:6px">${c.countryCode&&c.countryCode!=='ID'?(c.pricesIncludeTax?'Harga sudah termasuk pajak.':'Pajak ditambahkan saat sesi selesai.'):'Harga sudah termasuk PBJT & PPN saat sesi selesai.'}</div></div>`:''}
     <button class="cta stickycta" id="pay" disabled>${svg(I.bolt)} Pilih jumlah dulu</button>`;
   let amount=0, quoteTimer=null;
   const quote=$('#quote'), payBtn=$('#pay');
@@ -1966,11 +2059,11 @@ VIEWS.connector=async(v)=>{
   const setAmount=(a)=>{ amount=a;
     $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.toggle('sel',Number(ch.dataset.a)===a));
     if(quoteTimer)clearTimeout(quoteTimer);
-    if(!a||a<1000){ quote.style.display='none'; payBtn.disabled=true; payBtn.innerHTML=svg(I.bolt)+' Pilih jumlah dulu'; return; }
+    if(!a||a<(CUR===RUPIAH?1000:100)){ quote.style.display='none'; payBtn.disabled=true; payBtn.innerHTML=svg(I.bolt)+' Pilih jumlah dulu'; return; }
     quote.style.display='flex'; quote.innerHTML=`<div><div class="lbl">Menghitung…</div></div><span class="spinner" style="border-color:var(--line-2);border-top-color:var(--arus)"></span>`;
     payBtn.disabled=true;
     quoteTimer=setTimeout(async()=>{
-      try{ const q=await api('/v1/charge/quote',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,amountIdr:a,promoCode:promoCode()||undefined})});
+      try{ const q=await api('/v1/charge/quote',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,amountMinor:a,promoCode:promoCode()||undefined})});
         const perks=[q.membership?`Harga member: ${esc(q.membership)}`:'',q.promotion?`Promo: ${esc(q.promotion)}`:''].filter(Boolean).join(' · ');
         quote.innerHTML=`<div><div class="est">±${kwh(q.allowanceKwh)} kWh</div><div class="lbl">perkiraan energi untuk ${rp(a)}</div>${perks?`<div class="lbl perk">${perks}</div>`:''}${q.codeProblem?`<div class="lbl" style="color:var(--amber)">${esc(q.codeProblem)}</div>`:''}</div>${svg(I.bolt,'')}`;
         quote.querySelector('svg').style.cssText='width:30px;height:30px;color:var(--arus);opacity:.6';
@@ -1979,17 +2072,20 @@ VIEWS.connector=async(v)=>{
         lastQ=q; payBtn.disabled=false; payLabel();
         quote.scrollIntoView({block:'nearest',behavior:'smooth'});
       }catch(e){
-        const min=e.body&&e.body.minimumViableIdr;
+        const min=e.body&&e.body.minimumViableMinor;
         quote.innerHTML=`<div><div class="lbl" style="color:var(--amber)">${esc(e.message)}</div>${min?`<div class="lbl">Minimal sekitar ${rp(min)}.</div>`:''}</div>`;
         payBtn.disabled=true; payBtn.innerHTML=svg(I.bolt)+' Naikkan jumlah';
       }
     },350);
   };
   $('#amts').querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{haptic();$('#custom').value='';setAmount(Number(ch.dataset.a));});
-  $('#custom').oninput=(e)=>{ const raw=e.target.value.replace(/\D/g,''); e.target.value=raw?Number(raw).toLocaleString('id-ID'):''; setAmount(Number(raw)); $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.remove('sel')); };
+  $('#custom').oninput=(e)=>{
+    // Ringgit / Singapore dollars with cents (12.50); rupiah as before (whole rupiah, grouped as typed).
+    if(CUR!==RUPIAH){ const raw=e.target.value.replace(/[^\d.]/g,''); const m=raw?toMinor(raw):0; setAmount(Number.isFinite(m)?m:0); $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.remove('sel')); return; }
+    const raw=e.target.value.replace(/\D/g,''); e.target.value=raw?Number(raw).toLocaleString(ID_LOCALE):''; setAmount(Number(raw)); $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.remove('sel')); };
   payBtn.onclick=async()=>{ if(!amount)return; payBtn.disabled=true; payBtn.innerHTML='<span class="spinner"></span>';
     try{ const m=pick?pick.value():{};
-      const r=await api('/v1/charge/prepaid',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,amountIdr:amount,promoCode:promoCode()||undefined,...m})});
+      const r=await api('/v1/charge/prepaid',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,amountMinor:amount,promoCode:promoCode()||undefined,...m})});
       state._checkout=r; state._con=c;
       // A saved card that went through at once: straight to charging.
       if(r.payment&&r.payment.action==='done'){ return onPaid(r); }
@@ -2009,7 +2105,19 @@ async function startFleet(connectorId){
 
 //──────────── PAYMENT METHOD (QRIS, e-wallets, card)
 const METHOD_UI={QRIS:['QRIS','Pindai QR'],GOPAY:['GoPay','E-wallet'],SHOPEEPAY:['ShopeePay','E-wallet'],OVO:['OVO','E-wallet'],
-  DANA:['DANA','E-wallet'],LINKAJA:['LinkAja','E-wallet'],CARD:['Kartu','Kredit / debit']};
+  DANA:['DANA','E-wallet'],LINKAJA:['LinkAja','E-wallet'],CARD:['Kartu','Kredit / debit'],
+  // Malaysia and Singapore (Stripe). A method this list does not know shows the server's label.
+  PAYNOW:['PayNow','Pindai QR'],FPX:['FPX','Perbankan online'],GRABPAY:['GrabPay','E-wallet']};
+/** A QR payment's method (QRIS, PayNow) as the app names it. */
+const qrName=(co)=>{ const p=co&&co.payment; return p&&p.channel&&p.channel!=='QRIS'?(METHOD_UI[p.channel]||[p.label||p.channel])[0]:'QRIS'; };
+/** Under a QR other than QRIS (PayNow, valid one hour): when it expires, and the acquirer's own instructions. */
+const qrMore=(co)=>{ if(qrName(co)==='QRIS'||!co.qr) return '';
+  const p=co.payment||{};
+  return (co.qr.expiresAt?`<div class="small muted" style="text-align:center;margin-top:8px">QR berlaku sampai ${esc(hhmm(co.qr.expiresAt))}.</div>`:'')+
+    (p.checkoutUrl&&/^https:\/\//.test(p.checkoutUrl)?`<a class="small" style="display:block;text-align:center;margin-top:6px;color:var(--arus)" href="${esc(p.checkoutUrl)}" target="_blank" rel="noopener noreferrer">Petunjuk pembayaran</a>`:''); };
+/** Where to scan a QR: QRIS with any bank or e-wallet app; PayNow with a banking app. */
+const qrScanHint=(co)=>qrName(co)==='QRIS'?'Pindai dengan aplikasi bank / e-wallet':'Pindai dengan aplikasi bank Anda';
+const qrSaveHint=(co)=>qrName(co)==='QRIS'?'Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank / e-wallet.':'Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank Anda.';
 /**
  * The operator's payment methods as a picker. One method: nothing to choose.
  * The last choice is remembered on this phone. OVO charges are pushed to the
@@ -2041,6 +2149,7 @@ function methodPicker(box,list,o={}){
   if(lw) lw.onclick=async()=>{ haptic(); lw.disabled=true; try{ await o.onLink(cur,box.querySelector('#ovophone input').value.trim()); } finally{ lw.disabled=false; } };
   const holdNote='Kartu Anda hanya ditahan sebesar jumlah yang dipilih. Setelah selesai, yang ditagih hanya biaya pemakaian; sisanya langsung dilepas.';
   const note={QRIS:'Tampilkan QR, lalu pindai dengan aplikasi bank atau e-wallet apa pun.',OVO:'Tagihan dikirim ke aplikasi OVO; setujui di sana.',
+    PAYNOW:'Tampilkan QR PayNow, lalu pindai dengan aplikasi bank Anda.',FPX:'Pilih bank Anda di halaman pembayaran yang aman, lalu setujui di perbankan online Anda.',
     CARD:(o.cardHolds?holdNote+' ':'')+'Anda diarahkan ke halaman kartu yang aman (3-D Secure). Nomor kartu tidak disimpan PlugSure.'};
   const paint=()=>{ box.querySelectorAll('.method').forEach((b)=>b.classList.toggle('sel',b.dataset.ch===cur));
     const canLink=linkable.includes(cur)&&!!lw;
@@ -2063,7 +2172,7 @@ function methodPicker(box,list,o={}){
       :o.settle&&cur.startsWith('SAVED:')?'Dibayar dengan kartu tersimpan Anda sebesar tagihan sesi ini.'
       :o.settle&&cur==='CARD'?'Anda diarahkan ke halaman kartu yang aman (3-D Secure) untuk membayar tagihan sesi ini. Nomor kartu tidak disimpan PlugSure.'
       :cur.startsWith('WALLET:')?'Ditagih langsung dari e-wallet Anda yang terhubung, tanpa membuka aplikasinya. Sisa saldo yang tidak terpakai dikembalikan otomatis.'
-      :cur.startsWith('SAVED:')?(o.cardHolds?holdNote:'Dibayar dengan kartu tersimpan Anda.'):note[cur]||`Anda diarahkan ke aplikasi ${(METHOD_UI[cur]||[cur])[0]} untuk membayar.`; };
+      :cur.startsWith('SAVED:')?(o.cardHolds?holdNote:'Dibayar dengan kartu tersimpan Anda.'):note[cur]||`Anda diarahkan ke aplikasi ${(METHOD_UI[cur]||[(list.find((m)=>m.channel===cur)||{}).label||cur])[0]} untuk membayar.`; };
   box.querySelectorAll('.method').forEach((b)=>b.onclick=()=>{ haptic(); cur=b.dataset.ch; try{ LS.setItem('ps_method',cur.startsWith('WALLET:')?(wallets.find((w)=>'WALLET:'+w.id===cur)||{}).channel:cur); }catch(e){} paint(); });
   paint();
   return {postpay:()=>{ const w=cur.startsWith('WALLET:')?wallets.find((x)=>'WALLET:'+x.id===cur):null; return !!w&&!!o.walletPostpay&&w.postpay!==false&&!o.postpayBlocked; },
@@ -2104,8 +2213,9 @@ function resumeCheckout(){
   let p=null; try{ p=JSON.parse(LS.getItem('ps_pending')||'null'); }catch(e){}
   if(!p||!p.co||Date.now()-p.at>30*60_000){ forgetCheckout(); return false; }
   if(p.view==='mpay'){ state._mpay=p.co; go('mpay',{_back:()=>go('account')}); }
-  else if(p.view==='spay'){ state._spay=p.co; go('spay',{_back:()=>go('receipt',{chargeId:p.co.chargeId,_back:()=>go('home')})}); }
+  else if(p.view==='spay'){ state._spay=p.co; go('spay',{_back:()=>p.co.kind==='roaming'?go('home'):go('receipt',{chargeId:p.co.chargeId,_back:()=>go('home')})}); }
   else if(p.view==='rpay'){ state._rpay=p.co; go('rpay',{_back:()=>go('home')}); }
+  else if(p.view==='rsession'){ forgetCheckout(); go('rsession',{chargeId:p.co.chargeId,_back:()=>go('home')}); }
   else { state._checkout=p.co; state._con=p.con; go('pay',{chargeId:p.co.chargeId,_back:()=>go('home')}); }
   return true;
 }
@@ -2116,14 +2226,16 @@ function resumeCheckout(){
  * as QRIS sees the acquirer's confirmation.
  */
 function paintCheckout(v,co,o){
+  useCur(co.currency||(co.payment&&co.payment.currency)||(co.checkout&&co.checkout.currency));
   const p=co.payment, u=METHOD_UI[p.channel]||[p.label,''];
   const push=p.action==='push';
-  v.innerHTML=topbar(o.title||('Pembayaran '+u[0]),push?`Setujui di aplikasi ${u[0]}`:(p.channel==='CARD'?'Halaman kartu yang aman (3-D Secure)':`Lanjutkan di aplikasi ${u[0]}`),{back:1})+
+  const bank=p.method==='bank';
+  v.innerHTML=topbar(o.title||('Pembayaran '+u[0]),push?`Setujui di aplikasi ${u[0]}`:(p.channel==='CARD'?'Halaman kartu yang aman (3-D Secure)':bank?'Pilih bank Anda di halaman yang aman':`Lanjutkan di aplikasi ${u[0]}`),{back:1})+
     `<div class="paymark">${p.channel==='CARD'?svg(I.card):p.channel==='OVO'||p.method==='ewallet'?svg(I.wallet):esc(u[0])}</div>
-     <div class="paylabel"><div class="amt">${rp(o.amountIdr)}</div><div class="qris-badge">${esc(u[0])} · ${p.hold?'Ditahan, bukan ditagih':esc(o.note)}</div></div>
-     ${push?`<div class="banner b-info" style="margin-top:18px">${svg(I.info)}<div>Buka aplikasi <b>${esc(u[0])}</b> dan setujui pembayaran ${rp(o.amountIdr)}.</div></div>`:''}
-     ${p.checkoutUrl?`<button class="cta" id="gocheckout" style="margin-top:18px">${p.channel==='CARD'?svg(I.card):svg(I.wallet)} ${push?'Buka simulasi '+esc(u[0]):'Lanjutkan ke '+esc(u[0])}</button>`:''}
-     <div class="card soft small" style="margin-top:18px;display:flex;gap:10px;align-items:flex-start">${svg(I.info,'')}<div>${o.info?esc(o.info):o.view==='pay'?(p.hold?'Kartu Anda hanya ditahan '+rp(o.amountIdr)+'. Setelah pengisian selesai, yang ditagih hanya biaya pemakaian; sisanya langsung dilepas.':'Setelah membayar, kembali ke sini: charger mulai mengisi sesuai saldo Anda dan berhenti. Sisa saldo yang tidak terpakai dikembalikan ke '+esc(u[0])+'.'):'Setelah membayar, kembali ke sini: langganan langsung aktif.'}${p.saveCard?' Kartu disimpan setelah pembayaran berhasil.':''}</div></div>
+     <div class="paylabel"><div class="amt">${rp(o.amountMinor)}</div><div class="qris-badge">${esc(u[0])} · ${p.hold?'Ditahan, bukan ditagih':esc(o.note)}</div></div>
+     ${push?`<div class="banner b-info" style="margin-top:18px">${svg(I.info)}<div>Buka aplikasi <b>${esc(u[0])}</b> dan setujui pembayaran ${rp(o.amountMinor)}.</div></div>`:''}
+     ${p.checkoutUrl?`<button class="cta" id="gocheckout" style="margin-top:18px">${p.channel==='CARD'||bank?svg(I.card):svg(I.wallet)} <span>${push?'Buka simulasi '+esc(u[0]):'Lanjutkan ke '+esc(u[0])}</span></button>`:''}
+     <div class="card soft small" style="margin-top:18px;display:flex;gap:10px;align-items:flex-start">${svg(I.info,'')}<div>${o.info?esc(o.info):o.view==='pay'?(p.hold?'Kartu Anda hanya ditahan '+rp(o.amountMinor)+'. Setelah pengisian selesai, yang ditagih hanya biaya pemakaian; sisanya langsung dilepas.':(bank?'Setelah membayar, kembali ke sini: charger mulai mengisi sesuai saldo Anda dan berhenti. Sisa saldo yang tidak terpakai dikembalikan ke rekening bank Anda.':'Setelah membayar, kembali ke sini: charger mulai mengisi sesuai saldo Anda dan berhenti. Sisa saldo yang tidak terpakai dikembalikan ke '+esc(u[0])+'.')):'Setelah membayar, kembali ke sini: langganan langsung aktif.'}${p.saveCard?' Kartu disimpan setelah pembayaran berhasil.':''}</div></div>
      <div id="paywait" style="margin-top:18px"><div class="center-loading" style="padding:16px;gap:12px;flex-direction:column"><span class="spinner"></span><div class="muted small">Menunggu pembayaran…</div></div>
      ${co.demo!==false?'<button class="cta ghost" id="paid" type="button">Simulasikan pembayaran (demo)</button>':''}</div>`;
   const s=$('.card.soft svg',v); if(s) s.style.cssText='width:19px;height:19px;color:var(--arus);flex:none;margin-top:1px';
@@ -2145,20 +2257,22 @@ function paintCheckout(v,co,o){
 VIEWS.pay=async(v)=>{
   v.className='view full';
   const co=state._checkout; if(!co){return go('home');}
+  useCur(co.currency);
   if(co.payment&&co.payment.action!=='qr'){
-    return paintCheckout(v,co,{amountIdr:co.payment.amountIdr,note:`Perkiraan ±${kwh(co.allowanceKwh)} kWh`,view:'pay',
+    return paintCheckout(v,co,{amountMinor:co.payment.amountMinor,note:`Perkiraan ±${kwh(co.allowanceKwh)} kWh`,view:'pay',
       confirmPath:'/v1/charge/'+co.chargeId+'/confirm-payment',
       isPaid:async()=>{ const s=await api('/v1/charge/'+co.chargeId+'/status'); return s.state!=='awaiting_payment'; },
       onPaid:()=>onPaid(co)});
   }
-  v.innerHTML=topbar('Pembayaran QRIS','Pindai dengan aplikasi bank / e-wallet',{back:1})+
-    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="QRIS" /></div>
+  const qn=qrName(co);
+  v.innerHTML=topbar('Pembayaran '+qn,qrScanHint(co),{back:1})+
+    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="${esc(qn)}" /></div>
      <div class="paylabel">
-       <div class="amt">${rp(co.qr.amountIdr)}</div>
+       <div class="amt">${rp(co.qr.amountMinor)}</div>
        <div class="qris-badge">${svg(I.info,'')} Perkiraan ±${kwh(co.allowanceKwh)} kWh</div>
-     </div>
+     </div>${qrMore(co)}
      <button class="cta ghost" id="saveqr" style="margin-top:16px">${svg(I.save)} Simpan QR</button>
-     <div class="small muted" id="saveqr-hint" style="text-align:center;margin-top:8px">Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank / e-wallet.</div>
+     <div class="small muted" id="saveqr-hint" style="text-align:center;margin-top:8px">${qrSaveHint(co)}</div>
      <div class="card soft small" style="margin-top:20px;display:flex;gap:10px;align-items:flex-start">
        ${svg(I.info,'')}<div>Setelah membayar, charger akan otomatis mengisi sesuai saldo Anda dan berhenti. Sisa saldo yang tidak terpakai akan dikembalikan.</div>
      </div>
@@ -2219,21 +2333,21 @@ async function saveQrImage(co,label){
   g.fillStyle='#ffffff'; g.fillRect(0,0,W,H);
   g.fillStyle='#0c1a1d'; g.textAlign='center';
   g.font='700 30px "Plus Jakarta Sans", system-ui, sans-serif';
-  g.fillText('QRIS · PlugSure',W/2,64);
+  g.fillText(qrName(co)+' · PlugSure',W/2,64);
   g.imageSmoothingEnabled=false;
   g.drawImage(img,(W-Q)/2,qrTop,Q,Q);
   g.font='800 52px "Sora", system-ui, sans-serif';
-  g.fillText(rp(co.qr.amountIdr),W/2,amtBase);
+  g.fillText(rp(co.qr.amountMinor),W/2,amtBase);
   g.fillStyle='#5f7773'; g.font='600 24px "Plus Jakarta Sans", system-ui, sans-serif';
   // The line under the amount: what is being paid (a pass, an unpaid session), or the charging station.
   const station=label||(state._con&&state._con.station&&state._con.station.name)||'';
   if(station) g.fillText(station.length>44?station.slice(0,43)+'…':station,W/2,amtBase+48);
-  const exp=co.qr.expiresAt?new Date(co.qr.expiresAt).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}):'';
+  const exp=co.qr.expiresAt?new Date(co.qr.expiresAt).toLocaleTimeString(dloc(),{hour:'2-digit',minute:'2-digit'}):'';
   g.fillText((exp?'Berlaku s.d. '+exp+' · ':'')+'Ref '+String(co.qr.providerRef||'').slice(-10),W/2,amtBase+88);
   g.font='500 20px "Plus Jakarta Sans", system-ui, sans-serif';
   g.fillText('Bayar lewat aplikasi bank / e-wallet: Scan QR → pilih dari galeri',W/2,amtBase+146);
   const blob=await new Promise((res,rej)=>cv.toBlob(b=>b?res(b):rej(new Error('toBlob')),'image/png'));
-  const name='QRIS-PlugSure-'+co.qr.amountIdr+'.png';
+  const name='QRIS-PlugSure-'+co.qr.amountMinor+'.png';
   const file=new File([blob],name,{type:'image/png'});
   if(navigator.canShare && navigator.canShare({files:[file]})){
     try{ await navigator.share({files:[file],title:'QRIS PlugSure'}); return 'shared'; }
@@ -2257,11 +2371,11 @@ async function onPaid(co){
 function costNote(s){
   const c=s.cost; if(!c||!['charging','finishing','ended','rated'].includes(s.state))return '';
   const bits=[];
-  if(s.mode==='prepaid'&&s.amountIdr) bits.push(`<span>Biaya sejauh ini ${rp(c.totalIdr)} dari ${rp(s.amountIdr)} dibayar</span>`);
-  if(c.taxIdr>0) bits.push(`<span>Termasuk pajak ${rp(c.taxIdr)}</span>`);
-  if(c.discountIdr>0) bits.push(`<span class="save">Hemat ${rp(c.discountIdr)}</span>`);
-  const idle=c.idleFeeIdr>0&&s.state==='charging'
-    ?`<div class="idle">${svg(I.info,'')}<span>Biaya parkir ${rp(c.idleFeeIdr)}: mobil tidak mengisi selama ${c.idleMinutes} menit. Cabut untuk menghentikannya.</span></div>`:'';
+  if(s.mode==='prepaid'&&s.amountMinor) bits.push(`<span>Biaya sejauh ini ${rp(c.totalMinor)} dari ${rp(s.amountMinor)} dibayar</span>`);
+  if(c.taxTotalMinor>0) bits.push(`<span>Termasuk pajak ${rp(c.taxTotalMinor)}</span>`);
+  if(c.discountMinor>0) bits.push(`<span class="save">Hemat ${rp(c.discountMinor)}</span>`);
+  const idle=c.idleFeeMinor>0&&s.state==='charging'
+    ?`<div class="idle">${svg(I.info,'')}<span>Biaya parkir ${rp(c.idleFeeMinor)}: mobil tidak mengisi selama ${c.idleMinutes} menit. Cabut untuk menghentikannya.</span></div>`:'';
   return bits.length||idle?`<div class="costnote">${bits.length?`<div class="bits">${bits.join('<i>·</i>')}</div>`:''}${idle}</div>`:'';
 }
 VIEWS.session=async(v)=>{
@@ -2270,6 +2384,7 @@ VIEWS.session=async(v)=>{
   v.innerHTML=topbar('Sesi pengisian','',{back:1})+`<div id="live"><div class="center-loading"><span class="spinner"></span></div></div>`;
   const paint=(s)=>{
     const live=$('#live'); if(!live)return;
+    useCur(s.currency);
     const isPrepaid=s.mode==='prepaid';
     const pct=isPrepaid?(s.progressPct||0):null;
     const R=104, C=2*Math.PI*R, off=pct!=null?C*(1-pct/100):C*0.0001;
@@ -2292,7 +2407,7 @@ VIEWS.session=async(v)=>{
           <div class="lstat"><div class="v">${s.powerKw!=null?kwh(s.powerKw):'—'}</div><div class="k">kW saat ini</div></div>
           <div class="lstat"><div class="v">${s.durationMin}</div><div class="k">menit</div></div>
           ${isPrepaid?`<div class="lstat"><div class="v">${pct!=null?pct+'%':'—'}</div><div class="k">saldo</div></div>`
-            :`<div class="lstat"><div class="v" style="font-size:15px">${s.estimatedIdr!=null?rp(s.estimatedIdr):'—'}</div><div class="k">${s.cost&&s.cost.final?'Total':'biaya sejauh ini'}</div></div>`}
+            :`<div class="lstat"><div class="v" style="font-size:15px">${s.estimatedMinor!=null?rp(s.estimatedMinor):'—'}</div><div class="k">${s.cost&&s.cost.final?'Total':'biaya sejauh ini'}</div></div>`}
         </div>
         ${costNote(s)}
         <div class="card soft small" style="margin-top:14px;display:flex;justify-content:space-between">
@@ -2313,9 +2428,9 @@ VIEWS.session=async(v)=>{
       // Paid, but the charge never started: the payment is being / has been returned.
       const rf=s.refund||{};
       act.innerHTML=`<div class="refund">${svg(I.gift)}<div>
-          <div class="t">${s.state==='refunded'?'Dana dikembalikan':'Pengembalian dana diproses'} ${rp(rf.amountIdr||0)}</div>
+          <div class="t">${s.state==='refunded'?'Dana dikembalikan':'Pengembalian dana diproses'} ${rp(rf.amountMinor||0)}</div>
           <div class="s">${s.state==='refunded'
-            ?`Dikembalikan${rf.refundedAt?' '+new Date(rf.refundedAt).toLocaleDateString('id-ID',{day:'numeric',month:'short'}):''} ke metode pembayaran Anda.`
+            ?`Dikembalikan${rf.refundedAt?' '+new Date(rf.refundedAt).toLocaleDateString(dloc(),{day:'numeric',month:'short'}):''} ke metode pembayaran Anda.`
             :'Pengisian tidak dimulai, jadi pembayaran Anda dikembalikan penuh.'}</div></div></div>
         <button class="cta ghost" id="home" style="margin-top:12px">Kembali ke beranda</button>`;
       $('#home').onclick=()=>go('home');
@@ -2326,7 +2441,7 @@ VIEWS.session=async(v)=>{
       if(state.poll){clearInterval(state.poll);state.poll=null;}
       // Unpaid (an expired card hold, or a post-pay charge that failed): say so, and lead to paying.
       if(s.state==='rated') api('/v1/charge/'+id+'/pay-unpaid').then((u)=>{ if(u&&!u.paid&&state.view==='session'&&act.isConnected){
-        act.innerHTML=`<div class="banner b-warn" style="margin-bottom:10px">${svg(I.info)}<div><b>Belum terbayar: ${rp(u.owedIdr)}</b><div>Bayar sesi ini dari struk.</div></div></div><button class="cta" id="receipt">Bayar · lihat struk</button>`;
+        act.innerHTML=`<div class="banner b-warn" style="margin-bottom:10px">${svg(I.info)}<div><b>Belum terbayar: ${rp(u.owedMinor)}</b><div>Bayar sesi ini dari struk.</div></div></div><button class="cta" id="receipt">Bayar · lihat struk</button>`;
         $('#receipt').onclick=()=>go('receipt',{chargeId:id,_back:()=>go('home')}); } }).catch(()=>{});
     } else if(s.state==='awaiting_start'){
       const tok=state.params.justStarted&&state.params.justStarted.presentToken;
@@ -2366,7 +2481,7 @@ function v2xWhy(r){
 function paintV2x(box,s,id,refresh){
   const x=s.v2x; if(!box||!x) return;
   const active=s.state==='charging';
-  const given=x.exportKwh>0?`<div class="small" style="margin-top:6px">Dikembalikan ${kwh(x.exportKwh)} kWh · kredit ${rp(x.creditIdr||0)}</div>`:'';
+  const given=x.exportKwh>0?`<div class="small" style="margin-top:6px">Dikembalikan ${kwh(x.exportKwh)} kWh · kredit ${rp(x.creditMinor||0)}</div>`:'';
   if(!x.consent){
     if(!active||!x.canOffer){ box.innerHTML=given?`<div class="card soft" style="margin-top:12px">${given}</div>`:''; return; }
     const floors=[]; for(let p=Math.ceil((x.siteMinSocPercent||40)/5)*5;p<=90;p+=5) floors.push(p);
@@ -2374,7 +2489,7 @@ function paintV2x(box,s,id,refresh){
     box.innerHTML=`<div class="card" style="margin-top:12px">
         <div style="font-weight:700">Kembalikan energi ke lokasi (V2G)</div>
         <div class="small muted" style="margin-top:4px">Mobil Anda bisa mengembalikan listrik saat beban puncak lokasi.</div>
-        <div class="small" style="margin-top:6px">Kredit ${rp(x.creditIdrPerKwh||0)} per kWh. Baterai tidak turun di bawah ${pick}%, dan tidak dalam satu jam sebelum Anda pergi.</div>
+        <div class="small" style="margin-top:6px">Kredit ${rp(x.creditMinorPerKwh||0)} per kWh. Baterai tidak turun di bawah ${pick}%, dan tidak dalam satu jam sebelum Anda pergi.</div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
           <label class="small muted" for="v2xfloor">Batas baterai</label>
           <select id="v2xfloor">${floors.map((p)=>`<option value="${p}"${p===pick?' selected':''}>${p}%</option>`).join('')}</select>
@@ -2403,7 +2518,11 @@ VIEWS.receipt=async(v)=>{
   const id=state.params.chargeId;
   v.innerHTML=topbar('Struk','',{back:1})+`<div class="center-loading"><span class="spinner"></span></div>`;
   const r=await api('/v1/charge/'+id+'/receipt');
+  useCur(r.currency);
   const t=r.tax;
+  // Outside Indonesia: the country's tax (GST, SST) on one line; Singapore prices include GST.
+  const foreign=r.countryCode&&r.countryCode!=='ID';
+  const taxName=({SG_GST:'GST',MY_SST:'SST'})[r.taxScheme]||'Pajak';
   const UNIT={session:'sesi',min:'mnt',kWh:'kWh'};
   const lineName=(l)=>{
     // Loyalty points spent on this session.
@@ -2412,44 +2531,47 @@ VIEWS.receipt=async(v)=>{
     if(l.adjustment&&l.adjustment.source==='v2x') return 'Kredit energi dikembalikan';
     // Membership / promotion discount: its own label (plan or promotion name).
     if(l.adjustment) return l.description;
-    if(l.amountIdr<0) return 'Penyesuaian batas tarif';
+    if(l.amountMinor<0) return 'Penyesuaian batas tarif';
     const blk=l.touBlock&&l.touBlock!=='ANY'?' ('+(l.touBlock==='WBP'?'jam sibuk':'luar jam sibuk')+')':'';
     return ({energy:'Energi'+blk,session:'Biaya layanan',admin:'Biaya admin',idle:'Biaya idle',time:'Biaya waktu'})[l.kind]||l.description;
   };
-  const lines=(r.lines||[]).map(l=>`<div class="rc-line ${l.amountIdr<0?'neg':''}">
-    <div><div class="d">${esc(lineName(l))}</div>${l.quantity&&l.unit&&!l.adjustment?`<div class="q">${kwh(l.quantity)} ${esc(UNIT[l.unit]||l.unit)} × ${rp(l.unitRate)}</div>`:''}</div>
-    <div class="a">${l.amountIdr<0?'−':''}${rp(Math.abs(l.amountIdr))}</div></div>`).join('');
+  const lines=(r.lines||[]).map(l=>`<div class="rc-line ${l.amountMinor<0?'neg':''}">
+    <div><div class="d">${esc(lineName(l))}</div>${l.quantity&&l.unit&&!l.adjustment?`<div class="q">${kwh(l.quantity)} ${esc(UNIT[l.unit]||l.unit)} × ${rate(l.unitRate)}</div>`:''}</div>
+    <div class="a">${l.amountMinor<0?'−':''}${rp(Math.abs(l.amountMinor))}</div></div>`).join('');
   const set=r.settlement;
   v.innerHTML=topbar('Struk',r.station.operator,{back:1})+
     `<div class="receipt">
       <div class="rc-head">
         <div class="chk">${svg(I.check)}</div>
         <div class="muted small">${r.mode==='fleet'?'Ditagihkan ke armada':'Total dipakai'}</div>
-        <div class="rc-total">${t?rp(t.totalIdr):'—'}</div>
+        <div class="rc-total">${t?rp(t.totalMinor):'—'}</div>
         <div class="muted small" style="margin-top:4px">${kwh(r.energyKwh)} kWh · ${r.durationMin} menit</div>
       </div>
       <div class="rc-body">
         <div class="rc-line small muted"><span>${esc(r.station.name)}</span></div>
         ${r.station.spkluId?`<div class="rc-line small muted"><span>SPKLU</span><span class="a" style="font-weight:500">${esc(r.station.spkluId)}</span></div>`:''}
-        ${r.station.operatorNpwp?`<div class="rc-line small muted"><span>NPWP</span><span class="a" style="font-weight:500">${esc(r.station.operatorNpwp)}${r.station.operatorPkp?' · PKP':''}</span></div>`:''}
+        ${!foreign&&r.station.operatorNpwp?`<div class="rc-line small muted"><span>NPWP</span><span class="a" style="font-weight:500">${esc(r.station.operatorNpwp)}${r.station.operatorPkp?' · PKP':''}</span></div>`:''}
+        ${foreign&&r.station.taxRegistration?`<div class="rc-line small muted"><span>${esc(r.station.taxRegistration.label)}</span><span class="a" style="font-weight:500">${esc(r.station.taxRegistration.number)}</span></div>`:''}
         ${r.receiptNo?`<div class="rc-line small muted"><span>No.</span><span class="a" style="font-weight:500">${esc(r.receiptNo)}</span></div>`:''}
         <div class="rc-sep"></div>
         ${lines}
         ${t?`<div class="rc-sep"></div>
-          <div class="rc-line"><span class="d">Subtotal</span><span class="a">${rp(t.subtotalIdr)}</span></div>
-          <div class="rc-line"><span class="d">PBJT-TL ${(t.pbjtRateBps/100)}%</span><span class="a">${rp(t.pbjtIdr)}</span></div>
-          ${t.ppnIdr>0?`<div class="rc-line"><span class="d">DPP <span class="q">(${esc(t.dppFraction||'11/12')} × harga)</span></span><span class="a">${rp(t.ppnDppIdr)}</span></div>
-          <div class="rc-line"><span class="d">PPN ${(t.ppnRateBps/100)}% × DPP <span class="q">(efektif ${(t.ppnEffectiveRateBps/100)}%)</span></span><span class="a">${rp(t.ppnIdr)}</span></div>`
-          :`<div class="rc-line small muted"><span class="d">PPN</span><span class="a">Tidak dikenakan</span></div>`}
+          <div class="rc-line"><span class="d">Subtotal</span><span class="a">${rp(t.subtotalMinor)}</span></div>
+          ${foreign?(t.taxMinor>0?`<div class="rc-line"><span class="d">${esc(taxName)} ${(t.ppnRateBps/100)}%${r.pricesIncludeTax?' <span class="q">(termasuk)</span>':''}</span><span class="a">${rp(t.taxMinor)}</span></div>`
+            :`<div class="rc-line small muted"><span class="d">${esc(taxName)}</span><span class="a">Tidak dikenakan</span></div>`):`
+          <div class="rc-line"><span class="d">PBJT-TL ${(t.localTaxRateBps/100)}%</span><span class="a">${rp(t.localTaxMinor)}</span></div>
+          ${t.taxMinor>0?`<div class="rc-line"><span class="d">DPP <span class="q">(${esc(t.dppFraction||'11/12')} × harga)</span></span><span class="a">${rp(t.taxBaseMinor)}</span></div>
+          <div class="rc-line"><span class="d">PPN ${(t.ppnRateBps/100)}% × DPP <span class="q">(efektif ${(t.ppnEffectiveRateBps/100)}%)</span></span><span class="a">${rp(t.taxMinor)}</span></div>`
+          :`<div class="rc-line small muted"><span class="d">PPN</span><span class="a">Tidak dikenakan</span></div>`}`}
           <div class="rc-sep"></div>
-          <div class="rc-line tot"><span class="d">Total</span><span class="a">${rp(t.totalIdr)}</span></div>
-          ${r.loyalty&&r.loyalty.earnedPoints?`<div class="rc-line small muted"><span class="d">Poin diperoleh</span><span class="a">+${r.loyalty.earnedPoints.toLocaleString('id-ID')} poin</span></div>`:''}
+          <div class="rc-line tot"><span class="d">Total</span><span class="a">${rp(t.totalMinor)}</span></div>
+          ${r.loyalty&&r.loyalty.earnedPoints?`<div class="rc-line small muted"><span class="d">Poin diperoleh</span><span class="a">+${r.loyalty.earnedPoints.toLocaleString(ID_LOCALE)} poin</span></div>`:''}
           ${r.signedData&&r.signedData.status?`<div class="rc-line small muted"><span class="d">Meter bertanda tangan</span><span class="a">${esc(({verified:'Terverifikasi',unverified_key:'Cocok',mismatch:'Tidak cocok',invalid:'Tidak sah',incomplete:'Tidak lengkap',missing:'Tidak ada'})[r.signedData.status]||r.signedData.status)}</span></div>`:''}`
           :`<div class="banner b-info" style="margin-top:8px">${svg(I.clock)}<div>Struk sedang diproses. Coba lagi sebentar.</div></div>`}
       </div>
-      ${set&&set.postpay&&set.postpay.paidInApp?`<div class="refund">${svg(I.check)}<div><div class="t">Dibayar di aplikasi: ${rp(set.postpay.paidInApp.amountIdr)}</div><div class="s">${set.postpay.paidInApp.reason==='link_ended'?'Tautan e-wallet Anda sudah tidak aktif saat penagihan':set.postpay.paidInApp.reason==='pin_not_confirmed'?'Anda memilih metode lain daripada konfirmasi PIN e-wallet':set.postpay.paidInApp.reason==='pin_expired'?'Konfirmasi PIN e-wallet Anda kedaluwarsa':set.postpay.paidInApp.reason==='pin_denied'?'Konfirmasi PIN e-wallet Anda ditolak':set.postpay.paidInApp.reason==='pin_cancelled'?'Anda membatalkan konfirmasi PIN e-wallet':'Penagihan ke e-wallet Anda tidak berhasil'}; Anda sudah membayar sesi ini di aplikasi${set.postpay.paidInApp.channel?' ('+esc((METHOD_UI[set.postpay.paidInApp.channel]||[set.postpay.paidInApp.channel])[0])+')':''}. Terima kasih.</div></div></div>`:set&&set.postpay?`<div class="refund">${svg(I.wallet)}<div><div class="t">${set.postpay.unpaid?'Belum terbayar: ':'Dibayar setelah selesai: '}${rp(set.postpay.chargedIdr)}</div><div class="s">${set.postpay.unpaid?(set.postpay.checkoutUrl?'Konfirmasi pembayaran di aplikasi '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+(set.postpay.payOptions?', atau bayar dengan metode lain.':'.'):set.postpay.linkEnded?'Tautan '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' Anda sudah tidak aktif, jadi belum ada yang ditagih. Bayar sesi ini sekarang dengan metode lain.':set.postpay.pinCancelled?'Konfirmasi PIN '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' dibatalkan, jadi belum ada yang ditagih. Konfirmasi lagi, atau bayar dengan metode lain.':set.postpay.pinDenied?'Konfirmasi PIN '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' ditolak, jadi belum ada yang ditagih. Coba konfirmasi lagi, atau bayar dengan metode lain.':set.postpay.pinExpired?'Konfirmasi PIN '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' sudah kedaluwarsa, jadi belum ada yang ditagih. Konfirmasi ulang sekarang, atau bayar dengan metode lain.':set.postpay.insufficient?'Saldo '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' Anda tidak cukup untuk tagihan ini. Isi saldo lalu bayar sekarang, atau bayar dengan metode lain.':set.postpay.payOptions?'Penagihan ke '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' belum berhasil. Coba bayar sekarang, atau bayar dengan metode lain.':'Penagihan ke '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' belum berhasil. Periksa saldo, lalu bayar sekarang.'):'Ditagih dari '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' Anda sesuai pemakaian (batas '+rp(set.postpay.limitIdr)+').'}</div></div></div>${set.postpay.linkEnded?'<div id="payunpaidbox"></div><button class="cta" id="payunpaid" style="margin-top:10px">Bayar sekarang · '+rp(set.postpay.chargedIdr)+'</button>':set.postpay.unpaid&&set.postpay.payOptions?'<button class="cta" id="paynow" style="margin-top:10px">'+(set.postpay.checkoutUrl?'Konfirmasi di ':set.postpay.pinExpired||set.postpay.pinDenied||set.postpay.pinCancelled?'Konfirmasi ulang di ':'Bayar sekarang dengan ')+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+'</button><div id="payunpaidbox"></div><button class="cta ghost" id="payunpaid" style="margin-top:10px">Bayar dengan metode lain · '+rp(set.postpay.chargedIdr)+'</button>':set.postpay.unpaid?'<button class="cta" id="paynow" style="margin-top:10px">Bayar sekarang</button>':''}`:''}
-      ${set&&set.hold&&set.hold.paidInApp?`<div class="refund">${svg(I.check)}<div><div class="t">Dibayar di aplikasi: ${rp(set.hold.paidInApp.amountIdr)}</div><div class="s">Penahanan kartu Anda berakhir sebelum biaya ditagih; Anda sudah membayar sesi ini di aplikasi${set.hold.paidInApp.channel?' ('+esc((METHOD_UI[set.hold.paidInApp.channel]||[set.hold.paidInApp.channel])[0])+')':''}. Terima kasih.</div></div></div>`:set&&set.hold&&set.hold.expired?`<div class="refund">${svg(I.card)}<div><div class="t">Tidak ditagih dari kartu Anda</div><div class="s">Penahanan ${rp(set.hold.heldIdr)} di kartu Anda berakhir di bank sebelum biaya pengisian ${rp(set.hold.unpaidIdr||0)} ditagih, jadi tidak ada yang diambil dan dana yang ditahan sudah kembali. Bayar sesi ini sekarang di aplikasi.</div></div></div><div id="payunpaidbox"></div><button class="cta" id="payunpaid" style="margin-top:10px">Bayar sekarang · ${rp(set.hold.unpaidIdr||0)}</button>`:set&&set.hold?`<div class="refund">${svg(I.card)}<div><div class="t">Ditagih ${rp(set.hold.chargedIdr)} dari kartu Anda</div><div class="s">Ditahan ${rp(set.hold.heldIdr)}; ${rp(set.hold.releasedIdr)} dilepas${set.hold.state==='captured'?'.':' (sedang diproses).'}${set.topUpIdr>0?' '+rp(set.topUpIdr)+' di atas batas penahanan tidak ditagih.':''}</div></div></div>`:''}
-      ${set&&set.refundIdr>0?`<div class="refund">${svg(I.gift)}<div><div class="t">Pengembalian ${rp(set.refundIdr)}</div><div class="s">Dari ${rp(set.paidIdr)} dibayar, ${rp(set.usedIdr)} terpakai. ${set.refund&&set.refund.state==='refunded'?'Sudah dikembalikan.':'Sedang diproses.'}</div></div></div>`:''}
+      ${set&&set.postpay&&set.postpay.paidInApp?`<div class="refund">${svg(I.check)}<div><div class="t">Dibayar di aplikasi: ${rp(set.postpay.paidInApp.amountMinor)}</div><div class="s">${set.postpay.paidInApp.reason==='link_ended'?'Tautan e-wallet Anda sudah tidak aktif saat penagihan':set.postpay.paidInApp.reason==='pin_not_confirmed'?'Anda memilih metode lain daripada konfirmasi PIN e-wallet':set.postpay.paidInApp.reason==='pin_expired'?'Konfirmasi PIN e-wallet Anda kedaluwarsa':set.postpay.paidInApp.reason==='pin_denied'?'Konfirmasi PIN e-wallet Anda ditolak':set.postpay.paidInApp.reason==='pin_cancelled'?'Anda membatalkan konfirmasi PIN e-wallet':'Penagihan ke e-wallet Anda tidak berhasil'}; Anda sudah membayar sesi ini di aplikasi${set.postpay.paidInApp.channel?' ('+esc((METHOD_UI[set.postpay.paidInApp.channel]||[set.postpay.paidInApp.channel])[0])+')':''}. Terima kasih.</div></div></div>`:set&&set.postpay?`<div class="refund">${svg(I.wallet)}<div><div class="t">${set.postpay.unpaid?'Belum terbayar: ':'Dibayar setelah selesai: '}${rp(set.postpay.chargedMinor)}</div><div class="s">${set.postpay.unpaid?(set.postpay.checkoutUrl?'Konfirmasi pembayaran di aplikasi '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+(set.postpay.payOptions?', atau bayar dengan metode lain.':'.'):set.postpay.linkEnded?'Tautan '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' Anda sudah tidak aktif, jadi belum ada yang ditagih. Bayar sesi ini sekarang dengan metode lain.':set.postpay.pinCancelled?'Konfirmasi PIN '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' dibatalkan, jadi belum ada yang ditagih. Konfirmasi lagi, atau bayar dengan metode lain.':set.postpay.pinDenied?'Konfirmasi PIN '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' ditolak, jadi belum ada yang ditagih. Coba konfirmasi lagi, atau bayar dengan metode lain.':set.postpay.pinExpired?'Konfirmasi PIN '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' sudah kedaluwarsa, jadi belum ada yang ditagih. Konfirmasi ulang sekarang, atau bayar dengan metode lain.':set.postpay.insufficient?'Saldo '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' Anda tidak cukup untuk tagihan ini. Isi saldo lalu bayar sekarang, atau bayar dengan metode lain.':set.postpay.payOptions?'Penagihan ke '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' belum berhasil. Coba bayar sekarang, atau bayar dengan metode lain.':'Penagihan ke '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' belum berhasil. Periksa saldo, lalu bayar sekarang.'):'Ditagih dari '+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+' Anda sesuai pemakaian (batas '+rp(set.postpay.limitMinor)+').'}</div></div></div>${set.postpay.linkEnded?'<div id="payunpaidbox"></div><button class="cta" id="payunpaid" style="margin-top:10px">Bayar sekarang · '+rp(set.postpay.chargedMinor)+'</button>':set.postpay.unpaid&&set.postpay.payOptions?'<button class="cta" id="paynow" style="margin-top:10px">'+(set.postpay.checkoutUrl?'Konfirmasi di ':set.postpay.pinExpired||set.postpay.pinDenied||set.postpay.pinCancelled?'Konfirmasi ulang di ':'Bayar sekarang dengan ')+esc((METHOD_UI[set.postpay.channel]||['e-wallet'])[0])+'</button><div id="payunpaidbox"></div><button class="cta ghost" id="payunpaid" style="margin-top:10px">Bayar dengan metode lain · '+rp(set.postpay.chargedMinor)+'</button>':set.postpay.unpaid?'<button class="cta" id="paynow" style="margin-top:10px">Bayar sekarang</button>':''}`:''}
+      ${set&&set.hold&&set.hold.paidInApp?`<div class="refund">${svg(I.check)}<div><div class="t">Dibayar di aplikasi: ${rp(set.hold.paidInApp.amountMinor)}</div><div class="s">Penahanan kartu Anda berakhir sebelum biaya ditagih; Anda sudah membayar sesi ini di aplikasi${set.hold.paidInApp.channel?' ('+esc((METHOD_UI[set.hold.paidInApp.channel]||[set.hold.paidInApp.channel])[0])+')':''}. Terima kasih.</div></div></div>`:set&&set.hold&&set.hold.expired?`<div class="refund">${svg(I.card)}<div><div class="t">Tidak ditagih dari kartu Anda</div><div class="s">Penahanan ${rp(set.hold.heldMinor)} di kartu Anda berakhir di bank sebelum biaya pengisian ${rp(set.hold.unpaidMinor||0)} ditagih, jadi tidak ada yang diambil dan dana yang ditahan sudah kembali. Bayar sesi ini sekarang di aplikasi.</div></div></div><div id="payunpaidbox"></div><button class="cta" id="payunpaid" style="margin-top:10px">Bayar sekarang · ${rp(set.hold.unpaidMinor||0)}</button>`:set&&set.hold?`<div class="refund">${svg(I.card)}<div><div class="t">Ditagih ${rp(set.hold.chargedMinor)} dari kartu Anda</div><div class="s">Ditahan ${rp(set.hold.heldMinor)}; ${rp(set.hold.releasedMinor)} dilepas${set.hold.state==='captured'?'.':' (sedang diproses).'}${set.topUpMinor>0?' '+rp(set.topUpMinor)+' di atas batas penahanan tidak ditagih.':''}</div></div></div>`:''}
+      ${set&&set.refundMinor>0?`<div class="refund">${svg(I.gift)}<div><div class="t">Pengembalian ${rp(set.refundMinor)}</div><div class="s">Dari ${rp(set.paidMinor)} dibayar, ${rp(set.usedMinor)} terpakai. ${set.refund&&set.refund.state==='refunded'?'Sudah dikembalikan.':'Sedang diproses.'}</div></div></div>`:''}
     </div>
     ${t?`<button class="cta ghost" id="taxdoc" style="margin-top:16px">Unduh struk pajak</button>`:''}
     <button class="cta ghost" id="done" style="margin-top:10px">Selesai</button>`;
@@ -2463,7 +2585,7 @@ VIEWS.receipt=async(v)=>{
     catch(e){ alertBanner(e.message); b.disabled=false; b.textContent='Bayar sekarang'; } };
   // An unpaid session (a card hold that expired, or post-pay whose e-wallet link ended): pay what it cost now,
   // with any method the operator offers.
-  if($('#payunpaid')){ let pick=null; const due=set.hold&&set.hold.expired?{owed:set.hold.unpaidIdr||0,po:set.hold.payOptions||{}}:{owed:set.postpay.chargedIdr||0,po:set.postpay.payOptions||{}};
+  if($('#payunpaid')){ let pick=null; const due=set.hold&&set.hold.expired?{owed:set.hold.unpaidMinor||0,po:set.hold.payOptions||{}}:{owed:set.postpay.chargedMinor||0,po:set.postpay.payOptions||{}};
     const owed=due.owed, po=due.po;
     $('#payunpaid').onclick=async()=>{ const b=$('#payunpaid');
       const list=po.paymentMethods||[], saved=(list.some((m)=>m.channel==='CARD')?(po.savedCards||[]):[]).concat(po.linkedWallets||[]);
@@ -2499,12 +2621,12 @@ VIEWS.history=async(v)=>{
   const stLabel={rated:'Selesai',ended:'Selesai',active:'Berlangsung',settled:'Selesai',no_session:'Belum dimulai',refund_pending:'Dana sedang dikembalikan',refunded:'Dana dikembalikan',starting:'Menghubungkan'};
   box.innerHTML=charges.map((c,i)=>{
     const d=c.createdAt?new Date(c.createdAt):null;
-    const when=d?d.toLocaleDateString('id-ID',{day:'numeric',month:'short'})+' · '+d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}):'';
+    const when=d?d.toLocaleDateString(dloc(),{day:'numeric',month:'short'})+' · '+d.toLocaleTimeString(dloc(),{hour:'2-digit',minute:'2-digit'}):'';
     return `<button class="hrow" data-hi="${i}">
       <div class="ic">${svg(c.kind==='roaming'?I.globe:c.mode==='fleet'?I.fleet:I.bolt)}</div>
       <div style="flex:1;min-width:0"><div class="nm">${esc(c.siteName||'Pengisian')}</div>
         <div class="mt">${when} · ${stLabel[c.state]||c.state}${c.kind==='roaming'?' · Mitra':c.mode==='fleet'?' · Armada':''}</div></div>
-      <div class="rt">${c.totalIdr!=null?`<div class="a">${rp(c.totalIdr)}</div>`:''}${c.energyKwh!=null?`<div class="e">${kwh(c.energyKwh)} kWh</div>`:''}</div>
+      <div class="rt">${c.totalMinor!=null?`<div class="a">${rp(c.totalMinor,c.currency)}</div>`:''}${c.energyKwh!=null?`<div class="e">${kwh(c.energyKwh)} kWh</div>`:''}</div>
     </button>`;}).join('');
   box.querySelectorAll('[data-hi]').forEach(b=>b.onclick=()=>{
     const c=charges[Number(b.dataset.hi)];
@@ -2631,9 +2753,9 @@ async function paintCards(row){
 async function paintMembership(row){
   let d; try{ d=await api('/v1/memberships'); }catch(e){ return; }
   if(!row.isConnected||(!d.plans.length&&!d.memberships.length)) return;
-  const perks=(p)=>[p.memberRateIdr!=null?`${rp(p.memberRateIdr)}/kWh`:'',p.energyDiscountPercent?`Diskon ${p.energyDiscountPercent}% energi`:'',
+  const perks=(p)=>[p.memberRate!=null?`${rate(p.memberRate,p.currency)}/kWh`:'',p.energyDiscountPercent?`Diskon ${p.energyDiscountPercent}% energi`:'',
     p.includedKwh?`${kwhQ(p.includedKwh)} kWh gratis`:'',p.waiveSessionFees?'Tanpa biaya layanan':'',p.currentType?`Khusus ${p.currentType}`:''].filter(Boolean).join(' · ');
-  const until=(iso)=>new Date(iso).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
+  const until=(iso)=>new Date(iso).toLocaleDateString(dloc(),{day:'numeric',month:'short',year:'numeric'});
   const mine=d.memberships.filter((m)=>m.status!=='ended');
   // Saved cards and linked e-wallets usable at a membership's operator (for automatic renewal).
   const methodsFor=(m)=>{ const p=d.plans.find((x)=>x.operator===m.operator); return p?(p.savedCards||[]).concat(p.linkedWallets||[]):[]; };
@@ -2657,8 +2779,8 @@ async function paintMembership(row){
       const sw=p.switch;
       return `<div class="plan"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
         <div style="min-width:0"><div class="op">${esc(p.operator)}</div><div class="nm">${esc(p.name)}</div><div class="perks">${esc(perks(p))}</div></div>
-        <div style="text-align:right;flex:none"><div class="price">${rp(p.totalIdr)}</div><div class="op">/ ${p.days} hari</div></div></div>
-        ${sw?`<div class="perks" style="margin-top:6px">${sw.payTotalIdr?`Sisa hari paket Anda: potongan ${rp(sw.creditIdr)}. Bayar ${rp(sw.payTotalIdr)}.`:`Sisa hari paket Anda menutup paket ini: gratis, berlaku ${sw.days} hari.`}</div>`:''}
+        <div style="text-align:right;flex:none"><div class="price">${rp(p.totalMinor,p.currency)}</div><div class="op">/ ${p.days} hari</div></div></div>
+        ${sw?`<div class="perks" style="margin-top:6px">${sw.payTotalMinor?`Sisa hari paket Anda: potongan ${rp(sw.creditMinor,p.currency)}. Bayar ${rp(sw.payTotalMinor,p.currency)}.`:`Sisa hari paket Anda menutup paket ini: gratis, berlaku ${sw.days} hari.`}</div>`:''}
         <button class="cta ghost" type="button" data-buy="${esc(p.id)}" style="margin-top:10px"${d.signedIn?'':' disabled'}>${active?'Perpanjang 30 hari':sw?'Ganti ke paket ini':'Berlangganan'}</button></div>`; }).join('')+
     (d.signedIn?'':`<div class="small muted" style="margin-top:8px">Masuk dengan nomor HP untuk berlangganan.</div>`)+
     `<div class="small muted" style="margin-top:8px">Berlaku 30 hari. Perpanjang sendiri, atau otomatis dengan kartu tersimpan atau e-wallet terhubung. Ganti paket kapan saja: sisa hari paket lama menjadi potongan. Harga member otomatis berlaku saat mengisi di operator tersebut.</div>`;
@@ -2673,7 +2795,7 @@ async function paintMembership(row){
     b.replaceWith(box); box.querySelectorAll('[data-pickm]').forEach((x)=>x.onclick=()=>on(x.dataset.pickm)); });
   const buy=async(b,m)=>{ haptic(); const label=b.textContent; b.disabled=true; b.innerHTML='<span class="spinner"></span>';
     try{ state._mpay=await api('/v1/memberships',{method:'POST',body:JSON.stringify({planId:b.dataset.buy,...(m||{})})});
-      if(state._mpay.paid||(state._mpay.payment&&state._mpay.payment.action==='done')){ haptic(); alertBanner(state._mpay.creditIdr&&!state._mpay.totalIdr?'Paket diganti. Berlaku sampai '+until(state._mpay.periodEnd)+'.':'Langganan aktif.'); return go('account'); }
+      if(state._mpay.paid||(state._mpay.payment&&state._mpay.payment.action==='done')){ haptic(); alertBanner(state._mpay.creditMinor&&!state._mpay.totalMinor?'Paket diganti. Berlaku sampai '+until(state._mpay.periodEnd)+'.':'Langganan aktif.'); return go('account'); }
       rememberCheckout('mpay',state._mpay); go('mpay',{_back:()=>go('account')}); }
     catch(e){ alertBanner(e.message); if(e.body&&(e.body.code==='wallet_link_ended'||e.body.code==='saved_card_ended')) return go('account'); b.disabled=false; b.textContent=label; } };
   row.querySelectorAll('[data-buy]').forEach((b)=>b.onclick=()=>{
@@ -2685,7 +2807,7 @@ async function paintMembership(row){
     // More than one way to pay: choose first, then the same button pays.
     const box=el('<div style="margin-top:10px"></div>'); b.before(box);
     b._pick=methodPicker(box,list,{savedCards:plan.savedCards,canSaveCard:plan.canSaveCard,linkedWallets:plan.linkedWallets}); b.dataset.picking='1';
-    b.textContent='Bayar '+rp(plan.switch?plan.switch.payTotalIdr:plan.totalIdr);
+    b.textContent='Bayar '+rp(plan.switch?plan.switch.payTotalMinor:plan.totalMinor,plan.currency);
     if(saved.length) b.before(el('<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" data-autorenew> <span>Perpanjang otomatis dengan kartu tersimpan atau e-wallet terhubung</span></label>'));
   });
 }
@@ -2695,14 +2817,14 @@ async function paintLoyalty(row){
   let d; try{ d=await api('/v1/loyalty'); }catch(e){ return; }
   if(!row.isConnected||!d.operators||!d.operators.length) return;
   const KIND={earn:'Diperoleh',redeem:'Dipakai',expire:'Kedaluwarsa',adjust:'Penyesuaian'};
-  const day=(iso)=>new Date(iso).toLocaleDateString('id-ID',{day:'numeric',month:'short'});
+  const day=(iso)=>new Date(iso).toLocaleDateString(dloc(),{day:'numeric',month:'short'});
   row.innerHTML=`<div class="seclabel">Poin</div>`+d.operators.map((o)=>`<div class="plan mine">
-      <div class="op">${esc(o.operator)}</div><div class="nm">${o.balance.toLocaleString('id-ID')} poin</div>
-      <div class="perks">≈ ${rp(o.valueIdr)}</div>
-      ${o.expiringSoon?`<div class="perks">${o.expiringSoon.points.toLocaleString('id-ID')} poin kedaluwarsa ${esc(day(o.expiringSoon.at))}</div>`:''}
+      <div class="op">${esc(o.operator)}</div><div class="nm">${o.balance.toLocaleString(ID_LOCALE)} poin</div>
+      <div class="perks">≈ ${rp(o.valueMinor)}</div>
+      ${o.expiringSoon?`<div class="perks">${o.expiringSoon.points.toLocaleString(ID_LOCALE)} poin kedaluwarsa ${esc(day(o.expiringSoon.at))}</div>`:''}
       ${o.enabled?`<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" data-autoredeem="${esc(o.orgId)}"${o.autoRedeem?' checked':''}> <span>Pakai poin otomatis saat mengisi</span></label>
-      <div class="small muted" style="margin-top:6px">${o.earnPer1000Idr} poin per Rp 1.000. 1 poin = ${rp(o.pointValueIdr)}, paling banyak ${o.maxRedeemPercent}% biaya energi dan layanan, sebelum pajak.</div>`:''}
-      ${o.history.length?`<details style="margin-top:8px"><summary class="small">Riwayat poin</summary>${o.history.map((h)=>`<div class="rc-line small"><span class="d">${esc(KIND[h.kind]||h.kind)} · ${esc(day(h.at))}</span><span class="a">${h.points>0?'+':''}${h.points.toLocaleString('id-ID')}</span></div>`).join('')}</details>`:''}
+      <div class="small muted" style="margin-top:6px">${o.earnPer1000Minor} poin per Rp 1.000. 1 poin = ${rp(o.pointValueMinor)}, paling banyak ${o.maxRedeemPercent}% biaya energi dan layanan, sebelum pajak.</div>`:''}
+      ${o.history.length?`<details style="margin-top:8px"><summary class="small">Riwayat poin</summary>${o.history.map((h)=>`<div class="rc-line small"><span class="d">${esc(KIND[h.kind]||h.kind)} · ${esc(day(h.at))}</span><span class="a">${h.points>0?'+':''}${h.points.toLocaleString(ID_LOCALE)}</span></div>`).join('')}</details>`:''}
     </div>`).join('');
   row.querySelectorAll('[data-autoredeem]').forEach((x)=>x.onchange=async()=>{ x.disabled=true;
     try{ await api('/v1/loyalty/'+x.dataset.autoredeem,{method:'PUT',body:JSON.stringify({autoRedeem:x.checked})}); haptic(); }
@@ -2713,7 +2835,8 @@ async function paintLoyalty(row){
 VIEWS.rpay=async(v)=>{
   v.className='view full';
   const co=state._rpay; if(!co||!co.checkout){ return go('home'); }
-  const id=co.checkout.id, amount=co.checkout.totalIdr;
+  const id=co.checkout.id, amount=co.checkout.totalMinor;
+  useCur(co.checkout.currency||co.currency);
   const back=()=>co.connectorId?openConnector(co.connectorId):go('home');
   const status=()=>api('/v1/reservations/checkout/'+id);
   const confirmPath='/v1/reservations/checkout/'+id+'/confirm-payment';
@@ -2726,11 +2849,11 @@ VIEWS.rpay=async(v)=>{
     back(); };
   const isPaid=async()=>{ const s=await status(); return s.state!=='pending'; };
   if(co.payment&&co.payment.action!=='qr'){
-    return paintCheckout(v,co,{amountIdr:amount,note:'Biaya reservasi',view:'rpay',title:'Bayar biaya reservasi',info:'Setelah membayar, kembali ke sini: charger langsung menahan konektor untuk Anda.',confirmPath,isPaid,onPaid:done});
+    return paintCheckout(v,co,{amountMinor:amount,note:'Biaya reservasi',view:'rpay',title:'Bayar biaya reservasi',info:'Setelah membayar, kembali ke sini: charger langsung menahan konektor untuk Anda.',confirmPath,isPaid,onPaid:done});
   }
   v.innerHTML=topbar('Bayar biaya reservasi',co.checkout.siteName||'',{back:1})+
-    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="QRIS" /></div>
-     <div class="paylabel"><div class="amt">${rp(amount)}</div><div class="qris-badge">QRIS · biaya reservasi</div></div>
+    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="${esc(qrName(co))}" /></div>
+     <div class="paylabel"><div class="amt">${rp(amount)}</div><div class="qris-badge">${esc(qrName(co))} · biaya reservasi</div></div>${qrMore(co)}
      <div class="card soft small" style="margin-top:18px">Setelah membayar, charger langsung menahan konektor untuk Anda.</div>
      <div style="margin-top:18px"><div class="center-loading" style="padding:16px;gap:12px;flex-direction:column"><span class="spinner"></span><div class="muted small">Menunggu pembayaran…</div></div>
      ${co.demo!==false?'<button class="cta ghost" id="rpaid" type="button">Simulasikan pembayaran (demo)</button>':''}
@@ -2746,18 +2869,19 @@ VIEWS.rpay=async(v)=>{
 VIEWS.spay=async(v)=>{
   v.className='view full';
   const co=state._spay; if(!co){ return go('home'); }
-  const back=()=>go('receipt',{chargeId:co.chargeId,_back:()=>go('home')});
+  useCur(co.currency);
+  const back=()=>co.kind==='roaming'?go('home'):go('receipt',{chargeId:co.chargeId,_back:()=>go('home')});
   const isPaid=async()=>{ const s=await api('/v1/charge/'+co.chargeId+'/pay-unpaid'); return s.paid===true; };
   const confirmPath='/v1/charge/'+co.chargeId+'/pay-unpaid/confirm-payment';
   const done=()=>{ if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); haptic(); alertBanner('Pembayaran berhasil. Terima kasih.'); back(); };
   if(co.payment&&co.payment.action!=='qr'){
-    return paintCheckout(v,co,{amountIdr:co.amountIdr,note:'Sesi pengisian',view:'spay',title:'Bayar sesi pengisian',info:'Setelah membayar, kembali ke sini: struk sesi Anda diperbarui.',confirmPath,isPaid,onPaid:done});
+    return paintCheckout(v,co,{amountMinor:co.amountMinor,note:'Sesi pengisian',view:'spay',title:'Bayar sesi pengisian',info:'Setelah membayar, kembali ke sini: struk sesi Anda diperbarui.',confirmPath,isPaid,onPaid:done});
   }
   v.innerHTML=topbar('Bayar sesi pengisian','Belum terbayar',{back:1})+
-    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="QRIS" /></div>
-     <div class="paylabel"><div class="amt">${rp(co.amountIdr)}</div><div class="qris-badge">QRIS · sesi pengisian</div></div>
+    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="${esc(qrName(co))}" /></div>
+     <div class="paylabel"><div class="amt">${rp(co.amountMinor)}</div><div class="qris-badge">${esc(qrName(co))} · sesi pengisian</div></div>${qrMore(co)}
      <button class="cta ghost" id="ssaveqr" style="margin-top:16px">${svg(I.save)} Simpan QR</button>
-     <div class="small muted" id="ssaveqr-hint" style="text-align:center;margin-top:8px">Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank / e-wallet.</div>
+     <div class="small muted" id="ssaveqr-hint" style="text-align:center;margin-top:8px">${qrSaveHint(co)}</div>
      <div id="swait" style="margin-top:18px"><div class="center-loading" style="padding:16px;gap:12px;flex-direction:column"><span class="spinner"></span><div class="muted small">Menunggu pembayaran…</div></div>
      ${co.demo!==false?'<button class="cta ghost" id="spaid" type="button">Simulasikan pembayaran (demo)</button>':''}</div>`;
   // A phone cannot scan its own screen: save the QR and pick it from the gallery in the bank app.
@@ -2778,22 +2902,23 @@ VIEWS.spay=async(v)=>{
 VIEWS.mpay=async(v)=>{
   v.className='view full';
   const co=state._mpay; if(!co){ return go('account'); }
-  const until=new Date(co.periodEnd).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'});
+  useCur(co.currency);
+  const until=new Date(co.periodEnd).toLocaleDateString(dloc(),{day:'numeric',month:'long',year:'numeric'});
   if(co.payment&&co.payment.action!=='qr'){
-    return paintCheckout(v,co,{amountIdr:co.totalIdr,note:`Berlaku sampai ${until}`,view:'mpay',title:`Bayar langganan · ${co.plan}`,
+    return paintCheckout(v,co,{amountMinor:co.totalMinor,note:`Berlaku sampai ${until}`,view:'mpay',title:`Bayar langganan · ${co.plan}`,
       confirmPath:'/v1/memberships/charges/'+co.chargeId+'/confirm-payment',
       isPaid:async()=>{ const s=await api('/v1/memberships/charges/'+co.chargeId); return s.state==='paid'; },
       onPaid:()=>{ forgetCheckout(); alertBanner('Langganan aktif. Harga member berlaku sampai '+until+'.'); go('account'); }});
   }
   v.innerHTML=topbar('Bayar langganan',`${co.plan} · ${co.operator}`,{back:1})+
-    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="QRIS" /></div>
-     <div class="paylabel"><div class="amt">${rp(co.totalIdr)}</div><div class="qris-badge">Berlaku sampai ${esc(until)}</div></div>
+    `<div class="qrwrap"><img src="${co.qr.qrImage}" alt="${esc(qrName(co))}" /></div>
+     <div class="paylabel"><div class="amt">${rp(co.totalMinor)}</div><div class="qris-badge">Berlaku sampai ${esc(until)}</div></div>${qrMore(co)}
      <div class="card soft small" style="margin-top:16px">
-       <div class="rc-line"><span class="d">${esc(co.plan)} (30 hari)</span><span class="a">${rp(co.feeIdr)}</span></div>
-       ${co.ppnIdr?`<div class="rc-line"><span class="d">PPN 12% × DPP</span><span class="a">${rp(co.ppnIdr)}</span></div>`:''}
-       <div class="rc-line tot"><span class="d">Total</span><span class="a">${rp(co.totalIdr)}</span></div></div>
+       <div class="rc-line"><span class="d">${esc(co.plan)} (30 hari)</span><span class="a">${rp(co.feeMinor)}</span></div>
+       ${co.taxMinor?`<div class="rc-line"><span class="d">${CUR===RUPIAH?'PPN 12% × DPP':'Pajak'}</span><span class="a">${rp(co.taxMinor)}</span></div>`:''}
+       <div class="rc-line tot"><span class="d">Total</span><span class="a">${rp(co.totalMinor)}</span></div></div>
      <button class="cta ghost" id="msaveqr" style="margin-top:16px">${svg(I.save)} Simpan QR</button>
-     <div class="small muted" id="msaveqr-hint" style="text-align:center;margin-top:8px">Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank / e-wallet.</div>
+     <div class="small muted" id="msaveqr-hint" style="text-align:center;margin-top:8px">${qrSaveHint(co)}</div>
      <div id="mwait" style="margin-top:18px"><div class="center-loading" style="padding:16px;gap:12px;flex-direction:column"><span class="spinner"></span><div class="muted small">Menunggu pembayaran…</div></div>
      ${co.demo!==false?'<button class="cta ghost" id="mpaid" type="button">Simulasikan pembayaran (demo)</button>':''}</div>`;
   const done=()=>{ if(state.poll){clearInterval(state.poll);state.poll=null;} haptic();

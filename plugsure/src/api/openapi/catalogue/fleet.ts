@@ -2,6 +2,8 @@ import { type Op, type Schema, ref, arrayOf, nullable } from '../types.js';
 
 const money = (d?: string): Schema => ({ type: 'integer', ...(d ? { description: d } : {}) });
 const PERIOD = { name: 'period', required: true, description: 'Month, YYYY-MM.', schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } };
+/** One statement and invoice per currency: never mixed (default IDR). */
+const CURRENCY = { name: 'currency', description: 'The statement\'s currency: IDR (default), MYR or SGD. An account charging in several currencies has one statement and invoice per currency.', schema: { type: 'string', enum: ['IDR', 'MYR', 'SGD'] } };
 
 export const schemas: Record<string, Schema> = {
   FleetSeller: {
@@ -62,7 +64,7 @@ export const schemas: Record<string, Schema> = {
       updated_at: { type: 'string', format: 'date-time' },
       cards: { description: 'Card count (list) or the cards (detail).' },
       open_invoices: { type: 'integer' },
-      outstanding_idr: { type: 'integer', description: 'Still owed on issued invoices, after credit notes.' },
+      outstanding_minor: { type: 'integer', description: 'Still owed on issued invoices, after credit notes.' },
       portal_users: { type: 'integer', description: 'Fleet customer portal users (list).' },
     },
   },
@@ -108,11 +110,11 @@ export const schemas: Record<string, Schema> = {
   },
   FleetSiteLine: {
     type: 'object',
-    required: ['siteId', 'siteName', 'sessions', 'energyWh', 'subtotalIdr', 'pbjtIdr', 'taxBaseIdr', 'dppIdr', 'ppnIdr', 'totalIdr'],
+    required: ['siteId', 'siteName', 'sessions', 'energyWh', 'subtotalMinor', 'localTaxMinor', 'taxableMinor', 'taxBaseMinor', 'taxMinor', 'totalMinor'],
     properties: {
       siteId: { type: 'string', format: 'uuid' }, siteName: { type: 'string' }, sessions: { type: 'integer' }, energyWh: { type: 'number' },
-      subtotalIdr: money('Energy, service and admin fees.'), pbjtIdr: money(), taxBaseIdr: money('Price subject to PPN (e-Faktur TaxBase).'),
-      dppIdr: money('DPP nilai lain, 11/12 of the price.'), ppnIdr: money(), totalIdr: money(), untaxedSessions: { type: 'integer' },
+      subtotalMinor: money('Energy, service and admin fees.'), localTaxMinor: money(), taxableMinor: money('Price subject to PPN (e-Faktur TaxBase).'),
+      taxBaseMinor: money('DPP nilai lain, 11/12 of the price.'), taxMinor: money(), totalMinor: money(), untaxedSessions: { type: 'integer' },
     },
   },
   FleetStatement: {
@@ -151,59 +153,59 @@ export const schemas: Record<string, Schema> = {
       sites: arrayOf(ref('FleetSiteLine')),
       cards: arrayOf({
         type: 'object',
-        properties: { uid: { type: 'string' }, holder: nullable('string'), sessions: { type: 'integer' }, energyWh: { type: 'number' }, totalIdr: money(), roamingIdr: money() },
+        properties: { uid: { type: 'string' }, holder: nullable('string'), sessions: { type: 'integer' }, energyWh: { type: 'number' }, totalMinor: money(), roamingMinor: money() },
       }),
       sessions: arrayOf({
         type: 'object',
-        required: ['id', 'startedAt', 'siteName', 'cardUid', 'energyWh', 'totalIdr'],
+        required: ['id', 'startedAt', 'siteName', 'cardUid', 'energyWh', 'totalMinor'],
         properties: {
           id: { type: 'string', format: 'uuid' }, startedAt: { type: 'string', format: 'date-time' }, endedAt: nullable('string', { format: 'date-time' }),
           siteId: { type: 'string', format: 'uuid' }, siteName: { type: 'string' }, ocppIdentity: { type: 'string' }, cardUid: { type: 'string' }, holder: nullable('string'),
-          energyWh: { type: 'number' }, subtotalIdr: money(), pbjtIdr: money(), ppnDppIdr: money(), ppnRateBps: { type: 'integer' }, ppnIdr: money(),
-          totalIdr: money('The session receipt total.'), taxBaseIdr: money(),
+          energyWh: { type: 'number' }, subtotalMinor: money(), localTaxMinor: money(), taxBaseMinor: money(), ppnRateBps: { type: 'integer' }, taxMinor: money(),
+          totalMinor: money('The session receipt total.'), taxableMinor: money(),
         },
       }),
       roaming: arrayOf({
         type: 'object',
-        required: ['id', 'operator', 'cardUid', 'amountIdr'],
+        required: ['id', 'operator', 'cardUid', 'amountMinor'],
         properties: {
           id: { type: 'string', format: 'uuid' }, operator: { type: 'string' }, location: nullable('string'), cardUid: { type: 'string' },
           startedAt: { type: 'string', format: 'date-time' }, endedAt: { type: 'string', format: 'date-time' }, energyKwh: { type: 'number' },
-          exclVat: { type: 'number' }, inclVat: nullable('number'), currency: { type: 'string' }, amountIdr: money('Re-billed amount.'),
+          exclVat: { type: 'number' }, inclVat: nullable('number'), currency: { type: 'string' }, amountMinor: money('Re-billed amount.'),
         },
       }),
       fees: arrayOf({
         type: 'object',
         description: 'Membership fees billed on this invoice (plans with invoice billing).',
         properties: {
-          subscriptionId: { type: 'string', format: 'uuid' }, planName: { type: 'string' }, subscriber: { type: 'string' }, feeIdr: money(),
-          taxBaseIdr: money(), dppIdr: money(), ppnIdr: money(), totalIdr: money(), periodStart: { type: 'string', format: 'date-time' }, periodEnd: { type: 'string', format: 'date-time' },
+          subscriptionId: { type: 'string', format: 'uuid' }, planName: { type: 'string' }, subscriber: { type: 'string' }, feeMinor: money(),
+          taxableMinor: money(), taxBaseMinor: money(), taxMinor: money(), totalMinor: money(), periodStart: { type: 'string', format: 'date-time' }, periodEnd: { type: 'string', format: 'date-time' },
         },
       }),
       totals: {
         type: 'object',
-        required: ['sessions', 'energyWh', 'subtotalIdr', 'pbjtIdr', 'taxBaseIdr', 'dppIdr', 'ppnIdr', 'ownTotalIdr', 'roamingIdr', 'totalIdr'],
+        required: ['sessions', 'energyWh', 'subtotalMinor', 'localTaxMinor', 'taxableMinor', 'taxBaseMinor', 'taxMinor', 'ownTotalMinor', 'roamingMinor', 'totalMinor'],
         properties: {
-          sessions: { type: 'integer' }, energyWh: { type: 'number' }, subtotalIdr: money(), pbjtIdr: money(), taxBaseIdr: money(), dppIdr: money(), ppnIdr: money(),
-          ownTotalIdr: money(), roamingSessions: { type: 'integer' }, roamingIdr: money(), feesIdr: money('Membership fees incl. PPN.'), totalIdr: money('Total due.'),
-          receiptsTotalIdr: money('Sum of the per-session receipts.'), roundingIdr: money('Invoice minus receipts (PPN computed per invoice line).'),
+          sessions: { type: 'integer' }, energyWh: { type: 'number' }, subtotalMinor: money(), localTaxMinor: money(), taxableMinor: money(), taxBaseMinor: money(), taxMinor: money(),
+          ownTotalMinor: money(), roamingSessions: { type: 'integer' }, roamingMinor: money(), feesMinor: money('Membership fees incl. PPN.'), totalMinor: money('Total due.'),
+          receiptsTotalMinor: money('Sum of the per-session receipts.'), roundingMinor: money('Invoice minus receipts (PPN computed per invoice line).'),
         },
       },
       warnings: arrayOf({ type: 'string' }),
-      creditedIdr: money('Credit notes settled against this invoice.'),
-      priorCreditIdr: money('Earlier credit notes deducted from this invoice.'),
-      balanceIdr: money('Still owed on an issued invoice (0 once paid or for a draft).'),
+      creditedMinor: money('Credit notes settled against this invoice.'),
+      priorCreditMinor: money('Earlier credit notes deducted from this invoice.'),
+      balanceMinor: money('Still owed on an issued invoice (0 once paid or for a draft).'),
       priorCredits: arrayOf({
         type: 'object',
         description: 'Credit notes on earlier invoices deducted from this one.',
-        properties: { id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, invoiceNumber: { type: 'string' }, totalIdr: money() },
+        properties: { id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, invoiceNumber: { type: 'string' }, totalMinor: money() },
       }),
       creditNotes: arrayOf({
         type: 'object',
         description: 'Credit notes issued against this invoice.',
         properties: {
           id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, status: { type: 'string', enum: ['issued', 'void'] },
-          settlement: { type: 'string', enum: ['invoice', 'refund', 'next_invoice'] }, reason: { type: 'string' }, totalIdr: money(), ppnIdr: money(),
+          settlement: { type: 'string', enum: ['invoice', 'refund', 'next_invoice'] }, reason: { type: 'string' }, totalMinor: money(), taxMinor: money(),
           issuedAt: { type: 'string', format: 'date-time' }, refundedAt: nullable('string', { format: 'date' }), applied: { type: 'boolean' },
         },
       }),
@@ -211,30 +213,30 @@ export const schemas: Record<string, Schema> = {
   },
   FleetInvoiceRow: {
     type: 'object',
-    required: ['id', 'number', 'period', 'status', 'total_idr', 'account_id', 'account_name', 'overdue'],
+    required: ['id', 'number', 'period', 'status', 'total_minor', 'account_id', 'account_name', 'overdue'],
     properties: {
       id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, period: { type: 'string' },
       status: { type: 'string', enum: ['issued', 'paid', 'void'] }, issued_at: { type: 'string', format: 'date-time' }, due_date: { type: 'string', format: 'date' },
-      sessions: { type: 'integer' }, energy_wh: { type: 'integer' }, ppn_idr: { type: 'integer' }, roaming_total_idr: { type: 'integer' }, total_idr: { type: 'integer' },
+      sessions: { type: 'integer' }, energy_wh: { type: 'integer' }, tax_minor: { type: 'integer' }, roaming_total_minor: { type: 'integer' }, total_minor: { type: 'integer' },
       paid_at: nullable('string', { format: 'date' }), paid_reference: nullable('string'), voided_at: nullable('string', { format: 'date-time' }),
       efaktur_exported_at: nullable('string', { format: 'date-time' }), efaktur_number: nullable('string'), sent_at: nullable('string', { format: 'date-time' }),
       account_id: { type: 'string', format: 'uuid' }, account_name: { type: 'string' }, overdue: { type: 'boolean', description: 'Issued, something still owed, and past its due date.' },
-      credited_idr: money('Credit notes settled against this invoice.'), prior_credit_idr: money('Earlier credit notes deducted from this invoice.'),
-      balance_idr: money('Still owed: total less both kinds of credit (0 once paid).'),
+      credited_minor: money('Credit notes settled against this invoice.'), prior_credit_minor: money('Earlier credit notes deducted from this invoice.'),
+      balance_minor: money('Still owed: total less both kinds of credit (0 once paid).'),
     },
   },
   FleetCreditLine: {
     type: 'object',
-    required: ['description', 'amountIdr', 'taxed'],
+    required: ['description', 'amountMinor', 'taxed'],
     properties: {
-      description: { type: 'string' }, amountIdr: money('Credited, PPN included.'), taxed: { type: 'boolean', description: 'Carries PPN (split like an invoice line).' },
-      taxBaseIdr: money('Price subject to PPN.'), dppIdr: money('DPP nilai lain, 11/12 of the price.'), ppnIdr: money('12% of the DPP.'),
+      description: { type: 'string' }, amountMinor: money('Credited, PPN included.'), taxed: { type: 'boolean', description: 'Carries PPN (split like an invoice line).' },
+      taxableMinor: money('Price subject to PPN.'), taxBaseMinor: money('DPP nilai lain, 11/12 of the price.'), taxMinor: money('12% of the DPP.'),
     },
   },
   FleetCreditNote: {
     type: 'object',
     description: 'A numbered credit note against a fleet invoice. The invoice itself never changes.',
-    required: ['id', 'number', 'status', 'settlement', 'reason', 'lines', 'dppIdr', 'ppnIdr', 'totalIdr', 'invoice'],
+    required: ['id', 'number', 'status', 'settlement', 'reason', 'lines', 'taxBaseMinor', 'taxMinor', 'totalMinor', 'invoice'],
     properties: {
       id: { type: 'string', format: 'uuid' }, number: { type: 'string', examples: ['FLT-CN/2026/10/0001'] },
       status: { type: 'string', enum: ['issued', 'void'] },
@@ -243,23 +245,23 @@ export const schemas: Record<string, Schema> = {
         description: 'invoice: reduces what is owed on the (unpaid) invoice. refund: paid back (refundedAt once done). next_invoice: deducted from the account\'s next invoice (appliedInvoice once done).',
       },
       reason: { type: 'string' }, lines: arrayOf(ref('FleetCreditLine')),
-      dppIdr: money(), ppnIdr: money(), totalIdr: money('Total credited, PPN included.'),
+      taxBaseMinor: money(), taxMinor: money(), totalMinor: money('Total credited, PPN included.'),
       issuedAt: { type: 'string', format: 'date-time' }, issuedDate: { type: 'string', format: 'date' }, issuedBy: nullable('string'),
       refundedAt: nullable('string', { format: 'date' }), refundReference: nullable('string'), appliedInvoice: { type: ['string', 'null'], description: 'The invoice it was deducted from.' },
       voidedAt: nullable('string', { format: 'date-time' }), voidReason: nullable('string'), sentAt: nullable('string', { format: 'date-time' }), sentTo: nullable('string'),
       invoice: {
         type: 'object',
-        properties: { id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, issuedDate: { type: 'string', format: 'date' }, periodLabel: { type: 'string' }, totalIdr: money(), efakturNumber: nullable('string'), status: { type: 'string' } },
+        properties: { id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, issuedDate: { type: 'string', format: 'date' }, periodLabel: { type: 'string' }, totalMinor: money(), efakturNumber: nullable('string'), status: { type: 'string' } },
       },
       accountId: { type: 'string', format: 'uuid' }, seller: ref('FleetSeller'), buyer: { type: 'object' },
     },
   },
   FleetCreditNoteRow: {
     type: 'object',
-    required: ['id', 'number', 'status', 'settlement', 'total_idr', 'invoice_number', 'account_name', 'pending'],
+    required: ['id', 'number', 'status', 'settlement', 'total_minor', 'invoice_number', 'account_name', 'pending'],
     properties: {
       id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, status: { type: 'string', enum: ['issued', 'void'] },
-      settlement: { type: 'string', enum: ['invoice', 'refund', 'next_invoice'] }, reason: { type: 'string' }, total_idr: money(), ppn_idr: money(),
+      settlement: { type: 'string', enum: ['invoice', 'refund', 'next_invoice'] }, reason: { type: 'string' }, total_minor: money(), tax_minor: money(),
       issued_at: { type: 'string', format: 'date-time' }, refunded_at: nullable('string', { format: 'date' }), refund_reference: nullable('string'),
       voided_at: nullable('string', { format: 'date-time' }), sent_at: nullable('string', { format: 'date-time' }),
       invoice_id: { type: 'string', format: 'uuid' }, invoice_number: { type: 'string' }, account_id: { type: 'string', format: 'uuid' }, account_name: { type: 'string' },
@@ -340,14 +342,14 @@ export const ops: Op[] = [
   {
     method: 'GET', path: '/v1/fleet-accounts/:id/statement', tag: T, summary: "Get a fleet account's monthly statement", pathParams: ID,
     description: 'The month\'s live invoice, or else a draft of the sessions (by the month their charge record was issued) and partner-network charge records not yet invoiced. PPN is computed per site line: DPP nilai lain = 11/12 of the summed price, PPN = 12% of the DPP — the figures the e-Faktur line carries.',
-    query: [PERIOD],
+    query: [PERIOD, CURRENCY],
     responses: { 200: { description: 'The statement', schema: ref('FleetStatement') } },
     errors: [404],
   },
   {
     method: 'GET', path: '/v1/fleet-accounts/:id/statement.html', tag: T, summary: 'Print a monthly statement', pathParams: ID,
     description: 'The statement or invoice as an A4 printable page (print to PDF from the browser).',
-    query: [PERIOD],
+    query: [PERIOD, CURRENCY],
     responses: { 200: { description: 'HTML', contentType: 'text/html', schema: { type: 'string' } } },
     errors: [404],
   },
@@ -365,16 +367,16 @@ export const ops: Op[] = [
             period: { type: 'string' }, periodLabel: { type: 'string' }, current: { type: 'string', description: 'The current month.' }, ended: { type: 'boolean', description: 'Only an ended month can be invoiced.' },
             rows: arrayOf({
               type: 'object',
-              required: ['accountId', 'name', 'status', 'sessions', 'totalIdr'],
+              required: ['accountId', 'name', 'status', 'sessions', 'totalMinor'],
               properties: {
                 accountId: { type: 'string', format: 'uuid' }, name: { type: 'string' }, legalName: nullable('string'),
                 status: { type: 'string', enum: ['draft', 'issued', 'paid'] }, invoiceId: nullable('string', { format: 'uuid' }), number: nullable('string'),
-                sessions: { type: 'integer' }, energyWh: { type: 'number' }, ppnIdr: { type: 'number' }, roamingIdr: { type: 'number' }, totalIdr: { type: 'number' },
+                sessions: { type: 'integer' }, energyWh: { type: 'number' }, taxMinor: { type: 'number' }, roamingMinor: { type: 'number' }, totalMinor: { type: 'number' },
                 dueDate: nullable('string', { format: 'date' }), overdue: { type: 'boolean' }, efakturExported: { type: 'boolean' }, efakturNumber: nullable('string'),
                 sent: { type: 'boolean' }, voided: { type: 'integer' }, warnings: { type: 'integer' },
               },
             }),
-            unassigned: { type: 'object', properties: { sessions: { type: 'integer' }, totalIdr: { type: 'number' } } },
+            unassigned: { type: 'object', properties: { sessions: { type: 'integer' }, totalMinor: { type: 'number' } } },
           },
         },
       },
@@ -413,7 +415,7 @@ export const ops: Op[] = [
   {
     method: 'POST', path: '/v1/fleet-invoices', tag: T, summary: "Issue a fleet account's invoice for a month",
     description: 'Freezes the month\'s statement as an invoice numbered PREFIX/YYYY/MM/NNNN (per organisation and year), due after the account\'s payment terms. Only a month that has ended; one live invoice per account and month; each session is on at most one live invoice.',
-    body: { required: true, schema: { type: 'object', required: ['fleetAccountId', 'period'], properties: { fleetAccountId: { type: 'string', format: 'uuid' }, period: { type: 'string' } } }, example: { fleetAccountId: '3fa85f64-5717-4562-b3fc-2c963f66afa6', period: '2026-09' } },
+    body: { required: true, schema: { type: 'object', required: ['fleetAccountId', 'period'], properties: { fleetAccountId: { type: 'string', format: 'uuid' }, period: { type: 'string' }, currency: { type: 'string', enum: ['IDR', 'MYR', 'SGD'], description: 'Default IDR: one invoice per account, month and currency.' } } }, example: { fleetAccountId: '3fa85f64-5717-4562-b3fc-2c963f66afa6', period: '2026-09' } },
     responses: { 201: { description: 'The invoice', schema: ref('FleetStatement') } },
     errors: [404, 409],
   },
@@ -478,7 +480,7 @@ export const ops: Op[] = [
   {
     method: 'GET', path: '/v1/fleet-accounts/:id/statement.pdf', tag: T, summary: 'Download a monthly statement as PDF', pathParams: ID,
     description: 'The month as a PDF: the invoice once issued, otherwise the draft (marked as a draft).',
-    query: [PERIOD],
+    query: [PERIOD, CURRENCY],
     responses: { 200: { description: 'PDF', contentType: 'application/pdf', schema: { type: 'string', format: 'binary' } } },
     errors: [400, 404],
   },
@@ -497,11 +499,11 @@ export const ops: Op[] = [
         properties: {
           reason: { type: 'string', minLength: 3, maxLength: 500, description: 'Printed on the credit note.' },
           full: { type: 'boolean', description: 'Credit everything still creditable on the invoice.' },
-          lines: arrayOf({ type: 'object', required: ['description', 'amountIdr'], properties: { description: { type: 'string', minLength: 3, maxLength: 200 }, amountIdr: { type: 'integer', minimum: 1, description: 'PPN included.' }, taxed: { type: 'boolean', description: 'Default: whether the invoice carries PPN.' } } }),
+          lines: arrayOf({ type: 'object', required: ['description', 'amountMinor'], properties: { description: { type: 'string', minLength: 3, maxLength: 200 }, amountMinor: { type: 'integer', minimum: 1, description: 'PPN included.' }, taxed: { type: 'boolean', description: 'Default: whether the invoice carries PPN.' } } }),
           settlement: { type: 'string', enum: ['refund', 'next_invoice'], description: 'For a paid invoice only.' },
         },
       },
-      example: { reason: 'Session on 12 August billed twice after a charger restart', lines: [{ description: 'Session 12 Aug 09:14, card ARM-0001 (duplicate)', amountIdr: 111000 }] },
+      example: { reason: 'Session on 12 August billed twice after a charger restart', lines: [{ description: 'Session 12 Aug 09:14, card ARM-0001 (duplicate)', amountMinor: 111000 }] },
     },
     responses: {
       201: {
@@ -580,7 +582,7 @@ export const ops: Op[] = [
   },
   {
     method: 'GET', path: '/v1/fleet-portal/:accountId/statement', tag: T, summary: 'Fleet portal: this month so far', pathParams: ACC, permissions: ['fleet:portal'], internal: PORTAL,
-    query: [{ ...PERIOD, required: false }],
+    query: [{ ...PERIOD, required: false }, CURRENCY],
     responses: { 200: { description: 'The statement (without the operator\'s warnings)', schema: { type: 'object' } } },
     errors: [400, 404],
   },

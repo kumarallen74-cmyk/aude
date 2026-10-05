@@ -4,6 +4,7 @@
 #   Operators ──https://console.example.id──▶ Caddy (IP allow-list) ──▶ api:9200
 #   Chargers  ──https://ocpp.example.id/fw/*, /diag/*──▶ api:9200 (FOTA + log upload)
 #   Partners  ──https://ocpi.example.id/ocpi/*──▶ api:9200 (roaming, token-authenticated)
+#   Hub members ──https://hub.example.id/hub/ocpi/*──▶ api:9200 (PlugSure Hub, optional)
 #   Integrators ──https://api.example.id/v1/*──▶ api:9200 (API keys only; optional)
 #
 # Install:  /etc/caddy/Caddyfile   then  systemctl reload caddy
@@ -265,6 +266,48 @@ ocpi.example.id {
 }
 
 # =============================================================================
+# PlugSure Hub (v1.8, optional) — the OCPI 2.2.1 roaming hub, called by hub members
+# =============================================================================
+#
+# Only with HUB_ENABLED=true on the API. Members (other CSMSs and eMSPs) call
+# /hub/ocpi/* with their hub token; nothing else is served on this hostname.
+# Its own hostname, never the tenants' OCPI host: set
+# HUB_PUBLIC_URL=https://hub.example.id so the versions URL handed to members
+# (deploy/HUB-OPERATIONS.md, deploy/HUB-ONBOARDING.md) points here. Remove the
+# block while the hub is off.
+hub.example.id {
+	@hub path /hub/ocpi/*
+	handle @hub {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy 127.0.0.1:9200 {
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up -X-Forwarded-Ssl
+			transport http {
+				# Above HUB_FORWARD_TIMEOUT_MS (10 s): the hub answers 4002 itself first.
+				read_timeout 60s
+				dial_timeout 5s
+			}
+		}
+	}
+	handle {
+		respond "PlugSure Hub (OCPI 2.2.1). Start at /hub/ocpi/versions with your credentials token." 404
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	log {
+		output file /var/log/caddy/hub-access.log
+		format json
+	}
+}
+
+# =============================================================================
 # Operator console + REST API (v1.3: password sign-in, RBAC, audited)
 # =============================================================================
 #
@@ -282,6 +325,9 @@ ocpi.example.id {
 # Portal users (site owners, fleet customers) sign in here from outside your
 # office. If you use a portal, serve the console to them too: a second hostname
 # with this same block minus the allow-list, or their addresses added below.
+# With a second hostname, set CONSOLE_ADMIN_HOSTS to THIS (office-only) name:
+# the API then refuses administrator sign-in, and administrator sessions, on any
+# other host, so an admin password is useless from the internet-facing one.
 console.example.id {
 	@notoffice not remote_ip 203.0.113.0/24 10.0.0.0/8
 	respond @notoffice "forbidden" 403
@@ -442,7 +488,7 @@ http://127.0.0.1:8080 {
 # An operator points its address at this server (DNS CNAME to the console or
 # driver hostname) and sets it in Commercial → Driver app. The certificate is
 # issued on first request (on_demand_tls above, which asks the API). Only the
-# driver app, its API and the store association files are served here; the API
+# driver app, its API, its public link pages and the store association files are served here; the API
 # picks the brand from the Host header, which reverse_proxy passes through.
 # This block must stay LAST: it catches every HTTPS name not matched above.
 https:// {
@@ -452,7 +498,9 @@ https:// {
 	@root path /
 	redir @root /app/ 302
 
-	@driver path /app /app/* /d/* /.well-known/assetlinks.json /.well-known/apple-app-site-association
+	# v1.9.0: the PlugSure app's public pages on its link domain (MOBILITY_LINK_HOST): QR and share links
+	# (/c, /s, /r), the payment return (/paid) and the account-deletion form the app stores require (/account/delete).
+	@driver path /app /app/* /d/* /.well-known/assetlinks.json /.well-known/apple-app-site-association /c/* /s/* /r/* /paid /account/delete
 	handle @driver {
 		reverse_proxy 127.0.0.1:9200 {
 			header_up X-Forwarded-Proto {http.request.scheme}

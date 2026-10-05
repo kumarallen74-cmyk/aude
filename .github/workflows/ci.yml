@@ -87,6 +87,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Country literals (IDR, Asia/Jakarta, id-ID, "Rp ", +62) outside domain/ and the Indonesian
+      # modules may only go down (tools/country-literals-baseline.json). The unit suite enforces it too;
+      # this step names the offending file at once.
+      - name: Country-literal ratchet
+        run: npm run check:country-literals
+
       # Proves the schema applies cleanly from an EMPTY database — the thing that
       # breaks silently when someone edits an already-applied migration in place.
       - name: Migrate from empty
@@ -117,14 +123,50 @@ jobs:
           fi
           printf 'running %d test file(s):\n' "${#files[@]}"
           printf '  %s\n' "${files[@]}"
-          npx tsx --test "${files[@]}"
+          # The TAP log runs to ~12,000 lines; repeat any failure at the end, where it can be found.
+          rc=0; npx tsx --test "${files[@]}" 2>&1 | tee "$RUNNER_TEMP/unit.tap" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::failed tests"; grep -n -A40 'not ok' "$RUNNER_TEMP/unit.tap" || true; echo "::endgroup::"
+            grep -E '^\s*not ok' "$RUNNER_TEMP/unit.tap" | sed 's/^/::error::/' || true
+          fi
+          exit "$rc"
 
+      # Every migration file in the tree is applied — the merged multi-country ones (059-063, 070)
+      # included — and the money rename left no *_idr column behind.
       - name: Assert schema is recorded
         run: |
           set -euo pipefail
           count=$(psql "$DATABASE_URL" -tAc "select count(*) from schema_migration")
-          echo "applied migrations: $count"
-          test "$count" -ge 1
+          files=$(ls db/migrations/*.sql | wc -l)
+          echo "applied migrations: $count of $files files"
+          test "$count" -eq "$files"
+          idr=$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.columns where table_schema = 'public' and column_name like '%\_idr'")
+          echo "*_idr columns left: $idr"
+          test "$idr" -eq 0
+
+      # The 060 rollback the pilot upgrade relies on (RELEASE-NOTES-v1.7.0.md): on a scratch database
+      # migrated with EVERY migration (061-070 included) and seeded in rupiah, db/rollback/060_down.sql
+      # brings the *_idr columns back and removes its own schema_migration row; migrate re-applies 060.
+      - name: Rollback chain 075 → 060 and re-apply (scratch database)
+        shell: bash
+        env:
+          SCRATCH_URL: postgresql://postgres:plugsure@127.0.0.1:5432/plugsure_rollback
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -qc "drop database if exists plugsure_rollback" -c "create database plugsure_rollback"
+          DATABASE_URL="$SCRATCH_URL" npm run migrate
+          DATABASE_URL="$SCRATCH_URL" npm run seed
+          # The seed's PlugSure Mobility has MY/SG parties, which 060_down refuses (as it should); the pilot has none.
+          psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -qc "DELETE FROM ocpi_party WHERE NOT is_home"
+          # The chain in deploy/README.md §7.
+          for f in 075 074 073 072 060; do
+            psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -1 -qf "db/rollback/${f}_down.sql"
+          done
+          test "$(psql "$SCRATCH_URL" -tAc "select count(*) from schema_migration where name in ('060_money_minor_rename.sql', '072_hub_core.sql', '075_mobile_app.sql')")" -eq 0
+          test "$(psql "$SCRATCH_URL" -tAc "select count(*) from information_schema.columns where table_schema = 'public' and column_name like '%\_idr'")" -gt 0
+          DATABASE_URL="$SCRATCH_URL" npm run migrate
+          test "$(psql "$SCRATCH_URL" -tAc "select count(*) from information_schema.columns where table_schema = 'public' and column_name like '%\_idr'")" -eq 0
+          psql "$DATABASE_URL" -qc "drop database plugsure_rollback"
 
       - name: Build (tsc -p tsconfig.build.json)
         run: npm run build
@@ -152,7 +194,7 @@ jobs:
   e2e:
     name: end-to-end (split deployment)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: verify
 
     services:
@@ -199,6 +241,26 @@ jobs:
       E2E_DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
       E2E_PASSWORD: Console-Test-2026!
       E2E_QUICK: "1"
+      # Malaysian and Singapore sites (multi-country-e2e); Indonesian behaviour is unchanged by it.
+      MULTI_COUNTRY: "true"
+      # "Sign in with Microsoft" (v1.6.0) against the mock Entra ID that tools/e2e/ms-login-e2e.mts
+      # starts on this port. Test-only values; the API reaches the loopback mock only because
+      # NODE_ENV is development here (production requires a Microsoft sign-in host).
+      MS_CLIENT_ID: 6f1d3c2e-0b1a-4c7e-9d2f-5a8b7c6d5e4f
+      MS_CLIENT_SECRET: ci-ms-client-secret-not-a-secret
+      MS_AUTHORITY_BASE: http://127.0.0.1:9240
+      # PlugSure Hub (v1.8, docs/HUB-DESIGN.md) for the whole job: the hub is additive (its own /hub surface and
+      # tables), so every other suite also proves that peers and tenants are unaffected with it on. The hub's base
+      # URL is a different origin (localhost) than the tenants' OCPI URL (127.0.0.1) on the same listener.
+      HUB_ENABLED: "true"
+      HUB_PUBLIC_URL: http://localhost:9200
+      E2E_HUB: http://localhost:9200
+      # v1.9 (mobile app driver API, docs/MOBILE-APP-SPEC.md §15): Google (OAuth + FCM HTTP v1) and Apple (APNs) are
+      # local stand-ins that tools/e2e/mobile-api-e2e.mts starts on these ports (plain HTTP is accepted only outside
+      # production). No other suite sends to FCM or APNs.
+      FCM_URL: http://127.0.0.1:9298
+      APNS_URL_PRODUCTION: http://127.0.0.1:9296
+      APNS_URL_DEVELOPMENT: http://127.0.0.1:9297
 
     steps:
       - uses: actions/checkout@v4
@@ -218,6 +280,9 @@ jobs:
 
       - name: Seed (owner)
         run: DATABASE_URL="$OWNER_DATABASE_URL" npm run seed
+
+      - name: Country-literal ratchet
+        run: npm run check:country-literals
 
       - name: Start gateway and API as plugsure_app
         shell: bash
@@ -249,6 +314,223 @@ jobs:
         run: npm run e2e:console
       - name: e2e — white-label console
         run: npm run e2e:console-brand
+      - name: e2e — Sign in with Microsoft (mock Entra ID)
+        run: npm run e2e:ms-login
+      # Payments and pricing (v1.5.1: these never ran in CI). Each brings its own
+      # local fakes for the acquirers (Midtrans, Xendit) and needs nothing beyond
+      # the job env above (E2E_DATABASE_URL as the runtime role). postpay is the
+      # slow one (~5 min: it waits out real retry and reminder timers).
+      - name: e2e — card holds and saved cards
+        run: npm run e2e:card-holds
+      - name: e2e — e-wallet and card payments
+        run: npm run e2e:payment-methods
+      - name: e2e — linked e-wallets
+        run: npm run e2e:linked-wallets
+      - name: e2e — post-pay
+        run: npm run e2e:postpay
+      - name: e2e — pricing (promotions, memberships, passes)
+        run: npm run e2e:pricing
+      - name: e2e — fleet billing
+        run: npm run e2e:fleet-billing
+      - name: e2e — reservation fees
+        run: npm run e2e:reservation-fees
+      # v1.7.0: Malaysian and Singapore sites (MULTI_COUNTRY=true above), and Stripe for them against a
+      # local fake Stripe (tools/testing/fake-stripe.ts) — including driver messages in English.
+      - name: e2e — one operator in Indonesia, Malaysia and Singapore
+        run: npm run e2e:multi-country
+      - name: e2e — Stripe for Malaysia and Singapore (local fake Stripe)
+        run: npm run e2e:stripe
+      # v1.8 (WP H1): PlugSure Hub — an external CPO and eMSP (local fakes) and the seeded tenant around the hub:
+      # handshakes, broadcast, GET All, real-time authorisation, commands, sessions and CDRs, ClientInfo, isolation.
+      - name: e2e — PlugSure Hub (OCPI 2.2.1 roaming hub)
+        run: npm run e2e:hub
+      # v1.8 (WP H2): hub clearing and settlement — ledger, disputes, credit CDRs, settlement run with bilateral
+      # netting and commission, statements and fee invoices, payments through the member API, balances zero.
+      - name: e2e — PlugSure Hub clearing and settlement
+        run: npm run e2e:hub-clearing
+      # v1.8 (WP H3): every call the console's Hub screens and the tenant's "PlugSure Hub" card make — onboarding with
+      # token A shown once, a handshake, lifecycle actions with audited reasons, agreements, message log, trace, outbox.
+      - name: e2e — PlugSure Hub console screens
+        run: npm run e2e:hub-console
+      # v1.9: the driver API for the native PlugSure Hub app — network brand (PlugSure Mobility), Android push over FCM,
+      # live sessions (Android, partner networks), account deletion, deduplicated partner stations, app links, the map
+      # (viewport, clusters, paging, ETag) and the version gate.
+      - name: e2e — mobile app driver API
+        run: npm run e2e:mobile-api
+
+      - name: Stack logs
+        if: always()
+        shell: bash
+        run: |
+          for f in "$RUNNER_TEMP"/logs/*.log; do echo "::group::$f"; tail -n 300 "$f" || true; echo "::endgroup::"; done
+          for p in "$RUNNER_TEMP"/*.pid; do kill "$(cat "$p")" 2>/dev/null || true; done
+
+  e2e-pilot:
+    name: end-to-end (pilot configuration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    needs: verify
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: plugsure
+          POSTGRES_DB: plugsure
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plugsure"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Owner connection: migrations and seed only.
+      OWNER_DATABASE_URL: postgresql://postgres:plugsure@127.0.0.1:5432/plugsure
+      # The runtime role the migrator provisions from POSTGRES_APP_PASSWORD.
+      POSTGRES_APP_PASSWORD: ci-app-password
+      DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+      # development: bench security profile and auto-adoption are allowed, which
+      # the simulators rely on. Test-only secrets.
+      NODE_ENV: development
+      LOG_LEVEL: warn
+      TZ: Asia/Jakarta
+      AUDIT_HMAC_KEY: ci-audit-hmac-key-not-a-secret-0123456789abcdef
+      SECRETS_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      INTERNAL_API_TOKEN: ci-internal-token-0123456789abcdef0123456789
+      OCPP_VERSIONS: ocpp1.6,ocpp2.0.1,ocpp2.1
+      OCPP_PORT: "9220"
+      API_PORT: "9200"
+      PUBLIC_BASE_URL: http://127.0.0.1:9200
+      OCPP_TRUST_PROXY_PROTO: "true"
+      GATEWAY_INTERNAL_URL: http://127.0.0.1:9220
+      EVENT_RELAY: "true"
+      STORAGE_DIR: /tmp/plugsure-ci-storage
+      SEED_ADMIN_PASSWORD: Console-Test-2026!
+      # The suites
+      E2E_API: http://127.0.0.1:9200
+      E2E_OCPP: ws://127.0.0.1:9220/ocpp
+      E2E_DATABASE_URL: postgresql://plugsure_app:ci-app-password@127.0.0.1:5432/plugsure
+      E2E_PASSWORD: Console-Test-2026!
+      E2E_QUICK: "1"
+      # Apple's push service: the local stand-ins the apns and live-activity suites start (test-only, not production).
+      APNS_URL_PRODUCTION: http://127.0.0.1:9296
+      APNS_URL_DEVELOPMENT: http://127.0.0.1:9297
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: plugsure/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Migrate (owner) and provision plugsure_app
+        run: DATABASE_URL="$OWNER_DATABASE_URL" npm run migrate
+
+      - name: Seed (owner)
+        run: DATABASE_URL="$OWNER_DATABASE_URL" npm run seed
+
+      # The platform administrator the integrations suite (and field's §25) sign in as. Test-only password.
+      - name: Create the platform administrator (owner)
+        run: >-
+          DATABASE_URL="$OWNER_DATABASE_URL" npm run create-admin -- --email platform@plugsure.test --name Platform
+          --org-slug plugsure-platform --org-name "PlugSure Platform" --password 'Platform-Test-2026!' --platform-admin
+
+      - name: Country-literal ratchet
+        run: npm run check:country-literals
+
+      - name: Start gateway and API as plugsure_app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$STORAGE_DIR" "$RUNNER_TEMP/logs"
+          nohup npx tsx src/apps/gateway.ts > "$RUNNER_TEMP/logs/gateway.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gateway.pid"
+          nohup npx tsx src/apps/api.ts > "$RUNNER_TEMP/logs/api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/api.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9220/healthz >/dev/null 2>&1 && curl -fsS http://127.0.0.1:9200/healthz >/dev/null 2>&1; then
+              echo "stack up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::stack did not come up"
+          tail -n 100 "$RUNNER_TEMP/logs/gateway.log" "$RUNNER_TEMP/logs/api.log"
+          exit 1
+
+      # v1.9.0: the configuration the pilot runs (MULTI_COUNTRY, HUB_ENABLED, Microsoft sign-in and the mobile
+      # backends off), with every suite that applies to it. The job above runs with every feature on; before
+      # v1.9.0 nothing ran the default-off path, and 18 of these suites were not run by CI at all.
+      - name: Build the TypeScript SDK (the sdk suite imports it)
+        run: npm run sdk
+      - name: e2e (pilot) — pilot-fixes
+        run: npm run e2e:pilot-fixes
+      - name: e2e (pilot) — isolation
+        run: npm run e2e:isolation
+      - name: e2e (pilot) — ocpi-auth
+        run: npm run e2e:ocpi-auth
+      - name: e2e (pilot) — console
+        run: npm run e2e:console
+      - name: e2e (pilot) — console-brand
+        run: npm run e2e:console-brand
+      - name: e2e (pilot) — field
+        run: npm run e2e:field
+      - name: e2e (pilot) — driver
+        run: npm run e2e:driver
+      - name: e2e (pilot) — driver-plus
+        run: npm run e2e:driver-plus
+      - name: e2e (pilot) — queue
+        run: npm run e2e:queue
+      - name: e2e (pilot) — reservation-fees
+        run: npm run e2e:reservation-fees
+      - name: e2e (pilot) — fleet-billing
+        run: npm run e2e:fleet-billing
+      - name: e2e (pilot) — pricing
+        run: npm run e2e:pricing
+      - name: e2e (pilot) — pnc
+        run: npm run e2e:pnc
+      - name: e2e (pilot) — onboarding
+        run: npm run e2e:onboarding
+      - name: e2e (pilot) — integrations
+        run: npm run e2e:integrations
+      - name: e2e (pilot) — payment-methods
+        run: npm run e2e:payment-methods
+      - name: e2e (pilot) — card-holds
+        run: npm run e2e:card-holds
+      - name: e2e (pilot) — linked-wallets
+        run: npm run e2e:linked-wallets
+      - name: e2e (pilot) — postpay
+        run: npm run e2e:postpay
+      - name: e2e (pilot) — ocpi
+        run: npm run e2e:ocpi
+      - name: e2e (pilot) — ocpi-emsp
+        run: npm run e2e:ocpi-emsp
+      - name: e2e (pilot) — ocpi-profiles
+        run: npm run e2e:ocpi-profiles
+      - name: e2e (pilot) — sdk
+        run: npm run e2e:sdk
+      - name: e2e (pilot) — v2x
+        run: npm run e2e:v2x
+      - name: e2e (pilot) — ocmf
+        run: npm run e2e:ocmf
+      - name: e2e (pilot) — sandbox-2x
+        run: npm run e2e:sandbox-2x
+      - name: e2e (pilot) — brand
+        run: npm run e2e:brand
+      - name: e2e (pilot) — apns
+        run: npm run e2e:apns
+      - name: e2e (pilot) — live-activity
+        run: npm run e2e:live-activity
+      - name: e2e (pilot) — api-sandbox
+        run: npm run e2e:api-sandbox
 
       - name: Stack logs
         if: always()
@@ -404,7 +686,11 @@ jobs:
             deploy/plugsure-api.service \
             deploy/plugsure-migrate.service \
             deploy/plugsure-backup.service \
-            deploy/plugsure-backup.timer > /tmp/units.log 2>&1 || true
+            deploy/plugsure-backup.timer \
+            deploy/plugsure-basebackup.service \
+            deploy/plugsure-basebackup.timer \
+            deploy/plugsure-wal-offsite.service \
+            deploy/plugsure-wal-offsite.timer > /tmp/units.log 2>&1 || true
           cat /tmp/units.log
           # systemd-analyze exits non-zero when an ExecStart binary is missing, and on
           # the runner they all are (/usr/bin/node, /opt/plugsure/...), so its exit
@@ -416,8 +702,10 @@ jobs:
             exit 1
           fi
 
-      - name: Lint the backup script
-        run: bash -n tools/backup/pg-backup.sh
+      - name: Lint the backup scripts
+        run: |
+          set -euo pipefail
+          for f in tools/backup/*.sh; do bash -n "$f"; test -x "$f" || { echo "::error::$f is not executable"; exit 1; }; done
 
       - name: Validate Caddyfile
         run: |

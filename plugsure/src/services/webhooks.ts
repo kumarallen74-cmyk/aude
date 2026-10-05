@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
+import { addLegacyMoneyAliases } from '../api/legacy-money.js';
 import http from 'node:http';
 import https from 'node:https';
 import { one, many, query } from '../db/pool.js';
@@ -125,7 +126,8 @@ export function post(url: string, body: string, headers: Record<string, string>,
 }
 
 function envelope(eventId: string, type: string, createdAt: Date, data: unknown) {
-  return JSON.stringify({ id: eventId, type, created_at: createdAt.toISOString(), api_version: '2026-09', data });
+  // v1.6 receivers read totalIdr / amountIdr: IDR amounts carry the legacy name too (api/legacy-money.ts).
+  return JSON.stringify({ id: eventId, type, created_at: createdAt.toISOString(), api_version: '2026-09', data: addLegacyMoneyAliases(data).body });
 }
 
 // ─────────────────────────────────────────── outbox

@@ -9,6 +9,31 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
+**v1.9.0 — the reviewed release of the v1.6–1.9 work (5 October 2026), the current release.** 1.9.0-dev (v1.5.1,
+v1.6.0, v1.7.0/1.7.1, v1.8.0 and the native-app driver API with the Expo app in `../mobile`) after an independent
+review: the account-deletion form no longer exposes an account's open charges to strangers, a rehearsed rollback to
+v1.5.0, least privilege restored (migration 076), the driver API's anonymous rate limit, Hub routing and settlement
+fixes, and CI for the pilot's configuration. Pilot upgrade: [`docs/UPGRADE-v1.5-to-v1.9.md`](docs/UPGRADE-v1.5-to-v1.9.md);
+notes: [`RELEASE-NOTES-v1.9.0.md`](RELEASE-NOTES-v1.9.0.md).
+
+**v1.6.0 — Sign in with Microsoft (2 October 2026).** Operator staff can sign
+in to the console with their company Microsoft account (Microsoft Entra ID, OpenID Connect). Each
+operator organisation connects its own Entra tenant (Users & Roles → Microsoft sign-in); only
+people who already have a console user can sign in — nobody is created from Microsoft — and
+password sign-in stays. Microsoft MFA counts as the console's two-step verification. Off unless
+`MS_CLIENT_ID` is set; setup in [`deploy/MICROSOFT-SIGN-IN.md`](deploy/MICROSOFT-SIGN-IN.md).
+Migration 058 (additive); see [`RELEASE-NOTES-v1.6.0.md`](RELEASE-NOTES-v1.6.0.md).
+
+**v1.5.1 — review fixes (2 October 2026).** Billing: payments left unsettled
+by a crash are settled by a new recovery worker, and underpaid payments, holds and passes are
+refunded or released with a critical alert. Security: `NODE_ENV` must be set (the processes refuse
+to start otherwise), two-step verification (TOTP) required for console administrators, live
+streams end when their session does, driver sign-in hardening, a fixed Docker network. OCPP 2.x:
+version-correct RPC error codes, dual-gun EVSE status, Ended for unknown transactions recorded for
+review, seqNo gaps flagged. Operations: worker-failure alerts and an external heartbeat, `/healthz`
+503, point-in-time recovery. Migrations 055 and 057; read the upgrade notes in
+[`RELEASE-NOTES-v1.5.1.md`](RELEASE-NOTES-v1.5.1.md) before upgrading.
+
 **v1.5.0 — white-label operator console (2 October 2026).** Each operator can show its own
 product name, tagline, colours and logo in the console (Governance → Console branding), and give
 the console its own web address, where the sign-in page shows the brand and only that operator's
@@ -183,7 +208,7 @@ Requires Node 22+ and PostgreSQL 16.
 
 ```bash
 npm install
-cp .env.example .env          # adjust DATABASE_URL if needed
+cp .env.example .env          # adjust DATABASE_URL if needed, and set NODE_ENV=development (below)
 createdb plugsure
 
 npm run migrate               # schema
@@ -192,6 +217,13 @@ npm run dev                   # gateway :9220 + API and console :9200
 ```
 
 Open <http://localhost:9200>.
+
+**`NODE_ENV` must be set.** `.env.example` ships `NODE_ENV=production` (it is also the
+template for the production env file), and the API, gateway and `npm run dev` refuse to
+start when `NODE_ENV` is missing — an unset value used to mean development. For the
+workstation flows here (`npm run dev`, `npm run api` / `npm run gateway`, the simulators
+and the `npm run e2e:*` suites) put `NODE_ENV=development` in your `.env` or the shell
+(`NODE_ENV=development npm run dev`). The unit tests run with `NODE_ENV=test`.
 
 In a second terminal, connect virtual chargers:
 
@@ -331,6 +363,12 @@ of it moves:
 | `WBP_START` / `WBP_END` | `17:00` / `22:00` | Peak window, currently priced flat for SPKLU but structurally present |
 | `OCPP_MIN_SECURITY_PROFILE` | `0` | Set to `2` for anything internet-facing |
 | `OCPP_AUTO_ADOPT` | `true` | Development only. In production unknown chargers are parked for adoption |
+| `NODE_ENV` | none — required | `production`, or `development` / `test` on a workstation. Unset refuses to start |
+| `CONSOLE_MFA_REQUIRED` | `true` (`false` in development/test) | Two-step verification (TOTP) required for administrator accounts |
+| `CONSOLE_ADMIN_HOSTS` | empty (any host) | Host names on which administrator accounts may sign in, e.g. the office-only console name |
+| `MS_CLIENT_ID` / `MS_CLIENT_SECRET` (or `MS_CLIENT_SECRET_FILE`) | unset (off) | "Sign in with Microsoft" (Entra ID) for the console: one multi-tenant app registration; each operator connects its own tenant. See `deploy/MICROSOFT-SIGN-IN.md` |
+| `MULTI_COUNTRY` | `false` | Malaysian and Singapore sites, tariffs and payments. MY/SG payments go through **Stripe**, one account per country, connected under *Govern → Integrations* (keys are integration secrets, not environment variables). See `deploy/STRIPE.md` |
+| `HUB_ENABLED` | `false` | **PlugSure Hub** (v1.8): PlugSure as an OCPI 2.2.1 roaming hub on its own host (`HUB_PUBLIC_URL`, parties `HUB_PARTIES`). Platform administrators run it from *Governance → Hub* (members, token A, agreements, message log, outbox); tenants see their membership under *Roaming → PlugSure Hub*. Operators' runbook: `deploy/HUB-OPERATIONS.md`; guide for external members: `deploy/HUB-ONBOARDING.md`; design: `docs/HUB-DESIGN.md` |
 
 ---
 

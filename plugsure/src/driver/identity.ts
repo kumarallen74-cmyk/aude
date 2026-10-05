@@ -1,3 +1,5 @@
+import { normaliseMobile } from '../domain/phone.js';
+import type { CountryCode } from '../domain/country.js';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { one, query } from '../db/pool.js';
 import { config, isRelaxedEnv } from '../config.js';
@@ -131,7 +133,7 @@ const envInt = (name: string, def: number): number => {
  *   DRIVER_OTP_PER_IP_PER_HOUR          codes requested from one IP per hour (10; 1000 in development/test)
  *   DRIVER_OTP_PER_DEVICE_PER_HOUR      codes requested by one app install   (5;  1000 in development/test)
  *   DRIVER_OTP_GLOBAL_PER_DAY           codes sent by the installation       (5000; 100000 in development/test)
- *   DRIVER_OTP_VERIFY_FAILURES_PER_DAY  wrong codes for one number per 24 h, across codes (10)
+ *   DRIVER_OTP_VERIFY_FAILURES_PER_DAY  wrong codes for one number FROM ONE DEVICE per 24 h, across codes (10)
  *   DRIVER_PIN_FAILURES_PER_IP_PER_HOUR wrong fleet sign-ins from one IP per hour (20; 1000 in development/test)
  *
  * Plus one code per number per minute (fixed). The development/test defaults are
@@ -201,20 +203,34 @@ const MSG_PHONE_DAY = 'Batas pengiriman kode untuk nomor ini hari ini sudah terc
 const MSG_BUSY = 'Terlalu banyak permintaan kode. Coba lagi nanti.';
 const MSG_VERIFY_DAY = 'Terlalu banyak kode salah untuk nomor ini. Coba lagi besok.';
 
-/** Normalise an Indonesian phone number to E.164 (+62…). */
-export function normalisePhone(raw: string): string | null {
-  const digits = String(raw).replace(/[^\d+]/g, '');
-  let n = digits;
-  if (n.startsWith('+62')) n = n.slice(1);
-  else if (n.startsWith('62')) {
-    /* already */
-  } else if (n.startsWith('0')) n = '62' + n.slice(1);
-  else if (n.startsWith('8')) n = '62' + n;
-  else return null;
-  n = n.replace(/[^\d]/g, '');
-  // Indonesian mobile numbers: 62 + 8xxxxxxxxx, total 11–15 digits.
-  if (!/^628\d{8,12}$/.test(n)) return null;
-  return '+' + n;
+/**
+ * The wrong-code budget is per number AND app install (v1.5.x).
+ *
+ * It used to be per number alone, and verifying never asked which device had requested the
+ * code: anyone who knew a driver's number could request a code (it went to the driver's
+ * phone) and send ten wrong guesses from their own device, and the number could then
+ * neither verify nor receive a code for 24 hours. A sign-in lock-out for any driver, on
+ * demand.
+ *
+ * Now a code can be verified only by the device that asked for it (driver_otp.device_id,
+ * migration 055), and the failure budget is counted per (number, device). A stranger's
+ * guesses use up only their own budget against codes only they asked for; the driver's
+ * own device is untouched. The guessing bound is unchanged in substance: every code
+ * still allows OTP_MAX_ATTEMPTS comparisons, and the number still gets at most
+ * DRIVER_OTP_PER_PHONE_PER_DAY codes a day — so at most (codes × attempts) guesses a day
+ * across ALL devices, which with the defaults is 50 tries at a 1-in-a-million code.
+ * Rotating device tokens therefore buys nothing, and the per-address, per-device and
+ * installation-wide SEND caps stay exactly as they were.
+ */
+const verifyKeyOf = (phone: string, deviceId: string | undefined) => `otp-verify:${phone}:${deviceId ?? '-'}`;
+
+/**
+ * Normalise a mobile number to E.164: Indonesian (+62), Malaysian (+60) or Singapore (+65).
+ * Local forms (08…, 8…; 01… in Malaysia; 8/9xxxxxxx in Singapore) are read as `defaultCountry`'s,
+ * so every Indonesian spelling lands on the same identity as before (domain/phone.ts).
+ */
+export function normalisePhone(raw: string, defaultCountry: CountryCode = 'ID'): string | null {
+  return normaliseMobile(raw, defaultCountry);
 }
 
 /**
@@ -226,11 +242,16 @@ export function normalisePhone(raw: string): string | null {
  * burst cannot slip past, and a send that fails still counts (a failing
  * provider is retried by the driver a minute later, not hammered).
  * `limited` marks a refusal for a limit (HTTP 429).
+ *
+ * `send: false` claims every limit exactly as a real send would, then sends nothing: the
+ * account-deletion form uses it for a number with no account, so whether a number has an
+ * account shows neither in the answer nor in which limits apply (v1.9.0).
  */
 export async function sendOtp(
   phoneRaw: string,
   appName?: string,
   from: { ip?: string; deviceId?: string } = {},
+  opts: { send?: boolean } = {},
 ): Promise<{ ok: true; devCode?: string } | { ok: false; error: string; limited?: true }> {
   const phone = normalisePhone(phoneRaw);
   if (!phone) return { ok: false, error: 'Nomor telepon tidak valid.' };
@@ -245,7 +266,8 @@ export async function sendOtp(
   // Refuse early, WITHOUT taking a slot, when this number cannot get a code anyway:
   // a driver tapping "send" again inside the minute must not use up the address's
   // budget, and someone hammering a victim's number must not keep its minute busy.
-  if ((await limitState(`otp-verify:${phone}`, lim.otpVerifyFailuresPerDay, DAY_S)) === 'full') {
+  // This device has used up its wrong guesses for this number: no new code for it either.
+  if ((await limitState(verifyKeyOf(phone, from.deviceId), lim.otpVerifyFailuresPerDay, DAY_S)) === 'full') {
     return { ok: false, error: MSG_VERIFY_DAY, limited: true };
   }
   const pre = await limitState(phoneKey, lim.otpPerPhonePerDay, DAY_S, OTP_RESEND_WINDOW_S);
@@ -268,7 +290,20 @@ export async function sendOtp(
   if (!(await claimLimit(phoneKey, lim.otpPerPhonePerDay, DAY_S, OTP_RESEND_WINDOW_S))) {
     return { ok: false, error: MSG_WAIT, limited: true };
   }
+  if (opts.send === false) return { ok: true };
+  return deliverOtp(phone, appName, from.deviceId);
+}
 
+/**
+ * Make and send a code to an already-normalised number, after its limits were claimed
+ * (sendOtp). The account-deletion form calls it on its own, in the background, so its
+ * answer does not wait on the provider (v1.9.0).
+ */
+export async function deliverOtp(
+  phone: string,
+  appName?: string,
+  deviceId?: string,
+): Promise<{ ok: true; devCode?: string } | { ok: false; error: string }> {
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   // Sent by the provider configured in Govern → Integrations (WhatsApp / SMS, with
   // a fallback). The development provider shows the code in the app instead, and
@@ -278,10 +313,11 @@ export async function sendOtp(
     logger.error({ phone: maskPhone(phone), err: sent.error }, 'driver sign-in code not sent');
     return { ok: false, error: sent.notConfigured ? 'Masuk dengan nomor HP belum tersedia. Hubungi operator.' : 'Kode tidak dapat dikirim. Coba lagi sebentar lagi.' };
   }
+  // Bound to the requesting device: only it can verify this code (see verifyKeyOf).
   await query(
-    `INSERT INTO driver_otp (phone, code_hash, expires_at)
-     VALUES ($1, $2, now() + ($3 || ' milliseconds')::interval)`,
-    [phone, sha256(code), OTP_TTL_MS],
+    `INSERT INTO driver_otp (phone, code_hash, expires_at, device_id)
+     VALUES ($1, $2, now() + ($3 || ' milliseconds')::interval, $4)`,
+    [phone, sha256(code), OTP_TTL_MS, deviceId ?? null],
   );
   logger.info({ phone: maskPhone(phone), channel: sent.channel }, 'driver OTP issued');
   if (sent.devCode && isRelaxedEnv()) return { ok: true, devCode: sent.devCode };
@@ -297,19 +333,45 @@ export async function sendOtp(
  * read the same count, so hundreds of guesses were compared against one code.
  * And each new code started at zero, so ~7,200 guesses a day per number were
  * possible even without the race. Now a code allows exactly five comparisons, the
- * number allows DRIVER_OTP_VERIFY_FAILURES_PER_DAY wrong codes across all codes
- * (after which neither verifying nor sending works until the window passes), and
- * a code signs in once: the consume is conditional too.
+ * number allows DRIVER_OTP_VERIFY_FAILURES_PER_DAY wrong codes across all codes from
+ * one device (after which that device can neither verify nor ask for a code for that
+ * number until the window passes), and a code signs in once: the consume is
+ * conditional too. Only the device that asked for a code can try it (verifyKeyOf); codes
+ * from before migration 055 carry no device and any device may try them.
  */
 export async function verifyOtp(
   deviceId: string,
   phoneRaw: string,
   code: string,
 ): Promise<{ ok: true; account: { id: string; phone: string; name: string | null } } | { ok: false; error: string; limited?: true }> {
+  const checked = await checkOtp(deviceId, phoneRaw, code);
+  if (!checked.ok) return checked;
+  const phone = checked.phone;
+
+  const account = await one<{ id: string; phone: string; name: string | null }>(
+    `INSERT INTO app_driver (phone) VALUES ($1)
+     ON CONFLICT (phone) DO UPDATE SET last_seen_at = now()
+     RETURNING id, phone, name`,
+    [phone],
+  );
+  await query(`UPDATE driver_device SET app_driver_id = $2 WHERE id = $1`, [deviceId, account!.id]);
+
+  return { ok: true, account: account! };
+}
+
+/**
+ * Check (and consume) a code this device asked for, with every limit of verifyOtp, WITHOUT signing in: the
+ * confirmation step of account deletion (driver/account-deletion.ts) and verifyOtp itself.
+ */
+export async function checkOtp(
+  deviceId: string,
+  phoneRaw: string,
+  code: string,
+): Promise<{ ok: true; phone: string } | { ok: false; error: string; limited?: true }> {
   const phone = normalisePhone(phoneRaw);
   if (!phone) return { ok: false, error: 'Nomor telepon tidak valid.' };
   const lim = authLimits();
-  const verifyKey = `otp-verify:${phone}`;
+  const verifyKey = verifyKeyOf(phone, deviceId);
 
   if ((await limitState(verifyKey, lim.otpVerifyFailuresPerDay, DAY_S)) === 'full') {
     return { ok: false, error: MSG_VERIFY_DAY, limited: true };
@@ -320,16 +382,18 @@ export async function verifyOtp(
     `UPDATE driver_otp SET attempts = attempts + 1
       WHERE id = (SELECT id FROM driver_otp
                    WHERE phone = $1 AND consumed_at IS NULL AND expires_at > now()
+                     AND (device_id = $3 OR device_id IS NULL)
                    ORDER BY created_at DESC LIMIT 1)
         AND attempts < $2 AND consumed_at IS NULL AND expires_at > now()
       RETURNING id, code_hash`,
-    [phone, OTP_MAX_ATTEMPTS],
+    [phone, OTP_MAX_ATTEMPTS, deviceId],
   );
   if (!otp) {
     const live = await one<{ attempts: number }>(
       `SELECT attempts FROM driver_otp WHERE phone = $1 AND consumed_at IS NULL AND expires_at > now()
+          AND (device_id = $2 OR device_id IS NULL)
         ORDER BY created_at DESC LIMIT 1`,
-      [phone],
+      [phone, deviceId],
     );
     return live
       ? { ok: false, error: 'Terlalu banyak percobaan. Minta kode baru.' }
@@ -351,16 +415,7 @@ export async function verifyOtp(
     [otp.id],
   );
   if (!consumed) return { ok: false, error: 'Kode sudah tidak berlaku. Minta kode baru.' };
-
-  const account = await one<{ id: string; phone: string; name: string | null }>(
-    `INSERT INTO app_driver (phone) VALUES ($1)
-     ON CONFLICT (phone) DO UPDATE SET last_seen_at = now()
-     RETURNING id, phone, name`,
-    [phone],
-  );
-  await query(`UPDATE driver_device SET app_driver_id = $2 WHERE id = $1`, [deviceId, account!.id]);
-
-  return { ok: true, account: account! };
+  return { ok: true, phone };
 }
 
 /** Set the driver's display name on their account. */
@@ -395,15 +450,26 @@ export async function fleetLogin(
     return { ok: false, error: 'Terlalu banyak percobaan masuk. Coba lagi nanti.', limited: true };
   }
 
-  const org = await one<{ id: string; name: string }>(
-    `SELECT id, name FROM organisation WHERE slug = $1`,
-    [String(orgSlug).trim().toLowerCase()],
-  );
-  if (!org) return { ok: false, error: 'Organisasi tidak ditemukan.' };
-
   // Cards are stored the way the RFID centre normalises them (hex serials upper
   // case); a driver typing the serial in lower case is the same card.
   const typed = String(rfidUid).trim();
+  const slug = String(orgSlug).trim().toLowerCase();
+
+  /**
+   * The card's daily attempt budget is claimed BEFORE anything is looked up, keyed by what
+   * was TYPED (organisation + normalised serial), not by the card row. Keyed by the row it
+   * only ever engaged for real cards, so "too many attempts for this card today" told a
+   * prober that the card existed. Now a made-up card runs out exactly like a real one.
+   */
+  const cardKey = `pin-card:${slug}:${normaliseUid(typed)}`;
+  if (!(await claimLimit(cardKey, authLimits().pinAttemptsPerCardPerDay, DAY_S))) {
+    logger.warn({ orgSlug: slug, uid: typed }, 'fleet sign-in refused: daily attempt budget for this card used up');
+    return { ok: false, error: MSG_FLEET_CARD_DAY, limited: true };
+  }
+
+  const org = await one<{ id: string; name: string }>(`SELECT id, name FROM organisation WHERE slug = $1`, [slug]);
+  if (!org) return fleetRefused('unknown organisation', { orgSlug: slug, uid: typed });
+
   const tok = await one<{
     id: string;
     uid: string;
@@ -416,12 +482,10 @@ export async function fleetLogin(
       ORDER BY (uid = $2) DESC LIMIT 1`,
     [org.id, normaliseUid(typed), typed],
   );
-  if (!tok) return { ok: false, error: 'Kartu RFID tidak dikenal.' };
-  if (tok.status !== 'Accepted') return { ok: false, error: 'Kartu ini diblokir. Hubungi admin armada Anda.' };
-  if (tok.valid_to && new Date(tok.valid_to) < new Date()) {
-    return { ok: false, error: 'Kartu ini sudah kedaluwarsa. Hubungi admin armada Anda.' };
-  }
-  if (!tok.pin_hash) return { ok: false, error: 'Kartu ini belum diaktifkan untuk aplikasi. Hubungi admin armada Anda.' };
+  if (!tok) return fleetRefused('unknown card', { orgId: org.id, uid: typed });
+  if (tok.status !== 'Accepted') return fleetRefused(`card ${tok.status}`, { tokenId: tok.id });
+  if (tok.valid_to && new Date(tok.valid_to) < new Date()) return fleetRefused('card expired', { tokenId: tok.id });
+  if (!tok.pin_hash) return fleetRefused('card has no app PIN', { tokenId: tok.id });
 
   /**
    * The attempt is COUNTED before the PIN is checked, in one statement — the
@@ -435,12 +499,6 @@ export async function fleetLogin(
    * restarts the count for after it), and every later one finds the card locked
    * and is refused whatever the PIN. A right PIN clears the counter below.
    */
-  const cardKey = `pin-card:${tok.id}`;
-  if (!(await claimLimit(cardKey, authLimits().pinAttemptsPerCardPerDay, DAY_S))) {
-    logger.warn({ tokenId: tok.id }, 'fleet sign-in refused: daily attempt budget for this card used up');
-    return { ok: false, error: 'Terlalu banyak percobaan untuk kartu ini hari ini. Coba lagi besok atau hubungi admin armada Anda.', limited: true };
-  }
-
   const claimed = await one<{ locked_now: boolean }>(
     `UPDATE token
         SET pin_failures = CASE WHEN pin_failures + 1 >= $2::int THEN 0 ELSE pin_failures + 1 END,
@@ -450,16 +508,15 @@ export async function fleetLogin(
     [tok.id, FLEET_PIN_MAX_FAILURES, FLEET_PIN_LOCK_MINUTES],
   );
   if (!claimed) {
-    await refundLimit(cardKey); // refused by the lock without a guess being tried
-    return { ok: false, error: 'Terlalu banyak PIN salah. Coba lagi nanti atau hubungi admin armada Anda.' };
+    // Refused by the lock without a guess being tried; the same scrypt work and answer as a
+    // wrong PIN, so the lock does not mark the card as real either.
+    await refundLimit(cardKey);
+    return fleetRefused('card locked', { tokenId: tok.id });
   }
 
   if (!(await pinMatches(String(pin).trim(), tok.pin_hash))) {
-    if (claimed.locked_now) {
-      logger.warn({ tokenId: tok.id }, 'fleet PIN locked after repeated failures');
-      return { ok: false, error: 'Terlalu banyak PIN salah. Coba lagi nanti atau hubungi admin armada Anda.' };
-    }
-    return { ok: false, error: 'PIN salah.' };
+    if (claimed.locked_now) logger.warn({ tokenId: tok.id }, 'fleet PIN locked after repeated failures');
+    return fleetRefused('wrong PIN', { tokenId: tok.id }, false);
   }
 
   // Success: clear the counter, and upgrade a legacy (v1.2) SHA-256 PIN to scrypt.
@@ -476,6 +533,39 @@ export async function fleetLogin(
 
 const FLEET_PIN_MAX_FAILURES = 5;
 const FLEET_PIN_LOCK_MINUTES = 15;
+
+const MSG_FLEET_CARD_DAY = 'Terlalu banyak percobaan untuk kartu ini hari ini. Coba lagi besok atau hubungi admin armada Anda.';
+
+/**
+ * ONE answer for every failed fleet sign-in: unknown organisation, unknown card, blocked,
+ * expired or not-yet-activated card, locked card and wrong PIN. They used to be told
+ * apart ("Organisasi tidak ditemukan", "Kartu RFID tidak dikenal", "Kartu ini diblokir"…),
+ * which let anyone enumerate a CPO's tenants and its fleet cards, and see which were live,
+ * without knowing a single PIN. The reason goes to the log (with the serial masked) for
+ * the operator; the driver is told what to check and when the card pauses.
+ */
+export const FLEET_LOGIN_FAILED =
+  `Organisasi, nomor kartu, atau PIN salah. Setelah ${FLEET_PIN_MAX_FAILURES} kali salah, kartu dikunci ${FLEET_PIN_LOCK_MINUTES} menit. ` +
+  'Jika masih gagal, hubungi admin armada Anda.';
+
+let dummyPinHash: string | null = null;
+
+/**
+ * Refuse with the uniform answer. `burnPinWork`: paths that never reached the PIN check
+ * spend the same scrypt work, so the answer TIME does not tell the reasons apart either.
+ */
+async function fleetRefused(
+  reason: string,
+  ctx: Record<string, unknown>,
+  burnPinWork = true,
+): Promise<{ ok: false; error: string }> {
+  if (burnPinWork) {
+    dummyPinHash ??= await hashPassword(randomBytes(12).toString('hex'));
+    await verifyPassword('0000', dummyPinHash);
+  }
+  logger.info({ ...ctx, reason }, 'fleet sign-in refused');
+  return { ok: false, error: FLEET_LOGIN_FAILED };
+}
 
 /**
  * The RFID centre (v1.3) stores the app PIN as scrypt, the same KDF as operator

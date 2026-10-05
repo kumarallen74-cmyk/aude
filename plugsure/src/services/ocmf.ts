@@ -1,3 +1,4 @@
+import { defaultTimezone, utcOffsetMinutes } from '../domain/timezone.js';
 import { createPublicKey, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from 'node:crypto';
 
 /**
@@ -191,7 +192,7 @@ export function parseOcmfTime(tm: string): Date | null {
 // ─────────────────────────────────────────────── build (virtual meters)
 
 /** OCMF's time format, in a given UTC offset (WIB by default), with the clock's sync state. */
-export function formatOcmfTime(d: Date, offsetMinutes = 420, sync: 'S' | 'U' | 'I' | 'R' = 'S'): string {
+export function formatOcmfTime(d: Date, offsetMinutes = utcOffsetMinutes(d, defaultTimezone('ID')), sync: 'S' | 'U' | 'I' | 'R' = 'S'): string {
   const local = new Date(d.getTime() + offsetMinutes * 60_000);
   const iso = local.toISOString(); // shifted: read it as local time
   const sign = offsetMinutes >= 0 ? '+' : '-';

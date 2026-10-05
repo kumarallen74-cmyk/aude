@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { PdfDoc, Flow, type Rgb } from './pdf.js';
-import { creditRows } from './fleet-billing.js';
+import { creditRows, docTax } from './fleet-billing.js';
+import { LOCALE_TAG } from '../domain/locale.js';
 import { splitFees } from './fleet-calc.js';
 import type { getCreditNote } from './fleet-credit.js';
 
@@ -10,8 +11,7 @@ import type { getCreditNote } from './fleet-credit.js';
  * amount due, how to pay, and an appendix with every card and session.
  */
 
-const idr = (v: unknown) => 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(Number(v ?? 0)));
-const kwh = (wh: number) => (wh / 1000).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const kwh = (wh: number) => (wh / 1000).toLocaleString(LOCALE_TAG.id, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dmy = (d: string | null | undefined) => (d ? new Date(`${String(d).slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '—');
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB', { timeZone: config.billing.timeZone, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
 const MUTED: Rgb = [0.36, 0.39, 0.44];
@@ -25,7 +25,7 @@ function banner(f: Flow, text: string, fill: Rgb, color: Rgb) {
 }
 
 /** Seller and buyer side by side. */
-function parties(f: Flow, seller: any, buyer: any) {
+function parties(f: Flow, seller: any, buyer: any, sellerTaxLine?: string) {
   const w = (f.width - 14) / 2;
   const box = (x: number, label: string, name: string, lines: string[]) => {
     let yy = f.y + 14;
@@ -38,7 +38,7 @@ function parties(f: Flow, seller: any, buyer: any) {
   f.need(90);
   f.y += 10;
   const top = f.y;
-  const h1 = box(f.left, 'From', seller.name, [seller.npwp ? `NPWP ${seller.npwp}${seller.pkp ? ' · PKP' : ''}` : '', ...String(seller.address ?? '').split(/\r?\n/)]);
+  const h1 = box(f.left, 'From', seller.name, [sellerTaxLine ?? (seller.npwp ? `NPWP ${seller.npwp}${seller.pkp ? ' · PKP' : ''}` : ''), ...String(seller.address ?? '').split(/\r?\n/)]);
   const buyerId = buyer.taxId ? `${buyer.taxIdKind === 'TIN' ? 'NPWP' : buyer.taxIdKind} ${buyer.taxId}` : '';
   const h2 = box(f.left + w + 14, 'Bill to', buyer.name, [buyerId, ...String(buyer.address ?? '').split(/\r?\n/), buyer.contact ? `Attn. ${buyer.contact}` : '']);
   const h = Math.max(h1, h2) - top;
@@ -59,6 +59,10 @@ function footers(doc: PdfDoc, left: string) {
 
 export function invoicePdf(st: any): Buffer {
   const t = st.totals;
+  // A rupiah statement exactly as before; ringgit / Singapore dollars with their own tax (docTax).
+  const dx = docTax(st);
+  const idr = dx.m;
+  const taxName = dx.id ? 'PPN' : dx.tax;
   const b = st.buyer;
   const s = st.seller;
   const title = st.number ? `Invoice ${st.number}` : `Draft statement ${st.period}`;
@@ -78,17 +82,26 @@ export function invoicePdf(st: any): Buffer {
   else if (st.status === 'void') banner(f, `VOID — ${st.voidReason ?? ''}`, [1, 0.89, 0.89], [0.6, 0.11, 0.11]);
   else if (st.status === 'paid') banner(f, `Paid ${dmy(st.paidAt)}${st.paidReference ? ` · ${st.paidReference}` : ''}`, [0.86, 0.99, 0.91], [0.09, 0.4, 0.2]);
 
-  parties(f, s, b);
+  parties(f, s, b, dx.id ? undefined : dx.regLabel && st.taxRegistrationNo ? `${dx.regLabel} ${st.taxRegistrationNo}` : '');
   for (const w of st.warnings ?? []) f.para(`! ${w}`, { size: 8.5, color: [0.57, 0.25, 0.05] });
 
   f.heading('Charging at our stations');
-  f.table(
+  if (!dx.id) {
+    f.table(
+      [{ label: 'Site', width: 3 }, { label: 'Sessions', width: 1, align: 'right' }, { label: 'kWh', width: 1.1, align: 'right' },
+       { label: 'Energy & fees', width: 1.8, align: 'right' }, { label: dx.tax, width: 1.6, align: 'right' }, { label: `Amount (${dx.cur})`, width: 1.8, align: 'right' }],
+      st.sites.length
+        ? st.sites.map((l: any) => ({ cells: [l.siteName, String(l.sessions), kwh(l.energyWh), idr(l.subtotalMinor), idr(l.taxMinor), idr(l.totalMinor)] }))
+        : [{ cells: ['No sessions.', '', '', '', '', ''] }],
+      { size: 8 },
+    );
+  } else f.table(
     [{ label: 'Site', width: 3 }, { label: 'Sessions', width: 1, align: 'right' }, { label: 'kWh', width: 1.1, align: 'right' },
      { label: 'Energy & fees', width: 1.6, align: 'right' }, { label: 'PBJT-TL', width: 1.4, align: 'right' }, { label: 'DPP', width: 1.5, align: 'right' },
      { label: 'PPN', width: 1.4, align: 'right' }, { label: 'Amount', width: 1.6, align: 'right' }],
     st.sites.length
       ? st.sites.map((l: any) => ({
-          cells: [l.siteName, String(l.sessions), kwh(l.energyWh), idr(l.subtotalIdr), idr(l.pbjtIdr), idr(l.dppIdr), idr(l.ppnIdr), idr(l.totalIdr)],
+          cells: [l.siteName, String(l.sessions), kwh(l.energyWh), idr(l.subtotalMinor), idr(l.localTaxMinor), idr(l.taxBaseMinor), idr(l.taxMinor), idr(l.totalMinor)],
           sub: [l.untaxedSessions ? `${l.untaxedSessions} session(s) without PPN` : ''],
         }))
       : [{ cells: ['No sessions.', '', '', '', '', '', '', ''] }],
@@ -97,49 +110,58 @@ export function invoicePdf(st: any): Buffer {
   if (st.roaming.length) {
     f.heading('Charging on partner networks (re-billed at cost)');
     f.table([{ label: 'When', width: 1.4 }, { label: 'Operator', width: 2.6 }, { label: 'Card', width: 1.8 }, { label: 'kWh', width: 0.9, align: 'right' }, { label: 'Amount', width: 1.4, align: 'right' }],
-      st.roaming.map((x: any) => ({ cells: [when(x.startedAt), x.operator, x.cardUid, x.energyKwh.toLocaleString('id-ID', { maximumFractionDigits: 3 }), idr(x.amountIdr)], sub: ['', x.location ?? ''] })));
+      st.roaming.map((x: any) => ({ cells: [when(x.startedAt), x.operator, x.cardUid, x.energyKwh.toLocaleString(LOCALE_TAG.id, { maximumFractionDigits: 3 }), idr(x.amountMinor)], sub: ['', x.location ?? ''] })));
   }
   const fees = splitFees(st.fees);
   if (fees.memberships.length) {
     f.heading('Memberships');
-    f.table([{ label: 'Plan', width: 2 }, { label: 'For', width: 2 }, { label: 'Fee', width: 1.2, align: 'right' }, { label: 'PPN', width: 1.2, align: 'right' }, { label: 'Amount', width: 1.3, align: 'right' }],
-      fees.memberships.map((x: any) => ({ cells: [x.planName, x.subscriber, idr(x.feeIdr), idr(x.ppnIdr), idr(x.totalIdr)] })));
+    f.table([{ label: 'Plan', width: 2 }, { label: 'For', width: 2 }, { label: 'Fee', width: 1.2, align: 'right' }, { label: taxName, width: 1.2, align: 'right' }, { label: 'Amount', width: 1.3, align: 'right' }],
+      fees.memberships.map((x: any) => ({ cells: [x.planName, x.subscriber, idr(x.feeMinor), idr(x.taxMinor), idr(x.totalMinor)] })));
   }
   if (fees.reservations.length) {
     f.heading('Connector reservations');
-    f.table([{ label: 'Held', width: 1.4 }, { label: 'Site', width: 2.2 }, { label: 'Card', width: 1.6 }, { label: 'Fee', width: 1, align: 'right' }, { label: 'PPN', width: 1, align: 'right' }, { label: 'Amount', width: 1.2, align: 'right' }],
-      fees.reservations.map((x: any) => ({ cells: [when(x.periodStart), x.planName, x.subscriber, idr(x.feeIdr), idr(x.ppnIdr), idr(x.totalIdr)] })));
+    f.table([{ label: 'Held', width: 1.4 }, { label: 'Site', width: 2.2 }, { label: 'Card', width: 1.6 }, { label: 'Fee', width: 1, align: 'right' }, { label: taxName, width: 1, align: 'right' }, { label: 'Amount', width: 1.2, align: 'right' }],
+      fees.reservations.map((x: any) => ({ cells: [when(x.periodStart), x.planName, x.subscriber, idr(x.feeMinor), idr(x.taxMinor), idr(x.totalMinor)] })));
   }
 
   f.heading('Summary');
-  const dppFrac = `${config.tax.ppnDppNumerator}/${config.tax.ppnDppDenominator}`;
-  f.row('Energy, service and admin fees', idr(t.subtotalIdr));
-  f.row('PBJT-TL (regional tax on electricity)', idr(t.pbjtIdr));
-  f.row('Price subject to PPN', idr(t.taxBaseIdr), { muted: true });
-  f.row(`DPP nilai lain (${dppFrac} × price)`, idr(t.dppIdr), { muted: true });
-  f.row(`PPN ${config.tax.ppnRateBps / 100}% × DPP`, idr(t.ppnIdr));
-  f.row('Charging at our stations', idr(t.ownTotalIdr), { bold: true });
-  if (fees.membershipsIdr) f.row('Memberships (incl. PPN)', idr(fees.membershipsIdr));
-  if (fees.reservationsIdr) f.row(`Connector reservations (${fees.reservations.length}, incl. PPN)`, idr(fees.reservationsIdr));
-  if (t.roamingSessions) f.row(`Partner networks (${t.roamingSessions} session${t.roamingSessions === 1 ? '' : 's'}, as billed by the operators, incl. their taxes)`, idr(t.roamingIdr));
+  const dppFrac = `${config.tax.id.ppnDppNumerator}/${config.tax.id.ppnDppDenominator}`;
+  if (dx.id) {
+    f.row('Energy, service and admin fees', idr(t.subtotalMinor));
+    f.row('PBJT-TL (regional tax on electricity)', idr(t.localTaxMinor));
+    f.row('Price subject to PPN', idr(t.taxableMinor), { muted: true });
+    f.row(`DPP nilai lain (${dppFrac} × price)`, idr(t.taxBaseMinor), { muted: true });
+    f.row(`PPN ${config.tax.id.ppnRateBps / 100}% × DPP`, idr(t.taxMinor));
+  } else {
+    f.row('Energy, service and admin fees (before tax)', idr(t.subtotalMinor));
+    if (dx.registered) {
+      f.row(`Price subject to ${dx.tax.replace(/ \d.*$/, '')}`, idr(t.taxableMinor), { muted: true });
+      f.row(dx.tax, idr(t.taxMinor));
+    } else f.row(dx.noTaxNote, idr(0));
+  }
+  f.row('Charging at our stations', idr(t.ownTotalMinor), { bold: true });
+  if (fees.membershipsMinor) f.row(`Memberships (incl. ${taxName})`, idr(fees.membershipsMinor));
+  if (fees.reservationsMinor) f.row(`Connector reservations (${fees.reservations.length}, incl. ${taxName})`, idr(fees.reservationsMinor));
+  if (t.roamingSessions) f.row(`Partner networks (${t.roamingSessions} session${t.roamingSessions === 1 ? '' : 's'}, as billed by the operators, incl. their taxes)`, idr(t.roamingMinor));
   const credits = creditRows(st);
   if (credits.length) {
-    f.row('Invoice total', idr(t.totalIdr), { bold: true });
-    for (const c of credits) f.row(c.label, `− ${idr(c.amountIdr)}`);
+    f.row('Invoice total', idr(t.totalMinor), { bold: true });
+    for (const c of credits) f.row(c.label, `− ${idr(c.amountMinor)}`);
     const paid = st.status === 'paid';
-    f.row(paid ? 'Paid' : 'Amount due', idr(paid ? t.totalIdr - credits.reduce((a, c) => a + c.amountIdr, 0) : st.balanceIdr), { bold: true, size: 12, rule: false });
+    f.row(paid ? 'Paid' : 'Amount due', idr(paid ? t.totalMinor - credits.reduce((a, c) => a + c.amountMinor, 0) : st.balanceMinor), { bold: true, size: 12, rule: false });
   } else {
-    f.row(st.number ? 'Total due' : 'Total so far', idr(t.totalIdr), { bold: true, size: 12, rule: false });
+    f.row(st.number ? 'Total due' : 'Total so far', idr(t.totalMinor), { bold: true, size: 12, rule: false });
   }
-  f.para(`${t.sessions} session${t.sessions === 1 ? '' : 's'} · ${kwh(t.energyWh)} kWh at our stations${t.roundingIdr ? ` · the per-session receipts add up to ${idr(t.receiptsTotalIdr)} (PPN is calculated per invoice line here; difference ${idr(t.roundingIdr)})` : ''}`, { size: 8, color: MUTED });
+  f.para(`${t.sessions} session${t.sessions === 1 ? '' : 's'} · ${kwh(t.energyWh)} kWh at our stations${t.roundingMinor ? ` · the per-session receipts add up to ${idr(t.receiptsTotalMinor)} (${dx.id ? 'PPN' : dx.tax.replace(/ \d.*$/, '')} is calculated per invoice line here; difference ${idr(t.roundingMinor)})` : ''}${dx.id ? '' : ` · all amounts in ${dx.cur}`}`, { size: 8, color: MUTED });
 
   if (st.paymentInstructions) { f.heading('How to pay'); f.para(st.paymentInstructions, { size: 9 }); }
   if (st.number && st.status === 'issued') f.para(`Please quote ${st.number} with your payment.`, { size: 9, bold: true });
   f.gap(6);
   f.para([
     `Sessions count in the month their charge record was issued (${config.billing.timeZone}). Each session also has its own tax receipt.`,
-    s.pkp ? 'The faktur pajak for the PPN is issued through e-Faktur (Coretax) under this invoice number.' : 'The seller is not a PKP: no PPN is charged.',
-    t.roamingSessions ? 'Partner-network charging is re-billed at the amount the partner operator charged; it is not part of our faktur pajak.' : '',
+    dx.id ? (s.pkp ? 'The faktur pajak for the PPN is issued through e-Faktur (Coretax) under this invoice number.' : 'The seller is not a PKP: no PPN is charged.')
+      : dx.registered ? `${dx.tax} is calculated on each line's total before tax.` : dx.noTaxNote,
+    t.roamingSessions ? `Partner-network charging is re-billed at the amount the partner operator charged; it is not part of our ${dx.id ? 'faktur pajak' : 'tax invoice'}.` : '',
   ].filter(Boolean).join(' '), { size: 7.5, color: MUTED });
 
   if (st.sessions.length || st.roaming.length) {
@@ -148,11 +170,11 @@ export function invoicePdf(st: any): Buffer {
     f.heading('Appendix — sessions by card');
     f.table([{ label: 'Card', width: 2 }, { label: 'Holder', width: 2 }, { label: 'Sessions', width: 0.9, align: 'right' }, { label: 'kWh', width: 1, align: 'right' },
       { label: 'At our stations', width: 1.5, align: 'right' }, { label: 'Partner networks', width: 1.5, align: 'right' }],
-      st.cards.map((c: any) => ({ cells: [c.uid, c.holder ?? '', String(c.sessions), kwh(c.energyWh), idr(c.totalIdr), c.roamingIdr ? idr(c.roamingIdr) : '—'] })), { size: 8 });
+      st.cards.map((c: any) => ({ cells: [c.uid, c.holder ?? '', String(c.sessions), kwh(c.energyWh), idr(c.totalMinor), c.roamingMinor ? idr(c.roamingMinor) : '—'] })), { size: 8 });
     if (st.sessions.length) {
       f.heading('Sessions at our stations (receipt amounts)');
       f.table([{ label: 'Started', width: 1.3 }, { label: 'Site / charger', width: 2.6 }, { label: 'Card', width: 2 }, { label: 'kWh', width: 0.9, align: 'right' }, { label: 'Receipt', width: 1.3, align: 'right' }],
-        st.sessions.map((x: any) => ({ cells: [when(x.startedAt), x.siteName, x.cardUid, kwh(x.energyWh), idr(x.totalIdr)], sub: ['', x.ocppIdentity, x.holder ?? ''] })), { size: 7.5 });
+        st.sessions.map((x: any) => ({ cells: [when(x.startedAt), x.siteName, x.cardUid, kwh(x.energyWh), idr(x.totalMinor)], sub: ['', x.ocppIdentity, x.holder ?? ''] })), { size: 7.5 });
     }
   }
   footers(doc, `${s.name} · ${title}`);
@@ -167,6 +189,9 @@ const SETTLEMENT_TEXT: Record<string, (c: any) => string> = {
 
 export function creditNotePdf(c: Awaited<ReturnType<typeof getCreditNote>>): Buffer {
   const title = `Credit note ${c.number}`;
+  const dx = docTax({ ...c, seller: c.seller });
+  const idr = dx.m;
+  const taxName = dx.id ? 'PPN' : dx.tax;
   const doc = new PdfDoc({ title, author: c.seller.name, subject: `Credits invoice ${c.invoice.number}` });
   const f = new Flow(doc);
   doc.text(f.left, f.y + 18, 'Credit note', { size: 20, bold: true });
@@ -174,19 +199,24 @@ export function creditNotePdf(c: Awaited<ReturnType<typeof getCreditNote>>): Buf
   [`No. ${c.number}`, `Date: ${dmy(c.issuedDate)}`].forEach((l, i) => doc.text(f.right, f.y + 14 + i * 12.5, l, { size: 9, bold: i === 0, align: 'right' }));
   f.y += 50;
   if (c.status === 'void') banner(f, `VOID — ${c.voidReason ?? ''}`, [1, 0.89, 0.89], [0.6, 0.11, 0.11]);
-  parties(f, c.seller, c.buyer);
+  parties(f, c.seller, c.buyer, dx.id ? undefined : dx.regLabel && c.taxRegistrationNo ? `${dx.regLabel} ${c.taxRegistrationNo}` : '');
   f.heading('Reason');
   f.para(c.reason, { size: 9.5 });
   f.heading('Credited');
-  f.table([{ label: 'Description', width: 3.4 }, { label: 'Price', width: 1.3, align: 'right' }, { label: 'DPP', width: 1.3, align: 'right' }, { label: 'PPN', width: 1.2, align: 'right' }, { label: 'Amount', width: 1.4, align: 'right' }],
-    c.lines.map((l) => ({ cells: [l.description, l.taxed ? idr(l.taxBaseIdr) : '—', l.taxed ? idr(l.dppIdr) : '—', l.taxed ? idr(l.ppnIdr) : '—', idr(l.amountIdr)], sub: [l.taxed ? '' : 'no PPN'] })));
+  f.table([{ label: 'Description', width: 3.4 }, { label: 'Price', width: 1.3, align: 'right' }, { label: dx.id ? 'DPP' : 'Taxable', width: 1.3, align: 'right' }, { label: taxName, width: 1.2, align: 'right' }, { label: 'Amount', width: 1.4, align: 'right' }],
+    c.lines.map((l) => ({ cells: [l.description, l.taxed ? idr(l.taxableMinor) : '—', l.taxed ? idr(l.taxBaseMinor) : '—', l.taxed ? idr(l.taxMinor) : '—', idr(l.amountMinor)], sub: [l.taxed ? '' : `no ${taxName}`] })));
   f.gap(4);
-  f.row('DPP credited', idr(c.dppIdr), { muted: true });
-  f.row(`PPN credited (${config.tax.ppnRateBps / 100}% × DPP)`, idr(c.ppnIdr));
-  f.row('Total credited', idr(c.totalIdr), { bold: true, size: 12, rule: false });
+  if (dx.id) {
+    f.row('DPP credited', idr(c.taxBaseMinor), { muted: true });
+    f.row(`PPN credited (${config.tax.id.ppnRateBps / 100}% × DPP)`, idr(c.taxMinor));
+  } else {
+    f.row('Taxable amount credited', idr(c.taxBaseMinor), { muted: true });
+    f.row(`${taxName} credited`, idr(c.taxMinor));
+  }
+  f.row('Total credited', idr(c.totalMinor), { bold: true, size: 12, rule: false });
   f.gap(8);
   f.para(SETTLEMENT_TEXT[c.settlement]!(c), { size: 9.5, bold: true });
-  if (c.ppnIdr > 0) {
+  if (c.taxMinor > 0 && dx.id) {
     f.para(`The PPN credited is reversed in e-Faktur (Coretax) with a nota pembatalan${c.invoice.efakturNumber ? ` for faktur pajak ${c.invoice.efakturNumber}` : ''} for invoice ${c.invoice.number}.`, { size: 7.5, color: MUTED });
   }
   footers(doc, `${c.seller.name} · ${title}`);

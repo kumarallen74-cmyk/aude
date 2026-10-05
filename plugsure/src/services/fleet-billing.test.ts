@@ -8,11 +8,11 @@ const CFG: TaxCfg = { ppnRateBps: 1200, dppNum: 11, dppDen: 12 };
 
 /** A session rated exactly as the rating engine does (computeTax), so the fixtures are real. */
 function session(id: string, site: string, subtotal: number, pbjtBps = 1000, over: Partial<FleetSession> = {}): FleetSession {
-  const t = computeTax({ subtotalIdr: subtotal, pbjtRateBps: pbjtBps });
+  const t = computeTax({ subtotalMinor: subtotal, localTaxRateBps: pbjtBps });
   return {
     id, startedAt: '2026-09-10T02:00:00Z', endedAt: '2026-09-10T03:00:00Z', siteId: site, siteName: site === 's1' ? 'Kuningan' : 'Bekasi',
     ocppIdentity: 'CP-1', cardUid: 'FLEET-1', holder: 'Budi', energyWh: 10_000,
-    subtotalIdr: t.subtotalIdr, pbjtIdr: t.pbjtIdr, ppnDppIdr: t.ppnDppIdr, ppnRateBps: t.ppnRateBps, ppnIdr: t.ppnIdr, totalIdr: t.totalIdr, ...over,
+    subtotalMinor: t.subtotalMinor, localTaxMinor: t.localTaxMinor, taxBaseMinor: t.taxBaseMinor, ppnRateBps: t.taxRateBps, taxMinor: t.taxMinor, totalMinor: t.totalMinor, ...over,
   };
 }
 
@@ -21,9 +21,9 @@ describe('fleet invoice arithmetic', () => {
     const s = session('a', 's1', 29_005);
     const t = taxBaseOf(s, CFG);
     assert.ok(t.exact);
-    assert.equal(dppOf(t.base, CFG), s.ppnDppIdr);
-    assert.deepEqual(taxBaseOf({ subtotalIdr: 29_005, pbjtIdr: 2_901, ppnDppIdr: dppOf(29_005, CFG), ppnRateBps: 1200 }, CFG), { base: 29_005, exact: true });
-    assert.deepEqual(taxBaseOf({ subtotalIdr: 1000, pbjtIdr: 0, ppnDppIdr: 0, ppnRateBps: 0 }, CFG), { base: 0, exact: true });
+    assert.equal(dppOf(t.base, CFG), s.taxBaseMinor);
+    assert.deepEqual(taxBaseOf({ subtotalMinor: 29_005, localTaxMinor: 2_901, taxBaseMinor: dppOf(29_005, CFG), ppnRateBps: 1200 }, CFG), { base: 29_005, exact: true });
+    assert.deepEqual(taxBaseOf({ subtotalMinor: 1000, localTaxMinor: 0, taxBaseMinor: 0, ppnRateBps: 0 }, CFG), { base: 0, exact: true });
   });
 
   test('PPN is computed per site line on the summed price: DPP = 11/12, PPN = 12% of DPP', () => {
@@ -31,23 +31,23 @@ describe('fleet invoice arithmetic', () => {
     const st = computeFleetStatement(sessions, [], { includeRoaming: true, cfg: CFG });
     assert.equal(st.sites.length, 2);
     for (const l of st.sites) {
-      assert.equal(l.dppIdr, Math.round((l.taxBaseIdr * 11) / 12));
-      assert.equal(l.ppnIdr, Math.round((l.dppIdr * 1200) / 10_000));
-      assert.equal(l.totalIdr, l.subtotalIdr + l.pbjtIdr + l.ppnIdr);
+      assert.equal(l.taxBaseMinor, Math.round((l.taxableMinor * 11) / 12));
+      assert.equal(l.taxMinor, Math.round((l.taxBaseMinor * 1200) / 10_000));
+      assert.equal(l.totalMinor, l.subtotalMinor + l.localTaxMinor + l.taxMinor);
     }
     const t = st.totals;
-    assert.equal(t.totalIdr, t.subtotalIdr + t.pbjtIdr + t.ppnIdr);
-    assert.equal(t.receiptsTotalIdr, sessions.reduce((a, s) => a + s.totalIdr, 0));
+    assert.equal(t.totalMinor, t.subtotalMinor + t.localTaxMinor + t.taxMinor);
+    assert.equal(t.receiptsTotalMinor, sessions.reduce((a, s) => a + s.totalMinor, 0));
     // Per-line PPN may differ from the sum of per-session PPN only by rounding: a rupiah per session at most.
-    assert.ok(Math.abs(t.roundingIdr) <= sessions.length, `rounding ${t.roundingIdr}`);
-    assert.equal(t.roundingIdr, t.ownTotalIdr - t.receiptsTotalIdr);
+    assert.ok(Math.abs(t.roundingMinor) <= sessions.length, `rounding ${t.roundingMinor}`);
+    assert.equal(t.roundingMinor, t.ownTotalMinor - t.receiptsTotalMinor);
   });
 
   test('sessions without PPN add nothing to the tax base and are counted', () => {
-    const untaxed = session('u', 's1', 20_000, 1000, { ppnDppIdr: 0, ppnRateBps: 0, ppnIdr: 0, totalIdr: 22_000 });
+    const untaxed = session('u', 's1', 20_000, 1000, { taxBaseMinor: 0, ppnRateBps: 0, taxMinor: 0, totalMinor: 22_000 });
     const st = computeFleetStatement([untaxed, session('a', 's1', 10_000)], [], { includeRoaming: true, cfg: CFG });
     assert.equal(st.sites[0]!.untaxedSessions, 1);
-    assert.equal(st.sites[0]!.taxBaseIdr, taxBaseOf(session('a', 's1', 10_000), CFG).base);
+    assert.equal(st.sites[0]!.taxableMinor, taxBaseOf(session('a', 's1', 10_000), CFG).base);
   });
 
   test('partner-network records are re-billed at cost in IDR; other currencies are left off with a warning', () => {
@@ -56,12 +56,12 @@ describe('fleet invoice arithmetic', () => {
       { id: 'r2', operator: 'Partner', location: null, cardUid: 'FLEET-2', startedAt: '2026-09-12T01:00:00Z', endedAt: '2026-09-12T02:00:00Z', energyKwh: 5, exclVat: 12.5, inclVat: null, currency: 'EUR' },
     ];
     const st = computeFleetStatement([session('a', 's1', 10_000)], roam, { includeRoaming: true, cfg: CFG });
-    assert.deepEqual(st.roaming.map((x) => [x.id, x.amountIdr]), [['r1', 33_300]]);
-    assert.equal(st.totals.totalIdr, st.totals.ownTotalIdr + 33_300);
+    assert.deepEqual(st.roaming.map((x) => [x.id, x.amountMinor]), [['r1', 33_300]]);
+    assert.equal(st.totals.totalMinor, st.totals.ownTotalMinor + 33_300);
     assert.ok(st.warnings.some((w) => /another currency/.test(w)));
-    assert.equal(st.cards.find((c) => c.uid === 'FLEET-1')!.roamingIdr, 33_300);
+    assert.equal(st.cards.find((c) => c.uid === 'FLEET-1')!.roamingMinor, 33_300);
     const off = computeFleetStatement([session('a', 's1', 10_000)], roam, { includeRoaming: false, cfg: CFG });
-    assert.equal(off.totals.roamingIdr, 0);
+    assert.equal(off.totals.roamingMinor, 0);
     assert.equal(off.roaming.length, 0);
   });
 
@@ -96,12 +96,12 @@ describe('e-Faktur (Coretax XML)', () => {
       {
         number: 'FLT/2026/10/0001', date: '2026-10-01',
         buyer: { taxId: '0987654321098765', kind: 'TIN', nitku: null, name: 'PT Logistik & Co <Tbk>', address: 'Jl. "A" 1', email: 'ap@x.co.id' },
-        lines: [{ name: 'Pengisian listrik — Kuningan', taxBaseIdr: 101_229, dppIdr: 92_793, ppnIdr: 11_135 }],
+        lines: [{ name: 'Pengisian listrik — Kuningan', taxableMinor: 101_229, taxBaseMinor: 92_793, taxMinor: 11_135 }],
       },
       {
         number: 'FLT/2026/10/0002', date: '2026-10-01',
         buyer: { taxId: '3171012345678901', kind: 'NIK', nitku: null, name: 'Budi', address: null, email: null },
-        lines: [{ name: 'x', taxBaseIdr: 1200, dppIdr: 1100, ppnIdr: 132 }],
+        lines: [{ name: 'x', taxableMinor: 1200, taxBaseMinor: 1100, taxMinor: 132 }],
       },
     ], settings);
     assert.match(xml, /^<\?xml version="1\.0" encoding="utf-8"\?>/);

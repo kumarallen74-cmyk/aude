@@ -129,12 +129,13 @@ function keyProblem(k: KeyObject): string | null {
   return `unsupported key type ${k.asymmetricKeyType}`;
 }
 
-async function signFor(identity: string, orgName: string, spki: Buffer, subjectDer: Buffer | null, days: number) {
+/** `country`: the organisation's home country, the leaf's C= (§D11; the platform CA keeps C=ID). */
+async function signFor(identity: string, orgName: string, spki: Buffer, subjectDer: Buffer | null, days: number, country = 'ID') {
   const ca = await chargerCa();
   const pub = createPublicKey({ key: spki, format: 'der', type: 'spki' });
   const why = keyProblem(pub);
   if (why) throw new CertificateError(422, why);
-  const subject = subjectDer ?? name([['C', 'ID'], ['O', orgName.slice(0, 64) || 'PlugSure'], ['CN', identity]]);
+  const subject = subjectDer ?? name([['C', country], ['O', orgName.slice(0, 64) || 'PlugSure'], ['CN', identity]]);
   const der = buildCertificate({
     serial: randomBytes(12), issuer: ca.subject, subject, spki, issuerSpki: ca.spki,
     notBefore: new Date(Date.now() - 5 * 60_000), notAfter: new Date(Date.now() + days * 24 * 3600_000),
@@ -161,8 +162,8 @@ export function checkStationCsr(csrPem: string, identity: string) {
  * fingerprint to the charger.
  */
 export async function issueAtOnboarding(chargePointId: string, opts: { keyType?: KeyType; csr?: string; days?: number }, actor: { type: 'user' | 'api_client' | 'system'; id?: string; orgId?: string; ip?: string }): Promise<Issued> {
-  const cp = await one<{ ocpp_identity: string; org_id: string; org_name: string }>(
-    `SELECT cp.ocpp_identity, s.org_id, o.name AS org_name FROM charge_point cp JOIN site s ON s.id = cp.site_id JOIN organisation o ON o.id = s.org_id WHERE cp.id = $1`,
+  const cp = await one<{ ocpp_identity: string; org_id: string; org_name: string; home_country_code: string }>(
+    `SELECT cp.ocpp_identity, s.org_id, o.name AS org_name, o.home_country_code FROM charge_point cp JOIN site s ON s.id = cp.site_id JOIN organisation o ON o.id = s.org_id WHERE cp.id = $1`,
     [chargePointId],
   );
   if (!cp) throw new CertificateError(404, 'charge point not found');
@@ -180,7 +181,7 @@ export async function issueAtOnboarding(chargePointId: string, opts: { keyType?:
     spki = k.publicKey.export({ type: 'spki', format: 'der' });
     privateKeyPem = k.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
   }
-  const s = await signFor(cp.ocpp_identity, cp.org_name, spki, subject, days);
+  const s = await signFor(cp.ocpp_identity, cp.org_name, spki, subject, days, cp.home_country_code);
   const source = opts.csr ? 'plugsure_ca_csr' : 'plugsure_ca';
   await query(
     `UPDATE charge_point SET client_cert_fingerprint = $2, client_cert_prev_fingerprint = NULL, client_cert_serial = $3,
@@ -321,13 +322,13 @@ export async function onStationCsr(ctx: Ctx, csrPem: string): Promise<{ status: 
 async function signAndInstall(ctx: Ctx, certId: string, csrPem: string) {
   const { logEvent } = await import('../pnc/service.js');
   const { sendBackground, wireVersion, changeConfiguration } = await import('../ocpp/commands.js');
-  const cp = await one<{ org_name: string; security_profile: number; cert_auto_upgrade: boolean; client_cert_fingerprint: string | null }>(
-    `SELECT o.name AS org_name, cp.security_profile, cp.cert_auto_upgrade, cp.client_cert_fingerprint
+  const cp = await one<{ org_name: string; home_country_code: string; security_profile: number; cert_auto_upgrade: boolean; client_cert_fingerprint: string | null }>(
+    `SELECT o.name AS org_name, o.home_country_code, cp.security_profile, cp.cert_auto_upgrade, cp.client_cert_fingerprint
        FROM charge_point cp JOIN site s ON s.id = cp.site_id JOIN organisation o ON o.id = s.org_id WHERE cp.id = $1`,
     [ctx.chargePointId],
   );
   const csr = checkStationCsr(csrPem, ctx.ocppIdentity);
-  const s = await signFor(ctx.ocppIdentity, cp!.org_name, csr.spkiDer, csr.subjectDer, config.chargerCa.certDays);
+  const s = await signFor(ctx.ocppIdentity, cp!.org_name, csr.spkiDer, csr.subjectDer, config.chargerCa.certDays, cp!.home_country_code);
   await recordCertificate(ctx.orgId, ctx.chargePointId, 'signed', s, 'ocpp_csr', { id: certId });
   const v = await wireVersion(ctx.ocppIdentity);
   const payload = v === 'ocpp2.0.1' || v === 'ocpp2.1'

@@ -110,7 +110,7 @@ export async function createSandbox(parentOrgId: string, label: string, createdB
         name: 'Sandbox Hub — Kuningan, Jakarta Selatan',
         address: 'Jl. H.R. Rasuna Said Kav. 1, Kuningan, Jakarta Selatan',
         kabupatenKotaCode: '3174', lat: '-6.2297', lon: '106.8295',
-        gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000',
+        gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000',
       }));
 
       const chargers: Array<{ identity: string; model: string; evses: EvseSpec[]; current: 'AC' | 'DC'; maxPowerKw: number }> = [

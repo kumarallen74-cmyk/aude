@@ -25,3 +25,21 @@ export function routePath(req: FastifyRequest): string {
 export function underPrefix(req: FastifyRequest, prefix: string): boolean {
   return routePath(req).startsWith(prefix) || req.url.startsWith(prefix);
 }
+
+/**
+ * A request for the console's or the driver app's own files (JS, CSS, images, fonts, the page shells),
+ * served by @fastify/static or the driver app's rendered shell. These are not API calls: one console
+ * page load fetches ~60 of them, so counting them against the per-IP API limit throttled an office of
+ * operators behind one NAT on page loads alone. Only GET/HEAD on the static routes themselves (by the
+ * route Fastify matched, never the raw target, so `/%761/...` cannot pose as a file); everything under
+ * an API prefix stays limited.
+ */
+const STATIC_ROUTES = new Set(['/*', '/', '/app/*', '/app/', '/app/index.html', '/app/manifest.webmanifest', '/app/sw.js']);
+const API_PREFIXES = ['/v1/', '/d/', '/ocpi/', '/hub/', '/pay/', '/hooks/', '/fw/', '/diag/', '/.well-known/'];
+export function isStaticAsset(req: FastifyRequest): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const route = routePath(req);
+  if (!STATIC_ROUTES.has(route)) return false;
+  const path = req.url.split('?')[0]!;
+  return !API_PREFIXES.some((p) => path.startsWith(p));
+}

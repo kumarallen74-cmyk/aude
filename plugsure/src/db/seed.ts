@@ -27,7 +27,7 @@ async function main() {
 
   const org = await one<{ id: string }>(
     `INSERT INTO organisation (name, slug, npwp, pkp, iuptlu_number, licence_scheme)
-     VALUES ('Nusantara Charge Nusantara', 'nusantara-charge', '01.234.567.8-091.000', true,
+     VALUES ('Nusantara Charge', 'nusantara-charge', '01.234.567.8-091.000', true,
              'IUPTLU-2025-000871', 'POSO')
      ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
      RETURNING id`,
@@ -53,7 +53,7 @@ async function main() {
     (await one<{ id: string }>(
       `INSERT INTO site (org_id, name, address, kabupaten_kota_code, lat, lon,
                          grid_tariff_group, connected_kva, phases, nominal_voltage_v, power_factor,
-                         spklu_id, spklu_scheme, slo_number, slo_issued_at, slo_expires_at, pbjt_rate_bps)
+                         spklu_id, spklu_scheme, slo_number, slo_issued_at, slo_expires_at, local_tax_rate_bps)
        VALUES ($1, 'Summarecon Mall Bekasi — P2 Basement', 'Jl. Bulevar Ahmad Yani, Bekasi',
                '3275', -6.2246, 106.9998, 'L/TR', 197, 3, 400, 0.95,
                '01.POSO.20.3275.010', 'POSO', 'SLO/2025/JKT/00412', '2025-03-14', '2030-03-13', 500)
@@ -73,6 +73,7 @@ async function main() {
 
   const hardware: Array<{
     identity: string;
+    displayName: string;
     vendor: string;
     model: string;
     firmware: string;
@@ -89,6 +90,7 @@ async function main() {
   }> = [
     {
       identity: 'AUTEL-AC22-SMB-001',
+      displayName: 'Pillar A · AC',
       vendor: 'Autel',
       model: 'MaxiCharger AC Wallbox',
       firmware: 'V1.4.12',
@@ -107,6 +109,7 @@ async function main() {
     },
     {
       identity: 'AUTEL-DC60-SMB-002',
+      displayName: 'Pillar B · DC fast',
       vendor: 'Autel',
       model: 'MaxiCharger DC Compact',
       firmware: 'V2.1.7',
@@ -137,11 +140,11 @@ async function main() {
 
   for (const h of hardware) {
     const cp = await one<{ id: string }>(
-      `INSERT INTO charge_point (site_id, ocpp_identity, vendor, model, firmware, serial, ocpp_version, status)
-       VALUES ($1,$2,$3,$4,$5,$2,'ocpp1.6','offline')
-       ON CONFLICT (ocpp_identity) DO UPDATE SET vendor = EXCLUDED.vendor, model = EXCLUDED.model
+      `INSERT INTO charge_point (site_id, ocpp_identity, vendor, model, firmware, serial, ocpp_version, status, display_name)
+       VALUES ($1,$2,$3,$4,$5,$2,'ocpp1.6','offline',$6)
+       ON CONFLICT (ocpp_identity) DO UPDATE SET vendor = EXCLUDED.vendor, model = EXCLUDED.model, display_name = COALESCE(charge_point.display_name, EXCLUDED.display_name)
        RETURNING id`,
-      [siteAId, h.identity, h.vendor, h.model, h.firmware],
+      [siteAId, h.identity, h.vendor, h.model, h.firmware, h.displayName],
     );
     for (const c of h.connectors) {
       await query(
@@ -295,6 +298,26 @@ async function main() {
     permissions: SYSTEM_ROLES.org_owner!,
   });
 
+  if (['1', 'true'].includes(process.env.SEED_MULTI_COUNTRY ?? '')) await seedMultiCountry(orgId);
+
+  // The PlugSure app's eMSP organisation and network brand (v1.9, docs/MOBILE-APP-SPEC.md §15.1), with a console
+  // administrator (same development password). SEED_MOBILITY=0 leaves it out. Not joined to the hub here.
+  if (process.env.SEED_MOBILITY !== '0') {
+    const { setupMobility } = await import('../services/mobility.js');
+    const m = await setupMobility({
+      linkHost: 'go.plugsure.test', iosBundleId: 'asia.plugsure.app', iosTeamId: 'PSTEAM0001', androidPackage: 'asia.plugsure.app',
+      androidCertSha256: ['AB'.repeat(32)], privacyUrl: 'https://plugsure.test/privacy', termsUrl: 'https://plugsure.test/terms', supportEmail: 'help@plugsure.test',
+    });
+    const mu = await one<{ id: string }>(
+      `INSERT INTO app_user (org_id, email, name, status) VALUES ($1, 'mobility@plugsure.com', 'PlugSure Mobility Admin', 'active')
+       ON CONFLICT (email) DO UPDATE SET status = 'active' RETURNING id`, [m.orgId]);
+    if (mu) {
+      await query(`UPDATE app_user SET password_hash = $2, must_change_password = $3 WHERE id = $1`, [mu.id, await hashPassword(seedPassword), mustChange]);
+      await setUserRole(mu.id, m.orgId, 'super_admin');
+    }
+    logger.info({ orgId: m.orgId }, 'PlugSure Mobility seeded (console: mobility@plugsure.com, same password)');
+  }
+
   logger.info({ orgId, siteAId }, 'seed complete');
   logger.info('charge point identities: AUTEL-AC22-SMB-001, AUTEL-DC60-SMB-002');
   logger.info('─────────────────────────────────────────────────────────────');
@@ -303,6 +326,71 @@ async function main() {
   logger.info(`Console sign-in:  ops@plugsure.com  /  ${seedPassword}`);
   logger.info('─────────────────────────────────────────────────────────────');
   await pool.end();
+}
+
+/**
+ * SEED_MULTI_COUNTRY=1 (docs/MULTI-COUNTRY-DESIGN.md WP1a): the same operator also runs
+ * a Malaysian and a Singapore site, each with a charger and a tariff in its own
+ * currency (one organisation in several countries). Singapore GST-registered (prices
+ * GST-inclusive); Malaysia not registered for service tax (the default, V1).
+ * Re-runnable: everything is looked up first.
+ */
+async function seedMultiCountry(orgId: string) {
+  const sites = [
+    {
+      country: 'MY', name: 'Pavilion Kuala Lumpur — B2', address: '168 Jalan Bukit Bintang, Kuala Lumpur', city: 'Kuala Lumpur',
+      postal: '55100', lat: 3.1490, lon: 101.7133, tz: 'Asia/Kuala_Lumpur',
+      cp: { identity: 'SEED-MY-DC-001', vendor: 'Autel', model: 'MaxiCharger DC Compact', powerW: 60_000, current: 'DC', type: 'cCCS2', phases: 3 },
+      // RM 1.20/kWh, idle RM 0.50/min after 15 min, at most 60 min (RM 30, the platform cap).
+      tariff: { name: 'Public DC — Malaysia', currency: 'MYR', inclusive: true, comps: [['energy', 1.2, 0, null], ['idle', 0.5, 15, 75]] as const },
+    },
+    {
+      country: 'SG', name: 'Marina Square — B1', address: '6 Raffles Boulevard, Singapore', city: 'Singapore',
+      postal: '039594', lat: 1.2913, lon: 103.8572, tz: 'Asia/Singapore',
+      cp: { identity: 'SEED-SG-AC-001', vendor: 'Autel', model: 'MaxiCharger AC Elite', powerW: 22_000, current: 'AC', type: 'sType2', phases: 3 },
+      // S$0.65/kWh including 9% GST, idle S$0.30/min after 15 min, at most 100 min (S$30).
+      tariff: { name: 'Public AC — Singapore', currency: 'SGD', inclusive: true, comps: [['energy', 0.65, 0, null], ['idle', 0.3, 15, 115]] as const },
+    },
+  ];
+  for (const x of sites) {
+    const site = (await one<{ id: string }>(`SELECT id FROM site WHERE org_id = $1 AND name = $2 LIMIT 1`, [orgId, x.name]))
+      ?? (await one<{ id: string }>(
+        `INSERT INTO site (org_id, name, address, city, postal_code, lat, lon, timezone, country_code, connected_kva, phases, nominal_voltage_v, power_factor, roaming_publish)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,150,3,400,0.95,true) RETURNING id`,
+        [orgId, x.name, x.address, x.city, x.postal, x.lat, x.lon, x.tz, x.country]));
+    const cp = await one<{ id: string }>(
+      `INSERT INTO charge_point (site_id, ocpp_identity, vendor, model, firmware, serial, ocpp_version, status)
+       VALUES ($1,$2,$3,$4,'1.0.0',$2,'ocpp1.6','offline')
+       ON CONFLICT (ocpp_identity) DO UPDATE SET vendor = EXCLUDED.vendor RETURNING id`,
+      [site!.id, x.cp.identity, x.cp.vendor, x.cp.model]);
+    await query(`INSERT INTO evse (charge_point_id, evse_id, max_power_w) VALUES ($1,1,$2) ON CONFLICT (charge_point_id, evse_id) DO NOTHING`, [cp!.id, x.cp.powerW]);
+    const e = await one<{ id: string }>(`SELECT id FROM evse WHERE charge_point_id = $1 AND evse_id = 1`, [cp!.id]);
+    await query(
+      `INSERT INTO connector (evse_uuid, connector_id, connector_type, current_type, max_power_w, phases)
+       VALUES ($1,1,$2,$3,$4,$5) ON CONFLICT (evse_uuid, connector_id) DO NOTHING`,
+      [e!.id, x.cp.type, x.cp.current, x.cp.powerW, x.cp.phases]);
+    const existing = await one<{ id: string }>(`SELECT id FROM tariff WHERE org_id = $1 AND name = $2 LIMIT 1`, [orgId, x.tariff.name]);
+    const t = existing ?? (await one<{ id: string }>(
+      `INSERT INTO tariff (org_id, name, pln_scheme, country_code, currency, prices_include_tax) VALUES ($1,$2,'none',$3,$4,$5) RETURNING id`,
+      [orgId, x.tariff.name, x.country, x.tariff.currency, x.tariff.inclusive]));
+    if (!existing) {
+      for (const [i, [kind, rate, fromMin, toMin]] of x.tariff.comps.entries()) {
+        await query(
+          `INSERT INTO tariff_component (tariff_id, kind, rate, tou_block, from_kwh, from_minutes, to_minutes, sort_order) VALUES ($1,$2,$3,'ANY',0,$4,$5,$6)`,
+          [t!.id, kind, rate, fromMin, toMin, i]);
+      }
+    }
+    await query(
+      `INSERT INTO tariff_assignment (tariff_id, scope_type, scope_id, priority)
+       SELECT $1, 'site', $2, 0 WHERE NOT EXISTS (SELECT 1 FROM tariff_assignment WHERE tariff_id = $1 AND scope_type = 'site' AND scope_id = $2 AND valid_to IS NULL)`,
+      [t!.id, site!.id]);
+  }
+  await query(
+    `INSERT INTO org_tax_registration (org_id, country_code, scheme, registration_no, registered, effective_from, created_by)
+     SELECT $1, 'SG', 'SG_GST', '201912345M', true, DATE '2024-01-01', 'seed'
+      WHERE NOT EXISTS (SELECT 1 FROM org_tax_registration WHERE org_id = $1 AND scheme = 'SG_GST' AND effective_to IS NULL)`,
+    [orgId]);
+  logger.info('multi-country seed: SEED-MY-DC-001 (Kuala Lumpur, MYR), SEED-SG-AC-001 (Singapore, SGD, GST-registered)');
 }
 
 function inDays(n: number): string {

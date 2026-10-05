@@ -96,9 +96,12 @@ registerView('webhooks', {
         events = data.events ?? [];
         rows = data.rows ?? [];
       } catch (e) {
-        $('[data-list]', root).innerHTML = callout('crit', esc(e.status === 403 ? 'You do not have permission to view webhooks.' : e.message));
+        const box = $('[data-list]', root);
+        if (box) box.innerHTML = callout('crit', esc(e.status === 403 ? 'You do not have permission to view webhooks.' : e.message));
         return;
       }
+      // The page was left while loading (an endpoint drawer's close reloads it): nothing to draw into.
+      if (!$('[data-list]', root)) return;
       table($('[data-list]', root), {
         columns: [
           { label: 'Endpoint', render: (w) => `<div class="cell-title mono" style="word-break:break-all">${esc(w.url)}</div>${w.description ? `<div class="cell-sub">${esc(w.description)}</div>` : ''}` },

@@ -111,7 +111,7 @@ try {
   check('setup: operator signs in to the console', login.status === 200, login.data);
   const site = await ops('POST', '/v1/sites', {
     name: 'Driver E2E Hub — Kuningan', address: 'Jl. H.R. Rasuna Said', kabupatenKotaCode: '3171', lat: '-6.2215', lon: '106.8320',
-    gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000',
+    gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000',
   });
   const siteId = site.data.id as string;
   const ID = `DRV-E2E-${Date.now().toString().slice(-6)}`;
@@ -140,19 +140,19 @@ try {
   const st = await until(() => d.get('/v1/stations'), (r) => !!r.data.stations?.find((s: any) => s.siteId === siteId)?.connectors?.every((c: any) => c.status === 'Available'), 20_000, 1000);
   const station = st.data.stations.find((s: any) => s.siteId === siteId);
   check('stations: new site listed, both connectors Available via the bridge', station?.availableCount === 2, station?.connectors?.map((c: any) => c.status));
-  check('stations: charger display name and headline price shown', station?.connectors?.[0]?.chargerName === 'Kuningan Lobby DC' && station.priceFromIdr === 2400, { name: station?.connectors?.[0]?.chargerName, price: station?.priceFromIdr });
+  check('stations: charger display name and headline price shown', station?.connectors?.[0]?.chargerName === 'Kuningan Lobby DC' && station.priceFromMinor === 2400, { name: station?.connectors?.[0]?.chargerName, price: station?.priceFromMinor });
   const res = await d.get(`/v1/resolve?code=${encodeURIComponent(ID + ':1')}`);
   check('resolve: QR code IDENTITY:1 → connector', res.status === 200 && res.data.connectorNo === 1, res.data);
   const conn1 = res.data.connectorId as string;
   const conn2 = station.connectors.find((c: any) => c.connectorNo === 2).connectorId as string;
   const det = await d.get(`/v1/connectors/${conn1}`);
-  check('connector: detail with energy price and service fee', det.data.energyPriceIdr === 2400 && det.data.fees?.some((f: any) => f.kind === 'session' && f.rate === 5000), det.data);
+  check('connector: detail with energy price and service fee', det.data.energyPriceMinor === 2400 && det.data.fees?.some((f: any) => f.kind === 'session' && f.rate === 5000), det.data);
 
   // ------------------------------------------------------------ maintenance hold from the console reaches the app
   const inop = await ops('POST', `/v1/charge-points/${ID}/availability`, { connectorId: 2, type: 'Inoperative', reason: 'E2E: gun 2 cable jacket damaged' });
   const m = await until(() => d.get(`/v1/connectors/${conn2}`), (r) => r.data.status === 'Maintenance', 10_000);
   check('maintenance: console Inoperative + reason → app shows Maintenance, internal reason hidden', inop.status === 200 && m.data.status === 'Maintenance' && !/cable/.test(m.data.blockedReason), m.data);
-  const mq = await d.post('/v1/charge/quote', { connectorId: conn2, amountIdr: 50000 });
+  const mq = await d.post('/v1/charge/quote', { connectorId: conn2, amountMinor: 50000 });
   check('maintenance: cannot pay for a connector on maintenance hold (422)', mq.status === 422 && /perawatan/.test(mq.data.error), mq.data);
   await ops('POST', `/v1/charge-points/${ID}/availability`, { connectorId: 2, type: 'Operative' });
   const back = await until(() => d.get(`/v1/connectors/${conn2}`), (r) => r.data.status === 'Available', 10_000);
@@ -166,9 +166,9 @@ try {
     const sStations = await d.get('/v1/stations');
     const sStation = sStations.data.stations?.find((x: any) => x.siteId === siteId);
     check('suspended: the station stays on the map with no connector available', !!sStation && sStation.availableCount === 0, sStation?.connectors?.map((c: any) => c.status));
-    const sq = await d.post('/v1/charge/quote', { connectorId: conn1, amountIdr: 50000 });
+    const sq = await d.post('/v1/charge/quote', { connectorId: conn1, amountMinor: 50000 });
     check('suspended: cannot pay for a connector on a suspended charger (422)', sq.status === 422 && /sementara tidak beroperasi/i.test(sq.data.error ?? ''), sq.data);
-    const sco = await d.post('/v1/charge/prepaid', { connectorId: conn1, amountIdr: 50000 });
+    const sco = await d.post('/v1/charge/prepaid', { connectorId: conn1, amountMinor: 50000 });
     check('suspended: checkout refused too', sco.status >= 400 && !sco.data?.qr, sco.data);
   } finally {
     await ops('POST', `/v1/charge-points/${ID}/resume`);
@@ -179,9 +179,9 @@ try {
   check('suspended: a charger still connected reads online straight after Resume', sCp.data?.status === 'online', sCp.data?.status);
 
   // ------------------------------------------------------------ prepaid QRIS journey
-  const q = await d.post('/v1/charge/quote', { connectorId: conn1, amountIdr: 50000 });
+  const q = await d.post('/v1/charge/quote', { connectorId: conn1, amountMinor: 50000 });
   check('prepaid: quote Rp 50,000 buys energy', q.status === 200 && q.data.allowanceKwh > 0, q.data);
-  const co = await d.post('/v1/charge/prepaid', { connectorId: conn1, amountIdr: 50000 });
+  const co = await d.post('/v1/charge/prepaid', { connectorId: conn1, amountMinor: 50000 });
   check('prepaid: checkout returns a QRIS QR and a single-use start token', co.status === 200 && co.data.qr?.qrImage?.startsWith('data:image/svg+xml') && /^PS-/.test(co.data.startToken), co.data);
   const png = Buffer.from(String(co.data.qr?.qrPng ?? '').split(',')[1] ?? '', 'base64');
   check('prepaid: "Simpan QR" PNG of the same code is returned (valid PNG header)',
@@ -208,7 +208,7 @@ try {
   const live = await until(() => d.get(`/v1/charge/${chargeId}/status`), (r) => r.data.state === 'charging' && r.data.energyKwh > 0, 45_000, 1000);
   check('prepaid: live status charging with energy and progress', live.data.state === 'charging' && live.data.progressPct != null, live.data);
   check('prepaid: the cost so far while charging (tax included, not final yet)',
-    live.data.cost?.final === false && live.data.cost.totalIdr > 0 && live.data.cost.taxIdr > 0 && live.data.estimatedIdr === live.data.cost.totalIdr, live.data.cost);
+    live.data.cost?.final === false && live.data.cost.totalMinor > 0 && live.data.cost.taxTotalMinor > 0 && live.data.estimatedMinor === live.data.cost.totalMinor, live.data.cost);
   const replay = await d.post(`/v1/charge/${chargeId}/start`);
   check('prepaid: replayed start refused once the session is bound', replay.status === 400, replay.data);
   const stop = await d.post(`/v1/charge/${chargeId}/stop`);
@@ -217,17 +217,17 @@ try {
   check('prepaid: session rated into a receipt', rated.data.state === 'rated', rated.data);
   const rc = await d.get(`/v1/charge/${chargeId}/receipt`);
   const t = rc.data.tax;
-  check('receipt: PBJT-TL 10%, PPN 12% × DPP (11% effective), receipt no.', rc.status === 200 && t?.pbjtRateBps === 1000 && t.ppnRateBps === 1200 && t.ppnEffectiveRateBps === 1100 && t.dppFraction === '11/12' && t.ppnIdr > 0 && /^PS-/.test(rc.data.receiptNo), { t, no: rc.data.receiptNo });
+  check('receipt: PBJT-TL 10%, PPN 12% × DPP (11% effective), receipt no.', rc.status === 200 && t?.localTaxRateBps === 1000 && t.ppnRateBps === 1200 && t.ppnEffectiveRateBps === 1100 && t.dppFraction === '11/12' && t.taxMinor > 0 && /^PS-/.test(rc.data.receiptNo), { t, no: rc.data.receiptNo });
   const afterRating = await d.get(`/v1/charge/${chargeId}/status`);
   check('prepaid: once rated, the cost shown is the receipt total, marked final',
-    afterRating.data.cost?.final === true && afterRating.data.cost.totalIdr === t.totalIdr, { cost: afterRating.data.cost, receipt: t?.totalIdr });
-  check('receipt: prepaid settlement shows the refund of unused balance', rc.data.settlement?.paidIdr === 50000 && rc.data.settlement.refundIdr === 50000 - t.totalIdr, rc.data.settlement);
+    afterRating.data.cost?.final === true && afterRating.data.cost.totalMinor === t.totalMinor, { cost: afterRating.data.cost, receipt: t?.totalMinor });
+  check('receipt: prepaid settlement shows the refund of unused balance', rc.data.settlement?.paidMinor === 50000 && rc.data.settlement.refundMinor === 50000 - t.totalMinor, rc.data.settlement);
   const doc = await d.get(`/v1/charge/${chargeId}/receipt.html`);
   check('receipt: printable tax receipt with DPP, PPN and PBJT-TL', doc.status === 200 && /DPP nilai lain/.test(doc.text) && /PPN 12% × DPP \(efektif 11%/.test(doc.text) && /PBJT-TL/.test(doc.text), doc.status);
   const docOther = await other.get(`/v1/charge/${chargeId}/receipt.html`);
   check('receipt: another device cannot fetch it (404)', docOther.status === 404, docOther.status);
   const hist = await d.get('/v1/history');
-  check('history: the charge is listed with its total', hist.data.charges?.[0]?.chargeId === chargeId && hist.data.charges[0].totalIdr === t.totalIdr, hist.data.charges?.[0]);
+  check('history: the charge is listed with its total', hist.data.charges?.[0]?.chargeId === chargeId && hist.data.charges[0].totalMinor === t.totalMinor, hist.data.charges?.[0]);
 
   // ------------------------------------------------------------ fleet driver with an RFID-centre PIN
   const UID = Date.now().toString(16).slice(-10).toUpperCase();
@@ -243,7 +243,7 @@ try {
   const fst = await f.post(`/v1/charge/${fco.data.chargeId}/start`);
   check('fleet: remote start with the fleet card accepted', fst.status === 200 && fst.data.status === 'Accepted', fst.data);
   const flive = await until(() => f.get(`/v1/charge/${fco.data.chargeId}/status`), (r) => r.data.state === 'charging' && r.data.energyKwh > 0, 45_000, 1000);
-  check('fleet: charging, with a running cost estimate', flive.data.state === 'charging' && flive.data.estimatedIdr > 0, flive.data);
+  check('fleet: charging, with a running cost estimate', flive.data.state === 'charging' && flive.data.estimatedMinor > 0, flive.data);
   const fstop = await f.post(`/v1/charge/${fco.data.chargeId}/stop`);
   const fdone = await until(() => f.get(`/v1/charge/${fco.data.chargeId}/status`), (r) => r.data.state === 'rated', 60_000, 1500);
   check('fleet: stopped and rated, billed to the fleet', fstop.status === 200 && fdone.data.state === 'rated', { stop: fstop.data, s: fdone.data.state });
@@ -256,7 +256,8 @@ try {
   check('fleet: an already-created charge cannot start once the limit is reached', overStart.status === 400 && /Batas energi/.test(overStart.data.error), overStart.data);
   for (let i = 0; i < 5; i++) await f.post('/v1/fleet/login', { orgSlug: 'nusantara-charge', rfidUid: UID, pin: '111111' });
   const locked = await f.post('/v1/fleet/login', { orgSlug: 'nusantara-charge', rfidUid: UID, pin: '482913' });
-  check('fleet: 5 wrong PINs lock the card, even for the right PIN', locked.status === 400 && /Terlalu banyak/.test(locked.data.error), locked.data);
+  // The lock answers exactly like a wrong PIN (one message for every failure), so the right PIN failing is the proof.
+  check('fleet: 5 wrong PINs lock the card, even for the right PIN', locked.status === 400 && locked.data.error === wrongPin.data.error && /kartu dikunci/.test(locked.data.error), locked.data);
   const reset = await ops('PUT', `/v1/tokens/${card.data.id}`, { pin: '482913', energyLimitKwh: null });
   const relog = await f.post('/v1/fleet/login', { orgSlug: 'nusantara-charge', rfidUid: UID, pin: '482913' });
   check('fleet: re-issuing the PIN in the console clears the lock', reset.status === 200 && relog.status === 200, relog.data);
@@ -280,7 +281,7 @@ try {
   const d2 = new Driver(); await d2.init();
   const r3 = await until(() => d2.get(`/v1/resolve?code=${encodeURIComponent(ID3 + ':1')}`), (r) => r.data?.status === 'Available', 15_000, 500);
   check('2.0.1: driver sees the connector Available through the bridge', r3.data?.status === 'Available', r3.data);
-  const co3 = await d2.post('/v1/charge/prepaid', { connectorId: r3.data.connectorId, amountIdr: 50000 });
+  const co3 = await d2.post('/v1/charge/prepaid', { connectorId: r3.data.connectorId, amountMinor: 50000 });
   await d2.post(`/v1/charge/${co3.data.chargeId}/confirm-payment`);
   const tag = co3.data.startToken as string;
   c201.handlers.RequestStartTransaction = () => ({ status: 'Accepted' });
@@ -318,7 +319,7 @@ try {
   const rated3 = await until(() => d2.get(`/v1/charge/${co3.data.chargeId}/status`), (r) => r.data.state === 'rated' && r.data.hasReceipt, 30_000, 1000);
   const rc3 = await d2.get(`/v1/charge/${co3.data.chargeId}/receipt`);
   check('2.0.1: session ended and rated; receipt for 1.5 kWh with PPN and PBJT-TL',
-    rated3.data.state === 'rated' && rc3.data.energyKwh === 1.5 && rc3.data.tax?.ppnIdr > 0 && rc3.data.tax?.pbjtIdr > 0, { s: rated3.data.state, e: rc3.data.energyKwh, t: rc3.data.tax });
+    rated3.data.state === 'rated' && rc3.data.energyKwh === 1.5 && rc3.data.tax?.taxMinor > 0 && rc3.data.tax?.localTaxMinor > 0, { s: rated3.data.state, e: rc3.data.energyKwh, t: rc3.data.tax });
   const again = await d2.post(`/v1/charge/${co3.data.chargeId}/stop`);
   check('2.0.1: stopping an already-ended session is refused cleanly (400, not 500)', again.status === 400, again);
 

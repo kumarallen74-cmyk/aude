@@ -102,7 +102,7 @@ try {
   // ------------------------------------------------------------ setup
   const login = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   check('setup: operator signs in', login.status === 200, login.data);
-  const site = await ops('POST', '/v1/sites', { name: 'Field E2E Hub', address: 'Jl. Sudirman', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Field E2E Hub', address: 'Jl. Sudirman', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const siteId = site.data.id as string;
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Field E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true,
     components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }, { kind: 'session', rate: 5000, touBlock: 'ANY' }, { kind: 'idle', rate: 1000, touBlock: 'ANY', fromMinutes: 1, toMinutes: 60 }] });
@@ -129,8 +129,8 @@ try {
     await c.status(1, 'SuspendedEV');
     await c.stop(s.transactionId, 108_000, 'EVDisconnected', iso(-60));
     await c.status(1, 'Finishing'); await c.status(1, 'Available');
-    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_idr != null, 20_000);
-    check('1. session rated: 8.000 kWh billed from meter registers', row && Number(row.energy_wh) === 8000 && row.total_idr > 0, row && { e: row.energy_wh, t: row.total_idr, rev: row.review_reason });
+    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_minor != null, 20_000);
+    check('1. session rated: 8.000 kWh billed from meter registers', row && Number(row.energy_wh) === 8000 && row.total_minor > 0, row && { e: row.energy_wh, t: row.total_minor, rev: row.review_reason });
   }
 
   // ------------------------------------------------------------ 2. fault mid-session
@@ -162,7 +162,7 @@ try {
     await c.connect(); await c.boot(); await c.status(1, 'Charging');
     await c.meter(1, s.transactionId, 305_000);
     await c.stop(s.transactionId, 306_000, 'Local');
-    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_idr != null, 20_000);
+    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_minor != null, 20_000);
     const all = (await sessionsOn(ID)).filter((x: any) => String(x.ocpp_transaction_id) === String(s.transactionId));
     check('3. after reconnect the same transaction continues: one session, 6.000 kWh', all.length === 1 && Number(row?.energy_wh) === 6000, { n: all.length, e: row?.energy_wh });
     await c.status(1, 'Available');
@@ -189,7 +189,7 @@ try {
     const startAt = iso(-3600), stopAt = iso(-1800);
     const s = await c.start(1, 'ID-RFID-0001', 500_000, startAt);
     await c.stop(s.transactionId, 507_500, 'Local', stopAt);
-    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_idr != null, 20_000);
+    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_minor != null, 20_000);
     const durMin = row ? Math.round((new Date(row.ended_at).getTime() - new Date(row.started_at).getTime()) / 60000) : null;
     check('5. offline session keeps the charger\'s own start/stop times (30 min) and bills 7.5 kWh', durMin === 30 && Number(row?.energy_wh) === 7500, { durMin, e: row?.energy_wh, s: row?.started_at });
   }
@@ -206,7 +206,7 @@ try {
     await c.stop(a.transactionId, 602_000, 'Local', stopTs);
     await sleep(2500);
     const rows = (await sessionsOn(ID)).filter((x: any) => String(x.ocpp_transaction_id) === String(a.transactionId));
-    check('6. retried StopTransaction does not double-bill (one session, one CDR, 2 kWh)', rows.length === 1 && Number(rows[0]?.energy_wh) === 2000 && rows[0]?.total_idr > 0, rows.map((r: any) => ({ e: r.energy_wh, t: r.total_idr })));
+    check('6. retried StopTransaction does not double-bill (one session, one CDR, 2 kWh)', rows.length === 1 && Number(rows[0]?.energy_wh) === 2000 && rows[0]?.total_minor > 0, rows.map((r: any) => ({ e: r.energy_wh, t: r.total_minor })));
   }
 
   // ------------------------------------------------------------ 7. meter goes backwards (register reset / swap)
@@ -273,8 +273,8 @@ try {
     const dB = await (await fetch(API + '/d/v1/device', { method: 'POST' })).json();
     const res = await (await fetch(API + `/d/v1/resolve?code=${encodeURIComponent(ID + ':1')}`)).json();
     const conn = res.connectorId as string;
-    const coA = await drv('POST', '/v1/charge/prepaid', dA.deviceToken, { connectorId: conn, amountIdr: 20000 });
-    const coB = await drv('POST', '/v1/charge/prepaid', dB.deviceToken, { connectorId: conn, amountIdr: 20000 });
+    const coA = await drv('POST', '/v1/charge/prepaid', dA.deviceToken, { connectorId: conn, amountMinor: 20000 });
+    const coB = await drv('POST', '/v1/charge/prepaid', dB.deviceToken, { connectorId: conn, amountMinor: 20000 });
     await drv('POST', `/v1/charge/${coA.data.chargeId}/confirm-payment`, dA.deviceToken);
     await drv('POST', `/v1/charge/${coB.data.chargeId}/confirm-payment`, dB.deviceToken);
     // Charger accepts the first remote start; the second finds the connector occupied.
@@ -314,9 +314,9 @@ try {
     await c.meter(2, s.transactionId, 1_503_000, iso(30));
     await c.meter(2, s.transactionId, 1_503_000, iso(150));
     await c.stop(s.transactionId, 1_503_000, 'EVDisconnected', iso(270));
-    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_idr != null, 20_000);
+    const row = await until(() => sessionByTx(ID, s.transactionId), (r) => r?.total_minor != null, 20_000);
     // The explorer returns the frozen CDR as a breakdown (energy / service / idle / taxes).
-    check('14. overstay after the battery is full is billed as an idle fee', row && Number(row.idle_minutes) >= 3 && row.breakdown?.idleFeeIdr > 0, row && { idle: row.idle_minutes, breakdown: row.breakdown });
+    check('14. overstay after the battery is full is billed as an idle fee', row && Number(row.idle_minutes) >= 3 && row.breakdown?.idleFeeMinor > 0, row && { idle: row.idle_minutes, breakdown: row.breakdown });
   }
 
   // ------------------------------------------------------------ 15–17. OCPP 2.0.1 field behaviour
@@ -339,7 +339,7 @@ try {
     const st = await te('Started', 0, TXO, 10_000, iso(-2400), { offline: true, idToken: { idToken: 'ID-RFID-0001', type: 'ISO14443' } });
     await te('Updated', 1, TXO, 14_000, iso(-1800), { offline: true });
     await te('Ended', 2, TXO, 16_500, iso(-1200), { offline: true });
-    const r15 = await until(() => sessionByTx(ID2, TXO), (r) => r?.total_idr != null, 20_000);
+    const r15 = await until(() => sessionByTx(ID2, TXO), (r) => r?.total_minor != null, 20_000);
     const dur15 = r15 ? Math.round((new Date(r15.ended_at).getTime() - new Date(r15.started_at).getTime()) / 60000) : null;
     check('15. 2.0.1 offline transaction (offline:true) is billed with its original 20-min window and 6.5 kWh', st?.idTokenInfo?.status === 'Accepted' && dur15 === 20 && Number(r15?.energy_wh) === 6500, { st, dur15, e: r15?.energy_wh });
 
@@ -357,12 +357,12 @@ try {
     const e17 = await te('Ended', 3, TXE, 33_000, iso(-60), { idToken: { idToken: 'ID-RFID-0001', type: 'ISO14443' } });
     await sleep(1500);
     const r17 = await sessionByTx(ID2, TXE);
-    check('17. an Ended event for an unknown transaction is answered (no crash) and surfaced for review, not billed blind', !e17?.__error && (!r17 || r17.needs_review || r17.total_idr == null), { e17, r17: r17 && { st: r17.state, rev: r17.review_reason, t: r17.total_idr } });
+    check('17. an Ended event for an unknown transaction is answered (no crash) and surfaced for review, not billed blind', !e17?.__error && (!r17 || r17.needs_review || r17.total_minor == null), { e17, r17: r17 && { st: r17.state, rev: r17.review_reason, t: r17.total_minor } });
 
     // 18. prepaid energy cut-off on a 2.0.1 station (transaction ids are strings there)
     const dv = await (await fetch(API + '/d/v1/device', { method: 'POST' })).json();
     const res18 = await (await fetch(API + `/d/v1/resolve?code=${encodeURIComponent(ID2 + ':1')}`)).json();
-    const co18 = await drv('POST', '/v1/charge/prepaid', dv.deviceToken, { connectorId: res18.connectorId, amountIdr: 20000 });
+    const co18 = await drv('POST', '/v1/charge/prepaid', dv.deviceToken, { connectorId: res18.connectorId, amountMinor: 20000 });
     await drv('POST', `/v1/charge/${co18.data.chargeId}/confirm-payment`, dv.deviceToken);
     s2.handlers.RequestStartTransaction = () => ({ status: 'Accepted' });
     s2.handlers.RequestStopTransaction = () => ({ status: 'Accepted' });
@@ -558,7 +558,7 @@ try {
   {
     const dv = await (await fetch(API + '/d/v1/device', { method: 'POST' })).json();
     const res = await (await fetch(API + `/d/v1/resolve?code=${encodeURIComponent(ID + ':1')}`)).json();
-    const co = await drv('POST', '/v1/charge/prepaid', dv.deviceToken, { connectorId: res.connectorId, amountIdr: 50000 });
+    const co = await drv('POST', '/v1/charge/prepaid', dv.deviceToken, { connectorId: res.connectorId, amountMinor: 50000 });
     await drv('POST', `/v1/charge/${co.data.chargeId}/confirm-payment`, dv.deviceToken);
     c.handlers.RemoteStartTransaction = () => ({ status: 'Accepted' });
     const t0 = Date.now();
@@ -568,10 +568,10 @@ try {
     await c.meter(1, s.transactionId, 3_003_000);
     await c.stop(s.transactionId, 3_003_000, 'Local'); // driver leaves early: 3 kWh of a Rp 50,000 top-up
     const rcpt = await until(() => drv('GET', `/v1/charge/${co.data.chargeId}/receipt`, dv.deviceToken), (r) => !!r.data?.settlement?.refund, 20_000, 500);
-    const owed = rcpt.data?.settlement?.refundIdr;
+    const owed = rcpt.data?.settlement?.refundMinor;
     check('21. an under-used prepaid session puts the unused balance in the refund queue', owed > 0 && rcpt.data?.settlement?.refund?.state === 'due', rcpt.data?.settlement);
     const q = await ops('GET', '/v1/refunds?state=due');
-    const row = (q.data?.rows ?? []).find((r: any) => Number(r.refund_due_idr) === Number(owed) && r.ocpp_identity === ID);
+    const row = (q.data?.rows ?? []).find((r: any) => Number(r.refund_due_minor) === Number(owed) && r.ocpp_identity === ID);
     check('21. finance sees it in Refunds with the charger and amount', q.status === 200 && !!row && q.data.summary?.due_count >= 1, { owed, rows: q.data?.rows?.slice?.(0, 2) });
     const pay = row ? await ops('POST', `/v1/refunds/${row.id}/process`) : { status: 0, data: null };
     check('21. refund paid through the payment provider (reference recorded)', pay.status === 200 && pay.data?.state === 'refunded' && !!pay.data?.refundRef, pay.data);
@@ -601,7 +601,7 @@ try {
       const { sweepUnusedPayments } = await import('../../src/services/refunds.js');
       const n = await sweepUnusedPayments();
       const st = await drv('GET', `/v1/charge/${unused.chargeId}/status`, unused.token);
-      check('22. the refund sweep queues the full amount and the driver app says "refund in progress"', n >= 1 && st.data?.state === 'refund_pending' && st.data?.refund?.amountIdr === 20000, { n, st: st.data?.state, refund: st.data?.refund });
+      check('22. the refund sweep queues the full amount and the driver app says "refund in progress"', n >= 1 && st.data?.state === 'refund_pending' && st.data?.refund?.amountMinor === 20000, { n, st: st.data?.state, refund: st.data?.refund });
       const tok = (await db.query(`SELECT status FROM token WHERE uid = $1 AND kind = 'prepaid'`, [pi.claim_id_tag])).rows[0];
       check('22. the claim token is retired (Expired) once its money is refundable', tok?.status === 'Expired', tok);
       const manual = await ops('POST', `/v1/refunds/${pi.id}/mark-refunded`, { reference: 'BCA-E2E-778812' });
@@ -626,8 +626,8 @@ try {
     const o = new Raw(ID3); raws.push(o);
     await o.connect(); await o.boot(); await o.status(1, 'Available');
     // A site with a weak signal tolerates a day offline: its charger drops at the same moment and must not alert.
-    const patient = await ops('POST', '/v1/sites', { name: `E2E Patient site ${ID3}`, address: 'Jl. Pelan', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000', offlineAlertMinutes: 1440 });
-    const badThreshold = await ops('POST', '/v1/sites', { name: 'E2E bad threshold', address: 'x', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000', offlineAlertMinutes: 0 });
+    const patient = await ops('POST', '/v1/sites', { name: `E2E Patient site ${ID3}`, address: 'Jl. Pelan', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000', offlineAlertMinutes: 1440 });
+    const badThreshold = await ops('POST', '/v1/sites', { name: 'E2E bad threshold', address: 'x', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000', offlineAlertMinutes: 0 });
     const patientRow = (await ops('GET', `/v1/sites/${patient.data?.id}`)).data;
     const pMin = (patientRow?.site ?? patientRow)?.offline_alert_minutes;
     check('23. a site can set its own offline threshold (1–1440 minutes)', patient.status === 200 && pMin === 1440 && badThreshold.status === 422, { pMin, bad: badThreshold.data });
@@ -656,7 +656,7 @@ try {
     const r3 = (rep.data?.rows ?? []).find((r: any) => r.ocppIdentity === ID3);
     check('23. availability report: the outage is counted and uptime is below 100%', rep.status === 200 && r3?.outages === 1 && r3.uptimePct < 100 && r3.offlineMinutes >= 1 && r3.online === true, r3);
     const rMain = (rep.data?.rows ?? []).find((r: any) => r.ocppIdentity === ID);
-    check('23. availability report: sessions, energy and revenue per charger', rMain?.sessions >= 10 && rMain.energyKwh > 0 && rMain.revenueIdr > 0 && rMain.utilisationPct != null, rMain);
+    check('23. availability report: sessions, energy and revenue per charger', rMain?.sessions >= 10 && rMain.energyKwh > 0 && rMain.revenueMinor > 0 && rMain.utilisationPct != null, rMain);
     // Scenario 10 left a session stamped 3 days in the future on this charger.
     const outOfRange = (rep.data?.rows ?? []).filter((r: any) => [r.uptimePct, r.utilisationPct].some((p) => p != null && (p < 0 || p > 100)));
     check('23. availability report: every percentage is within 0–100 (a charger clock running ahead cannot skew it)', outOfRange.length === 0, outOfRange);
@@ -962,15 +962,15 @@ try {
     check('25. the customer sees this month\'s draft statement at the published rates', st?.status === 'draft' && st.plan?.tiers?.map((t: any) => t.rateBps).join() === '800,650,500' && st.plan.tierMode === 'whole', st && { status: st.status, plan: st.plan });
     const s25 = st.sites.find((s: any) => s.siteId === siteId);
     const rows = ((await ops('GET', `/v1/sessions/search?siteId=${siteId}&limit=500`)).data?.rows ?? []).filter((r: any) => r.cdr_id);
-    const subtotal = rows.reduce((a: number, r: any) => a + Number(r.subtotal_idr), 0);
-    const gross = rows.reduce((a: number, r: any) => a + Number(r.total_idr), 0);
-    check('25. commission base = the sessions\' subtotals, excluding PBJT and PPN', !!s25 && s25.gtvIdr === subtotal && s25.grossIdr === gross && gross > subtotal && s25.pbjtIdr + s25.ppnIdr === gross - subtotal, s25 && { base: s25.gtvIdr, subtotal, gross, pbjt: s25.pbjtIdr, ppn: s25.ppnIdr, sessions: rows.length });
-    check('25. this site is in the Standard tier: 8% commission', s25?.tier === 'Standard' && Math.abs(s25.commissionIdr - s25.gtvIdr * 0.08) <= s25.chargers.length, s25 && { tier: s25.tier, commission: s25.commissionIdr, base: s25.gtvIdr });
-    const cOk = (s25?.chargers ?? []).every((c: any) => c.topUpIdr === Math.max(0, c.minimumIdr - c.commissionIdr) && c.feeIdr === c.commissionIdr + c.topUpIdr);
+    const subtotal = rows.reduce((a: number, r: any) => a + Number(r.subtotal_minor), 0);
+    const gross = rows.reduce((a: number, r: any) => a + Number(r.total_minor), 0);
+    check('25. commission base = the sessions\' subtotals, excluding PBJT and PPN', !!s25 && s25.gtvMinor === subtotal && s25.grossMinor === gross && gross > subtotal && s25.localTaxMinor + s25.taxMinor === gross - subtotal, s25 && { base: s25.gtvMinor, subtotal, gross, pbjt: s25.localTaxMinor, ppn: s25.taxMinor, sessions: rows.length });
+    check('25. this site is in the Standard tier: 8% commission', s25?.tier === 'Standard' && Math.abs(s25.commissionMinor - s25.gtvMinor * 0.08) <= s25.chargers.length, s25 && { tier: s25.tier, commission: s25.commissionMinor, base: s25.gtvMinor });
+    const cOk = (s25?.chargers ?? []).every((c: any) => c.topUpMinor === Math.max(0, c.minimumMinor - c.commissionMinor) && c.feeMinor === c.commissionMinor + c.topUpMinor);
     const main = s25?.chargers?.find((c: any) => c.ocppIdentity === ID);
-    check('25. each quiet charger is topped up to its pro-rated minimum (DC Rp 350,000 a month; AC Rp 150,000)', cOk && main?.minimumIdr > 0 && main.minimumIdr <= 350_000 && main.kind === 'DC' && st.plan.minPerChargerAcIdr === 150_000 && st.plan.minPerChargerDcIdr === 350_000, main);
+    check('25. each quiet charger is topped up to its pro-rated minimum (DC Rp 350,000 a month; AC Rp 150,000)', cOk && main?.minimumMinor > 0 && main.minimumMinor <= 350_000 && main.kind === 'DC' && st.plan.minPerChargerAcMinor === 150_000 && st.plan.minPerChargerDcMinor === 350_000, main);
     const t = st.totals;
-    check('25. PPN on the fee: DPP 11/12, 12% of DPP; MDR credited (commission covers payment processing)', t.netIdr === t.feesIdr - t.mdrCreditIdr && t.dppIdr === Math.round(t.netIdr * 11 / 12) && t.ppnIdr === Math.round(t.dppIdr * 0.12) && t.totalIdr === t.netIdr + t.ppnIdr, t);
+    check('25. PPN on the fee: DPP 11/12, 12% of DPP; MDR credited (commission covers payment processing)', t.netMinor === t.feesMinor - t.mdrCreditMinor && t.taxBaseMinor === Math.round(t.netMinor * 11 / 12) && t.taxMinor === Math.round(t.taxBaseMinor * 0.12) && t.totalMinor === t.netMinor + t.taxMinor, t);
 
     const csv = await fetch(API + '/v1/billing/statement.csv', { headers: { cookie } });
     const csvText = await csv.text();
@@ -978,7 +978,7 @@ try {
     const htmlText = await html.text();
     check('25. CSV (one line per charger) and a printable statement', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type') ?? '') && csvText.includes('Commission base (excl. PBJT, PPN)') && csvText.trim().split('\r\n').length === 1 + st.sites.reduce((a: number, s: any) => a + s.chargers.length, 0)
       && html.status === 200 && htmlText.includes('Platform commission &amp; fee statement') && htmlText.includes('DRAFT'), { csv: csv.status, lines: csvText.trim().split('\r\n').length, html: html.status });
-    const denied = await ops('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'Mine', upToIdr: null, rateBps: 0 }] } });
+    const denied = await ops('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'Mine', upToMinor: null, rateBps: 0 }] } });
     const deniedModel = await ops('PUT', `/v1/platform/billing/sites/${siteId}/model`, { model: 'private' });
     check('25. a customer administrator cannot change its own commission plan or billing model', denied.status === 403 && deniedModel.status === 403, { plan: denied.status, model: deniedModel.status });
 
@@ -997,18 +997,18 @@ try {
       try {
         const ov = await pa('GET', '/v1/platform/billing');
         const mine = ov.data?.orgs?.find((o: any) => o.orgId === orgId);
-        check('25. platform operator sees every customer\'s month (same figures as the customer)', ov.status === 200 && mine?.totals?.netIdr === st.totals.netIdr && mine.status === 'draft', { status: ov.status, mine: mine?.totals?.netIdr, cust: st.totals.netIdr });
-        const bad = await pa('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'A', upToIdr: 500_000_000, rateBps: 800 }, { name: 'B', upToIdr: 150_000_000, rateBps: 650 }, { name: 'C', upToIdr: null, rateBps: 500 }] } });
-        const set = await pa('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'Standard', upToIdr: 150_000_000, rateBps: 1000 }, { name: 'Volume', upToIdr: 500_000_000, rateBps: 650 }, { name: 'Network', upToIdr: null, rateBps: 500 }], minPerChargerDcIdr: 400_000 } });
+        check('25. platform operator sees every customer\'s month (same figures as the customer)', ov.status === 200 && mine?.totals?.netMinor === st.totals.netMinor && mine.status === 'draft', { status: ov.status, mine: mine?.totals?.netMinor, cust: st.totals.netMinor });
+        const bad = await pa('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'A', upToMinor: 500_000_000, rateBps: 800 }, { name: 'B', upToMinor: 150_000_000, rateBps: 650 }, { name: 'C', upToMinor: null, rateBps: 500 }] } });
+        const set = await pa('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'Standard', upToMinor: 150_000_000, rateBps: 1000 }, { name: 'Volume', upToMinor: 500_000_000, rateBps: 650 }, { name: 'Network', upToMinor: null, rateBps: 500 }], minPerChargerDcMinor: 400_000 } });
         const st2 = (await ops('GET', '/v1/billing/statement')).data;
         const s2 = st2.sites.find((s: any) => s.siteId === siteId);
         const m2 = s2?.chargers?.find((c: any) => c.ocppIdentity === ID);
-        check('25. a custom plan (10%, DC minimum Rp 400,000) applies to the draft; an unordered plan is refused', bad.status === 400 && set.status === 200 && s2?.rateBps === 1000 && m2?.minimumIdr > main.minimumIdr, { bad: bad.status, set: set.status, rate: s2?.rateBps, min: [main?.minimumIdr, m2?.minimumIdr] });
+        check('25. a custom plan (10%, DC minimum Rp 400,000) applies to the draft; an unordered plan is refused', bad.status === 400 && set.status === 200 && s2?.rateBps === 1000 && m2?.minimumMinor > main.minimumMinor, { bad: bad.status, set: set.status, rate: s2?.rateBps, min: [main?.minimumMinor, m2?.minimumMinor] });
 
         const priv = await pa('PUT', `/v1/platform/billing/sites/${siteId}/model`, { model: 'private' });
         const st3 = (await ops('GET', '/v1/billing/statement')).data;
         const s3 = st3.sites.find((s: any) => s.siteId === siteId);
-        check('25. a private site pays the flat platform fee, no commission — and is flagged because drivers paid there', priv.status === 200 && s3?.model === 'private' && s3.commissionIdr === 0 && s3.privateFeeIdr > 0 && s3.warnings.some((w: string) => /should be public/.test(w)), s3 && { model: s3.model, commission: s3.commissionIdr, fee: s3.privateFeeIdr, warnings: s3.warnings });
+        check('25. a private site pays the flat platform fee, no commission — and is flagged because drivers paid there', priv.status === 200 && s3?.model === 'private' && s3.commissionMinor === 0 && s3.privateFeeMinor > 0 && s3.warnings.some((w: string) => /should be public/.test(w)), s3 && { model: s3.model, commission: s3.commissionMinor, fee: s3.privateFeeMinor, warnings: s3.warnings });
 
         const cur = ov.data.current as string;
         const [yy, mm] = cur.split('-').map(Number);
@@ -1018,8 +1018,8 @@ try {
         const fAgain = await pa('POST', `/v1/platform/billing/orgs/${orgId}/finalise`, { month: prev });
         const stPrev = (await ops('GET', `/v1/billing/statement?month=${prev}`)).data;
         check('25. only an ended month can be finalised, once; the customer then sees it frozen and numbered', fNow.status === 400 && (fPrev.status === 200 || fPrev.status === 409) && fAgain.status === 409 && stPrev?.status === 'final' && /^PSC-\d{6}-/.test(stPrev.number ?? '') && (stPrev.history ?? []).some((h: any) => h.period === prev), { now: fNow.status, prev: fPrev.status, again: fAgain.status, st: stPrev?.status, number: stPrev?.number });
-        check('25. last month is billed at the rates in force last month, not the new plan set this month', stPrev?.plan?.tiers?.[0]?.rateBps === 800 && stPrev.plan.minPerChargerDcIdr === 350_000, stPrev?.plan);
-        const reprice = await pa('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'Flat', upToIdr: null, rateBps: 100 }] }, effectiveFrom: prev });
+        check('25. last month is billed at the rates in force last month, not the new plan set this month', stPrev?.plan?.tiers?.[0]?.rateBps === 800 && stPrev.plan.minPerChargerDcMinor === 350_000, stPrev?.plan);
+        const reprice = await pa('PUT', `/v1/platform/billing/orgs/${orgId}/plan`, { plan: { tiers: [{ name: 'Flat', upToMinor: null, rateBps: 100 }] }, effectiveFrom: prev });
         check('25. a finalised month cannot be re-priced by a back-dated plan', reprice.status === 400 && /final/.test(JSON.stringify(reprice.data)), reprice);
       } finally {
         await pa('PUT', `/v1/platform/billing/sites/${siteId}/model`, { model: 'public' }).catch(() => {});
@@ -1027,7 +1027,7 @@ try {
       }
       const st4 = (await ops('GET', '/v1/billing/statement')).data;
       const ov4 = (await pa('GET', '/v1/platform/billing')).data?.orgs?.find((o: any) => o.orgId === orgId);
-      check('25. reset follows the published rates (8%, AC minimum Rp 150,000; not "custom") and a public site', st4.plan.tiers[0].rateBps === 800 && st4.plan.minPerChargerAcIdr === 150_000 && st4.sites.find((s: any) => s.siteId === siteId)?.model === 'public' && ov4?.customPlan === false, { rate: st4.plan.tiers[0].rateBps, ac: st4.plan.minPerChargerAcIdr, custom: ov4?.customPlan });
+      check('25. reset follows the published rates (8%, AC minimum Rp 150,000; not "custom") and a public site', st4.plan.tiers[0].rateBps === 800 && st4.plan.minPerChargerAcMinor === 150_000 && st4.sites.find((s: any) => s.siteId === siteId)?.model === 'public' && ov4?.customPlan === false, { rate: st4.plan.tiers[0].rateBps, ac: st4.plan.minPerChargerAcMinor, custom: ov4?.customPlan });
     }
   }
 
@@ -1116,12 +1116,12 @@ try {
     const ost = await oc('GET', '/v1/billing/statement');
     const t = ost.data?.totals;
     check('26. the owner sees its own statement: units, amounts and its share', ost.status === 200 && ost.data.owner?.id === ownerId && ost.data.sites.length === 1 && ost.data.sites[0].siteId === siteId
-      && ost.data.billTo?.name === `PT E2E Hotel ${tag}` && t.energyKwh > 0 && t.ownerShareIdr + t.platformShareIdr + t.mdrEstimateIdr === t.gtvIdr, t && { base: t.gtvIdr, owner: t.ownerShareIdr, op: t.platformShareIdr, mdr: t.mdrEstimateIdr, kwh: t.energyKwh });
+      && ost.data.billTo?.name === `PT E2E Hotel ${tag}` && t.energyKwh > 0 && t.ownerShareMinor + t.platformShareMinor + t.mdrEstimateMinor === t.gtvMinor, t && { base: t.gtvMinor, owner: t.ownerShareMinor, op: t.platformShareMinor, mdr: t.mdrEstimateMinor, kwh: t.energyKwh });
     const spoof = await oc('GET', `/v1/billing/statement?ownerId=${ow2.data?.id}`);
     const ohtml = await fetch(API + '/v1/billing/statement.html', { headers: { cookie: ocookie } });
     const ohtmlText = await ohtml.text();
     check('26. the owner cannot open another owner\'s statement; its printable statement shows its share', spoof.status === 404 && ohtml.status === 200 && ohtmlText.includes('Your share') && ohtmlText.includes(`PT E2E Hotel ${tag}`), { spoof: spoof.status, html: ohtml.status });
-    const planTry = await oc('PUT', `/v1/billing/owners/${ownerId}/plan`, { plan: { tiers: [{ name: 'Free', upToIdr: null, rateBps: 0 }] } });
+    const planTry = await oc('PUT', `/v1/billing/owners/${ownerId}/plan`, { plan: { tiers: [{ name: 'Free', upToMinor: null, rateBps: 0 }] } });
     check('26. the owner cannot change its own commission plan', planTry.status === 403, planTry.status);
 
     // Operator Billing: every owner with units, amounts and shares, and totals.
@@ -1130,11 +1130,11 @@ try {
     const T = bo.data?.totals;
     const all = [...(bo.data?.owners ?? []), bo.data?.operatorOwn];
     const sumOf = (k: string) => all.reduce((a: number, r: any) => a + Number(r?.[k] ?? 0), 0);
-    check('26. Billing shows the owner\'s units and amounts, matching its statement', bo.status === 200 && row?.baseIdr === t.gtvIdr && row.ownerShareIdr === t.ownerShareIdr && row.platformShareIdr === t.platformShareIdr && Math.abs(row.energyKwh - t.energyKwh) < 0.01 && row.sessions === t.sessions, { row, stmt: t && { base: t.gtvIdr, kwh: t.energyKwh } });
-    check('26. Billing totals add up across owners and the operator\'s own sites', !!T && T.baseIdr === sumOf('baseIdr') && T.ownerShareIdr === sumOf('ownerShareIdr') && T.platformShareIdr === sumOf('platformShareIdr') && T.sessions === sumOf('sessions')
-      && T.baseIdr === T.ownerShareIdr + T.platformShareIdr + T.mdrIdr, T);
+    check('26. Billing shows the owner\'s units and amounts, matching its statement', bo.status === 200 && row?.baseMinor === t.gtvMinor && row.ownerShareMinor === t.ownerShareMinor && row.platformShareMinor === t.platformShareMinor && Math.abs(row.energyKwh - t.energyKwh) < 0.01 && row.sessions === t.sessions, { row, stmt: t && { base: t.gtvMinor, kwh: t.energyKwh } });
+    check('26. Billing totals add up across owners and the operator\'s own sites', !!T && T.baseMinor === sumOf('baseMinor') && T.ownerShareMinor === sumOf('ownerShareMinor') && T.platformShareMinor === sumOf('platformShareMinor') && T.sessions === sumOf('sessions')
+      && T.baseMinor === T.ownerShareMinor + T.platformShareMinor + T.mdrMinor, T);
 
-    const op1 = await ops('PUT', `/v1/billing/owners/${ownerId}/plan`, { plan: { tiers: [{ name: 'Hotel', upToIdr: null, rateBps: 700 }] } });
+    const op1 = await ops('PUT', `/v1/billing/owners/${ownerId}/plan`, { plan: { tiers: [{ name: 'Hotel', upToMinor: null, rateBps: 700 }] } });
     const ost2 = await oc('GET', '/v1/billing/statement');
     check('26. an owner-specific plan (7%) applies to that owner only', op1.status === 200 && ost2.data.sites[0].tier === 'Hotel' && ost2.data.plan.tiers[0].rateBps === 700, { op1: op1.status, tier: ost2.data?.sites?.[0]?.tier });
 
@@ -1147,7 +1147,7 @@ try {
     check('26. driver receipts name the operator, or the owner once it is seller of record', !rc1.includes(`PT E2E Hotel ${tag}`) && rc2.includes(`PT E2E Hotel ${tag}`) && rc2.includes('01.234.567.8-901.000'), { sid });
 
     // A charger moved onto the owner's site does not bring its old OCPP log (RFID idTags) along.
-    const siteB = await ops('POST', '/v1/sites', { name: `E2E Other site ${tag}`, address: 'Jl. Lain', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+    const siteB = await ops('POST', '/v1/sites', { name: `E2E Other site ${tag}`, address: 'Jl. Lain', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
     const IDM = `FIELDMV-${tag}`.slice(0, 20);
     const regM = await ops('POST', '/v1/charge-points', { ocppIdentity: IDM, siteId: siteB.data.id, displayName: 'Moved unit', ocppVersion: 'ocpp1.6',
       evses: [{ evseId: 1, connectors: [{ connectorId: 1, connectorType: 'cCCS2', currentKind: 'DC', maxPowerW: 60000, teraCertStatus: 'verified', teraDueAt: '2027-12-31' }] }] });

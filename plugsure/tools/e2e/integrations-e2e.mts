@@ -133,7 +133,7 @@ try {
   check('test: the server key is checked against Midtrans (status call) and the result kept', t1.data.ok === true && /accepted/.test(t1.data.message) && callsTo(/^\/v2\/plugsure-connection-test/).length === 1, t1.data);
 
   // A site with a tariff and a connected charger.
-  const site = await ops('POST', '/v1/sites', { name: 'Integrations E2E Hub', address: 'Jl. Kuningan', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Integrations E2E Hub', address: 'Jl. Kuningan', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Integrations E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${site.data.id}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
   const ID = `INTG-${Date.now().toString().slice(-6)}`;
@@ -149,12 +149,12 @@ try {
 
   // Console checkout through Midtrans.
   const t2 = Date.now();
-  const co = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountIdr: 50_000 });
+  const co = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 50_000 });
   const charge = callsTo(/^\/v2\/charge$/, t2)[0];
   const orderId = co.data.qr?.providerRef as string;
   check('console checkout: a QRIS charge created at Midtrans (the QR string is Midtrans\'), recorded with the provider',
     co.status === 200 && co.data.provider === 'midtrans' && !!charge && JSON.parse(charge.body).transaction_details.gross_amount === 50_000 && co.data.qr.qrString.includes(orderId), { co: co.data, charge: charge?.body });
-  const intentState = async (ref: string) => (await pg.query(`SELECT state, amount_captured_idr, integration_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
+  const intentState = async (ref: string) => (await pg.query(`SELECT state, amount_captured_minor, integration_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
   const sig = (o: string, s: string, g: string) => createHash('sha512').update(`${o}${s}${g}${SERVER_KEY}`).digest('hex');
   const note = (o: string, g = '50000.00', st = 'settlement') => JSON.stringify({ order_id: o, status_code: '200', gross_amount: g, transaction_status: st, transaction_id: 'mt-tx-1', signature_key: sig(o, '200', g) });
   const forged = await raw(hookPath, JSON.stringify({ order_id: orderId, status_code: '200', gross_amount: '50000.00', transaction_status: 'settlement', signature_key: 'f'.repeat(128) }));
@@ -164,16 +164,19 @@ try {
   const captured = await intentState(orderId);
   const again = await raw(hookPath, note(orderId));
   check('notification: a forged signature (401) and an unknown URL (404) change nothing; the signed one captures the payment once',
-    forged.status === 401 && unknownUrl.status === 404 && stillPending.state === 'pending' && good.status === 200 && captured.state === 'captured' && captured.amount_captured_idr === 50_000 && again.status === 200,
+    forged.status === 401 && unknownUrl.status === 404 && stillPending.state === 'pending' && good.status === 200 && captured.state === 'captured' && captured.amount_captured_minor === 50_000 && again.status === 200,
     { forged: forged.status, unknownUrl: unknownUrl.status, stillPending, captured });
-  const co2 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountIdr: 40_000 });
+  const co2 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 40_000 });
   const short = await raw(hookPath, note(co2.data.qr.providerRef, '4000.00'));
   const shortState = await intentState(co2.data.qr.providerRef);
-  check('notification for less than the payment: acknowledged but not captured', short.status === 200 && shortState.state === 'pending', shortState);
+  const shortRefund = (await pg.query(`SELECT refund_state FROM payment_intent WHERE provider_ref = $1`, [co2.data.qr.providerRef])).rows[0];
+  // Since v1.5.1 an underpaid notification is not left pending (money stranded): recorded, voided, and refunded in full.
+  check('notification for less than the payment: acknowledged, not captured — voided with a full refund of what was taken',
+    short.status === 200 && shortState.state === 'voided' && !!shortRefund?.refund_state, { shortState, shortRefund });
 
   // Refund through the acquirer.
   const pi = (await pg.query(`SELECT id FROM payment_intent WHERE provider_ref = $1`, [orderId])).rows[0].id;
-  await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_idr = 12000, refund_reason = 'e2e unused balance' WHERE id = $1`, [pi]);
+  await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_minor = 12000, refund_reason = 'e2e unused balance' WHERE id = $1`, [pi]);
   const t3 = Date.now();
   const rf = await ops('POST', `/v1/refunds/${pi}/process`);
   const rfCall = callsTo(/\/refund$/, t3)[0];
@@ -184,7 +187,7 @@ try {
   const d = async (method: string, path: string, body?: unknown) => { const r = await fetch(`${API}/d${path}`, { method, headers: { authorization: `Bearer ${dev}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); const t = await r.text(); let j: any = t; try { j = JSON.parse(t); } catch {} return { status: r.status, data: j }; };
   const stations = await until(() => d('GET', '/v1/stations'), (r) => !!r.data.stations?.find((s: any) => s.siteId === site.data.id)?.connectors?.[0], 20_000, 800);
   const conn = stations.data.stations.find((s: any) => s.siteId === site.data.id).connectors[0].connectorId;
-  const pre = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000 });
+  const pre = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000 });
   const demoConfirm = pre.data.chargeId ? await d('POST', `/v1/charge/${pre.data.chargeId}/confirm-payment`) : null;
   const paidByHook = pre.data.qr ? await raw(hookPath, note(pre.data.qr.providerRef, '30000.00')) : null;
   const preState = pre.data.qr ? await intentState(pre.data.qr.providerRef) : null;
@@ -192,9 +195,12 @@ try {
     pre.status === 200 && pre.data.demo === false && /MIDTRANS/.test(pre.data.qr.qrString) && demoConfirm?.data?.ok === false && paidByHook?.status === 200 && preState?.state === 'captured',
     { pre: pre.data, demoConfirm: demoConfirm?.data, preState });
 
+  // A Midtrans payment still open when the operator switches to Xendit (settled below through the old URL).
+  const co3 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 40_000 });
+
   // ================================================================ QRIS: Xendit
   const xe = await ops('PUT', '/v1/integrations/payments', { provider: 'xendit', settings: { baseUrl: FAKE }, secrets: { secretKey: 'xnd_development_E2E', callbackToken: 'xendit-callback-token-e2e' } });
-  const coX = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountIdr: 20_000 });
+  const coX = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 20_000 });
   const refX = coX.data.qr?.providerRef as string;
   const cb = (token: string) => raw(xe.data.webhookPath, JSON.stringify({ event: 'qr.payment', data: { id: 'qrpy_e2e', reference_id: refX, amount: 20000, status: 'SUCCEEDED' } }), { 'x-callback-token': token });
   // Fail closed: a correctly authenticated "paid" callback that states no amount is not recorded as paid.
@@ -207,8 +213,12 @@ try {
   const xState = await intentState(refX);
   check('Xendit: a dynamic QR from Xendit; a callback with the wrong token refused, with the verification token captured',
     xe.status === 200 && coX.data.provider === 'xendit' && /XENDIT/.test(coX.data.qr.qrString) && wrongTok.status === 401 && rightTok.status === 200 && xState.state === 'captured', { wrongTok: wrongTok.status, xState });
-  const midHookAfterSwitch = await raw(hookPath, note(co2.data.qr.providerRef, '40000.00'));
-  check('the old Midtrans URL still settles payments it took (each payment remembers its account)', midHookAfterSwitch.status === 200 && (await intentState(co2.data.qr.providerRef)).state === 'captured');
+  const midHookAfterSwitch = await raw(hookPath, note(co3.data.qr.providerRef, '40000.00'));
+  // v1.9.0: the underpaid payment voided above stays voided when a full "paid" follows (its refund is already queued).
+  const afterVoid = await raw(hookPath, note(co2.data.qr.providerRef, '40000.00'));
+  check('the old Midtrans URL still settles payments it took (each payment remembers its account); a voided payment stays voided',
+    midHookAfterSwitch.status === 200 && (await intentState(co3.data.qr.providerRef)).state === 'captured'
+      && afterVoid.status === 200 && (await intentState(co2.data.qr.providerRef)).state === 'voided');
 
   // ================================================================ sign-in codes
   const wa = await pa('PUT', '/v1/integrations/otp', { provider: 'whatsapp_cloud', settings: { phoneNumberId: '1098765', templateName: 'plugsure_otp', language: 'id', copyCodeButton: true, baseUrl: FAKE }, secrets: { accessToken: 'EAAG-e2e-token' } });
@@ -232,9 +242,12 @@ try {
   const s2 = await d('POST', '/v1/otp/send', { phone: phone2 });
   const sms = callsTo(/Messages\.json$/, t5)[0];
   const code2 = sms ? /(\d{6})/.exec(new URLSearchParams(sms.body).get('Body') ?? '')?.[1] : '';
+  // Since v1.5.1 a code works only on the device that asked for it: another device is refused, the asking one signs in.
   const dev2 = (await raw('/d/v1/device', '{}')).data.deviceToken as string;
-  const v2 = await fetch(`${API}/d/v1/otp/verify`, { method: 'POST', headers: { authorization: `Bearer ${dev2}`, 'content-type': 'application/json' }, body: JSON.stringify({ phone: phone2, code: code2 }) });
-  check('fallback: WhatsApp refuses → the code goes by SMS (Twilio) and still signs in', s2.status === 200 && callsTo(/\/messages$/, t5).length === 1 && !!sms && v2.status === 200, { s2: s2.data, sms: sms?.body });
+  const other = await fetch(`${API}/d/v1/otp/verify`, { method: 'POST', headers: { authorization: `Bearer ${dev2}`, 'content-type': 'application/json' }, body: JSON.stringify({ phone: phone2, code: code2 }) });
+  const v2 = await d('POST', '/v1/otp/verify', { phone: phone2, code: code2 });
+  check('fallback: WhatsApp refuses → the code goes by SMS (Twilio) and still signs in (on the device that asked; another device is refused)',
+    s2.status === 200 && callsTo(/\/messages$/, t5).length === 1 && !!sms && other.status !== 200 && v2.status === 200, { s2: s2.data, sms: sms?.body, other: other.status, v2: v2.status });
   behaviour.whatsappStatus = 200;
   const ev = await pa('GET', '/v1/integrations/otp/events?limit=20');
   cc('/v1/integrations/{kind}/events', 'get', '200', ev.data);

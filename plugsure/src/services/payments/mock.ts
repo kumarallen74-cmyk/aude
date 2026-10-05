@@ -1,4 +1,5 @@
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
+import type { CurrencyCode } from '../../domain/money.js';
 import { CHANNELS } from './provider.js';
 import type {
   Channel, Checkout, CheckoutArgs, HoldArgs, HoldResult, SavedCardCharge, SavedCardChargeArgs,
@@ -29,6 +30,8 @@ export class MockPaymentProvider implements PaymentProvider {
   /** Sandbox notifications are {providerRef, status}: no amount, and no real money. */
   readonly unverifiedAmounts = true;
   readonly demo = true;
+  /** The sandbox takes every currency PlugSure supports (development and tests only). */
+  currencies(): CurrencyCode[] { return ['IDR', 'MYR', 'SGD']; }
   private charges = new Map<string, QrisCharge>();
 
   constructor(private secret = 'sandbox-webhook-secret') {}
@@ -39,8 +42,8 @@ export class MockPaymentProvider implements PaymentProvider {
     const charge: QrisCharge = {
       providerRef,
       // Not a valid EMVCo payload — a placeholder the sandbox UI can render.
-      qrString: `00020101021226${providerRef}5802ID5910PLUGSURE6007JAKARTA54${a.amountIdr}`,
-      amountIdr: a.amountIdr,
+      qrString: `00020101021226${providerRef}5802ID5910PLUGSURE6007JAKARTA54${a.amountMinor}`,
+      amountMinor: a.amountMinor,
       expiresAt,
       status: 'pending',
     };
@@ -100,8 +103,8 @@ export class MockPaymentProvider implements PaymentProvider {
   }
   async unlinkWallet(linkRef: string): Promise<void> { this.links.delete(linkRef); }
 
-  async captureHold(a: HoldArgs): Promise<HoldResult> { return a.amountIdr > 0 ? { ok: true } : { ok: false, error: 'amount must be positive' }; }
-  async releaseHold(_a: Omit<HoldArgs, 'amountIdr'>): Promise<HoldResult> { return { ok: true }; }
+  async captureHold(a: HoldArgs): Promise<HoldResult> { return a.amountMinor > 0 ? { ok: true } : { ok: false, error: 'amount must be positive' }; }
+  async releaseHold(_a: Omit<HoldArgs, 'amountMinor'>): Promise<HoldResult> { return { ok: true }; }
 
   /** Sandbox helper: simulate the driver paying. */
   async simulatePayment(providerRef: string): Promise<QrisCharge | null> {
@@ -115,16 +118,16 @@ export class MockPaymentProvider implements PaymentProvider {
     // Tokenisation does not guarantee funds — a driver can link a zero-balance
     // wallet. Real implementations must risk-score by history, cap unsecured
     // session value for new users, and degrade to prepay after a failed charge.
-    return { providerRef: `mock_tok_${randomUUID().slice(0, 12)}`, status: 'captured', amountIdr: a.amountIdr };
+    return { providerRef: `mock_tok_${randomUUID().slice(0, 12)}`, status: 'captured', amountMinor: a.amountMinor };
   }
 
   async authorizeCard(a: PreauthArgs): Promise<PaymentResult> {
-    return { providerRef: `mock_auth_${randomUUID().slice(0, 12)}`, status: 'authorised', amountIdr: a.amountIdr };
+    return { providerRef: `mock_auth_${randomUUID().slice(0, 12)}`, status: 'authorised', amountMinor: a.amountMinor };
   }
 
   async captureCard(a: CaptureArgs): Promise<PaymentResult> {
     // Capture may be lower than authorised, never higher.
-    return { providerRef: a.providerRef, status: 'captured', amountIdr: a.amountIdr };
+    return { providerRef: a.providerRef, status: 'captured', amountMinor: a.amountMinor };
   }
 
   private refunds = new Map<string, RefundResult>();
@@ -133,7 +136,7 @@ export class MockPaymentProvider implements PaymentProvider {
   async refund(a: RefundArgs): Promise<RefundResult> {
     const prior = this.refunds.get(a.idempotencyKey);
     if (prior) return prior;
-    if (!(a.amountIdr > 0)) return { status: 'failed', refundRef: '', raw: { error: 'amount must be positive' } };
+    if (!(a.amountMinor > 0)) return { status: 'failed', refundRef: '', raw: { error: 'amount must be positive' } };
     const r: RefundResult = { status: 'refunded', refundRef: `mock_rf_${randomUUID().slice(0, 12)}` };
     this.refunds.set(a.idempotencyKey, r);
     return r;
@@ -149,7 +152,7 @@ export class MockPaymentProvider implements PaymentProvider {
     let j: any;
     try { j = JSON.parse(rawBody); } catch { return null; }
     if (!j?.providerRef) return null;
-    return { providerRef: String(j.providerRef), paid: j.status === 'paid', status: String(j.status ?? ''), amountIdr: j.amountIdr != null ? Number(j.amountIdr) : null };
+    return { providerRef: String(j.providerRef), paid: j.status === 'paid', status: String(j.status ?? ''), amountMinor: j.amountMinor != null ? Number(j.amountMinor) : null };
   }
 
   notificationAck(ok: boolean) { return { status: ok ? 200 : 401, body: ok ? { ok: true } : { error: 'invalid signature' } }; }

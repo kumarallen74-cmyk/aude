@@ -1,7 +1,8 @@
 import {
   $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, confirmDialog, html, field,
-  formValues, fieldErrors, toast, callout, copy, sites as loadSites,
+  formValues, fieldErrors, toast, callout, copy, sites as loadSites, phoneExample
 } from '../core.js';
+import { MS_MARK } from '../microsoft.js';
 
 /**
  * Module 10 — Multi-Tenancy & RBAC.
@@ -107,7 +108,7 @@ function inviteUser(onDone) {
         <div class="form">
           ${field('Full name', '<input name="name" maxlength="200" autocomplete="off">')}
           ${field('Email', '<input name="email" type="email" autocomplete="off">', { help: 'Used to sign in. Must be unique.' })}
-          ${field('Phone', '<input name="phone" inputmode="tel" placeholder="+62 812 …">', { opt: true })}
+          ${field('Phone', `<input name="phone" inputmode="tel" placeholder="${esc(phoneExample())}">`, { opt: true })}
         </div>
         <fieldset style="margin-top:14px"><legend>Role</legend>${roleCards(null, false)}</fieldset>
         <div class="field full hidden" data-sitewrap style="margin-top:14px"><label>Sites this person hosts</label>
@@ -202,6 +203,8 @@ async function editUser(u, onDone) {
           <button type="button" class="btn${u.status === 'disabled' ? '' : ' danger'}" data-status${self ? ' disabled title="You cannot change your own status"' : ''}>
             ${u.status === 'disabled' ? `${icon('check')} Enable user` : `${icon('stop')} Disable user`}</button>
           <button type="button" class="btn" data-reset>${icon('key')} Reset password</button>
+          ${u.microsoft_bound ? `<button type="button" class="btn" data-ms-unbind title="Remove the link to their Microsoft account; their next Microsoft sign-in is matched by email address again">${icon('x')} Unlink Microsoft account</button>` : ''}
+          ${u.mfa_enabled ? `<button type="button" class="btn" data-reset-mfa${self ? ' disabled title="Ask another administrator to reset your own two-step verification"' : ''}>${icon('phone')} Reset two-step verification</button>` : ''}
         </div>` : ''}
       </fieldset>
     </form>`,
@@ -279,6 +282,30 @@ async function editUser(u, onDone) {
           warning: `Share it through a secure channel. It cannot be displayed again${r.expiresInHours ? ` and stops working after ${r.expiresInHours} hours` : ''}; the user must replace it at first sign-in.`,
         });
       });
+
+      $('[data-ms-unbind]', form)?.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'Unlink Microsoft account',
+          message: html`Remove the link between <b>${u.name}</b> and their Microsoft account? Their sessions signed in with Microsoft end. Their next "Sign in with Microsoft" is matched by email address again and links that Microsoft account. Password sign-in is not affected.`,
+          confirmLabel: 'Unlink',
+          danger: true,
+        });
+        if (!ok) return;
+        const r = await attempt(() => api(`/v1/users/${encodeURIComponent(u.id)}/microsoft`, { method: 'DELETE' }), { success: 'Microsoft account unlinked' });
+        if (r) { ctx.close(); onDone?.(); }
+      });
+
+      $('[data-reset-mfa]', form)?.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'Reset two-step verification',
+          message: html`Remove <b>${u.name}</b>'s authenticator and recovery codes? Do this only when you are sure who is asking (a lost phone): they are signed out everywhere, and if two-step verification is required for their role they set it up again at next sign-in.`,
+          confirmLabel: 'Reset two-step verification',
+          danger: true,
+        });
+        if (!ok) return;
+        const r = await attempt(() => api(`/v1/users/${encodeURIComponent(u.id)}/reset-mfa`, { method: 'POST' }), { success: 'Two-step verification reset' });
+        if (r) { ctx.close(); onDone?.(); }
+      });
     },
   });
 }
@@ -286,6 +313,8 @@ async function editUser(u, onDone) {
 function statusTags(u) {
   return [
     u.status === 'active' ? tag('t-ok', 'active') : tag('t-mute', u.status ?? 'unknown'),
+    u.mfa_enabled ? tag('t-info', '2-step', 'Signs in with a code from an authenticator app as well as the password') : '',
+    u.microsoft_bound ? tag('t-info', 'Microsoft', 'Bound to a Microsoft account: signs in with "Sign in with Microsoft"') : '',
     u.locked ? tag('t-crit', 'locked', 'Temporarily locked after repeated failed sign-ins') : '',
     u.temp_password_expired
       ? tag('t-crit', 'one-time password expired', 'The one-time password was not used in time and no longer signs in. Reset the password to issue a new one.')
@@ -549,6 +578,143 @@ async function renderKeys(box) {
   await load();
 }
 
+// ------------------------------------------------------------------ Microsoft sign-in (v1.6.0)
+
+/**
+ * The organisation's Microsoft Entra tenant: connect (the administrator signs in at Microsoft with
+ * an account of the tenant; the server records the tenant of that validated sign-in), the allowed
+ * email domains, disconnect. Users are never created from Microsoft: they are invited here first.
+ */
+async function renderMicrosoft(box) {
+  const canWrite = state.can('user:write');
+  let r;
+  try {
+    r = await api('/v1/auth/microsoft/tenant');
+  } catch (e) {
+    box.innerHTML = callout('crit', esc(e.status === 404 ? 'Microsoft sign-in is not set up on this installation.' : e.message));
+    return;
+  }
+  const t = r.tenant;
+  const domains = t?.allowedDomains ?? [];
+  box.innerHTML = `<div class="card pad stack" style="gap:14px;max-width:820px">
+      <div class="row" style="gap:10px"><span style="width:21px;height:21px;display:inline-block">${MS_MARK}</span>
+        <h3 style="font-size:15px;margin:0">Sign in with Microsoft</h3>
+        ${t ? tag('t-ok', 'connected') : tag('t-mute', 'not connected')}</div>
+      <p class="hint" style="margin:0">Your staff sign in with their company Microsoft account (Microsoft Entra ID). Only people who already have a console user here can sign in — invite them under <b>Users</b> first, with the email address of their Microsoft account. The first Microsoft sign-in is matched by that address and then remembered, so later changes to the address in Microsoft do not move it to someone else. Password sign-in stays available for everyone. When Microsoft has checked a second factor (MFA), the console's own two-step verification is not asked again — except at a person's first Microsoft sign-in, which links their account.</p>
+      ${t
+        ? `<dl class="kv">
+            <dt>Tenant ID</dt><dd class="mono">${esc(t.tenantId)}</dd>
+            <dt>Connected</dt><dd>${esc(fmt.time(t.linkedAt))}${t.linkedBy ? ` by ${esc(t.linkedBy.name)}` : ''}${t.linkedByAccount ? ` <span class="muted">(proved with ${esc(t.linkedByAccount)})</span>` : ''}</dd>
+            <dt>Users linked</dt><dd>${esc(String(r.boundUsers))} <span class="muted">— tagged "Microsoft" in the user list</span></dd>
+            <dt>Allowed email domains</dt><dd>${domains.length ? domains.map((d) => tag('t-info', d, '', true)).join(' ') : '<span class="muted">any address of the tenant</span>'}</dd>
+          </dl>`
+        : callout('info', 'To connect, you sign in at Microsoft with an <b>administrator account of your organisation\'s Microsoft tenant</b> (Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator — not a guest); PlugSure records that tenant. If PlugSure has not been approved in your tenant yet, Microsoft asks for consent first.')}
+      ${t && !domains.length ? callout('warn', '<b>Set the allowed email domains.</b> Without them, the first Microsoft sign-in of any account in your tenant is matched by its address alone — including addresses on domains you do not intend for console staff. List your company\'s domains (e.g. voltindo.co.id).') : ''}
+      ${r.redirectUri ? '' : callout('warn', 'Microsoft sign-in is not offered on this console address. Open the console on its main address to connect, and to sign in with Microsoft.')}
+      ${canWrite
+        ? `<div class="row">${t
+            ? `<button type="button" class="btn" data-domains>${icon('gear')} Allowed domains</button>
+               <button type="button" class="btn danger" data-unlink>${icon('x')} Disconnect Microsoft tenant</button>`
+            : `<button type="button" class="ms-signin sm" data-link${r.redirectUri ? '' : ' disabled'}>${MS_MARK}<span>Connect Microsoft tenant</span></button>`}</div>`
+        : ''}
+    </div>`;
+
+  if (state.can('platform:admin')) await renderAllTenants(box);
+
+  $('[data-link]', box)?.addEventListener('click', async (e) => {
+    e.currentTarget.classList.add('busy');
+    const x = await attempt(() => api('/v1/auth/microsoft/link', { method: 'POST' }));
+    if (x?.url) location.assign(x.url);
+    else e.currentTarget.classList.remove('busy');
+  });
+
+  $('[data-unlink]', box)?.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: 'Disconnect Microsoft tenant',
+      message: html`Stop Microsoft sign-in for this organisation? Every user's link to their Microsoft account is removed and everyone signed in with Microsoft is signed out. Password sign-in is not affected. You can connect again later.`,
+      confirmLabel: 'Disconnect',
+      danger: true,
+    });
+    if (!ok) return;
+    if (await attempt(() => api('/v1/auth/microsoft/tenant', { method: 'DELETE' }), { success: 'Microsoft tenant disconnected' })) renderMicrosoft(box);
+  });
+
+  $('[data-domains]', box)?.addEventListener('click', () => {
+    modal({
+      title: 'Allowed email domains',
+      subtitle: 'Optional. When set, a first Microsoft sign-in is matched to a console user only by an address in one of these domains.',
+      body: `<form novalidate><div class="form">${field('Domains', '<input name="domains" placeholder="e.g. voltindo.co.id, voltindo.com" autocomplete="off">', { full: true, help: 'Separate with commas. Leave empty to allow any address of your tenant.' })}</div></form>`,
+      actions: [
+        { label: 'Cancel' },
+        {
+          label: 'Save',
+          kind: 'primary',
+          async onClick(ctx) {
+            const form = $('form', ctx.body);
+            const list = String(formValues(form).domains ?? '').split(/[,\s]+/).map((d) => d.trim()).filter(Boolean);
+            try {
+              await api('/v1/auth/microsoft/tenant', { method: 'PUT', body: { allowedDomains: list } });
+              toast('Allowed domains saved', 'ok');
+              renderMicrosoft(box);
+            } catch (e) {
+              fieldErrors(form, { domains: e.message });
+              return false;
+            }
+          },
+        },
+      ],
+      onMount(ctx) { $('[name=domains]', ctx.body).value = domains.join(', '); },
+    });
+  });
+}
+
+/**
+ * The platform operator: every organisation's connected tenant, and Release — the supported way
+ * out of a tenant connected by an organisation that does not own it (it then cannot be
+ * connected by its real owner: one organisation per tenant).
+ */
+async function renderAllTenants(box) {
+  const wrap = document.createElement('div');
+  wrap.className = 'card pad stack';
+  wrap.style.cssText = 'gap:12px;max-width:820px;margin-top:14px';
+  box.append(wrap);
+  let list;
+  try {
+    list = (await api('/v1/platform/microsoft-tenants')).tenants ?? [];
+  } catch (e) {
+    wrap.innerHTML = callout('crit', esc(e.message));
+    return;
+  }
+  wrap.innerHTML = `<h3 style="font-size:15px;margin:0">All connected tenants <span class="muted" style="font-weight:400">· platform operator</span></h3>
+    <p class="hint" style="margin:0">Every connection raises a "Microsoft tenant connected" alert for you. If an organisation connected a tenant it does not own, release it: that organisation's Microsoft links and sessions end, and the real owner can connect it.</p>
+    <div data-tenants></div>`;
+  table($('[data-tenants]', wrap), {
+    columns: [
+      { label: 'Organisation', render: (t) => `<div class="cell-title">${esc(t.orgName)}</div>` },
+      { label: 'Tenant ID', render: (t) => `<span class="mono">${esc(t.tenantId)}</span>` },
+      { label: 'Connected', render: (t) => `${esc(fmt.time(t.linkedAt))}${t.linkedByAccount ? `<div class="cell-sub">${esc(t.linkedByAccount)}</div>` : ''}` },
+      { label: 'Users linked', num: true, render: (t) => esc(String(t.boundUsers)) },
+      { label: '', render: () => '<button class="btn sm danger" type="button" data-release>Release</button>' },
+    ],
+    rows: list,
+    empty: 'No organisation has connected a Microsoft tenant.',
+  });
+  $$('[data-release]', wrap).forEach((b) => b.addEventListener('click', async () => {
+    const t = list[Number(b.closest('tr').dataset.i)];
+    if (!t) return;
+    const ok = await confirmDialog({
+      title: 'Release Microsoft tenant',
+      message: html`Release tenant <span class="mono">${t.tenantId}</span> from <b>${t.orgName}</b>? Its users' Microsoft links are removed and everyone there signed in with Microsoft is signed out. Password sign-in is not affected.`,
+      confirmLabel: 'Release',
+      danger: true,
+    });
+    if (!ok) return;
+    if (await attempt(() => api(`/v1/platform/microsoft-tenants/${encodeURIComponent(t.tenantId)}`, { method: 'DELETE' }), { success: 'Tenant released' })) {
+      renderMicrosoft(box);
+    }
+  }));
+}
+
 // ------------------------------------------------------------------ view
 
 registerView('users', {
@@ -557,11 +723,13 @@ registerView('users', {
   group: 'govern',
   order: 43,
   perm: ['user:read', 'org:read'],
+  hubOnly: true,
   async render(root, [initial]) {
     const tabs = [
       state.can('user:read') && { id: 'users', label: 'Users', render: renderUsers },
       { id: 'roles', label: 'Role permissions', render: renderMatrix },
       state.can('org:read') && { id: 'keys', label: 'API keys', render: renderKeys },
+      state.can('user:read') && state.me?.features?.microsoftSignIn && { id: 'microsoft', label: 'Microsoft sign-in', render: renderMicrosoft },
     ].filter(Boolean);
 
     root.innerHTML = pageHead(

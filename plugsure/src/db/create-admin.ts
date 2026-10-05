@@ -22,6 +22,11 @@ import { ensureSystemRoles, hashPassword, generateTemporaryPassword, passwordPro
  * plan and finalise monthly statements (Govern → Platform billing). Create it in
  * the operator's own organisation, never in a customer's:
  *   npm run create-admin -- --email billing@plugsure.com --org-slug plugsure --org-name "PlugSure" --platform-admin
+ *
+ * --reset-2fa also removes the account's two-step verification (authenticator secret and
+ * recovery codes) and ends its sessions: the break-glass path for the LAST administrator
+ * who lost their phone and recovery codes, when no other administrator can reset it from
+ * Users & Roles. Needs shell access to the server, like the rest of this command.
  */
 
 function arg(name: string): string | undefined {
@@ -36,6 +41,7 @@ async function main() {
   const orgName = arg('org-name')?.trim();
   const given = arg('password');
   const platformAdmin = process.argv.includes('--platform-admin');
+  const reset2fa = process.argv.includes('--reset-2fa');
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('--email is required');
   if (!slug) throw new Error('--org-slug is required (the organisation this administrator belongs to)');
@@ -80,6 +86,15 @@ async function main() {
                  CASE WHEN $6::numeric IS NULL THEN NULL ELSE now() + ($6::numeric * interval '1 hour') END) RETURNING id`,
         [org!.id, email, name, hash, !given, tempExpiresHours],
       );
+  if (reset2fa) {
+    await one(
+      `UPDATE app_user SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled_at = NULL,
+              totp_last_step = NULL, totp_recovery_hashes = '{}' WHERE id = $1 RETURNING id`,
+      [user!.id],
+    );
+    await one(`UPDATE auth_session SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL RETURNING id`, [user!.id]);
+    logger.warn({ email }, 'two-step verification removed (--reset-2fa); the administrator enrols again at next sign-in');
+  }
   await setUserRole(user!.id, org!.id, 'super_admin');
   if (platformAdmin) {
     // The platform operator's own staff: sets customers' commission plans and

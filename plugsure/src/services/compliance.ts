@@ -1,4 +1,5 @@
 import { many, query } from '../db/pool.js';
+import { defaultTimezone } from '../domain/timezone.js';
 import { bus } from '../services/events.js';
 import { logger } from '../logger.js';
 import { parseSpkluId } from '../domain/spklu.js';
@@ -41,7 +42,10 @@ export type TeraStatus = 'verified' | 'due_soon' | 'lapsed' | 'unknown' | 'pendi
  * their due date — a day early. Dates are now handled as YYYY-MM-DD strings
  * (to_char in SQL) and compared with today's date in Asia/Jakarta.
  */
-export const COMPLIANCE_TZ = 'Asia/Jakarta';
+// Tera and SLO are Indonesian certificates (only Indonesian sites carry them since
+// 1.7): their calendar stays Indonesia's, WIB, exactly as before (not the site's
+// WITA/WIT zone, which would move the blocking moment by an hour).
+export const COMPLIANCE_TZ = defaultTimezone('ID');
 const ymdFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: COMPLIANCE_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
 
 /**
@@ -133,7 +137,8 @@ export async function keyRotationSweep(now = new Date()) {
 /** Sweep run on a timer. Refreshes derived statuses and raises alerts. */
 export async function runComplianceSweep(now = new Date()) {
   const connectors = await many<any>(
-    `SELECT c.id, to_char(c.tera_due_at, 'YYYY-MM-DD') AS tera_due_at, c.tera_status, c.tera_cert_status, s.org_id, cp.id AS cp_id, cp.ocpp_identity, e.evse_id
+    `SELECT c.id, to_char(c.tera_due_at, 'YYYY-MM-DD') AS tera_due_at, c.tera_status, c.tera_cert_status, s.org_id, cp.id AS cp_id, cp.ocpp_identity, e.evse_id,
+            s.country_code
        FROM connector c
        JOIN evse e ON e.id = c.evse_uuid
        JOIN charge_point cp ON cp.id = e.charge_point_id
@@ -141,7 +146,9 @@ export async function runComplianceSweep(now = new Date()) {
   );
 
   for (const c of connectors) {
-    const status = teraStatusFor(c.tera_due_at, now, c.tera_cert_status);
+    // Tera (Indonesian legal metrology, UTTP) applies to Indonesian sites only: elsewhere a
+    // connector is 'exempt', so nothing that gates on tera ever blocks it (regulatory profile).
+    const status: TeraStatus = (c.country_code ?? 'ID') !== 'ID' ? 'exempt' : teraStatusFor(c.tera_due_at, now, c.tera_cert_status);
     if (status !== c.tera_status) {
       await query(`UPDATE connector SET tera_status = $2 WHERE id = $1`, [c.id, status]);
     }
@@ -170,7 +177,8 @@ export async function runComplianceSweep(now = new Date()) {
   }
 
   const sites = await many<any>(
-    `SELECT id, org_id, name, to_char(slo_expires_at, 'YYYY-MM-DD') AS slo_expires_at, spklu_id FROM site WHERE slo_expires_at IS NOT NULL`,
+    `SELECT id, org_id, name, to_char(slo_expires_at, 'YYYY-MM-DD') AS slo_expires_at, spklu_id FROM site
+      WHERE slo_expires_at IS NOT NULL AND country_code = 'ID'`, // SLO is an Indonesian certificate
   );
   for (const s of sites) {
     // Valid through the expiry date: expired from the day after.
@@ -203,7 +211,7 @@ export async function runComplianceSweep(now = new Date()) {
 export async function complianceReport(orgId: string) {
   const sites = await many<any>(
     `SELECT s.id, s.name, s.spklu_id, s.spklu_scheme, s.slo_number, s.slo_issued_at,
-            s.slo_expires_at, to_char(s.slo_expires_at, 'YYYY-MM-DD') AS slo_expires_on, s.kabupaten_kota_code, s.pbjt_rate_bps,
+            s.slo_expires_at, to_char(s.slo_expires_at, 'YYYY-MM-DD') AS slo_expires_on, s.kabupaten_kota_code, s.local_tax_rate_bps,
             COALESCE(json_agg(json_build_object(
               'chargePoint', cp.ocpp_identity,
               'evseNo', e.evse_id,

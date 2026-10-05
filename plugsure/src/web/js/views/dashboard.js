@@ -1,4 +1,4 @@
-import { $, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, kpi, navigate, onLive, debounce, callout, inPortal, greetingName, sites as loadSites } from '../core.js';
+import { $, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, kpi, navigate, onLive, debounce, callout, inPortal, greetingName, sites as loadSites, isRupiah } from '../core.js';
 
 /**
  * NOC overview: fleet health, today's commercial numbers, a 14-day trend,
@@ -42,7 +42,7 @@ registerView('dashboard', {
       <div class="grid two section">
         <div class="card"><header><h3>Connector status</h3><span class="right small muted" data-conn-total></span></header><div class="body" data-status></div></div>
         <div class="card"><header><h3>Last 14 days</h3><div class="seg right" data-metric>
-          <button aria-pressed="true" data-k="revenue_idr">Revenue</button><button aria-pressed="false" data-k="energy_wh">Energy</button><button aria-pressed="false" data-k="sessions">Sessions</button></div></header>
+          <button aria-pressed="true" data-k="revenue_minor">Revenue</button><button aria-pressed="false" data-k="energy_wh">Energy</button><button aria-pressed="false" data-k="sessions">Sessions</button></div></header>
           <div class="body" data-trend></div></div>
       </div>
       <div class="grid two section">
@@ -50,10 +50,12 @@ registerView('dashboard', {
         <div class="card"><header><h3>${portal ? 'Your sites needing attention' : 'Sites needing attention'}</h3>${portal ? '' : '<a class="right small" href="#/sites">All sites →</a>'}</header><div data-sites></div></div>
       </div>`;
 
-    let metric = 'revenue_idr';
+    let metric = 'revenue_minor';
     let series = [];
+    // The chart's money is in the home country's currency (one currency per chart; never added across currencies).
+    let homeCurrency = null;
     const drawTrend = () => {
-      const f = metric === 'revenue_idr' ? fmt.idr : metric === 'energy_wh' ? (v) => fmt.kwh(v, 0) : (v) => fmt.num(v);
+      const f = metric === 'revenue_minor' ? (v) => fmt.money(v, homeCurrency) : metric === 'energy_wh' ? (v) => fmt.kwh(v, 0) : (v) => fmt.num(v);
       const total = series.reduce((a, d) => a + Number(d[metric] ?? 0), 0);
       $('[data-trend]', root).innerHTML = series.length
         ? `<div class="kpi" style="padding:0 0 6px"><div class="value">${esc(f(total))}</div><div class="foot">14-day total</div></div>${bars(series, metric, f)}`
@@ -77,7 +79,7 @@ registerView('dashboard', {
       // First-run guidance: a brand-new tenant has nothing to look at yet.
       if (!siteList.length && state.can('site:write')) {
         $('[data-setup]', root).innerHTML = `<div class="card pad" style="margin-bottom:14px"><div class="row" style="align-items:flex-start;gap:14px">
-          ${icon('bolt', 'x')}<div class="grow"><b>Set up your network in three steps</b><ol class="small" style="margin:6px 0 0;padding-left:18px">
+          ${icon('bolt', 'lead')}<div class="grow"><b>Set up your network in three steps</b><ol class="small" style="margin:6px 0 0;padding-left:18px">
           <li>Create an electrical site with its PLN subscription (Sites → Create site).</li>
           <li>Onboard a charger with the commissioning wizard (identity, security keys, connectors).</li>
           <li>Create a tariff and assign it to the site.</li></ol></div>
@@ -96,7 +98,10 @@ registerView('dashboard', {
           c.total && c.online < c.total ? 'warn' : 'ok'),
         kpi('Charging now', fmt.num(conn.Charging ?? 0), `${fmt.num(totalConn)} connectors installed`),
         t ? kpi('Energy today', fmt.kwh(t.energy_wh, 1), `${fmt.num(t.sessions)} sessions · ${fmt.num(t.active)} in progress`) : kpi('Faulted connectors', fmt.num(conn.Faulted ?? 0), '', conn.Faulted ? 'crit' : ''),
-        t ? kpi('Revenue today', fmt.idr(t.revenue_idr), 'gross, incl. PBJT & PPN') : kpi('Open alerts', fmt.num(d.alerts?.critical ?? 0), 'critical, last 7 days'),
+        t ? ((t.revenue_by_currency ?? []).some((x) => x.currency !== t.currency)
+          ? kpi('Revenue today', (t.revenue_by_currency ?? []).map((x) => fmt.money(x.revenue_minor, x.currency)).join('<br>'), 'gross, incl. tax, per currency')
+          : kpi('Revenue today', fmt.money(t.revenue_minor, t.currency), isRupiah(t.currency) ? 'gross, incl. PBJT & PPN' : 'gross, incl. tax'))
+          : kpi('Open alerts', fmt.num(d.alerts?.critical ?? 0), 'critical, last 7 days'),
         kpi('Critical alerts', fmt.num(d.alerts?.critical ?? 0), `${fmt.num(d.alerts?.warning ?? 0)} warnings (7 days)`, d.alerts?.critical ? 'crit' : 'ok'),
       ].join('');
 
@@ -109,6 +114,7 @@ registerView('dashboard', {
         : '<div class="empty-state small">No connectors yet.</div>';
 
       series = d.series ?? [];
+      homeCurrency = d.today?.currency ?? null;
       drawTrend();
 
       const open = (alerts ?? []).filter((a) => !a.resolved_at).slice(0, 8);

@@ -56,6 +56,16 @@ export const schemas: Record<string, Schema> = {
     },
     ['country_code', 'party_id', 'business_name'],
   ),
+  RoamingPartyOfCountry: obj(
+    {
+      country_code: { type: 'string', pattern: '^[A-Z]{2}$' },
+      party_id: { type: 'string', pattern: '^[A-Z0-9]{3}$' },
+      business_name: S,
+      website: nS,
+      is_home: { ...B, description: 'The home party: the eMSP identity and the one connections are made with.' },
+    },
+    ['country_code', 'party_id', 'business_name', 'is_home'],
+  ),
   RoamingPartner: obj(partnerCols, partnerRequired),
   RoamingPartnerSummary: obj(
     {
@@ -85,7 +95,8 @@ export const schemas: Record<string, Schema> = {
   ),
   RoamingOverview: obj(
     {
-      party: { anyOf: [ref('RoamingParty'), { type: 'null' }], description: 'This operator’s roaming identity, or null until set.' },
+      party: { anyOf: [ref('RoamingParty'), { type: 'null' }], description: 'This operator’s roaming identity (the home party), or null until set.' },
+      parties: { ...arrayOf(ref('RoamingPartyOfCountry')), description: 'Every OCPI party of the operator, one per country, the home party first.' },
       versionsUrl: { ...S, description: 'Our OCPI versions URL, to give to partners.' },
       partners: arrayOf(ref('RoamingPartnerSummary')),
       sites: { ...arrayOf(ref('RoamingSite')), description: 'Empty until the roaming identity is set.' },
@@ -180,11 +191,15 @@ export const schemas: Record<string, Schema> = {
       roaming_shared: B,
       contract_id: { ...nS, description: 'eMAID-style contract id, given when the card is first shared.' },
       energy_limit_wh: nI,
-      spend_limit_idr: nI,
+      spend_limit_minor: nI,
       roaming_cdrs: { ...I, description: 'Charge records received for this card from other networks.' },
-      roaming_idr: { ...I, description: 'Total IDR charged to this card on other networks.' },
+      roaming_minor: { ...I, description: 'Charged to this card on other networks in its spending-limit currency (minor units).' },
+      spend_limit_currency: { ...S, description: 'The currency of the spending limit (IDR, MYR or SGD).' },
+      roaming_currency: S,
+      roaming_cdrs_held: I,
+      roaming_by_currency: { type: 'object', additionalProperties: I, description: 'Charged on other networks per currency (minor units); never added across currencies.' },
     },
-    ['id', 'uid', 'status', 'account_type', 'roaming_shared', 'roaming_cdrs', 'roaming_idr'],
+    ['id', 'uid', 'status', 'account_type', 'roaming_shared', 'roaming_cdrs', 'roaming_minor'],
   ),
   RoamingNetworkLocation: obj(
     {
@@ -297,7 +312,7 @@ export const schemas: Record<string, Schema> = {
       visual_number: nS,
       site_name: S,
       ocpp_identity: S,
-      total_idr: nI,
+      total_minor: nI,
       cdr_push_state: { ...nS, description: 'State of the CDR delivery to the partner: pending | delivered | failed, or null before one is queued.' },
     },
     ['id', 'started_at', 'state', 'energy_wh', 'partner_name', 'contract_id', 'country_code', 'party_id', 'site_name', 'ocpp_identity'],
@@ -346,6 +361,48 @@ export const ops: Op[] = [
     },
     responses: { 200: { description: 'The identity now in force.', schema: obj({ party: ref('RoamingParty') }, ['party']) } },
     errors: [400, 409],
+  },
+  {
+    method: 'GET',
+    path: '/v1/roaming/parties',
+    tag: 'Roaming',
+    summary: 'List the OCPI parties (one per country)',
+    description: 'Every OCPI party of the operator, the home party first. A site is published under the party of its country, else under the home party.',
+    responses: { 200: { description: 'The parties.', schema: obj({ parties: arrayOf(ref('RoamingPartyOfCountry')) }, ['parties']) } },
+  },
+  {
+    method: 'PUT',
+    path: '/v1/roaming/parties/:country',
+    tag: 'Roaming',
+    summary: 'Set the OCPI party of a country',
+    description:
+      'Adds or updates the party under which the operator publishes its sites in another country (MY, SG). The home party is set with PUT /v1/roaming/party. ' +
+      'All parties are listed in our OCPI credentials (one CPO role each). Audited as roaming.party_set.',
+    pathParams: { country: 'ISO 3166-1 alpha-2: ID, MY or SG.' },
+    body: {
+      schema: {
+        type: 'object',
+        properties: {
+          partyId: { type: 'string', pattern: '^[A-Za-z0-9]{3}$', description: 'Three letters or digits. Upper-cased.' },
+          businessName: { type: 'string', minLength: 1 },
+          website: { type: 'string', pattern: '^https://\\S+$' },
+        },
+        required: ['partyId', 'businessName'],
+      },
+      example: { partyId: 'PLS', businessName: 'PlugSure Malaysia Sdn Bhd' },
+    },
+    responses: { 200: { description: 'The party now in force.', schema: obj({ party: ref('RoamingParty') }, ['party']) } },
+    errors: [400, 409],
+  },
+  {
+    method: 'DELETE',
+    path: '/v1/roaming/parties/:country',
+    tag: 'Roaming',
+    summary: 'Remove the OCPI party of a country',
+    description: 'Removes a non-home party; that country\'s sites are then published under the home party. Audited as roaming.party_removed.',
+    pathParams: { country: 'ISO 3166-1 alpha-2.' },
+    responses: { 200: { description: 'Removed.', schema: obj({ ok: { type: 'boolean' } }, ['ok']) } },
+    errors: [400, 404],
   },
   {
     method: 'POST',
@@ -578,6 +635,36 @@ export const ops: Op[] = [
     },
     responses: { 200: { description: 'Cards changed.', schema: obj({ changed: I }, ['changed']) } },
     errors: [400, 409],
+  },
+  {
+    method: 'GET',
+    path: '/v1/roaming/settings',
+    tag: 'Roaming',
+    summary: 'Get the driver-app roaming settings',
+    description: 'Whether signed-in app drivers may charge on partner networks, and the card hold placed before such a charge, per currency (the operator\'s amount, else the country default).',
+    responses: {
+      200: {
+        description: 'Settings.',
+        schema: obj({
+          appDrivers: B,
+          holds: arrayOf(obj({ currency: S, holdMinor: { ...I, description: 'Minor units of the currency.' }, defaultMinor: I, custom: B }, ['currency', 'holdMinor', 'defaultMinor', 'custom'])),
+        }, ['appDrivers', 'holds']),
+      },
+    },
+  },
+  {
+    method: 'PUT',
+    path: '/v1/roaming/settings',
+    tag: 'Roaming',
+    summary: 'Change the driver-app roaming settings',
+    description: 'Turns partner networks on or off for app drivers and sets the hold per currency (minor units; up to 50 times the country default; leave a currency out for the default). Audited.',
+    body: {
+      required: true,
+      schema: obj({ appDrivers: B, holdMinor: { type: 'object', additionalProperties: nI, description: 'Hold per currency code, minor units.' } }),
+      example: { appDrivers: true, holdMinor: { IDR: 300000, SGD: 8000 } },
+    },
+    responses: { 200: { description: 'Saved.', schema: obj({ ok: B, appDrivers: B, holdMinor: { type: 'object' } }, ['ok']) } },
+    errors: [422],
   },
   {
     method: 'GET',

@@ -40,7 +40,7 @@ if (DB_OK) {
       [SLUG],
     ))!.id;
     siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Tariff Atomic Hub', 1000) RETURNING id`,
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Tariff Atomic Hub', 1000) RETURNING id`,
       [orgId],
     ))!.id;
   });

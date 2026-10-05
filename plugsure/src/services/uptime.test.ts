@@ -41,7 +41,7 @@ if (DB_OK) {
     await cleanup();
     const orgId = (await one<{ id: string }>(
       `INSERT INTO organisation (name, slug) VALUES ('Uptime Race Test', $1) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
-    const siteId = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Uptime Race Hub', 1000) RETURNING id`, [orgId]))!.id;
+    const siteId = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Uptime Race Hub', 1000) RETURNING id`, [orgId]))!.id;
     // Seen just now: the sweep's "quiet charger" step leaves it alone; only the outages below matter.
     cpId = (await one<{ id: string }>(
       `INSERT INTO charge_point (site_id, ocpp_identity, ocpp_version, status, display_name, last_seen_at)

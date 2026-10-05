@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { defaultTimezone } from '../domain/timezone.js';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
 import * as registry from '../ocpp/registry.js';
@@ -120,7 +121,7 @@ export function localMinutes(now: Date, timeZone: string): number {
 }
 
 export function inWindow(windows: Window[], now: Date, timeZone: string): boolean {
-  const t = localMinutes(now, timeZone || 'Asia/Jakarta');
+  const t = localMinutes(now, timeZone || defaultTimezone('ID'));
   return windows.some((w) => {
     const a = minutes(w.from);
     const b = minutes(w.to);
@@ -205,7 +206,7 @@ export function planDischarge(site: SiteV2x, candidates: Candidate[], buildingLo
 }
 
 /** The driver's credit for energy given back, in rupiah (whole rupiah, rounded down). */
-export const creditIdr = (exportWh: number, rateIdrPerKwh: number | null | undefined) =>
+export const creditMinor = (exportWh: number, rateIdrPerKwh: number | null | undefined) =>
   Math.max(0, Math.floor((Math.max(0, exportWh) / 1000) * Math.max(0, rateIdrPerKwh ?? 0)));
 
 // ─────────────────────────────────────────────── recording what the charger reports
@@ -313,7 +314,7 @@ export async function applyFleetConsent(sessionId: string): Promise<boolean> {
     `UPDATE charging_session cs
         SET v2x_consent = true, v2x_consent_source = 'fleet',
             v2x_min_soc_percent = GREATEST(s.v2x_min_soc_percent, f.v2x_min_soc_percent),
-            v2x_credit_idr_per_kwh = s.v2x_credit_idr_per_kwh
+            v2x_credit_minor_per_kwh = s.v2x_credit_minor_per_kwh
        FROM token t, fleet_account f, site s
       WHERE cs.id = $1 AND cs.state = 'active' AND NOT cs.v2x_consent
         AND t.id = cs.token_id AND f.id = t.fleet_account_id AND f.v2x_allowed
@@ -333,7 +334,7 @@ export class V2xError extends Error {
  */
 export async function setDriverConsent(sessionId: string, enabled: boolean, minSocPercent?: number | null) {
   const s = await one<{ state: string; site_min: number; enabled: boolean; rate: number; bidirectional: boolean | null }>(
-    `SELECT cs.state, s.v2x_min_soc_percent AS site_min, s.v2x_enabled AS enabled, s.v2x_credit_idr_per_kwh AS rate,
+    `SELECT cs.state, s.v2x_min_soc_percent AS site_min, s.v2x_enabled AS enabled, s.v2x_credit_minor_per_kwh AS rate,
             (SELECT bool_or(bidirectional) FROM ev_charging_needs WHERE session_id = cs.id) AS bidirectional
        FROM charging_session cs JOIN site s ON s.id = cs.site_id WHERE cs.id = $1`,
     [sessionId],
@@ -346,7 +347,7 @@ export async function setDriverConsent(sessionId: string, enabled: boolean, minS
   if (enabled && (!Number.isFinite(floor) || floor < s.site_min || floor > 95)) throw new V2xError(400, `the battery floor must be between ${s.site_min}% and 95%`);
   await query(
     enabled
-      ? `UPDATE charging_session SET v2x_consent = true, v2x_consent_source = 'driver', v2x_min_soc_percent = $2, v2x_credit_idr_per_kwh = $3 WHERE id = $1`
+      ? `UPDATE charging_session SET v2x_consent = true, v2x_consent_source = 'driver', v2x_min_soc_percent = $2, v2x_credit_minor_per_kwh = $3 WHERE id = $1`
       : `UPDATE charging_session SET v2x_consent = false, v2x_consent_source = NULL WHERE id = $1`,
     enabled ? [sessionId, floor, s.rate] : [sessionId],
   );
@@ -419,7 +420,7 @@ export async function planSite(siteId: string, buildingLoadW: number, now = new 
     wasDischarging: r.v2x_discharging,
   }));
   const plan = planDischarge(
-    { enabled: site.v2x_enabled, windows: parseWindowsOr(site.v2x_windows), maxDischargeW: site.v2x_max_discharge_w, allowExport: site.v2x_allow_export, timezone: site.timezone ?? 'Asia/Jakarta' },
+    { enabled: site.v2x_enabled, windows: parseWindowsOr(site.v2x_windows), maxDischargeW: site.v2x_max_discharge_w, allowExport: site.v2x_allow_export, timezone: site.timezone ?? defaultTimezone('ID') },
     cands, buildingLoadW, now,
   );
   for (const r of rows) {
@@ -443,8 +444,8 @@ const parseWindowsOr = (v: unknown): Window[] => { const w = parseWindows(v); re
 export async function v2xView(sessionId: string) {
   const s = await one<any>(
     `SELECT cs.id, cs.state, cs.energy_export_wh, cs.soc_percent, cs.soc_at, cs.v2x_consent, cs.v2x_consent_source, cs.v2x_min_soc_percent,
-            cs.v2x_credit_idr_per_kwh, cs.v2x_discharging, cs.v2x_discharge_w, cs.v2x_stop_reason, cs.operation_mode,
-            s.v2x_enabled AS site_enabled, s.v2x_min_soc_percent AS site_min_soc, s.v2x_credit_idr_per_kwh AS site_credit, s.v2x_windows AS site_windows
+            cs.v2x_credit_minor_per_kwh, cs.v2x_discharging, cs.v2x_discharge_w, cs.v2x_stop_reason, cs.operation_mode,
+            s.v2x_enabled AS site_enabled, s.v2x_min_soc_percent AS site_min_soc, s.v2x_credit_minor_per_kwh AS site_credit, s.v2x_windows AS site_windows
        FROM charging_session cs JOIN site s ON s.id = cs.site_id WHERE cs.id = $1`,
     [sessionId],
   );
@@ -458,7 +459,7 @@ export async function v2xView(sessionId: string) {
   const exportWh = Number(s.energy_export_wh ?? 0);
   return {
     sessionId: s.id,
-    siteProgramme: { enabled: s.site_enabled, minSocPercent: s.site_min_soc, creditIdrPerKwh: s.site_credit, windows: s.site_windows },
+    siteProgramme: { enabled: s.site_enabled, minSocPercent: s.site_min_soc, creditMinorPerKwh: s.site_credit, windows: s.site_windows },
     needs: n ? {
       receivedAt: n.received_at,
       requestedTransfer: n.requested_transfer,
@@ -479,8 +480,8 @@ export async function v2xView(sessionId: string) {
     consent: s.v2x_consent,
     consentSource: s.v2x_consent_source,
     minSocPercent: s.v2x_min_soc_percent,
-    creditIdrPerKwh: s.v2x_credit_idr_per_kwh,
-    creditIdr: creditIdr(exportWh, s.v2x_credit_idr_per_kwh),
+    creditMinorPerKwh: s.v2x_credit_minor_per_kwh,
+    creditMinor: creditMinor(exportWh, s.v2x_credit_minor_per_kwh),
     discharging: s.v2x_discharging,
     dischargeW: s.v2x_discharge_w,
     notDischargingBecause: s.v2x_stop_reason,

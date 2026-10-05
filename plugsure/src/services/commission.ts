@@ -1,7 +1,10 @@
 import { one, many, query } from '../db/pool.js';
+import { upgradeLegacyKeys, moneyText, isCurrency, LEGACY_CURRENCY, CURRENCY_CODES, type CurrencyCode } from '../domain/money.js';
+import { LOCALE_TAG } from '../domain/locale.js';
 import { config } from '../config.js';
+import { billingZone } from './org-timezone.js';
 import { estimateQrisMdrIdr } from './payments/provider.js';
-import { DEFAULT_PLAN, computeStatement, normalisePlan, type ChargerInput, type Plan, type SiteInput, type Statement } from './commission-calc.js';
+import { DEFAULT_PLAN, DEFAULT_PLANS, computeStatement, normalisePlan, type ChargerInput, type Plan, type SiteInput, type Statement } from './commission-calc.js';
 
 /**
  * Platform commission and fee statements — loading the month from the database.
@@ -18,18 +21,23 @@ import { DEFAULT_PLAN, computeStatement, normalisePlan, type ChargerInput, type 
 
 export const PERIOD_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 
-export function currentPeriod(now = new Date()): string {
+/** A statement's currency from a request (absent = IDR); an unsupported one is refused. */
+export function currencyParam(c: unknown): CurrencyCode | { error: string } {
+  if (c == null || c === '') return LEGACY_CURRENCY;
+  return isCurrency(c) ? c : { error: 'currency must be IDR, MYR or SGD' };
+}
+
+export function currentPeriod(now = new Date(), tz: string = config.billing.timeZone): string {
   const p = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', { timeZone: config.billing.timeZone, year: 'numeric', month: '2-digit' }).formatToParts(now).map((x) => [x.type, x.value]),
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit' }).formatToParts(now).map((x) => [x.type, x.value]),
   );
   return `${p.year}-${p.month}`;
 }
 
 // Compare NORMALISED plans: JSONB does not keep key order, so a stored copy of
 // the published plan never string-matches the in-memory one.
-const canonical = (p: Plan) => JSON.stringify((normalisePlan(p) as { plan: Plan }).plan);
-const DEFAULT_CANON = canonical(DEFAULT_PLAN);
-const isDefault = (p: Plan) => canonical(p) === DEFAULT_CANON;
+const canonical = (p: Plan, cur: CurrencyCode = LEGACY_CURRENCY) => JSON.stringify((normalisePlan(p, cur) as { plan: Plan }).plan);
+const isDefault = (p: Plan, cur: CurrencyCode = LEGACY_CURRENCY) => canonical(p, cur) === canonical(DEFAULT_PLANS[cur], cur);
 
 /**
  * The plan in force for a month: the latest version effective on or before it.
@@ -37,33 +45,34 @@ const isDefault = (p: Plan) => canonical(p) === DEFAULT_CANON;
  * month — re-pricing August because the contract changed on 27 September would
  * be wrong, and finalising late would silently apply the new rates.
  */
-export async function planFor(orgId: string, period = currentPeriod(), ownerId: string | null = null): Promise<{ plan: Plan; custom: boolean; effectiveFrom: string | null; updatedAt: Date | null; ownPlan: boolean }> {
+export async function planFor(orgId: string, period = currentPeriod(), ownerId: string | null = null, currency: CurrencyCode = LEGACY_CURRENCY): Promise<{ plan: Plan; custom: boolean; effectiveFrom: string | null; updatedAt: Date | null; ownPlan: boolean; currency: CurrencyCode }> {
   // Two separate contracts: the organisation with the platform (ownerId null) and
   // an owner with the organisation. An owner without its own plan is on the
   // published rates — never on the plan the organisation agreed with the platform.
   const row = await one<{ plan: any; effective_from: string; updated_at: Date; own: boolean }>(
     `SELECT plan, to_char(effective_from, 'YYYY-MM') AS effective_from, updated_at, owner_id IS NOT NULL AS own
        FROM commercial_plan
-      WHERE org_id = $1 AND effective_from <= ($2 || '-01')::date AND owner_id IS NOT DISTINCT FROM $3
+      WHERE org_id = $1 AND effective_from <= ($2 || '-01')::date AND owner_id IS NOT DISTINCT FROM $3 AND currency = $4
       ORDER BY effective_from DESC LIMIT 1`,
-    [orgId, period, ownerId],
+    [orgId, period, ownerId, currency],
   );
-  if (!row) return { plan: DEFAULT_PLAN, custom: false, effectiveFrom: null, updatedAt: null, ownPlan: false };
-  const n = normalisePlan(row.plan);
-  const plan = 'plan' in n ? n.plan : DEFAULT_PLAN;
-  return { plan, custom: !isDefault(plan), effectiveFrom: row.effective_from, updatedAt: row.updated_at, ownPlan: row.own };
+  const dflt = DEFAULT_PLANS[currency];
+  if (!row) return { plan: dflt, custom: false, effectiveFrom: null, updatedAt: null, ownPlan: false, currency };
+  const n = normalisePlan(row.plan, currency);
+  const plan = 'plan' in n ? n.plan : dflt;
+  return { plan, custom: !isDefault(plan, currency), effectiveFrom: row.effective_from, updatedAt: row.updated_at, ownPlan: row.own, currency };
 }
 
-export async function planHistory(orgId: string, ownerId: string | null = null) {
+export async function planHistory(orgId: string, ownerId: string | null = null, currency: CurrencyCode = LEGACY_CURRENCY) {
   const rows = await many<{ effective_from: string; plan: any; updated_at: Date }>(
     `SELECT to_char(effective_from, 'YYYY-MM') AS effective_from, plan, updated_at FROM commercial_plan
-      WHERE org_id = $1 AND owner_id IS NOT DISTINCT FROM $2 ORDER BY effective_from DESC`,
-    [orgId, ownerId],
+      WHERE org_id = $1 AND owner_id IS NOT DISTINCT FROM $2 AND currency = $3 ORDER BY effective_from DESC`,
+    [orgId, ownerId, currency],
   );
   return rows.map((r) => {
-    const n = normalisePlan(r.plan);
-    const plan = 'plan' in n ? n.plan : DEFAULT_PLAN;
-    return { effectiveFrom: r.effective_from, plan, custom: !isDefault(plan), updatedAt: r.updated_at };
+    const n = normalisePlan(r.plan, currency);
+    const plan = 'plan' in n ? n.plan : DEFAULT_PLANS[currency];
+    return { effectiveFrom: r.effective_from, plan, custom: !isDefault(plan, currency), updatedAt: r.updated_at, currency };
   });
 }
 
@@ -72,26 +81,26 @@ export async function planHistory(orgId: string, ownerId: string | null = null) 
  * version). `null` returns to the published rates from that month. A month
  * already finalised cannot be re-priced.
  */
-export async function savePlan(orgId: string, raw: unknown, actor: string | null, effectiveFrom = currentPeriod(), ownerId: string | null = null) {
+export async function savePlan(orgId: string, raw: unknown, actor: string | null, effectiveFrom = currentPeriod(), ownerId: string | null = null, currency: CurrencyCode = LEGACY_CURRENCY) {
   if (!PERIOD_RE.test(effectiveFrom)) return { error: 'effectiveFrom must be YYYY-MM' };
   const last = await one<{ p: string | null }>(
-    `SELECT to_char(max(period), 'YYYY-MM') AS p FROM commission_statement WHERE org_id = $1 AND owner_id IS NOT DISTINCT FROM $2`,
-    [orgId, ownerId],
+    `SELECT to_char(max(period), 'YYYY-MM') AS p FROM commission_statement WHERE org_id = $1 AND owner_id IS NOT DISTINCT FROM $2 AND currency = $3`,
+    [orgId, ownerId, currency],
   );
   if (last?.p && effectiveFrom <= last.p) return { error: `Statements up to ${last.p} are final; a plan can take effect from the month after.` };
-  const n = raw === null ? { plan: DEFAULT_PLAN } : normalisePlan(raw);
+  const n = raw === null ? { plan: DEFAULT_PLANS[currency] } : normalisePlan(raw, currency);
   if ('error' in n) return n;
   // "Published rates" is stored as a marker, not a copy, so the customer follows
   // the published rates if they change (normalisePlan({published:true}) = today's
   // defaults). A copy would freeze whatever was published on the day of the reset.
   const stored = raw === null ? { published: true } : n.plan;
   await query(
-    `INSERT INTO commercial_plan (org_id, owner_id, effective_from, plan, updated_by) VALUES ($1, $5, ($2 || '-01')::date, $3, $4)
-     ON CONFLICT (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), effective_from)
+    `INSERT INTO commercial_plan (org_id, owner_id, effective_from, plan, updated_by, currency) VALUES ($1, $5, ($2 || '-01')::date, $3, $4, $6)
+     ON CONFLICT (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), effective_from, currency)
      DO UPDATE SET plan = EXCLUDED.plan, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [orgId, effectiveFrom, JSON.stringify(stored), actor, ownerId],
+    [orgId, effectiveFrom, JSON.stringify(stored), actor, ownerId, currency],
   );
-  return { plan: n.plan, effectiveFrom };
+  return { plan: n.plan, effectiveFrom, currency };
 }
 
 export async function setSiteModel(siteId: string, model: string) {
@@ -105,8 +114,9 @@ export async function setSiteModel(siteId: string, model: string) {
  * (ownerId undefined), for one owner's sites (ownerId), or for the sites that
  * have no owner (ownerId null — the operator's own sites).
  */
-export async function draftStatement(orgId: string, period: string, ownerId?: string | null): Promise<Statement & { status: 'draft'; projected: boolean }> {
-  const tz = config.billing.timeZone;
+export async function draftStatement(orgId: string, period: string, ownerId?: string | null, currency: CurrencyCode = LEGACY_CURRENCY): Promise<Statement & { status: 'draft'; projected: boolean }> {
+  // The statement's month in the organisation's zone for its currency (services/org-timezone.ts; Indonesia as v1.6).
+  const tz = await billingZone(orgId, currency);
   const b = await one<{ start: Date; end: Date; days: number; now: Date }>(
     `SELECT (($1 || '-01')::date)::timestamp AT TIME ZONE $2 AS start,
             ((($1 || '-01')::date + interval '1 month'))::timestamp AT TIME ZONE $2 AS "end",
@@ -117,14 +127,16 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
   const start = new Date(b!.start).getTime(), end = new Date(b!.end).getTime();
   const monthMs = end - start;
 
-  const { plan } = await planFor(orgId, period, ownerId ?? null);
+  const { plan } = await planFor(orgId, period, ownerId ?? null, currency);
   const scope = ownerId === undefined ? 'all' : ownerId === null ? 'none' : 'owner';
+  // The sites of the statement's currency (a site's currency is its country's): GTV is summed per currency, never across.
   const sites = await many<{ id: string; name: string; billing_model: 'public' | 'private' }>(
     `SELECT id, name, billing_model FROM site
       WHERE org_id = $1
         AND ($2 = 'all' OR ($2 = 'none' AND owner_id IS NULL) OR ($2 = 'owner' AND owner_id = $3::uuid))
+        AND country_code IN (SELECT code FROM country WHERE currency = $4)
       ORDER BY name`,
-    [orgId, scope, ownerId ?? null],
+    [orgId, scope, ownerId ?? null, currency],
   );
   const cps = await many<{ id: string; ocpp_identity: string; display_name: string | null; site_id: string; commissioned_at: Date | null; decommissioned_at: Date | null; status: string; dc: boolean }>(
     `SELECT cp.id, cp.ocpp_identity, cp.display_name, cp.site_id, cp.commissioned_at, cp.decommissioned_at, cp.status,
@@ -137,14 +149,16 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
   // the start), not the site its charger is at now: a charger moved to another
   // site — another owner's — used to take its earlier sessions, and their
   // commission and owner share, along with it.
-  const sessions = await many<{ charge_point_id: string; site_id: string; subtotal_idr: string; pbjt_idr: string; ppn_idr: string; total_idr: string; energy_wh: string; method: string | null; captured: string | null; paid_at: Date | null; needs_review: boolean }>(
-    `SELECT cs.charge_point_id, cs.site_id, d.subtotal_idr, d.pbjt_idr, d.ppn_idr, d.total_idr, cs.energy_wh,
-            pi.method, pi.amount_captured_idr AS captured, pi.created_at AS paid_at, cs.needs_review
+  const sessions = await many<{ charge_point_id: string; site_id: string; subtotal_minor: string; local_tax_minor: string; tax_minor: string; total_minor: string; energy_wh: string; method: string | null; captured: string | null; paid_at: Date | null; needs_review: boolean }>(
+    `SELECT cs.charge_point_id, cs.site_id, d.subtotal_minor, d.local_tax_minor, d.tax_minor, d.total_minor, cs.energy_wh,
+            pi.method, pi.amount_captured_minor AS captured, pi.created_at AS paid_at, cs.needs_review
        FROM cdr d
        JOIN charging_session cs ON cs.id = d.session_id
        LEFT JOIN payment_intent pi ON pi.id = cs.payment_intent_id
-      WHERE d.org_id = $1 AND d.issued_at >= $2 AND d.issued_at < $3`,
-    [orgId, b!.start, b!.end],
+      WHERE d.org_id = $1 AND d.issued_at >= $2 AND d.issued_at < $3 AND d.currency = $4
+        -- Paid through a Stripe account on test keys: no money moved, no commission (review fix 1).
+        AND NOT d.test_mode`,
+    [orgId, b!.start, b!.end, currency],
   );
 
   const byCp = new Map<string, ChargerInput>();
@@ -159,7 +173,7 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
     byCp.set(c.id, {
       chargePointId: c.id, ocppIdentity: c.ocpp_identity, displayName: c.display_name, siteId: c.site_id,
       kind: c.dc ? 'DC' : 'AC', activeFraction: frac,
-      sessions: 0, energyWh: 0, gtvIdr: 0, pbjtIdr: 0, ppnIdr: 0, grossIdr: 0, mdrIdr: 0, inReview: 0,
+      sessions: 0, energyWh: 0, gtvMinor: 0, localTaxMinor: 0, taxMinor: 0, grossMinor: 0, mdrMinor: 0, inReview: 0,
     });
   }
   for (const s of sessions) {
@@ -171,28 +185,31 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
     let c = home;
     if (s.site_id && s.site_id !== home.siteId) {
       const key = `${s.charge_point_id}|${s.site_id}`;
-      c = byCp.get(key) ?? { ...home, siteId: s.site_id, activeFraction: 0, sessions: 0, energyWh: 0, gtvIdr: 0, pbjtIdr: 0, ppnIdr: 0, grossIdr: 0, mdrIdr: 0, inReview: 0 };
+      c = byCp.get(key) ?? { ...home, siteId: s.site_id, activeFraction: 0, sessions: 0, energyWh: 0, gtvMinor: 0, localTaxMinor: 0, taxMinor: 0, grossMinor: 0, mdrMinor: 0, inReview: 0 };
       byCp.set(key, c);
     }
     c.sessions++;
     c.energyWh += Number(s.energy_wh ?? 0);
-    c.gtvIdr += Number(s.subtotal_idr ?? 0);
-    c.pbjtIdr += Number(s.pbjt_idr ?? 0);
-    c.ppnIdr += Number(s.ppn_idr ?? 0);
-    c.grossIdr += Number(s.total_idr ?? 0);
+    c.gtvMinor += Number(s.subtotal_minor ?? 0);
+    c.localTaxMinor += Number(s.local_tax_minor ?? 0);
+    c.taxMinor += Number(s.tax_minor ?? 0);
+    c.grossMinor += Number(s.total_minor ?? 0);
     if (s.needs_review) c.inReview++;
-    if (s.method === 'qris') {
+    // The QRIS MDR credit exists in Indonesia only (§D9).
+    if (s.method === 'qris' && currency === LEGACY_CURRENCY) {
       // MDR is charged on what the driver paid (the prepaid amount), by the rules in force that day.
-      const amount = Number(s.captured ?? s.total_idr ?? 0);
-      c.mdrIdr += estimateQrisMdrIdr(amount, { onOrAfterOct2026: s.paid_at ? new Date(s.paid_at) >= new Date('2026-10-01T00:00:00+07:00') : undefined });
+      const amount = Number(s.captured ?? s.total_minor ?? 0);
+      c.mdrMinor += estimateQrisMdrIdr(amount, { onOrAfterOct2026: s.paid_at ? new Date(s.paid_at) >= new Date('2026-10-01T00:00:00+07:00') : undefined });
     }
   }
   // A charger with no service in the month and nothing sold does not appear.
   const chargers = [...byCp.values()].filter((c) => c.activeFraction > 0 || c.sessions > 0);
   const siteIn: SiteInput[] = sites.map((s) => ({ siteId: s.id, name: s.name, model: s.billing_model }));
-  const st = computeStatement(plan, period, b!.days, siteIn, chargers, {
-    ppnRateBps: config.tax.ppnRateBps, dppNum: config.tax.ppnDppNumerator, dppDen: config.tax.ppnDppDenominator,
-  });
+  // PPN on the platform's fee in Indonesia; outside it the statement is issued without tax until V6 is settled.
+  const tax = currency === LEGACY_CURRENCY
+    ? { ppnRateBps: config.tax.id.ppnRateBps, dppNum: config.tax.id.ppnDppNumerator, dppDen: config.tax.id.ppnDppDenominator }
+    : null;
+  const st = computeStatement(plan, period, b!.days, siteIn, chargers, tax, currency);
   return { ...st, status: 'draft', projected: new Date(b!.now).getTime() < end };
 }
 
@@ -205,11 +222,11 @@ export async function orgInfo(orgId: string) {
  *   ownerId omitted  the organisation's statement from the platform
  *   ownerId given    the owner's statement from the organisation (issuer = the organisation)
  */
-export async function statementFor(orgId: string, period: string, ownerId: string | null = null) {
-  const fin = await one<{ number: string; data: any; finalised_at: Date }>(
-    `SELECT number, data, finalised_at FROM commission_statement
-      WHERE org_id = $1 AND period = ($2 || '-01')::date AND owner_id IS NOT DISTINCT FROM $3`,
-    [orgId, period, ownerId],
+export async function statementFor(orgId: string, period: string, ownerId: string | null = null, currency: CurrencyCode = LEGACY_CURRENCY) {
+  const fin = await one<{ number: string; data: any; finalised_at: Date; currency: string }>(
+    `SELECT number, data, finalised_at, currency FROM commission_statement
+      WHERE org_id = $1 AND period = ($2 || '-01')::date AND owner_id IS NOT DISTINCT FROM $3 AND currency = $4`,
+    [orgId, period, ownerId, currency],
   );
   const org = await orgInfo(orgId);
   const owner = ownerId
@@ -222,36 +239,47 @@ export async function statementFor(orgId: string, period: string, ownerId: strin
   const billTo = owner
     ? { name: owner.legal_name || owner.name, npwp: owner.npwp, address: owner.address }
     : { name: org?.name ?? '', npwp: org?.npwp ?? null, address: null };
-  if (fin) return { ...fin.data, status: 'final', number: fin.number, finalisedAt: fin.finalised_at, org, owner, issuer, billTo };
-  return { ...(await draftStatement(orgId, period, ownerId ?? undefined)), number: null, org, owner, issuer, billTo };
+  // The currencies this organisation has sites in (the console offers one statement per currency).
+  const currencies = await currenciesOf(orgId);
+  if (fin) return { currency: fin.currency, taxNote: null, ...upgradeLegacyKeys(fin.data), status: 'final', number: fin.number, finalisedAt: fin.finalised_at, org, owner, issuer, billTo, currencies };
+  return { ...(await draftStatement(orgId, period, ownerId ?? undefined, currency)), number: null, org, owner, issuer, billTo, currencies };
 }
 
-export async function finalise(orgId: string, period: string, actor: string | null, ownerId: string | null = null) {
-  if (period >= currentPeriod()) return { error: 'Only a month that has ended can be finalised.' };
+/** The currencies of an organisation's sites, IDR first (IDR is always offered: v1.6 statements). */
+export async function currenciesOf(orgId: string): Promise<CurrencyCode[]> {
+  const rows = await many<{ currency: string }>(
+    `SELECT DISTINCT co.currency FROM site s JOIN country co ON co.code = s.country_code WHERE s.org_id = $1`, [orgId]);
+  const set = new Set(rows.map((r) => r.currency));
+  return CURRENCY_CODES.filter((c) => c === LEGACY_CURRENCY || set.has(c));
+}
+
+export async function finalise(orgId: string, period: string, actor: string | null, ownerId: string | null = null, currency: CurrencyCode = LEGACY_CURRENCY) {
+  if (period >= currentPeriod(new Date(), await billingZone(orgId, currency))) return { error: 'Only a month that has ended can be finalised.' };
   const org = await orgInfo(orgId);
   if (!org) return { error: 'organisation not found' };
   if (ownerId && !(await one(`SELECT 1 FROM site_owner WHERE id = $1 AND org_id = $2`, [ownerId, orgId]))) return { error: 'owner not found' };
-  const st = await draftStatement(orgId, period, ownerId ?? undefined);
+  const st = await draftStatement(orgId, period, ownerId ?? undefined, currency);
   const code = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
-  const number = `PSC-${period.replace('-', '')}-${code(org.slug) || org.id.slice(0, 8).toUpperCase()}${ownerId ? `-${ownerId.slice(0, 8).toUpperCase()}` : ''}`;
+  // A rupiah statement keeps its v1.6 number; another currency's says which.
+  const number = `PSC-${period.replace('-', '')}-${code(org.slug) || org.id.slice(0, 8).toUpperCase()}${ownerId ? `-${ownerId.slice(0, 8).toUpperCase()}` : ''}${currency === LEGACY_CURRENCY ? '' : `-${currency}`}`;
   const data = { ...st, status: 'final', projected: false };
   const row = await one<{ number: string }>(
-    `INSERT INTO commission_statement (org_id, owner_id, period, number, gtv_idr, commission_idr, minimum_topup_idr, private_fee_idr,
-                                       mdr_credit_idr, net_idr, ppn_idr, total_idr, owner_share_idr, data, finalised_by)
-     VALUES ($1, $14, ($2 || '-01')::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $15, $12, $13)
-     ON CONFLICT (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), period) DO NOTHING RETURNING number`,
-    [orgId, period, number, st.totals.gtvIdr, st.totals.commissionIdr, st.totals.minimumTopUpIdr, st.totals.privateFeeIdr,
-     st.totals.mdrCreditIdr, st.totals.netIdr, st.totals.ppnIdr, st.totals.totalIdr, JSON.stringify(data), actor, ownerId, st.totals.ownerShareIdr],
+    `INSERT INTO commission_statement (org_id, owner_id, period, number, gtv_minor, commission_minor, minimum_topup_minor, private_fee_minor,
+                                       mdr_credit_minor, net_minor, tax_minor, total_minor, owner_share_minor, data, finalised_by, currency)
+     VALUES ($1, $14, ($2 || '-01')::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $15, $12, $13, $16)
+     ON CONFLICT (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), period, currency) DO NOTHING RETURNING number`,
+    [orgId, period, number, st.totals.gtvMinor, st.totals.commissionMinor, st.totals.minimumTopUpMinor, st.totals.privateFeeMinor,
+     st.totals.mdrCreditMinor, st.totals.netMinor, st.totals.taxMinor, st.totals.totalMinor, JSON.stringify(data), actor, ownerId, st.totals.ownerShareMinor, currency],
   );
   return row ? { number: row.number } : { error: 'already finalised' };
 }
 
 export async function listFinalised(orgId: string, ownerId: string | null = null) {
   return many(
-    `SELECT to_char(period, 'YYYY-MM') AS period, number, gtv_idr, commission_idr, minimum_topup_idr, private_fee_idr,
-            mdr_credit_idr, net_idr, ppn_idr, total_idr, owner_share_idr, finalised_at
-       FROM commission_statement WHERE org_id = $1 AND owner_id IS NOT DISTINCT FROM $2 ORDER BY period DESC`,
-    [orgId, ownerId],
+    `SELECT to_char(period, 'YYYY-MM') AS period, number, gtv_minor, commission_minor, minimum_topup_minor, private_fee_minor,
+            mdr_credit_minor, net_minor, tax_minor, total_minor, owner_share_minor, finalised_at, currency
+       FROM commission_statement WHERE org_id = $1 AND owner_id IS NOT DISTINCT FROM $2 ORDER BY period DESC, currency = $3 DESC, currency`,
+    [orgId, ownerId, LEGACY_CURRENCY],
   );
 }
 
@@ -260,7 +288,7 @@ export async function listFinalised(orgId: string, ownerId: string | null = null
  * (sessions, kWh) and amounts (gross, taxes, commission base, the owner's share
  * and the operator's share) — plus the operator's own sites (no owner), and totals.
  */
-export async function ownersOverview(orgId: string, period: string) {
+export async function ownersOverview(orgId: string, period: string, currency: CurrencyCode = LEGACY_CURRENCY) {
   const owners = await many<{ id: string; name: string; legal_name: string | null; archived_at: Date | null }>(
     `SELECT o.id, o.name, o.legal_name, o.archived_at FROM site_owner o
       WHERE o.org_id = $1 AND (o.archived_at IS NULL OR EXISTS (SELECT 1 FROM site s WHERE s.owner_id = o.id))
@@ -272,36 +300,38 @@ export async function ownersOverview(orgId: string, period: string) {
     return {
       status: st.status, number: st.number ?? null,
       sites: st.sites.length, chargers: st.sites.reduce((a: number, s: any) => a + s.chargers.length, 0),
-      sessions: t.sessions, energyKwh: t.energyKwh, grossIdr: t.grossCollectedIdr, pbjtIdr: t.pbjtIdr, ppnIdr: t.ppnCollectedIdr,
-      baseIdr: t.gtvIdr, mdrIdr: t.mdrEstimateIdr, ownerShareIdr: t.ownerShareIdr, platformShareIdr: t.platformShareIdr,
-      platformPpnIdr: t.ppnIdr, invoiceTotalIdr: t.totalIdr, warnings: st.warnings.length,
+      sessions: t.sessions, energyKwh: t.energyKwh, grossMinor: t.grossCollectedMinor, localTaxMinor: t.localTaxMinor, taxMinor: t.ppnCollectedMinor,
+      baseMinor: t.gtvMinor, mdrMinor: t.mdrEstimateMinor, ownerShareMinor: t.ownerShareMinor, platformShareMinor: t.platformShareMinor,
+      platformPpnMinor: t.taxMinor, invoiceTotalMinor: t.totalMinor, warnings: st.warnings.length,
     };
   };
   const rows = [];
   for (const o of owners) {
-    const st = await statementFor(orgId, period, o.id);
+    const st = await statementFor(orgId, period, o.id, currency);
     // "Own plan" = rates that differ from the published ones (a reset to published rates is not one).
-    const { custom } = await planFor(orgId, period, o.id);
+    const { custom } = await planFor(orgId, period, o.id, currency);
     rows.push({ ownerId: o.id, name: o.name, legalName: o.legal_name, archived: !!o.archived_at, customPlan: custom, ...pick(st) });
   }
   // The operator's own sites: everything after taxes and MDR is the operator's.
-  const own = await draftStatement(orgId, period, null);
+  const own = await draftStatement(orgId, period, null, currency);
   const ot = own.totals;
   const operatorOwn = {
     sites: own.sites.length, chargers: own.sites.reduce((a, s) => a + s.chargers.length, 0),
-    sessions: ot.sessions, energyKwh: ot.energyKwh, grossIdr: ot.grossCollectedIdr, pbjtIdr: ot.pbjtIdr, ppnIdr: ot.ppnCollectedIdr,
-    baseIdr: ot.gtvIdr, mdrIdr: ot.mdrEstimateIdr, ownerShareIdr: 0, platformShareIdr: ot.gtvIdr - ot.mdrEstimateIdr,
+    sessions: ot.sessions, energyKwh: ot.energyKwh, grossMinor: ot.grossCollectedMinor, localTaxMinor: ot.localTaxMinor, taxMinor: ot.ppnCollectedMinor,
+    baseMinor: ot.gtvMinor, mdrMinor: ot.mdrEstimateMinor, ownerShareMinor: 0, platformShareMinor: ot.gtvMinor - ot.mdrEstimateMinor,
   };
   const all = [...rows, operatorOwn];
   const sum = (k: string) => Math.round(all.reduce((a, r: any) => a + Number(r[k] ?? 0), 0) * 100) / 100;
   return {
     period,
+    currency,
+    currencies: await currenciesOf(orgId),
     owners: rows,
     operatorOwn,
     totals: {
       sites: sum('sites'), chargers: sum('chargers'), sessions: sum('sessions'), energyKwh: sum('energyKwh'),
-      grossIdr: sum('grossIdr'), pbjtIdr: sum('pbjtIdr'), ppnIdr: sum('ppnIdr'), baseIdr: sum('baseIdr'), mdrIdr: sum('mdrIdr'),
-      ownerShareIdr: sum('ownerShareIdr'), platformShareIdr: sum('platformShareIdr'),
+      grossMinor: sum('grossMinor'), localTaxMinor: sum('localTaxMinor'), taxMinor: sum('taxMinor'), baseMinor: sum('baseMinor'), mdrMinor: sum('mdrMinor'),
+      ownerShareMinor: sum('ownerShareMinor'), platformShareMinor: sum('platformShareMinor'),
     },
   };
 }
@@ -312,11 +342,13 @@ export async function platformOverview(period: string) {
     `SELECT o.id, o.name, o.slug FROM organisation o WHERE EXISTS (SELECT 1 FROM site s WHERE s.org_id = o.id) AND o.sandbox_of_org_id IS NULL ORDER BY o.name`,
   );
   const out = [];
-  for (const o of orgs) {
-    const s = await statementFor(o.id, period);
-    const { custom } = await planFor(o.id, period);
+  // One row per organisation AND currency it has sites in: amounts are never added across currencies.
+  for (const o of orgs) for (const currency of await currenciesOf(o.id)) {
+    const s = await statementFor(o.id, period, null, currency);
+    if (currency !== LEGACY_CURRENCY && !s.sites.length) continue;
+    const { custom } = await planFor(o.id, period, null, currency);
     out.push({
-      orgId: o.id, name: o.name, slug: o.slug, status: s.status, number: s.number, customPlan: custom,
+      orgId: o.id, name: o.name, slug: o.slug, currency, status: s.status, number: s.number, customPlan: custom,
       sites: s.sites.length, chargers: s.sites.reduce((a: number, x: any) => a + x.chargers.length, 0),
       warnings: s.warnings.length, totals: s.totals,
     });
@@ -333,30 +365,38 @@ const csvCell = (v: unknown) => {
 };
 
 export function statementCsv(st: any): string {
-  const head = ['Period', 'Site', 'Billing model', 'Tier', 'Charger', 'Identity', 'Type', 'Days in service', 'Sessions', 'Energy kWh',
-    'Commission base (excl. PBJT, PPN)', 'PBJT', 'PPN collected', 'Gross collected', 'Commission', 'Minimum', 'Minimum top-up', 'Private platform fee', 'Fee', 'MDR estimate'];
+  const cur = st.currency && st.currency !== LEGACY_CURRENCY ? st.currency : null;
+  // Amounts in minor units of the statement's currency; outside Indonesia the header says which, and the tax is the country's.
+  const head = !cur
+    ? ['Period', 'Site', 'Billing model', 'Tier', 'Charger', 'Identity', 'Type', 'Days in service', 'Sessions', 'Energy kWh',
+      'Commission base (excl. PBJT, PPN)', 'PBJT', 'PPN collected', 'Gross collected', 'Commission', 'Minimum', 'Minimum top-up', 'Private platform fee', 'Fee', 'MDR estimate']
+    : ['Period', 'Site', 'Billing model', 'Tier', 'Charger', 'Identity', 'Type', 'Days in service', 'Sessions', 'Energy kWh',
+      `Commission base (excl. tax, ${cur} minor)`, 'Local tax', 'Tax collected', 'Gross collected', 'Commission', 'Minimum', 'Minimum top-up', 'Private platform fee', 'Fee', 'MDR estimate'];
   const rows = st.sites.flatMap((s: any) => s.chargers.map((c: any) => [
     st.period, s.name, s.model, s.tier ?? '', c.displayName ?? '', c.ocppIdentity, c.kind, c.activeDays, c.sessions, (c.energyWh / 1000).toFixed(3),
-    c.gtvIdr, c.pbjtIdr, c.ppnIdr, c.grossIdr, c.commissionIdr, c.minimumIdr, c.topUpIdr, c.privateFeeIdr, c.feeIdr, s.model === 'public' ? c.mdrIdr : 0,
+    c.gtvMinor, c.localTaxMinor, c.taxMinor, c.grossMinor, c.commissionMinor, c.minimumMinor, c.topUpMinor, c.privateFeeMinor, c.feeMinor, s.model === 'public' ? c.mdrMinor : 0,
   ]));
   return [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"'`]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' })[c]!);
-const idr = (n: unknown) => 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(Number(n ?? 0)));
-const pct = (bps: number | null) => (bps == null ? '—' : `${(bps / 100).toLocaleString('id-ID', { maximumFractionDigits: 2 })}%`);
+const pct = (bps: number | null) => (bps == null ? '—' : `${(bps / 100).toLocaleString(LOCALE_TAG.id, { maximumFractionDigits: 2 })}%`);
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 export function statementHtml(st: any): string {
+  // A rupiah statement exactly as v1.6; another currency's in that currency, its taxes named generically, and no PPN on the fee (V6).
+  const cur: CurrencyCode = isCurrency(st.currency) ? st.currency : LEGACY_CURRENCY;
+  const id = cur === LEGACY_CURRENCY;
+  const idr = (n: unknown) => moneyText(Math.round(Number(n ?? 0)), cur, 'id');
   const [y, m] = String(st.period).split('-');
   const month = `${MONTHS[Number(m) - 1]} ${y}`;
   const t = st.totals;
-  const dppFrac = `${config.tax.ppnDppNumerator}/${config.tax.ppnDppDenominator}`;
+  const dppFrac = `${config.tax.id.ppnDppNumerator}/${config.tax.id.ppnDppDenominator}`;
   const siteRows = st.sites.map((s: any) => `<tr>
     <td><b>${esc(s.name)}</b><div class="muted">${s.model === 'public' ? `Public · ${esc(s.tier)} tier` : 'Private · platform fee'} · ${s.chargers.length} charger${s.chargers.length === 1 ? '' : 's'}</div>
       ${s.warnings.map((w: string) => `<div class="warn">${esc(w)}</div>`).join('')}</td>
-    <td class="n">${s.sessions}</td><td class="n">${idr(s.gtvIdr)}</td><td class="n">${s.model === 'public' ? pct(s.rateBps) : '—'}</td>
-    <td class="n">${idr(s.commissionIdr)}</td><td class="n">${idr(s.minimumTopUpIdr)}</td><td class="n">${idr(s.privateFeeIdr)}</td><td class="n"><b>${idr(s.feeIdr)}</b></td></tr>`).join('');
+    <td class="n">${s.sessions}</td><td class="n">${idr(s.gtvMinor)}</td><td class="n">${s.model === 'public' ? pct(s.rateBps) : '—'}</td>
+    <td class="n">${idr(s.commissionMinor)}</td><td class="n">${idr(s.minimumTopUpMinor)}</td><td class="n">${idr(s.privateFeeMinor)}</td><td class="n"><b>${idr(s.feeMinor)}</b></td></tr>`).join('');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Statement ${esc(st.number ?? `draft ${st.period}`)}</title>
 <style>
@@ -384,31 +424,32 @@ ${st.status !== 'final' ? `<div class="draft">Draft — figures change until the
 <tbody>${siteRows || '<tr><td colspan="8" class="muted">No chargers in service this month.</td></tr>'}</tbody></table>
 <h2>Summary</h2>
 <table><tbody>
-<tr><td>Gross collected from drivers (incl. PBJT-TL and PPN)</td><td class="n">${idr(t.grossCollectedIdr)}</td></tr>
-<tr><td class="muted">less PBJT-TL collected for the regional government</td><td class="n muted">${idr(t.pbjtIdr)}</td></tr>
-<tr><td class="muted">less PPN collected</td><td class="n muted">${idr(t.ppnCollectedIdr)}</td></tr>
-<tr><td><b>Commission base</b> (energy, service, admin and idle fees)</td><td class="n"><b>${idr(t.gtvIdr)}</b></td></tr>
-<tr><td>Commission</td><td class="n">${idr(t.commissionIdr)}</td></tr>
-<tr><td>Minimum per charger — top-up where commission fell below it</td><td class="n">${idr(t.minimumTopUpIdr)}</td></tr>
-<tr><td>Platform fee — private chargers</td><td class="n">${idr(t.privateFeeIdr)}</td></tr>
-${t.mdrCreditIdr ? `<tr><td>Less payment processing (QRIS MDR, estimated) — covered by the commission</td><td class="n">− ${idr(t.mdrCreditIdr)}</td></tr>` : ''}
-<tr><td><b>Fee before tax</b></td><td class="n"><b>${idr(t.netIdr)}</b></td></tr>
-<tr><td class="muted">DPP nilai lain (${esc(dppFrac)} × fee)</td><td class="n muted">${idr(t.dppIdr)}</td></tr>
-<tr><td>PPN ${config.tax.ppnRateBps / 100}% × DPP</td><td class="n">${idr(t.ppnIdr)}</td></tr>
-<tr class="grand"><td>Total due</td><td class="n">${idr(t.totalIdr)}</td></tr>
+${id ? `<tr><td>Gross collected from drivers (incl. PBJT-TL and PPN)</td><td class="n">${idr(t.grossCollectedMinor)}</td></tr>
+<tr><td class="muted">less PBJT-TL collected for the regional government</td><td class="n muted">${idr(t.localTaxMinor)}</td></tr>
+<tr><td class="muted">less PPN collected</td><td class="n muted">${idr(t.ppnCollectedMinor)}</td></tr>` : `<tr><td>Gross collected from drivers (incl. tax)</td><td class="n">${idr(t.grossCollectedMinor)}</td></tr>
+<tr><td class="muted">less tax collected (GST / service tax)</td><td class="n muted">${idr(t.ppnCollectedMinor)}</td></tr>`}
+<tr><td><b>Commission base</b> (energy, service, admin and idle fees)</td><td class="n"><b>${idr(t.gtvMinor)}</b></td></tr>
+<tr><td>Commission</td><td class="n">${idr(t.commissionMinor)}</td></tr>
+<tr><td>Minimum per charger — top-up where commission fell below it</td><td class="n">${idr(t.minimumTopUpMinor)}</td></tr>
+<tr><td>Platform fee — private chargers</td><td class="n">${idr(t.privateFeeMinor)}</td></tr>
+${t.mdrCreditMinor ? `<tr><td>Less payment processing (QRIS MDR, estimated) — covered by the commission</td><td class="n">− ${idr(t.mdrCreditMinor)}</td></tr>` : ''}
+<tr><td><b>Fee before tax</b></td><td class="n"><b>${idr(t.netMinor)}</b></td></tr>
+${id ? `<tr><td class="muted">DPP nilai lain (${esc(dppFrac)} × fee)</td><td class="n muted">${idr(t.taxBaseMinor)}</td></tr>
+<tr><td>PPN ${config.tax.id.ppnRateBps / 100}% × DPP</td><td class="n">${idr(t.taxMinor)}</td></tr>` : `<tr><td>Tax on the fee — not charged (${esc(st.taxNote ?? 'to be confirmed')})</td><td class="n">${idr(0)}</td></tr>`}
+<tr class="grand"><td>Total due</td><td class="n">${idr(t.totalMinor)}</td></tr>
 </tbody></table>
-${st.owner && t.ownerShareIdr != null ? `<h2>Shares of the commission base</h2>
+${st.owner && t.ownerShareMinor != null ? `<h2>Shares of the commission base</h2>
 <table><tbody>
-<tr><td>Your share (commission base less the fee before tax${t.mdrEstimateIdr ? ' and payment processing' : ''})</td><td class="n"><b>${idr(t.ownerShareIdr)}</b></td></tr>
-<tr><td>${esc(st.issuer?.name)} share (fee before tax)</td><td class="n">${idr(t.platformShareIdr)}</td></tr>
-${t.mdrEstimateIdr ? `<tr><td class="muted">Payment processing (QRIS MDR, estimated)</td><td class="n muted">${idr(t.mdrEstimateIdr)}</td></tr>` : ''}
-<tr><td class="muted">Charging units</td><td class="n muted">${Number(t.sessions).toLocaleString('id-ID')} sessions · ${Number(t.energyKwh).toLocaleString('id-ID', { maximumFractionDigits: 2 })} kWh</td></tr>
+<tr><td>Your share (commission base less the fee before tax${t.mdrEstimateMinor ? ' and payment processing' : ''})</td><td class="n"><b>${idr(t.ownerShareMinor)}</b></td></tr>
+<tr><td>${esc(st.issuer?.name)} share (fee before tax)</td><td class="n">${idr(t.platformShareMinor)}</td></tr>
+${t.mdrEstimateMinor ? `<tr><td class="muted">Payment processing (QRIS MDR, estimated)</td><td class="n muted">${idr(t.mdrEstimateMinor)}</td></tr>` : ''}
+<tr><td class="muted">Charging units</td><td class="n muted">${Number(t.sessions).toLocaleString(LOCALE_TAG.id)} sessions · ${Number(t.energyKwh).toLocaleString(LOCALE_TAG.id, { maximumFractionDigits: 2 })} kWh</td></tr>
 </tbody></table>` : ''}
 <div class="note">
-Commission base: the session subtotal — energy, service, admin and idle fees — excluding PBJT-TL and PPN. Sessions count in the month their charge record was issued.
-Rates: ${st.plan.tiers.map((x: any) => `${esc(x.name)} ${x.upToIdr ? `below ${idr(x.upToIdr)}` : 'above'} ${pct(x.rateBps)}`).join(' · ')} (${st.plan.tierMode === 'whole' ? 'whole month at the tier reached' : 'each band at its own rate'}), per site.
-Minimum ${idr(st.plan.minPerChargerAcIdr)} (AC) / ${idr(st.plan.minPerChargerDcIdr)} (DC) per charger per month, credited against that charger's commission; private chargers ${idr(st.plan.privateFeeAcIdr)} (AC) / ${idr(st.plan.privateFeeDcIdr)} (DC). ${st.plan.prorate ? 'Pro-rated by days in service.' : ''}
-${t.pph23Idr ? `If you are a PPh 23 withholding agent, withhold 2% of the fee before tax (${idr(t.pph23Idr)}) and send us the bukti potong.` : ''}
-This statement is not a tax invoice; the faktur pajak is issued separately.</div>
+${id ? 'Commission base: the session subtotal — energy, service, admin and idle fees — excluding PBJT-TL and PPN.' : `Commission base: the session subtotal — energy, service, admin and idle fees — excluding tax. All amounts in ${esc(cur)}.`} Sessions count in the month their charge record was issued.
+Rates: ${st.plan.tiers.map((x: any) => `${esc(x.name)} ${x.upToMinor ? `below ${idr(x.upToMinor)}` : 'above'} ${pct(x.rateBps)}`).join(' · ')} (${st.plan.tierMode === 'whole' ? 'whole month at the tier reached' : 'each band at its own rate'}), per site.
+Minimum ${idr(st.plan.minPerChargerAcMinor)} (AC) / ${idr(st.plan.minPerChargerDcMinor)} (DC) per charger per month, credited against that charger's commission; private chargers ${idr(st.plan.privateFeeAcMinor)} (AC) / ${idr(st.plan.privateFeeDcMinor)} (DC). ${st.plan.prorate ? 'Pro-rated by days in service.' : ''}
+${t.pph23Minor ? `If you are a PPh 23 withholding agent, withhold 2% of the fee before tax (${idr(t.pph23Minor)}) and send us the bukti potong.` : ''}
+${id ? 'This statement is not a tax invoice; the faktur pajak is issued separately.' : 'This statement is not a tax invoice.'}</div>
 </div></body></html>`;
 }

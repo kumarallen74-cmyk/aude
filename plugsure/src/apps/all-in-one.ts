@@ -1,12 +1,12 @@
 import { logger, installProcessGuards } from '../logger.js';
-import { pool } from '../db/pool.js';
+import { pool, endLockPool } from '../db/pool.js';
 import { startGateway } from '../ocpp/server.js';
 import { startApi } from '../api/server.js';
 import { assertAuditKeyConfigured } from '../services/audit.js';
 import { assertSecretsKeyConfigured } from '../services/secrets.js';
 import { assertAuthConfigured } from '../services/auth.js';
 import { assertRlsPosture } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, assertNodeEnvSet } from '../config.js';
 import { registerCoreListeners, startWorkers } from '../services/workers.js';
 
 /**
@@ -19,6 +19,8 @@ import { registerCoreListeners, startWorkers } from '../services/workers.js';
  */
 
 async function main() {
+  // First: an unset NODE_ENV used to mean development. Name the environment (config.ts).
+  assertNodeEnvSet();
   // Fail loudly at boot rather than at the first audited action or first request.
   assertAuditKeyConfigured();
   assertSecretsKeyConfigured();
@@ -45,6 +47,7 @@ async function main() {
     await gateway.close().catch(() => {});
     await api.close().catch(() => {});
     await pool.end().catch(() => {});
+    await endLockPool();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

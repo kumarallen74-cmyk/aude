@@ -1,6 +1,7 @@
 import { one, many, query, outsideRequestScope } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { bus } from './events.js';
+import { moneyText, currencyOr, LEGACY_CURRENCY } from '../domain/money.js';
 import { extras, providerOfPayment } from './payments/registry.js';
 import { PREPAID_CLAIM_WINDOW_MIN } from './sessions.js';
 
@@ -39,18 +40,18 @@ const PROCESSING_STALE_MIN = 10;
 const UNUSED_GRACE_MIN = 5;
 
 /** Record that money is owed. Idempotent: a payment already in the refund flow is left alone. */
-export async function markRefundDue(intentId: string, amountIdr: number, reason: string): Promise<boolean> {
-  if (!(amountIdr > 0)) return false;
-  const r = await one<{ org_id: string }>(
+export async function markRefundDue(intentId: string, amountMinor: number, reason: string): Promise<boolean> {
+  if (!(amountMinor > 0)) return false;
+  const r = await one<{ org_id: string; currency: string }>(
     `UPDATE payment_intent
-        SET refund_state = 'due', refund_due_idr = $2, refund_reason = $3,
+        SET refund_state = 'due', refund_due_minor = $2, refund_reason = $3,
             refund_requested_at = now(), updated_at = now()
       WHERE id = $1 AND refund_state IS NULL
-      RETURNING org_id`,
-    [intentId, Math.round(amountIdr), reason],
+      RETURNING org_id, currency`,
+    [intentId, Math.round(amountMinor), reason],
   );
   if (!r) return false;
-  bus.emit('refund.due', { orgId: r.org_id, paymentIntentId: intentId, amountIdr: Math.round(amountIdr), reason });
+  bus.emit('refund.due', { orgId: r.org_id, paymentIntentId: intentId, amountMinor: Math.round(amountMinor), currency: r.currency, reason });
   // Paid with a linked e-wallet: the driver never approved this payment by hand, so what is owed goes back at once.
   const linked = await one<{ ok: boolean }>(
     `SELECT EXISTS (SELECT 1 FROM payment_intent pi JOIN driver_card k ON k.id = pi.driver_card_id WHERE pi.id = $1 AND k.kind = 'ewallet') AS ok`, [intentId]);
@@ -69,8 +70,8 @@ export async function markRefundDue(intentId: string, amountIdr: number, reason:
  * them refundable in full, and retire their claim tokens. Runs in the worker.
  */
 export async function sweepUnusedPayments(): Promise<number> {
-  const rows = await many<{ id: string; org_id: string; amount: number; claim_id_tag: string | null }>(
-    `SELECT id, org_id, COALESCE(amount_captured_idr, amount_authorised_idr, 0) AS amount, claim_id_tag
+  const rows = await many<{ id: string; org_id: string; amount: number; claim_id_tag: string | null; currency: string }>(
+    `SELECT id, org_id, COALESCE(amount_captured_minor, amount_authorised_minor, 0) AS amount, claim_id_tag, currency
        FROM payment_intent
       WHERE mode = 'prepurchase' AND state = 'captured' AND session_id IS NULL
         AND refund_state IS NULL
@@ -94,7 +95,7 @@ export async function sweepUnusedPayments(): Promise<number> {
       orgId: r.org_id,
       kind: 'payment.refund_due',
       severity: 'warning',
-      message: `A driver paid Rp ${Number(r.amount).toLocaleString('id-ID')} and charging never started. A full refund is due — see Refunds.`,
+      message: `A driver paid ${moneyText(Number(r.amount), currencyOr(r.currency))} and charging never started. A full refund is due — see Refunds.`,
       targetType: 'payment_intent',
       targetId: r.id,
     });
@@ -111,7 +112,7 @@ export async function sweepUnusedPayments(): Promise<number> {
 export async function sweepProcessingRefunds(): Promise<number> {
   const rows = await many<{ id: string; org_id: string; provider: string; provider_ref: string | null; integration_id: string | null; channel: string | null;
     provider_payment_id: string | null; refund_ref: string | null; due: number }>(
-    `SELECT id, org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_ref, refund_due_idr AS due
+    `SELECT id, org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_ref, refund_due_minor AS due
        FROM payment_intent
       WHERE refund_state = 'processing' AND updated_at < now() - make_interval(mins => $1::int)
       ORDER BY updated_at LIMIT 50`,
@@ -152,7 +153,7 @@ export async function sweepProcessingRefunds(): Promise<number> {
  */
 export async function refundSettled(acquirer: { provider: string; integrationId: string | null }, refundRef: string, status: 'refunded' | 'pending' | 'failed'): Promise<string> {
   const r = await one<{ id: string; org_id: string; due: number }>(
-    `SELECT id, org_id, refund_due_idr AS due FROM payment_intent
+    `SELECT id, org_id, refund_due_minor AS due FROM payment_intent
       WHERE provider = $1 AND refund_ref = $2 AND refund_method = 'provider'
         AND ($3::uuid IS NULL OR integration_id IS NULL OR integration_id = $3::uuid)
       ORDER BY refund_requested_at DESC LIMIT 1`,
@@ -184,7 +185,7 @@ export async function processRefund(intentId: string, actorUserId: string | null
     `UPDATE payment_intent SET refund_state = 'processing', refund_error = NULL, updated_at = now()
       WHERE id = $1 AND (refund_state IN ('due', 'failed')
                          OR ($2::boolean AND refund_state = 'processing' AND refund_ref IS NULL AND updated_at < now() - make_interval(mins => $3::int)))
-      RETURNING org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_due_idr AS due`,
+      RETURNING org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_due_minor AS due`,
     [intentId, opts.resume === true, PROCESSING_STALE_MIN],
   );
   if (!row) {
@@ -211,7 +212,7 @@ export async function processRefund(intentId: string, actorUserId: string | null
       providerRef: row.provider_ref,
       providerPaymentId: row.provider_payment_id,
       channel: row.channel ?? 'QRIS',
-      amountIdr: Number(row.due),
+      amountMinor: Number(row.due),
       reason: 'PlugSure prepaid refund',
       idempotencyKey: `refund-${intentId}`,
     });
@@ -242,7 +243,7 @@ export async function markRefundedManually(intentId: string, reference: string, 
   const ref = String(reference ?? '').trim();
   if (ref.length < 3) return { ok: false, state: 'due', error: 'Enter the bank transfer reference.' };
   const row = await one<{ org_id: string; due: number; refund_state: string; refund_ref: string | null }>(
-    `SELECT org_id, refund_due_idr AS due, refund_state, refund_ref FROM payment_intent WHERE id = $1 AND refund_state IN ('due', 'failed', 'processing')`,
+    `SELECT org_id, refund_due_minor AS due, refund_state, refund_ref FROM payment_intent WHERE id = $1 AND refund_state IN ('due', 'failed', 'processing')`,
     [intentId],
   );
   if (!row) return { ok: false, state: 'none', error: 'No refund is outstanding for this payment.' };
@@ -265,12 +266,12 @@ export async function markRefundedManually(intentId: string, reference: string, 
 
 /** Mark the refund paid, once: only from the states given (a conditional UPDATE). False when it was not in one of them. */
 async function complete(intentId: string, orgId: string, amount: number, method: 'provider' | 'manual', reference: string, actor: string | null, from: Array<'due' | 'failed' | 'processing'>): Promise<boolean> {
-  const done = await one<{ id: string }>(
+  const done = await one<{ id: string; currency: string }>(
     `UPDATE payment_intent
-        SET refund_state = 'refunded', refunded_idr = $2, refund_method = $3, refund_ref = $4,
+        SET refund_state = 'refunded', refunded_minor = $2, refund_method = $3, refund_ref = $4,
             refunded_at = now(), refunded_by = $5, refund_error = NULL, updated_at = now()
       WHERE id = $1 AND refund_state = ANY($6::text[])
-      RETURNING id`,
+      RETURNING id, currency`,
     [intentId, amount, method, reference, actor, from],
   );
   if (!done) return false;
@@ -279,16 +280,16 @@ async function complete(intentId: string, orgId: string, amount: number, method:
     `UPDATE alert SET resolved_at = now() WHERE target_type = 'payment_intent' AND target_id = $1 AND resolved_at IS NULL`,
     [intentId],
   );
-  bus.emit('refund.completed', { orgId, paymentIntentId: intentId, amountIdr: amount, method, reference });
+  bus.emit('refund.completed', { orgId, paymentIntentId: intentId, amountMinor: amount, currency: done.currency, method, reference });
   return true;
 }
 
 export async function listRefunds(orgId: string, state?: string) {
   const states = state && ['due', 'processing', 'refunded', 'failed'].includes(state) ? [state] : ['due', 'processing', 'refunded', 'failed'];
   return many(
-    `SELECT pi.id, pi.refund_state, pi.refund_due_idr, pi.refunded_idr, pi.refund_reason, pi.refund_method,
+    `SELECT pi.id, pi.refund_state, pi.refund_due_minor, pi.refunded_minor, pi.refund_reason, pi.refund_method,
             pi.refund_ref, pi.refund_error, pi.refund_requested_at, pi.refunded_at,
-            pi.provider, pi.provider_ref, pi.method, pi.channel, pi.amount_captured_idr, COALESCE(pi.paid_at, pi.created_at) AS paid_at,
+            pi.provider, pi.provider_ref, pi.method, pi.channel, pi.amount_captured_minor, pi.currency, COALESCE(pi.paid_at, pi.created_at) AS paid_at,
             pi.session_id, s.name AS site_name, cp.ocpp_identity, e.evse_id AS connector_no,
             ad.phone AS driver_phone, u.name AS refunded_by_name
        FROM payment_intent pi
@@ -307,12 +308,21 @@ export async function listRefunds(orgId: string, state?: string) {
 }
 
 export async function refundSummary(orgId: string) {
-  return one<{ due_count: number; due_idr: number; failed_count: number; refunded_30d_idr: number }>(
-    `SELECT count(*) FILTER (WHERE refund_state IN ('due', 'processing'))::int AS due_count,
-            COALESCE(sum(refund_due_idr) FILTER (WHERE refund_state IN ('due', 'processing', 'failed')), 0)::bigint AS due_idr,
+  // The v1.6 sums are rupiah; by_currency has every currency separately (never added up).
+  const rows = await many<{ currency: string; due_count: number; due_minor: string; failed_count: number; refunded_30d_minor: string }>(
+    `SELECT currency, count(*) FILTER (WHERE refund_state IN ('due', 'processing'))::int AS due_count,
+            COALESCE(sum(refund_due_minor) FILTER (WHERE refund_state IN ('due', 'processing', 'failed')), 0)::bigint AS due_minor,
             count(*) FILTER (WHERE refund_state = 'failed')::int AS failed_count,
-            COALESCE(sum(refunded_idr) FILTER (WHERE refund_state = 'refunded' AND refunded_at > now() - interval '30 days'), 0)::bigint AS refunded_30d_idr
-       FROM payment_intent WHERE org_id = $1 AND refund_state IS NOT NULL`,
+            COALESCE(sum(refunded_minor) FILTER (WHERE refund_state = 'refunded' AND refunded_at > now() - interval '30 days'), 0)::bigint AS refunded_30d_minor
+       FROM payment_intent WHERE org_id = $1 AND refund_state IS NOT NULL GROUP BY currency ORDER BY currency`,
     [orgId],
   );
+  const idr = rows.find((r) => r.currency === LEGACY_CURRENCY);
+  return {
+    due_count: rows.reduce((a, r) => a + r.due_count, 0),
+    due_minor: Number(idr?.due_minor ?? 0),
+    failed_count: rows.reduce((a, r) => a + r.failed_count, 0),
+    refunded_30d_minor: Number(idr?.refunded_30d_minor ?? 0),
+    by_currency: rows.map((r) => ({ currency: r.currency, due_minor: Number(r.due_minor), refunded_30d_minor: Number(r.refunded_30d_minor) })),
+  };
 }

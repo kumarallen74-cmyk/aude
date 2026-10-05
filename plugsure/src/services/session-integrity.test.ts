@@ -56,7 +56,7 @@ if (DB_OK) {
       `INSERT INTO organisation (name, slug) VALUES ('Session Integrity Test', $1)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
     siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Session Integrity Hub', 1000) RETURNING id`, [orgId]))!.id;
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Session Integrity Hub', 1000) RETURNING id`, [orgId]))!.id;
     cpId = (await one<{ id: string }>(
       `INSERT INTO charge_point (site_id, ocpp_identity, ocpp_version, status) VALUES ($1, $2, 'ocpp1.6', 'online') RETURNING id`, [siteId, IDENT]))!.id;
     const e = await one<{ id: string }>(`INSERT INTO evse (charge_point_id, evse_id, max_power_w) VALUES ($1, 1, 22000) RETURNING id`, [cpId]);

@@ -159,7 +159,7 @@ describe('ocpi mapping: sessions and CDRs', () => {
   const s = {
     id: 'sess-1', state: 'ended', started_at: new Date('2026-09-27T02:00:00Z'), ended_at: new Date('2026-09-27T03:00:00Z'),
     energy_wh: 30_000, auth_method: 'COMMAND', authorization_reference: 'REF-1', location_id: site().id, evse_uid: 'X-1', connector_id: '1',
-    meter_id: 'MID-DC-1', cost: { subtotal_idr: 100_000, pbjt_idr: 7_500, total_idr: 118_825 }, last_updated: t0, idle_minutes: 15,
+    meter_id: 'MID-DC-1', cost: { subtotal_minor: 100_000, local_tax_minor: 7_500, total_minor: 118_825 }, last_updated: t0, idle_minutes: 15,
   };
   test('a session is ACTIVE while charging and COMPLETED with its total afterwards (PBJT inside excl_vat)', () => {
     const active = buildSession(party, { ...s, state: 'active', ended_at: null, cost: null }, token);
@@ -176,11 +176,11 @@ describe('ocpi mapping: sessions and CDRs', () => {
     const cdr = buildCdr(party, {
       id: 'cdr-1', issued_at: t0,
       lines: [
-        { kind: 'energy', description: 'Energy', quantity: 30, unit: 'kWh', unitRate: 2400, amountIdr: 72_000 },
-        { kind: 'session', description: 'Service', quantity: 1, unit: 'session', unitRate: 25_000, amountIdr: 25_000 },
-        { kind: 'idle', description: 'Idle', quantity: 3, unit: 'min', unitRate: 1000, amountIdr: 3_000 },
+        { kind: 'energy', description: 'Energy', quantity: 30, unit: 'kWh', unitRate: 2400, amountMinor: 72_000 },
+        { kind: 'session', description: 'Service', quantity: 1, unit: 'session', unitRate: 25_000, amountMinor: 25_000 },
+        { kind: 'idle', description: 'Idle', quantity: 3, unit: 'min', unitRate: 1000, amountMinor: 3_000 },
       ],
-      subtotal_idr: 100_000, pbjt_idr: 7_500, total_idr: 118_825, tariff: null,
+      subtotal_minor: 100_000, local_tax_minor: 7_500, total_minor: 118_825, tariff: null,
       session: s, site: site({ city: 'Bekasi' }), evse: evse(), connector: conn(),
     }, token);
     assert.equal(cdr.total_energy, 30);
@@ -207,5 +207,83 @@ describe('ocpi mapping: tokens from partners', () => {
     assert.match(parseToken({ ...good, contract_id: '' }) as string, /contract_id/);
     assert.match(parseToken({ ...good, valid: 'yes' }) as string, /valid/);
     assert.match(parseToken(good, { country_code: 'ID', party_id: 'EMS', uid: 'OTHER' }) as string, /match the URL/);
+  });
+});
+
+describe('ocpi mapping: per site country, currency and time zone (multi-country)', () => {
+  const my: Party = { country_code: 'MY', party_id: 'PLS', business_name: 'PlugSure Malaysia Sdn Bhd' };
+  const sgParty: Party = { country_code: 'SG', party_id: 'PLS', business_name: 'PlugSure Singapore Pte Ltd' };
+  const token = { country_code: 'MY', party_id: 'EMS', uid: 'RFID-1', type: 'RFID', contract_id: 'MY-EMS-C1' };
+
+  test('a Malaysian location: MYS, Asia/Kuala_Lumpur, the MY party', () => {
+    const l = buildLocation(my, site({ country_code: 'MY', timezone: 'Asia/Kuala_Lumpur', city: 'Kuala Lumpur', postal_code: '55100', lat: 3.149, lon: 101.713 }), [evse()]);
+    assert.equal(l.country, 'MYS');
+    assert.equal(l.time_zone, 'Asia/Kuala_Lumpur');
+    assert.equal(l.country_code, 'MY');
+    assert.equal(l.evses[0]!.evse_id, 'MY*PLS*EAUTELDC60SMB002*1');
+    assert.equal(buildLocation(sgParty, site({ country_code: 'SG', timezone: 'Asia/Singapore' }), []).country, 'SGP');
+    // Absent (a pre-1.7 row): Indonesia, as before.
+    assert.equal(buildLocation(party, site(), []).country, 'IDN');
+  });
+
+  test('a Singapore tariff: SGD, vat 9, the inclusive rate published excl. GST, English alt text', () => {
+    const t: Tariff = {
+      id: 'sg-1', name: 'SG', currency: 'SGD', countryCode: 'SG', pricesIncludeTax: true,
+      components: [
+        { kind: 'energy', rate: 0.654, touBlock: 'ANY' },
+        { kind: 'idle', rate: 0.3, touBlock: 'ANY', fromMinutes: 15, toMinutes: 115 },
+      ],
+    };
+    const o = buildTariff(sgParty, { tariff: t, active_from: null, active_to: null, last_updated: t0, vat: 9 });
+    assert.equal(o.currency, 'SGD');
+    assert.equal(o.country_code, 'SG');
+    assert.deepEqual(o.elements[0]!.price_components, [{ type: 'ENERGY', price: 0.6, vat: 9, step_size: 1 }]); // 0.654 / 1.09
+    assert.deepEqual(o.elements[1]!.price_components, [{ type: 'PARKING_TIME', price: 16.5138, vat: 9, step_size: 60 }]); // 18 / 1.09
+    assert.deepEqual(o.tariff_alt_text.map((a) => a.language), ['en']);
+    assert.match(o.tariff_alt_text[0]!.text, /^Prices exclude GST \(9%\); the price at the charger includes it\. Idle fee S\$ 0\.30\/min after 15 min/);
+  });
+
+  test('a Malaysian tariff without service tax: MYR, no vat field, "No tax is charged"', () => {
+    const t: Tariff = { id: 'my-1', name: 'MY', currency: 'MYR', countryCode: 'MY', pricesIncludeTax: true, components: [{ kind: 'energy', rate: 1.2, touBlock: 'ANY' }] };
+    const o = buildTariff(my, { tariff: t, active_from: null, active_to: null, last_updated: t0, vat: null });
+    assert.equal(o.currency, 'MYR');
+    assert.deepEqual(o.elements[0]!.price_components, [{ type: 'ENERGY', price: 1.2, step_size: 1 }]);
+    assert.equal(o.tariff_alt_text[0]!.text, 'No tax is charged.');
+  });
+
+  test('a MYR CDR: currency from the row, amounts in ringgit (1234 sen → 12.34)', () => {
+    const s = {
+      id: 'sess-my', state: 'ended', started_at: new Date('2026-09-27T02:00:00Z'), ended_at: new Date('2026-09-27T03:00:00Z'),
+      energy_wh: 10_000, auth_method: 'WHITELIST', authorization_reference: null, location_id: 'loc', evse_uid: 'X-1', connector_id: '1',
+      meter_id: null, cost: { subtotal_minor: 1234, local_tax_minor: 0, total_minor: 1234 }, currency: 'MYR', last_updated: t0, idle_minutes: 0,
+    };
+    assert.deepEqual(buildSession(my, s, token).total_cost, { excl_vat: 12.34, incl_vat: 12.34 });
+    assert.equal(buildSession(my, s, token).currency, 'MYR');
+    const cdr = buildCdr(my, {
+      id: 'cdr-my', issued_at: t0, currency: 'MYR',
+      lines: [{ kind: 'energy', description: 'Energy', quantity: 10, unit: 'kWh', unitRate: 1.234, amountMinor: 1234 }],
+      subtotal_minor: 1234, local_tax_minor: 0, total_minor: 1234, tariff: null,
+      session: s, site: site({ country_code: 'MY', timezone: 'Asia/Kuala_Lumpur', city: 'KL' }), evse: evse(), connector: conn(),
+    }, token);
+    assert.equal(cdr.currency, 'MYR');
+    assert.deepEqual(cdr.total_cost, { excl_vat: 12.34, incl_vat: 12.34 });
+    assert.deepEqual(cdr.total_energy_cost, { excl_vat: 12.34 });
+    assert.equal(cdr.cdr_location.country, 'MYS');
+  });
+
+  test('an SGD CDR with GST-inclusive lines: dimension costs net of GST, total excl/incl from the CDR', () => {
+    const s = {
+      id: 'sess-sg', state: 'ended', started_at: new Date('2026-09-27T02:00:00Z'), ended_at: new Date('2026-09-27T03:00:00Z'),
+      energy_wh: 20_000, auth_method: 'WHITELIST', authorization_reference: null, location_id: 'loc', evse_uid: 'X-1', connector_id: '1',
+      meter_id: null, cost: { subtotal_minor: 1193, local_tax_minor: 0, total_minor: 1300 }, currency: 'SGD', last_updated: t0, idle_minutes: 0,
+    };
+    const cdr = buildCdr(sgParty, {
+      id: 'cdr-sg', issued_at: t0, currency: 'SGD', prices_include_tax: true, vat: 9,
+      lines: [{ kind: 'energy', description: 'Energy', quantity: 20, unit: 'kWh', unitRate: 0.65, amountMinor: 1300 }],
+      subtotal_minor: 1193, local_tax_minor: 0, total_minor: 1300, tariff: null,
+      session: s, site: site({ country_code: 'SG', timezone: 'Asia/Singapore', city: 'Singapore' }), evse: evse(), connector: conn(),
+    }, token);
+    assert.deepEqual(cdr.total_cost, { excl_vat: 11.93, incl_vat: 13 });
+    assert.deepEqual(cdr.total_energy_cost, { excl_vat: 11.93 });
   });
 });

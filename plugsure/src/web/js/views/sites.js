@@ -1,6 +1,6 @@
 import {
   $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, field, options,
-  formValues, fieldErrors, toast, callout, kpi, navigate, sites as loadSites, onlineTag, confirmDialog,
+  formValues, fieldErrors, toast, callout, kpi, navigate, sites as loadSites, onlineTag, confirmDialog, COUNTRIES, countryCurrency, toMinor, toMajor, multiCountryUi,
 } from '../core.js';
 
 /**
@@ -8,11 +8,12 @@ import {
  * Replaces the SQL that used to create every electrical site.
  */
 
-const TIMEZONES = [
-  { value: 'Asia/Jakarta', label: 'WIB — Asia/Jakarta' },
-  { value: 'Asia/Makassar', label: 'WITA — Asia/Makassar' },
-  { value: 'Asia/Jayapura', label: 'WIT — Asia/Jayapura' },
-];
+/** A country's site time zones (first = default), labelled "WIB — Asia/Jakarta", "SGT — Asia/Singapore". */
+const timezonesOf = (cc) => (COUNTRIES[cc] ?? COUNTRIES.ID).timezones.map((tz) => ({ value: tz, label: `${fmt.tz(tz)} — ${tz}` }));
+/** Which countries a new site may be in: Indonesia, and Malaysia / Singapore when the platform allows (MULTI_COUNTRY). */
+const countryChoices = (current) => Object.values(COUNTRIES)
+  .filter((c) => c.code === 'ID' || state.me?.features?.multiCountry || c.code === current)
+  .map((c) => ({ value: c.code, label: `${c.name} (${c.currency})` }));
 
 const liveTag = (s) =>
   s === 'online' ? tag('t-ok', 'all online') : s === 'partial' ? tag('t-warn', 'partly offline') : s === 'offline' ? tag('t-crit', 'offline') : tag('t-mute', 'no chargers');
@@ -131,7 +132,11 @@ export function mapPicker(box, { lat, lon, onPick }) {
 export function openSiteModal(site = null) {
   return new Promise((resolve) => {
     const meta = state.meta ?? {};
-    const s = site ?? { power_factor: 0.95, phases: 3, timezone: 'Asia/Jakarta', pbjt_rate_bps: 0 };
+    const home = state.me?.org?.homeCountry ?? 'ID';
+    const s = site ?? { power_factor: 0.95, phases: 3, country_code: home, timezone: (COUNTRIES[home] ?? COUNTRIES.ID).timezones[0], local_tax_rate_bps: 0 };
+    let cc = s.country_code ?? 'ID';
+    // Country and currency only where they can differ (multi-country): an Indonesia-only operator's form is v1.5's.
+    const showCountry = multiCountryUi() || cc !== 'ID';
     let savedId = null;
     const ctx = modal({
       title: site ? `Edit site — ${site.name}` : 'Create electrical site',
@@ -139,28 +144,30 @@ export function openSiteModal(site = null) {
       size: 'xl',
       body: `<form novalidate>
         <fieldset><legend>General information</legend><div class="form">
+          ${showCountry ? field('Country', `<select name="countryCode"${site?.session_count > 0 ? ' disabled' : ''}>${options(countryChoices(cc), cc)}</select>`, { help: 'Decides the currency, time zones, tax and the regulatory fields below. It cannot change once the site has sessions.' }) : ''}
+          ${showCountry ? field('Currency', `<input data-currency-show readonly value="${esc(countryCurrency(cc))}">`, { help: 'Every price and fee at this site is in this currency (no conversion).' }) : ''}
           ${field('Site name', `<input name="name" maxlength="200" placeholder="Summarecon Mall Bekasi — P2 Basement">`, { full: true })}
           ${field('Street address', `<input name="address" placeholder="Jl. Bulevar Ahmad Yani, Bekasi">`, { full: true })}
           ${field('City', `<input name="city" maxlength="45" placeholder="Bekasi">`, { opt: true, help: 'Needed to share the site with roaming partners.' })}
           ${field('Postal code', `<input name="postalCode" inputmode="numeric" maxlength="5" placeholder="17142">`, { opt: true })}
-          ${field('Regency / city code', `<input name="kabupatenKotaCode" inputmode="numeric" maxlength="4" placeholder="3171">`, { help: '4-digit BPS code, e.g. 3171 Jakarta Pusat, 3275 Kota Bekasi. Drives PBJT and must match the SPKLU ID.' })}
-          ${field('Time zone', `<select name="timezone">${options(TIMEZONES, s.timezone)}</select>`)}
+          ${field('Regency / city code', `<input name="kabupatenKotaCode" inputmode="numeric" maxlength="4" placeholder="3171">`, { attrs: 'data-only="ID"', help: '4-digit BPS code, e.g. 3171 Jakarta Pusat, 3275 Kota Bekasi. Drives PBJT and must match the SPKLU ID.' })}
+          ${field('Time zone', `<select name="timezone">${options(timezonesOf(cc), s.timezone)}</select>`)}
           ${field('Latitude', `<input name="lat" inputmode="decimal" placeholder="-6.2246">`)}
           ${field('Longitude', `<input name="lon" inputmode="decimal" placeholder="106.9998">`)}
           <div class="field full"><div class="row"><span class="lbl small muted">Click the map to place the site, drag to pan.</span>
             <button type="button" class="btn sm ghost right" data-geo>${icon('site')} Use my location</button></div><div data-map></div></div>
         </div></fieldset>
-        <fieldset style="margin-top:14px"><legend>PLN grid connection</legend><div class="form">
-          ${field('Grid tariff group', `<select name="gridTariffGroup">${options((meta.plnTariffGroups ?? []).map((g) => ({ value: g.code, label: g.label })), s.grid_tariff_group, { blank: 'Choose…' })}</select>`)}
+        <fieldset style="margin-top:14px"><legend data-grid-legend>${cc === 'ID' ? 'PLN grid connection' : 'Grid connection'}</legend><div class="form">
+          ${field('Grid tariff group', `<select name="gridTariffGroup">${options((meta.plnTariffGroups ?? []).map((g) => ({ value: g.code, label: g.label })), s.grid_tariff_group, { blank: 'Choose…' })}</select>`, { attrs: 'data-only="ID"' })}
           ${field('Subscribed capacity', `<div class="inputgroup"><input name="connectedKva" inputmode="decimal" placeholder="250"><span class="suffix">kVA</span></div>`)}
           ${field('Power factor', `<input name="powerFactor" inputmode="decimal" placeholder="0.95">`)}
           ${field('Incoming supply', `<select name="phases">${options([{ value: 3, label: '3-phase (400 V)' }, { value: 1, label: '1-phase (230 V)' }], s.phases)}</select>`)}
           <div class="full" data-compute></div>
         </div></fieldset>
-        <fieldset style="margin-top:14px"><legend>Indonesian regulatory & SPKLU compliance (Permen ESDM 1/2023)</legend><div class="form">
+        <fieldset style="margin-top:14px" data-only="ID"><legend>Indonesian regulatory & SPKLU compliance (Permen ESDM 1/2023)</legend><div class="form">
           ${field('Official SPKLU ID', `<input name="spkluId" placeholder="01.POSO.20.3171.011" class="mono">`, { help: 'XX.SCHEME.YY.ZZZZ.NNN' })}
           ${field('Business scheme', `<select name="spkluScheme">${options(meta.spkluSchemes ?? [], s.spklu_scheme, { blank: 'Choose…' })}</select>`, { help: 'P = provider, R = retailer · O = owned, L = leased · SO = self-operated, PO = partner-operated' })}
-          ${field('PBJT-TL local tax', `<div class="inputgroup"><input name="pbjtRateBps" inputmode="numeric" placeholder="500"><span class="suffix">bps</span></div>`, { help: '<span data-pbjt></span> Set by the kabupaten/kota; 1000 bps = 10% maximum.' })}
+          ${field('PBJT-TL local tax', `<div class="inputgroup"><input name="localTaxRateBps" inputmode="numeric" placeholder="500"><span class="suffix">bps</span></div>`, { help: '<span data-pbjt></span> Set by the kabupaten/kota; 1000 bps = 10% maximum.' })}
           ${field('SLO certificate number', `<input name="sloNumber" placeholder="SLO/2025/JKT/00412">`)}
           ${field('SLO issuing agency (LIT)', `<input name="sloIssuer" placeholder="PT …">`)}
           ${field('SLO issue date', `<input name="sloIssuedAt" type="date">`)}
@@ -178,7 +185,7 @@ export function openSiteModal(site = null) {
           ${field('Longest wait', `<div class="inputgroup"><input name="queueMaxWaitMinutes" inputmode="numeric" placeholder="120"><span class="suffix">minutes</span></div>`, { help: '15 to 720. A place in the queue ends after this.' })}
         </div></fieldset>
         <fieldset style="margin-top:14px"><legend>Reservations</legend><div class="form">
-          ${field('Reservation fee', `<div class="inputgroup"><input name="reservationFeeIdr" inputmode="numeric" placeholder="0 = free"><span class="suffix">Rp</span></div>`, { help: 'For holding a connector 15 minutes from the driver app, before PPN. App drivers pay it first; fleet cards are billed on the fleet invoice. Kept once the connector is held, charging or not; not charged if the charger refuses or the driver cancels within 2 minutes. Queue turns are always free.' })}
+          ${field('Reservation fee', `<div class="inputgroup"><input name="reservationFeeMinor" inputmode="numeric" placeholder="0 = free"><span class="suffix" data-cur>${esc(fmt.sym(countryCurrency(cc)))}</span></div>`, { help: `For holding a connector 15 minutes from the driver app, ${showCountry ? 'before tax (in Singapore and Malaysia: the price drivers pay). In the site’s currency.' : 'before PPN.'} App drivers pay it first; fleet cards are billed on the fleet invoice. Kept once the connector is held, charging or not; not charged if the charger refuses or the driver cancels within 2 minutes. Queue turns are always free.` })}
         </div></fieldset>
         <fieldset style="margin-top:14px"><legend>Signed meter data (OCMF)</legend><div class="form">
           ${field('Signed readings', `<select name="signedMeterPolicy"><option value="record">Keep and check (default)</option><option value="require">Require: bill only verified sessions</option><option value="off">Ignore</option></select>`, { full: true, help: 'For chargers whose meters sign their readings (calibration-law meters, OCMF). Readings are checked against each connector’s registered meter key and against the bill. Require parks any session whose signed start and end readings do not verify or do not match.' })}
@@ -190,7 +197,7 @@ export function openSiteModal(site = null) {
           ${field('Discharge hours', `<input name="v2xWindows" placeholder="17:00-22:00">`, { help: 'Local time, e.g. PLN’s evening peak 17:00-22:00. Several ranges separated by commas; 00:00-00:00 is all day.' })}
           ${field('Site discharge limit', `<div class="inputgroup"><input name="v2xMaxDischargeKw" inputmode="decimal" placeholder="no limit"><span class="suffix">kW</span></div>`, { opt: true, help: 'The most all cars together give back at once.' })}
           ${field('Battery floor', `<div class="inputgroup"><input name="v2xMinSocPercent" inputmode="numeric" placeholder="40"><span class="suffix">%</span></div>`, { help: '10 to 95. Drivers may choose a higher floor, never a lower one.' })}
-          ${field('Driver credit', `<div class="inputgroup"><input name="v2xCreditIdrPerKwh" inputmode="numeric" placeholder="0"><span class="suffix">Rp / kWh</span></div>`, { help: 'Taken off the driver’s session before tax, for each kWh given back (never below zero). Fixed for a charge when the driver agrees.' })}
+          ${field('Driver credit', `<div class="inputgroup"><input name="v2xCreditMinorPerKwh" inputmode="numeric" placeholder="0"><span class="suffix"><span data-cur>${esc(fmt.sym(countryCurrency(cc)))}</span> / kWh</span></div>`, { help: 'Taken off the driver’s session before tax, for each kWh given back (never below zero). Fixed for a charge when the driver agrees.' })}
           </div>
           <label class="check" style="margin-top:8px"><input type="checkbox" name="v2xAllowExport"${s.v2x_allow_export ? ' checked' : ''}> <span>Energy may flow back to the PLN grid (only with a PLN export agreement)</span></label>
           <p class="small muted" style="margin:6px 0 0">Off: cars only cover the site’s own use. Discharge is capped at the auxiliary load set under Load management (lighting, air-conditioning, the shop), so nothing reaches the grid.</p>
@@ -205,6 +212,14 @@ export function openSiteModal(site = null) {
           async onClick(c) {
             const form = $('form', c.body);
             const v = formValues(form);
+            v.countryCode = cc;
+            // Indonesian-only fields are not sent for a Malaysian or Singapore site (the server refuses them).
+            if (cc !== 'ID') for (const k of ['kabupatenKotaCode', 'spkluId', 'spkluScheme', 'sloNumber', 'sloIssuer', 'sloIssuedAt', 'sloExpiresAt', 'gridTariffGroup', 'localTaxRateBps']) delete v[k];
+            // Amounts are typed in the site currency's major units (RM 5.00) and stored in minor units (500 sen); rupiah as typed.
+            const cur = countryCurrency(cc);
+            for (const k of ['reservationFeeMinor', 'v2xCreditMinorPerKwh']) {
+              if (v[k] != null && String(v[k]).trim() !== '') v[k] = toMinor(v[k], cur);
+            }
             // The discharge limit is typed in kW and stored in W.
             const kw = String(v.v2xMaxDischargeKw ?? '').trim();
             v.v2xMaxDischargeW = kw ? Math.round(Number(kw) * 1000) : null;
@@ -233,19 +248,37 @@ export function openSiteModal(site = null) {
     const set = (name, v) => { const i = $(`[name="${name}"]`, form); if (i && v != null) i.value = v; };
     set('name', s.name); set('address', s.address); set('city', s.city); set('postalCode', s.postal_code); set('kabupatenKotaCode', s.kabupaten_kota_code);
     set('lat', s.lat); set('lon', s.lon); set('connectedKva', s.connected_kva); set('powerFactor', s.power_factor);
-    set('spkluId', s.spklu_id); set('pbjtRateBps', s.pbjt_rate_bps); set('sloNumber', s.slo_number); set('sloIssuer', s.slo_issuer);
+    set('spkluId', s.spklu_id); set('localTaxRateBps', s.local_tax_rate_bps); set('sloNumber', s.slo_number); set('sloIssuer', s.slo_issuer);
     set('sloIssuedAt', fmt.isoDate(s.slo_issued_at)); set('sloExpiresAt', fmt.isoDate(s.slo_expires_at)); set('offlineAlertMinutes', s.offline_alert_minutes);
-    set('queueOfferMinutes', s.queue_offer_minutes); set('queueMaxLength', s.queue_max_length); set('queueMaxWaitMinutes', s.queue_max_wait_minutes); set('reservationFeeIdr', s.reservation_fee_idr || '');
-    set('v2xWindows', (s.v2x_windows ?? []).map((w) => `${w.from}-${w.to}`).join(', ')); set('v2xMinSocPercent', s.v2x_min_soc_percent); set('v2xCreditIdrPerKwh', s.v2x_credit_idr_per_kwh);
+    set('queueOfferMinutes', s.queue_offer_minutes); set('queueMaxLength', s.queue_max_length); set('queueMaxWaitMinutes', s.queue_max_wait_minutes); set('reservationFeeMinor', s.reservation_fee_minor ? toMajor(s.reservation_fee_minor, countryCurrency(cc)) : '');
+    set('v2xWindows', (s.v2x_windows ?? []).map((w) => `${w.from}-${w.to}`).join(', ')); set('v2xMinSocPercent', s.v2x_min_soc_percent); set('v2xCreditMinorPerKwh', s.v2x_credit_minor_per_kwh != null ? toMajor(s.v2x_credit_minor_per_kwh, countryCurrency(cc)) : null);
     set('v2xMaxDischargeKw', s.v2x_max_discharge_w ? s.v2x_max_discharge_w / 1000 : '');
     set('signedMeterPolicy', s.signed_meter_policy ?? 'record');
 
+    // The country decides the currency, the time zones and which regulatory fields apply.
+    const applyCountry = () => {
+      cc = $('[name=countryCode]', form)?.value || cc;
+      const cur = countryCurrency(cc);
+      const curShow = $('[data-currency-show]', form);
+      if (curShow) curShow.value = cur;
+      $$('[data-cur]', form).forEach((x) => { x.textContent = fmt.sym(cur); });
+      $$('[data-only]', form).forEach((x) => { x.hidden = x.dataset.only !== cc; });
+      $('[data-grid-legend]', form).textContent = cc === 'ID' ? 'PLN grid connection' : 'Grid connection';
+      const tzSel = $('[name=timezone]', form);
+      const keep = tzSel.value;
+      tzSel.innerHTML = options(timezonesOf(cc), (COUNTRIES[cc] ?? COUNTRIES.ID).timezones.includes(keep) ? keep : (COUNTRIES[cc] ?? COUNTRIES.ID).timezones[0]);
+      $('[name=postalCode]', form).maxLength = cc === 'SG' ? 6 : 5;
+      $('[name=postalCode]', form).placeholder = cc === 'SG' ? '018989' : cc === 'MY' ? '50450' : '17142';
+    };
+    $('[name=countryCode]', form)?.addEventListener('change', applyCountry);
+    applyCountry();
+
     const compute = () => {
       $('[data-compute]', form).innerHTML = computeCard($('[name=connectedKva]', form).value, $('[name=powerFactor]', form).value);
-      const bps = Number($('[name=pbjtRateBps]', form).value);
+      const bps = Number($('[name=localTaxRateBps]', form).value);
       $('[data-pbjt]', form).textContent = Number.isFinite(bps) ? `= ${(bps / 100).toFixed(2)}%.` : '';
     };
-    ['connectedKva', 'powerFactor', 'pbjtRateBps'].forEach((n) => $(`[name=${n}]`, form).addEventListener('input', compute));
+    ['connectedKva', 'powerFactor', 'localTaxRateBps'].forEach((n) => $(`[name=${n}]`, form).addEventListener('input', compute));
     compute();
 
     // SPKLU ID -> suggest scheme and municipality.
@@ -304,17 +337,22 @@ export async function openSiteDrawer(siteId) {
                 <dt>Supply</dt><dd>${Number(s.phases) === 1 ? '1-phase 230 V' : '3-phase 400 V'}</dd>
                 <dt>Managed ceiling</dt><dd>${s.ceiling_w != null ? fmt.kw(Math.min(Number(s.ceiling_w), Number(s.connected_kva ?? Infinity) * 1000 * Number(s.power_factor))) : '—'}${s.curtailed ? ' ' + tag('t-crit', 'curtailed') : ''}</dd>
                 <dt>Coordinates</dt><dd class="mono">${s.lat != null ? `${esc(s.lat)}, ${esc(s.lon)}` : '—'}</dd>
-                <dt>Time zone</dt><dd>${esc(s.timezone)}</dd>
+                <dt>Time zone</dt><dd>${esc(fmt.tz(s.timezone))} — ${esc(s.timezone)}</dd>
+                ${multiCountryUi() || (s.country_code ?? 'ID') !== 'ID' ? `<dt>Country</dt><dd>${esc(COUNTRIES[s.country_code ?? 'ID']?.name ?? s.country_code)} · ${esc(countryCurrency(s.country_code ?? 'ID'))}</dd>` : ''}
+                ${s.reservation_fee_minor ? `<dt>Reservation fee</dt><dd>${fmt.money(s.reservation_fee_minor, countryCurrency(s.country_code ?? 'ID'))}</dd>` : ''}
               </dl></div>
-              <div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">Regulatory</h3><dl class="kv">
+              ${(s.country_code ?? 'ID') !== 'ID' ? `<div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">Regulatory</h3><dl class="kv">
+                <dt>Tax</dt><dd>${esc(COUNTRIES[s.country_code]?.taxName ?? '—')} — set per country under Settings → Organisation</dd>
+                <dt>Licence / registration</dt><dd>${s.country_code === 'SG' ? 'LTA registration mark per charger' : 'EVCS licence reference per charger'} (Chargers)</dd>
+              </dl></div>` : `<div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">Regulatory</h3><dl class="kv">
                 <dt>SPKLU ID</dt><dd class="mono">${esc(s.spklu_id ?? '—')}</dd>
                 <dt>Scheme</dt><dd>${esc(s.spklu_scheme ?? '—')}</dd>
                 <dt>Regency/city</dt><dd>${esc(s.kabupaten_kota_code ?? '—')}</dd>
-                <dt>PBJT-TL</dt><dd>${(Number(s.pbjt_rate_bps ?? 0) / 100).toFixed(2)}%</dd>
+                <dt>PBJT-TL</dt><dd>${(Number(s.local_tax_rate_bps ?? 0) / 100).toFixed(2)}%</dd>
                 <dt>SLO</dt><dd>${esc(s.slo_number ?? '—')}${s.slo_issuer ? ` · ${esc(s.slo_issuer)}` : ''}</dd>
                 <dt>SLO validity</dt><dd>${fmt.date(s.slo_issued_at)} → ${fmt.date(s.slo_expires_at)} ${
                   sloDays == null ? '' : sloDays < 0 ? tag('t-crit', 'expired') : sloDays < 90 ? tag('t-warn', `${sloDays}d left`) : tag('t-ok', `${sloDays}d left`)}</dd>
-              </dl></div>
+              </dl></div>`}
             </div>
             <div class="section"><h2>Charge points</h2><div class="card" data-cps></div></div>`;
           $('[data-compute]', body).innerHTML = computeCard(s.connected_kva, s.power_factor);
@@ -434,7 +472,7 @@ registerView('sites', {
         columns: [
           { label: 'Site', render: (s) => `<div class="cell-title">${esc(s.name)}</div><div class="cell-sub">${esc(s.address ?? '')}${s.archived_at ? ' · archived' : ''}</div>` },
           { label: 'Organization', render: (s) => esc(s.org_name) },
-          { label: 'SPKLU ID', render: (s) => (s.spklu_id ? `<span class="mono">${esc(s.spklu_id)}</span>${s.spklu_valid === false ? ' ' + tag('t-crit', 'malformed') : ''}` : tag('t-warn', 'missing')) },
+          { label: 'SPKLU ID', render: (s) => ((s.country_code ?? 'ID') !== 'ID' ? `<span class="muted">${esc(COUNTRIES[s.country_code]?.name ?? s.country_code)}</span><div class="cell-sub">${esc(countryCurrency(s.country_code))} · ${esc(fmt.tz(s.timezone))}</div>` : s.spklu_id ? `<span class="mono">${esc(s.spklu_id)}</span>${s.spklu_valid === false ? ' ' + tag('t-crit', 'malformed') : ''}` : tag('t-warn', 'missing')) },
           { label: 'Subscribed', num: true, render: (s) => (s.connected_kva != null ? `${fmt.num(s.connected_kva)} kVA` : '—') },
           { label: 'PF', num: true, render: (s) => esc(Number(s.power_factor).toFixed(2)) },
           { label: 'Managed ceiling', num: true, render: (s) => `${fmt.kw(s.managed_ceiling_w)}${s.curtailed ? '<div>' + tag('t-crit', 'curtailed') + '</div>' : ''}` },

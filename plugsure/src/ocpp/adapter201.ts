@@ -315,16 +315,49 @@ async function onStatusNotification(ctx: AdapterContext, p: any) {
   // The connector table's evse_id is the 1.6 connectorId, i.e. the 2.0.1 EVSE —
   // the same key TransactionEvent uses (evse.id). Keying on the 2.0.1 connectorId
   // (almost always 1) wrote every EVSE's status onto EVSE 1.
+  //
+  // Within the EVSE, the 2.0.1 connectorId matters too. Each connector's own last
+  // report is kept on the EVSE (evse.connector_status), and the connector rows get
+  // a status derived from ALL of them (connectorRowStatuses). Writing the reported
+  // status straight onto the EVSE's row made a dual-gun EVSE (CCS2 + CHAdeMO) show
+  // whichever gun spoke last: the idle gun reporting Unavailable while the other
+  // charged turned a busy EVSE "Unavailable" (OCPI: INOPERATIVE).
   const c = await assets.ensureConnector(ctx.chargePointId, evseId);
   if (c) {
-    await query(
-      `UPDATE connector
-          SET status = $2, error_code = $3, status_updated_at = $4, vendor_error_code = $5, status_info = $6
-        WHERE id = $1`,
-      [c.id, status, null, observedAt, null, null],
+    const merged = await one<{ connector_status: Record<string, { status: ConnectorStatus }> }>(
+      `UPDATE evse
+          SET connector_status = connector_status || jsonb_build_object($2::text, jsonb_build_object('status', $3::text, 'raw', $4::text, 'at', $5::text))
+        WHERE id = $1
+        RETURNING connector_status`,
+      [c.evse_uuid, String(connectorNo), status, raw.slice(0, 32), observedAt],
     );
+    const reported: Record<number, ConnectorStatus> = {};
+    for (const [k, v] of Object.entries(merged?.connector_status ?? { [connectorNo]: { status } })) {
+      const n = Number(k);
+      if (Number.isInteger(n) && n > 0 && v && typeof v.status === 'string') reported[n] = v.status;
+    }
+    const rows = await query<{ id: string; connector_id: number; status: string }>(
+      `SELECT id, connector_id, status FROM connector WHERE evse_uuid = $1 ORDER BY connector_id`,
+      [c.evse_uuid],
+    );
+    const ids = rows.rows.map((r) => r.connector_id);
+    const next = connectorRowStatuses(ids, reported);
+    const ownRow = ids.includes(connectorNo) ? connectorNo : Math.min(...ids);
+    for (const r of rows.rows) {
+      const want = next.get(r.connector_id);
+      // The reporting connector's row is always touched (its status time moves, as
+      // before); the others only when the EVSE's status changes what they show.
+      if (!want || (want === r.status && r.connector_id !== ownRow)) continue;
+      await query(
+        `UPDATE connector
+            SET status = $2, error_code = $3, status_updated_at = $4, vendor_error_code = $5, status_info = $6
+          WHERE id = $1`,
+        [r.id, want, null, observedAt, null, null],
+      );
+    }
   }
 
+  // The event carries what THIS connector reported (it names the connector).
   bus.emit('connector.status_changed', {
     orgId: ctx.orgId,
     ocppIdentity: ctx.ocppIdentity,
@@ -333,6 +366,10 @@ async function onStatusNotification(ctx: AdapterContext, p: any) {
     status,
   });
 
+  // One alert per connector: a faulted CHAdeMO gun must not be cleared by its
+  // CCS neighbour reporting Available. Connector 1 keeps the historical target
+  // (`<cp>:<evse>`) so alerts already open stay matched.
+  const alertTarget = connectorNo === 1 ? `${ctx.chargePointId}:${evseId}` : `${ctx.chargePointId}:${evseId}:${connectorNo}`;
   if (status === 'Faulted' && c) {
     bus.emit('alert.raised', {
       orgId: c.org_id,
@@ -340,12 +377,76 @@ async function onStatusNotification(ctx: AdapterContext, p: any) {
       severity: 'critical',
       message: `${ctx.ocppIdentity} evse ${evseId} connector ${connectorNo} reported Faulted.`,
       targetType: 'connector',
-      targetId: `${ctx.chargePointId}:${evseId}`,
+      targetId: alertTarget,
     });
   } else if (c) {
-    await resolveAlertsFor(c.org_id, 'connector.faulted', 'connector', `${ctx.chargePointId}:${evseId}`).catch(() => 0);
+    await resolveAlertsFor(c.org_id, 'connector.faulted', 'connector', alertTarget).catch(() => 0);
   }
   return {};
+}
+
+/**
+ * Which status represents a 2.0.1 EVSE when its connectors disagree, highest
+ * first. Only one connector of an EVSE can be in use at a time (OCPP 2.0.1
+ * §"EVSE"), so a connector in use, or a reservation, makes the WHOLE EVSE busy;
+ * otherwise the EVSE can serve a driver if any connector is Available; a fault
+ * outranks plain Unavailable because it is the more useful thing to show.
+ */
+const EVSE_STATUS_RANK: Record<string, number> = {
+  Charging: 50, // 2.0.1 Occupied (STATUS_MAP_201)
+  Preparing: 50,
+  SuspendedEV: 50,
+  SuspendedEVSE: 50,
+  Finishing: 50,
+  Reserved: 40,
+  Available: 30,
+  Faulted: 20,
+  Unavailable: 10,
+};
+
+export function evseStatusOf(statuses: Iterable<ConnectorStatus>): ConnectorStatus | null {
+  let best: ConnectorStatus | null = null;
+  for (const s of statuses) {
+    if (best === null || (EVSE_STATUS_RANK[s] ?? 0) > (EVSE_STATUS_RANK[best] ?? 0)) best = s;
+  }
+  return best;
+}
+
+/**
+ * The status each connector ROW of a 2.0.1 EVSE should show, from the last
+ * status every connector of that EVSE reported. Pure.
+ *
+ * `rows` are the connector_ids of the EVSE's rows in the connector table: just
+ * [1] for an EVSE nobody configured (ensureConnector), or one row per gun when the
+ * operator entered the topology. `reported` is keyed by the 2.0.1 connectorId.
+ *
+ *  - A connector in use or a reservation anywhere on the EVSE: every row shows
+ *    it — the other guns cannot be used meanwhile, so the console, the driver
+ *    app and OCPI must not offer them.
+ *  - Otherwise a row shows its own connector's status. Connectors with no row of
+ *    their own fold into the first row, so an unconfigured EVSE (one row) shows
+ *    the EVSE's status (Available if any gun is).
+ *  - A row with no report of its own shows the EVSE's status.
+ *
+ * A single-connector EVSE (every 1.6 unit, most 2.0.1 ones) gets exactly what it
+ * reported — the previous behaviour.
+ */
+export function connectorRowStatuses(rows: number[], reported: Record<number, ConnectorStatus>): Map<number, ConnectorStatus> {
+  const out = new Map<number, ConnectorStatus>();
+  const all = Object.values(reported);
+  const evse = evseStatusOf(all);
+  if (!rows.length || evse === null) return out;
+  const busy = (EVSE_STATUS_RANK[evse] ?? 0) >= EVSE_STATUS_RANK.Reserved! ? evse : null;
+  const first = Math.min(...rows);
+  for (const row of rows) {
+    const own: ConnectorStatus[] = [];
+    for (const [k, v] of Object.entries(reported)) {
+      const n = Number(k);
+      if (n === row || (row === first && !rows.includes(n))) own.push(v);
+    }
+    out.set(row, busy ?? evseStatusOf(own) ?? evse);
+  }
+  return out;
 }
 
 async function onAuthorize(ctx: AdapterContext, p: any) {
@@ -512,7 +613,12 @@ async function onTransactionEvent(ctx: AdapterContext, p: any) {
 
   let session;
   try {
-    session = await handleTransactionEvent(ev, ctx.chargePointId, unauthorised ? { unauthorised } : {});
+    session = await handleTransactionEvent(ev, ctx.chargePointId, {
+      ...(unauthorised ? { unauthorised } : {}),
+      // An Ended for a transaction we never saw start is recorded for review
+      // instead of dropped (sessions.recordUnknownEnd).
+      ...(eventType === 'Ended' ? { reconstructUnknownEnd: true } : {}),
+    });
   } catch (e) {
     // Session start's own refusal, decided under the connector's lock (a prepaid
     // token with no claimable payment here): answered like a refused token. Live,
@@ -531,11 +637,85 @@ async function onTransactionEvent(ctx: AdapterContext, p: any) {
     throw new OcppCallError('InternalError', 'Could not open a charging session');
   }
 
+  // Lost TransactionEvents are detected (never reordered). Bookkeeping only: a
+  // failure here must not make the station resend an event already processed.
+  if (session && typeof p.seqNo === 'number') {
+    await trackSeqNo(ctx, session.id, ev.transactionId, eventType, p.seqNo).catch((e) =>
+      logger.warn({ cp: ctx.ocppIdentity, tx: ev.transactionId, err: String(e) }, 'TransactionEvent seqNo not tracked'));
+  }
+
   // Started echoes the authorisation back (when there was a token to
   // authorise); so does the event that carried a late token. Otherwise {}.
   if (eventType === 'Started' && idTokenValue) return { idTokenInfo: { status: authStatus } };
   if (lateAuth) return { idTokenInfo: { status: lateAuth } };
   return {};
+}
+
+/**
+ * What a TransactionEvent's seqNo says about the events before it. Pure.
+ *
+ * OCPP 2.0.1 numbers a transaction's TransactionEvents 0, 1, 2, … so that the
+ * CSMS can tell whether it received them all. `prev` is the highest seqNo seen
+ * for the session so far (null: none tracked yet — a session opened before
+ * tracking existed, or a Started whose station counts per station rather than
+ * per transaction; neither is judged).
+ *
+ *  - next:      prev + 1, the normal case
+ *  - duplicate: prev again (a retried event)
+ *  - late:      below prev — an event arriving after later ones (it may fill a
+ *               gap reported earlier); processed as it comes, never reordered
+ *  - gap:       above prev + 1 — events missingFrom..missingTo were not received
+ */
+export function seqNoCheck(prev: number | null, seqNo: number):
+  | { kind: 'first' | 'next' | 'duplicate' | 'late' }
+  | { kind: 'gap'; missingFrom: number; missingTo: number } {
+  if (prev === null) return { kind: 'first' };
+  if (seqNo === prev + 1) return { kind: 'next' };
+  if (seqNo === prev) return { kind: 'duplicate' };
+  if (seqNo < prev) return { kind: 'late' };
+  return { kind: 'gap', missingFrom: prev + 1, missingTo: seqNo - 1 };
+}
+
+/**
+ * Record a TransactionEvent's seqNo on its session and flag a gap.
+ *
+ * A gap is logged every time and flagged on the session once
+ * (TRANSACTION_EVENTS_MISSING, a warning: it does not park the session). Energy
+ * is billed from the meter registers, so a lost Updated loses no energy, but a
+ * lost event may have carried a token, a charging-state change or a stop the
+ * reviewer should know about.
+ */
+async function trackSeqNo(ctx: AdapterContext, sessionId: string, transactionId: string, eventType: string, seqNo: number) {
+  if (!Number.isInteger(seqNo) || seqNo < 0) return;
+  const r = await one<{ prev: number | null }>(
+    `WITH prev AS (SELECT id, ocpp_seq_no FROM charging_session WHERE id = $1 FOR UPDATE)
+     UPDATE charging_session cs
+        SET ocpp_seq_no = GREATEST(COALESCE(prev.ocpp_seq_no, $2::int), $2::int)
+       FROM prev
+      WHERE cs.id = prev.id
+      RETURNING prev.ocpp_seq_no AS prev`,
+    [sessionId, seqNo],
+  );
+  if (!r) return;
+  const check = seqNoCheck(r.prev, seqNo);
+  if (check.kind === 'late') {
+    logger.info({ cp: ctx.ocppIdentity, tx: transactionId, seqNo, highest: r.prev, eventType }, 'TransactionEvent arrived after later ones (processed in arrival order)');
+  } else if (check.kind === 'gap') {
+    const missing = check.missingFrom === check.missingTo ? `${check.missingFrom}` : `${check.missingFrom}-${check.missingTo}`;
+    logger.warn({ cp: ctx.ocppIdentity, tx: transactionId, sessionId, seqNo, missing, eventType }, 'TransactionEvents missing (seqNo gap)');
+    const flag = {
+      code: 'TRANSACTION_EVENTS_MISSING',
+      severity: 'warning',
+      message:
+        `TransactionEvent seqNo ${missing} had not been received when seqNo ${seqNo} (${eventType}) arrived. ` +
+        'Energy is taken from the meter registers; check the frame log for what the missing events carried.',
+    };
+    await query(
+      `UPDATE charging_session SET flags = flags || $2::jsonb
+        WHERE id = $1 AND NOT flags @> '[{"code":"TRANSACTION_EVENTS_MISSING"}]'::jsonb`,
+      [sessionId, JSON.stringify([flag])],
+    );
+  }
 }
 
 /** The parked-session record of a start that was not authorised (sessions.UnauthorisedStart). */

@@ -5,12 +5,12 @@ const uuidList = (d: string): Schema => ({ type: ['array', 'null'], items: { typ
 export const schemas: Record<string, Schema> = {
   SubscriptionPlan: {
     type: 'object',
-    required: ['id', 'name', 'monthly_fee_idr', 'energy_discount_bps', 'included_kwh', 'waive_session_fees', 'offered_in_app', 'active'],
+    required: ['id', 'name', 'monthly_fee_minor', 'energy_discount_bps', 'included_kwh', 'waive_session_fees', 'offered_in_app', 'active'],
     properties: {
       id: { type: 'string', format: 'uuid' }, name: { type: 'string' }, description: nullable('string'),
-      monthly_fee_idr: { type: 'integer', description: 'Before tax.' },
+      monthly_fee_minor: { type: 'integer', description: 'Before tax.' },
       energy_discount_bps: { type: 'integer', description: 'Discount on energy in basis points (1000 = 10%).' },
-      member_rate_idr: { type: ['number', 'null'], description: 'Member price per kWh, used where it is lower than the tariff.' },
+      member_rate: { type: ['number', 'null'], description: 'Member price per kWh, used where it is lower than the tariff.' },
       included_kwh: { type: 'number', description: 'kWh per month (or per 30-day pass) at no charge.' },
       waive_session_fees: { type: 'boolean' },
       current_type: { type: ['string', 'null'], enum: ['AC', 'DC', null] },
@@ -23,8 +23,8 @@ export const schemas: Record<string, Schema> = {
   SubscriptionPlanInput: {
     type: 'object',
     properties: {
-      name: { type: 'string' }, description: { type: 'string' }, monthlyFeeIdr: { type: 'integer', minimum: 0 },
-      memberRateIdr: { type: ['number', 'null'], minimum: 0 }, energyDiscountPercent: { type: 'number', minimum: 0, maximum: 100 },
+      name: { type: 'string' }, description: { type: 'string' }, currency: { type: 'string', enum: ['IDR', 'MYR', 'SGD'], description: 'Set when created (default IDR); fixed after.' }, monthlyFeeMinor: { type: 'integer', minimum: 0 },
+      memberRate: { type: ['number', 'null'], minimum: 0 }, energyDiscountPercent: { type: 'number', minimum: 0, maximum: 100 },
       includedKwh: { type: 'number', minimum: 0 }, waiveSessionFees: { type: 'boolean' },
       currentType: { type: ['string', 'null'], enum: ['AC', 'DC', null] }, siteIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
       offeredInApp: { type: 'boolean' }, active: { type: 'boolean' },
@@ -51,22 +51,22 @@ export const schemas: Record<string, Schema> = {
   },
   LoyaltyProgram: {
     type: 'object',
-    required: ['enabled', 'earnPer1000Idr', 'pointValueIdr', 'maxRedeemBps', 'expiryMonths'],
+    required: ['enabled', 'earnPer1000Minor', 'pointValueMinor', 'maxRedeemBps', 'expiryMonths'],
     properties: {
       enabled: { type: 'boolean' },
-      earnPer1000Idr: { type: 'integer', minimum: 0, maximum: 1000, description: 'Points earned per Rp 1,000 of a session\'s receipt total (rounded down).' },
-      pointValueIdr: { type: 'integer', minimum: 1, description: 'What one point takes off a session, in rupiah.' },
+      earnPer1000Minor: { type: 'integer', minimum: 0, maximum: 1000, description: 'Points earned per Rp 1,000 of a session\'s receipt total (rounded down).' },
+      pointValueMinor: { type: 'integer', minimum: 1, description: 'What one point takes off a session, in rupiah.' },
       maxRedeemBps: { type: 'integer', minimum: 0, maximum: 10000, description: 'The most of a session\'s energy and fees points may pay, in basis points (5000 = half).' },
       expiryMonths: { type: 'integer', minimum: 1, maximum: 60, description: 'Each earning expires this many months after it was earned; points are spent oldest first.' },
     },
   },
   LoyaltyStats: {
     type: 'object',
-    required: ['program', 'outstandingPoints', 'liabilityIdr', 'members', 'thisMonth'],
+    required: ['program', 'outstandingPoints', 'liabilityMinor', 'members', 'thisMonth'],
     properties: {
       program: ref('LoyaltyProgram'),
-      outstandingPoints: { type: 'integer' }, liabilityIdr: { type: 'integer', description: 'What the outstanding points are worth.' }, members: { type: 'integer', description: 'Drivers holding points.' },
-      thisMonth: { type: 'object', properties: { earned: { type: 'integer' }, redeemed: { type: 'integer' }, discountIdr: { type: 'integer' }, expired: { type: 'integer' } } },
+      outstandingPoints: { type: 'integer' }, liabilityMinor: { type: 'integer', description: 'What the outstanding points are worth.' }, members: { type: 'integer', description: 'Drivers holding points.' },
+      thisMonth: { type: 'object', properties: { earned: { type: 'integer' }, redeemed: { type: 'integer' }, discountMinor: { type: 'integer' }, expired: { type: 'integer' } } },
     },
   },
   Promotion: {
@@ -82,10 +82,10 @@ export const schemas: Record<string, Schema> = {
       starts_at: { type: 'string', format: 'date-time' }, ends_at: nullable('string', { format: 'date-time' }),
       days_mask: { type: 'integer', description: 'Bit 0 = Monday … bit 6 = Sunday.' },
       time_from: { type: ['string', 'null'], description: 'HH:MM local time at the site.' }, time_to: { type: ['string', 'null'] },
-      min_kwh: { type: 'number' }, max_redemptions: nullable('integer'), max_per_customer: nullable('integer'), budget_idr: nullable('integer'),
+      min_kwh: { type: 'number' }, max_redemptions: nullable('integer'), max_per_customer: nullable('integer'), budget_minor: nullable('integer'),
       stacks_with_membership: { type: 'boolean' }, active: { type: 'boolean' },
       created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
-      redemptions: { type: 'integer' }, discount_idr: { type: 'integer', description: 'Discount given so far.' }, customers: { type: 'integer' },
+      redemptions: { type: 'integer' }, discount_minor: { type: 'integer', description: 'Discount given so far.' }, customers: { type: 'integer' },
     },
   },
   PromotionInput: {
@@ -101,7 +101,8 @@ export const schemas: Record<string, Schema> = {
       startsAt: { type: 'string', format: 'date-time' }, endsAt: { type: ['string', 'null'], format: 'date-time' },
       daysMask: { type: 'integer', minimum: 1, maximum: 127 }, timeFrom: { type: ['string', 'null'] }, timeTo: { type: ['string', 'null'] },
       minKwh: { type: 'number', minimum: 0 }, maxRedemptions: { type: ['integer', 'null'], minimum: 1 }, maxPerCustomer: { type: ['integer', 'null'], minimum: 1 },
-      budgetIdr: { type: ['integer', 'null'], minimum: 1 }, stacksWithMembership: { type: 'boolean' }, active: { type: 'boolean' },
+      budgetMinor: { type: ['integer', 'null'], minimum: 1 }, stacksWithMembership: { type: 'boolean' }, active: { type: 'boolean' },
+      currency: { type: 'string', enum: ['IDR', 'MYR', 'SGD'], description: 'Set when created (default IDR); fixed after. Applies to sessions in it only.' },
     },
   },
 };
@@ -118,14 +119,14 @@ export const ops: Op[] = [
   {
     method: 'POST', path: '/v1/subscription-plans', tag: T, summary: 'Create a membership plan',
     description: 'With `offeredInApp`, drivers can buy it in the app as a 30-day pass (QRIS, e-wallet or card), renewed by hand or automatically with a saved card or linked e-wallet. A driver switching to another plan has the unused days of the current pass credited.',
-    body: { required: true, schema: ref('SubscriptionPlanInput'), example: { name: 'Member Hemat', monthlyFeeIdr: 99000, energyDiscountPercent: 10, includedKwh: 20, waiveSessionFees: true, offeredInApp: true } },
+    body: { required: true, schema: ref('SubscriptionPlanInput'), example: { name: 'Member Hemat', monthlyFeeMinor: 99000, energyDiscountPercent: 10, includedKwh: 20, waiveSessionFees: true, offeredInApp: true } },
     responses: { 201: { description: 'Created', schema: ref('SubscriptionPlan') } },
     errors: [409, 422],
   },
   {
     method: 'PUT', path: '/v1/subscription-plans/:id', tag: T, summary: 'Update a membership plan', pathParams: { id: 'Plan id.' },
     description: 'Changes apply to sessions rated from now on.',
-    body: { required: true, schema: ref('SubscriptionPlanInput'), example: { memberRateIdr: 2100 } },
+    body: { required: true, schema: ref('SubscriptionPlanInput'), example: { memberRate: 2100 } },
     responses: { 200: { description: 'Updated', schema: ref('SubscriptionPlan') } },
     errors: [404, 409, 422],
   },
@@ -169,7 +170,7 @@ export const ops: Op[] = [
   {
     method: 'PUT', path: '/v1/loyalty', tag: T, summary: 'Save the loyalty program',
     description: 'Switch loyalty on or off and set the earn rate, the value of a point, the most points may pay of a session and when points expire. Changes apply to sessions rated from now on; points already earned keep their expiry. Audited.',
-    body: { required: true, schema: { ...ref('LoyaltyProgram'), required: undefined } as Schema, example: { enabled: true, earnPer1000Idr: 1, pointValueIdr: 10, maxRedeemBps: 5000, expiryMonths: 12 } },
+    body: { required: true, schema: { ...ref('LoyaltyProgram'), required: undefined } as Schema, example: { enabled: true, earnPer1000Minor: 1, pointValueMinor: 10, maxRedeemBps: 5000, expiryMonths: 12 } },
     responses: { 200: { description: 'Saved', schema: ref('LoyaltyStats') } },
     errors: [422],
   },
@@ -193,7 +194,7 @@ export const ops: Op[] = [
   {
     method: 'POST', path: '/v1/promotions', tag: T, summary: 'Create a promotion',
     description: 'An offer (% off energy, a promo price per kWh, rupiah off, free kWh or service fee waived) for everyone, new drivers, chosen fleet accounts, members of chosen plans, or whoever enters its code in the app — limited by dates, days of the week, a time window (happy hour), sites, AC/DC, a minimum kWh, total and per-customer uses, and a budget.',
-    body: { required: true, schema: ref('PromotionInput'), example: { name: 'Happy hour malam', kind: 'energy_percent', value: 20, audience: 'everyone', timeFrom: '22:00', timeTo: '06:00', budgetIdr: 5000000 } },
+    body: { required: true, schema: ref('PromotionInput'), example: { name: 'Happy hour malam', kind: 'energy_percent', value: 20, audience: 'everyone', timeFrom: '22:00', timeTo: '06:00', budgetMinor: 5000000 } },
     responses: { 201: { description: 'Created', schema: ref('Promotion') } },
     errors: [409, 422],
   },

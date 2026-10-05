@@ -1,0 +1,14 @@
+{
+  "note": "Remaining Indonesian literals (WP2: driver/console UI and messages; WP3: IDR-only payment paths). Counts may only go down.",
+  "files": {
+    "src/api/integration-routes.ts": 2,
+    "src/driver-web/index.html": 26,
+    "src/driver/notify.ts": 1,
+    "src/driver/wallets.ts": 1,
+    "src/services/brand.ts": 1,
+    "src/services/payments/mock.ts": 1,
+    "src/services/payments/provider.ts": 1,
+    "src/services/payments/registry.ts": 1,
+    "src/web/js/views/pricing.js": 2
+  }
+}

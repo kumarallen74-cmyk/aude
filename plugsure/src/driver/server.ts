@@ -4,6 +4,10 @@ import fastifyStatic from '@fastify/static';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { logger } from '../logger.js';
+import { registerDriverCors } from './cors.js';
+import { takeDevice, takeAnonymous } from './rate-limit.js';
+import { accountStillActive, withDriverLock } from './account-deletion.js';
+import { acquirerReturnUrl, appRedirect, appReturnSlug } from './app-return.js';
 import {
   issueDevice,
   authenticateDriver,
@@ -14,7 +18,13 @@ import {
   signOutDevice,
   type DriverPrincipal,
 } from './identity.js';
-import { listStations, connectorDetail, resolveCode } from './stations.js';
+import { listStations, priceStations, connectorDetail, resolveCode, parseBbox, encodeCursor, decodeCursor } from './stations.js';
+import { mapQuery, parseFilters, etagOf, bboxFitsZoom, maxSpanDeg, DEFAULT_LIMIT, MAX_LIMIT } from './map.js';
+import { appConfigFor, PLATFORMS, type Platform } from './app-config.js';
+import { resolveLink, parseLink, webFallback } from './links.js';
+import { startDeletion, confirmDeletion } from './account-deletion.js';
+import { accountDeletePage, ACCOUNT_DELETE_JS } from './account-delete-page.js';
+import { emspOrgForApp } from './roaming-pay.js';
 import {
   quotePrepaid,
   checkoutPrepaid,
@@ -37,7 +47,7 @@ import { listRoamingStations, startRoaming, roamingStatus, stopRoaming, roamingR
 import { config, isRelaxedEnv } from '../config.js';
 import { vapid } from '../services/webpush.js';
 import { listFavourites, addFavourite, removeFavourite } from './favourites.js';
-import { subscribe, unsubscribe, pushStatus, subscribeApns, unsubscribeApns } from './notify.js';
+import { subscribe, unsubscribe, pushStatus, subscribeApns, unsubscribeApns, subscribeFcm, unsubscribeFcm } from './notify.js';
 import { currentReservation, reserve, cancel as cancelReservationFor, checkoutStatus as reservationCheckoutStatus, confirmCheckoutPayment, cancelCheckout } from './reservations.js';
 import { myQueue, siteQueue, join as joinQueue, leave as leaveQueue } from './queue.js';
 import { membershipOverview, buyPass, passStatus, confirmPassPayment, setAutoRenew } from './membership.js';
@@ -48,10 +58,12 @@ import { resolve as resolveIntegration } from '../integrations/store.js';
 import { readFile } from 'node:fs/promises';
 import {
   brandBySlug, brandForHost, brandForOrg, palette, renderIndex, manifestFor, renderServiceWorker, iconFile, assetLinks, appleAssociation, hostnameKnown, type Brand,
+  networkBrand,
 } from '../services/brand.js';
 import { one, many } from '../db/pool.js';
 import { renderChargeCard, powerFromRegister, chargeCardAllowed } from '../services/charge-card.js';
 import { registerActivity, registerStartToken, endedOnPhone } from '../services/live-activity.js';
+import { driverLang, hasTranslatable, localizeBody } from './i18n.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -68,14 +80,18 @@ declare module 'fastify' {
  * Which operator's app a request is for. The web address of a live brand wins;
  * otherwise the app names its brand (X-Driver-Brand, or ?brand= on the page
  * itself, which is how a draft is previewed from the console). No brand: the
- * PlugSure app, across every operator.
+ * PlugSure web app, across every operator.
+ *
+ * The PlugSure native app names the network brand (X-Driver-Brand: plugsure, docs/MOBILE-APP-SPEC.md G1): that is
+ * not a preview once the brand is live (its own link domain is its web address).
  */
 async function brandOf(req: FastifyRequest): Promise<{ brand: Brand | null; preview: boolean }> {
   const byHost = await brandForHost(String(req.headers.host ?? '')).catch(() => null);
   if (byHost) return { brand: byHost, preview: false };
   const named = String(req.headers['x-driver-brand'] ?? (req.query as Record<string, unknown> | undefined)?.brand ?? '').trim().toLowerCase();
   if (!named) return { brand: null, preview: false };
-  return { brand: await brandBySlug(named).catch(() => null), preview: true };
+  const b = await brandBySlug(named).catch(() => null);
+  return { brand: b, preview: !(b?.scope === 'network' && b.status === 'live') };
 }
 
 /**
@@ -88,6 +104,8 @@ async function brandOf(req: FastifyRequest): Promise<{ brand: Brand | null; prev
  * process, so deployment does not change.
  */
 export async function registerDriverApi(app: FastifyInstance): Promise<void> {
+  // Browser builds of the native app on another origin (DRIVER_WEB_ORIGINS; off by default, /d/v1 only).
+  registerDriverCors(app);
   // Serve the driver web app at /app. decorateReply:false — the operator console
   // already registered the sendFile decorator on the root static plugin.
   const webRoot = join(here, '../driver-web');
@@ -104,7 +122,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   app.addHook('onRequest', async (req) => {
     const p = req.url.split('?')[0]!;
-    if (p.startsWith('/app') || p.startsWith('/d/') || p.startsWith('/.well-known/')) {
+    if (p.startsWith('/app') || p.startsWith('/d/') || p.startsWith('/.well-known/') || p === '/account/delete') {
       const r = await brandOf(req);
       req.brand = r.brand;
       req.brandPreview = r.preview;
@@ -114,8 +132,9 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   const page = async (req: FastifyRequest, reply: import('fastify').FastifyReply) => {
     const html = await webFile('index.html');
     const b = req.brand;
+    const lang = b ? await one<{ l: string }>(`SELECT default_locale AS l FROM organisation WHERE id = $1`, [b.orgId]).catch(() => null) : null;
     return reply.header('cache-control', 'no-cache').type('text/html; charset=utf-8')
-      .send(b ? renderIndex(html, b, { preview: !!req.brandPreview }) : html);
+      .send(b ? renderIndex(html, b, { preview: !!req.brandPreview, defaultLang: lang?.l ?? null }) : html);
   };
   app.get('/app', async (req, reply) => reply.redirect('/app/' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''), 301));
   app.get('/app/', page);
@@ -143,6 +162,34 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     reply.header('cache-control', 'public, max-age=300').type('application/json').send(JSON.stringify(assetLinks(req.brand && !req.brandPreview ? req.brand : null))));
   app.get('/.well-known/apple-app-site-association', async (req, reply) =>
     reply.header('cache-control', 'public, max-age=300').type('application/json').send(JSON.stringify(appleAssociation(req.brand && !req.brandPreview ? req.brand : null))));
+  // Link-domain paths (G6): the native app opens these (universal links / App Links); without the app, the web app.
+  app.get('/c/*', async (req, reply) => {
+    const rest = req.url.split('?')[0]!.slice(3);
+    return reply.header('cache-control', 'no-store').redirect(webFallback(parseLink(`https://link.invalid/c/${rest}`)), 302);
+  });
+  app.get('/s/:siteId', async (req, reply) => reply.header('cache-control', 'no-store').redirect(webFallback(parseLink(`https://link.invalid/s/${(req.params as { siteId: string }).siteId}`)), 302));
+  app.get('/r/:kind/:id', async (req, reply) => {
+    const { kind, id } = req.params as { kind: string; id: string };
+    return reply.header('cache-control', 'no-store').redirect(webFallback(parseLink(`https://link.invalid/r/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`)), 302);
+  });
+  app.get('/paid', async (req, reply) => {
+    const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    // Back from an acquirer for the native app (G11): to `<slug>://paid?…`, only for a slug that is a brand's.
+    const slug = String((req.query as Record<string, unknown>)?.app ?? '').trim().toLowerCase();
+    const b = slug ? await brandBySlug(slug).catch(() => null) : null;
+    if (b) return reply.header('cache-control', 'no-store').redirect(appRedirect(q, b.slug), 302);
+    return reply.header('cache-control', 'no-store').redirect(`/app/paid.html${q}`, 302);
+  });
+  // Account deletion without the app (Google Play's web deletion link; Apple: the app has it in Account).
+  app.get('/account/delete', async (req, reply) => {
+    const b = req.brand ?? (await networkBrand().catch(() => null));
+    const accent = b ? palette(b.accentColor, b.badgeColor).dark.accent : undefined;
+    return reply.header('cache-control', 'no-cache')
+      .header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
+      .type('text/html; charset=utf-8').send(accountDeletePage(b?.appName ?? 'PlugSure', accent));
+  });
+  app.get('/d/account-delete.js', async (_req, reply) => reply.header('cache-control', 'public, max-age=3600').type('application/javascript; charset=utf-8').send(ACCOUNT_DELETE_JS));
+
   // The picture on a "charging finished" notification: fetched by the iPhone's Notification Service
   // Extension (or the browser) without credentials, so its address is signed and expires.
   const cardCache = new Map<string, Buffer>();
@@ -182,7 +229,28 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   });
 
   // A device token is required for everything except issuing one and public browse.
-  const PUBLIC = new Set(['/d/health', '/d/tls-ask', '/d/v1/device', '/d/v1/stations', '/d/v1/resolve', '/d/v1/meta']);
+  const PUBLIC = new Set(['/d/health', '/d/tls-ask', '/d/v1/device', '/d/v1/stations', '/d/v1/resolve', '/d/v1/meta',
+    '/d/v1/map', '/d/v1/app/config', '/d/v1/links/resolve']);
+  /**
+   * Creating what would block an account deletion (a charge, a reservation, a queue place) runs under the driver's
+   * lock, like the deletion itself (account-deletion.ts): a request that waited for a deletion finds no account.
+   */
+  const locked = (h: (req: FastifyRequest, reply: import('fastify').FastifyReply) => Promise<unknown>) =>
+    async (req: FastifyRequest, reply: import('fastify').FastifyReply) => {
+      const id = req.driver?.appDriverId;
+      if (!id) return h(req, reply);
+      return withDriverLock(id, async () => {
+        if (!(await accountStillActive(id))) return reply.status(401).send({ error: 'device token required', code: 'no_device' });
+        return h(req, reply);
+      });
+    };
+  /** Per device token (driver/rate-limit.ts): true when this request was refused (429 sent). */
+  const limitDevice = (req: FastifyRequest, reply: import('fastify').FastifyReply): boolean => {
+    const d = req.driver ? takeDevice(req.driver.deviceId) : takeAnonymous(req.ip ?? 'unknown');
+    if (d.allowed) return false;
+    void reply.header('Retry-After', d.retryAfterS).status(429).send({ error: 'Terlalu banyak permintaan. Coba lagi sebentar lagi.', code: 'rate_limited' });
+    return true;
+  };
   app.addHook('preHandler', async (req, reply) => {
     // Under the prefix by the matched route OR the raw target (see underPrefix).
     const path = routePath(req);
@@ -197,6 +265,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
       // Still resolve a principal if one is presented (so browse can personalise),
       // but do not require it.
       req.driver = (await authenticateDriver(req.headers as Record<string, unknown>)) ?? undefined;
+      if (limitDevice(req, reply)) return reply;
       return;
     }
     const principal = await authenticateDriver(req.headers as Record<string, unknown>);
@@ -204,10 +273,22 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: 'device token required', code: 'no_device' });
     }
     req.driver = principal;
+    if (limitDevice(req, reply)) return reply;
   });
 
-  // A white-label app works only with its own operator's chargers and sites.
-  const brandOrg = (req: FastifyRequest) => req.brand?.orgId ?? null;
+  // Messages in the driver's language (driver/i18n.ts): Indonesian answers are sent exactly as written; an English-speaking
+  // driver (the app's X-Driver-Lang, else the device, the operator's default, or a Malaysian / Singapore charger) gets English.
+  app.addHook('preSerialization', async (req, _reply, payload) => {
+    if (!req.url.startsWith('/d/') || !hasTranslatable(payload)) return payload;
+    return localizeBody(payload, await driverLang(req));
+  });
+
+  // A white-label app works only with its own operator's chargers and sites. The PlugSure app (network brand) is not
+  // limited: every operator's chargers, as without a brand.
+  const brandOrg = (req: FastifyRequest) => (req.brand && req.brand.scope !== 'network' ? req.brand.orgId : null);
+  // The organisation whose eMSP role takes the app's drivers to partner networks: the brand's (an operator's app, or
+  // PlugSure Mobility for the PlugSure app); no brand: the single operator offering it, as before (emspOrgForApp).
+  const emspBrandOrg = (req: FastifyRequest) => req.brand?.orgId ?? null;
   const otherOperator = (req: FastifyRequest) => ({
     error: 'Charger ini dikelola operator lain, bukan ' + req.brand!.appName + '.', code: 'other_operator',
   });
@@ -237,7 +318,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
    * an e-wallet or card payment: the app's return page on the public address
    * (DRIVER_PUBLIC_URL / CONSOLE_PUBLIC_URL), else this request's own origin.
    */
-  const payOptions = (req: FastifyRequest, b: Record<string, unknown>, kind: 'charge' | 'pass' | 'link' | 'settle' | 'reservation') => {
+  const payOptions = (req: FastifyRequest, b: Record<string, unknown>, kind: 'charge' | 'pass' | 'link' | 'settle' | 'reservation' | 'roaming') => {
     // A live white-label app returns to its own web address.
     const own = req.brand?.hostname && !req.brandPreview ? `https://${req.brand.hostname}` : null;
     const base = (own || process.env.DRIVER_PUBLIC_URL || process.env.CONSOLE_PUBLIC_URL || `${req.protocol}://${req.headers.host ?? 'localhost'}`).replace(/\/+$/, '');
@@ -247,7 +328,8 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
       savedCardId: b.savedCardId ? String(b.savedCardId) : null,
       saveCard: b.saveCard === true,
       walletId: b.walletId ? String(b.walletId) : null,
-      returnUrl: `${base}/app/paid.html?for=${kind}`,
+      // The native app's return (G11): only its own `<slug>://paid` / link-domain `/paid`, through this server's bounce.
+      returnUrl: acquirerReturnUrl(base, kind, appReturnSlug(b.returnUrl, req.brand ?? null)),
     };
   };
 
@@ -255,12 +337,90 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   app.get('/d/health', async () => ({ ok: true, service: 'driver' }));
 
-  app.get('/d/v1/stations', async (req) => {
+  /** `near=lat,lon`, else `lat` + `lon`. */
+  const nearOf = (q: Record<string, string>) => {
+    const [a, b] = q.near ? String(q.near).split(',') : [q.lat, q.lon];
+    const lat = Number(a);
+    const lon = Number(b);
+    return a != null && b != null && a !== '' && b !== '' && Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon } : undefined;
+  };
+
+  // Without bbox / limit / cursor: every station, exactly as before. With any of them (the native app, G7): the
+  // viewport's stations (bbox=w,s,e,n), nearest first, paged (limit ≤ 200, cursor from nextCursor).
+  app.get('/d/v1/stations', async (req, reply) => {
     const q = (req.query ?? {}) as Record<string, string>;
-    const lat = Number(q.lat);
-    const lon = Number(q.lon);
-    const loc = Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : undefined;
-    return { stations: await listStations(loc, brandOrg(req)) };
+    const loc = nearOf(q);
+    if (q.bbox === undefined && q.limit === undefined && q.cursor === undefined) return { stations: await listStations(loc, brandOrg(req)) };
+    const bbox = q.bbox === undefined ? null : parseBbox(q.bbox);
+    if (q.bbox !== undefined && !bbox) return reply.status(400).send({ error: 'bbox harus berupa barat,selatan,timur,utara.', code: 'bad_bbox' });
+    const limit = q.limit === undefined ? 50 : Math.floor(Number(q.limit));
+    if (!Number.isFinite(limit) || limit < 1 || limit > 200) return reply.status(400).send({ error: 'limit harus antara 1 dan 200.', code: 'bad_limit' });
+    const tag = `st:${q.bbox ?? ''}:${loc ? `${loc.lat},${loc.lon}` : ''}`;
+    const offset = decodeCursor(q.cursor, tag);
+    if (offset == null) return reply.status(400).send({ error: 'cursor tidak valid.', code: 'bad_cursor' });
+    // Priced per page (v1.9.0): pricing every station in the box on each page was the expensive part, as on /d/v1/map.
+    const listed = await listStations(loc, brandOrg(req), { bbox, prices: false });
+    // Paged and near a point: stations without coordinates last (the full list keeps its v1.8 order).
+    const all = loc ? [...listed.filter((s) => s.distanceKm != null), ...listed.filter((s) => s.distanceKm == null)] : listed;
+    const page = all.slice(offset, offset + limit);
+    await priceStations(page);
+    return { stations: page, total: all.length, nextCursor: offset + limit < all.length ? encodeCursor(offset + limit, tag) : null };
+  });
+
+  // The map (G7): hosted and partner stations in a viewport, clustered by zoom, filtered, paged, with an ETag.
+  app.get('/d/v1/map', async (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, string>;
+    const bbox = parseBbox(q.bbox);
+    if (!bbox) return reply.status(400).send({ error: 'bbox harus berupa barat,selatan,timur,utara.', code: 'bad_bbox' });
+    const zoom = q.zoom === undefined ? 12 : Number(q.zoom);
+    if (!Number.isFinite(zoom) || zoom < 0 || zoom > 22) return reply.status(400).send({ error: 'zoom harus antara 0 dan 22.', code: 'bad_zoom' });
+    if (!bboxFitsZoom(bbox, zoom)) {
+      return reply.status(400).send({ error: 'Area peta terlalu luas untuk zoom ini.', code: 'bbox_too_large', maxSpanDeg: maxSpanDeg(zoom) });
+    }
+    const limit = q.limit === undefined ? DEFAULT_LIMIT : Math.floor(Number(q.limit));
+    if (!Number.isFinite(limit) || limit < 1 || limit > MAX_LIMIT) return reply.status(400).send({ error: `limit harus antara 1 dan ${MAX_LIMIT}.`, code: 'bad_limit' });
+    const near = nearOf(q) ?? null;
+    const filters = parseFilters(q);
+    const doCluster = !(q.cluster === '0' || q.cluster === 'false');
+    const tag = `map:${q.bbox}:${Math.floor(zoom)}:${doCluster ? 1 : 0}:${near ? `${near.lat},${near.lon}` : ''}:${JSON.stringify(filters)}`;
+    const offset = decodeCursor(q.cursor, tag);
+    if (offset == null) return reply.status(400).send({ error: 'cursor tidak valid.', code: 'bad_cursor' });
+    const r = await mapQuery({ bbox, zoom, filters, near, limit, offset, cluster: doCluster },
+      { principal: req.driver ?? null, scopeOrg: brandOrg(req), emspBrandOrg: emspBrandOrg(req) });
+    const body = {
+      zoom: r.zoom, bbox, clusters: r.clusters, stations: r.stations, total: r.total, unclustered: r.unclustered,
+      nextCursor: r.nextOffset != null ? encodeCursor(r.nextOffset, tag) : null, partners: r.partners,
+    };
+    const etag = etagOf(body);
+    reply.header('etag', etag).header('cache-control', 'private, max-age=15').header('vary', 'Authorization, X-Driver-Brand, X-Driver-Lang');
+    if (String(req.headers['if-none-match'] ?? '') === etag) return reply.status(304).send();
+    return body;
+  });
+
+  // Any scanned QR code or tapped link (G6): a hosted connector, a partner network's EVSE, or a receipt / station /
+  // payment return; same parsing as the web app's scanner.
+  app.get('/d/v1/links/resolve', async (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, string>;
+    const r = await resolveLink(String(q.url ?? q.code ?? ''), { scopeOrg: brandOrg(req), emspBrandOrg: emspBrandOrg(req) });
+    if (r === 'other_operator') return reply.status(404).send({ ...otherOperator(req), message: otherOperator(req).error });
+    if (!r) return reply.status(404).send({ error: 'not_found', code: 'not_found', message: 'Kode charger tidak dikenal.' });
+    return r;
+  });
+
+  // The native app's version gate and remote configuration (G8).
+  app.get('/d/v1/app/config', async (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, string>;
+    const platform = q.platform == null || q.platform === '' ? null : (PLATFORMS as readonly string[]).includes(q.platform) ? (q.platform as Platform) : undefined;
+    if (platform === undefined) return reply.status(400).send({ error: 'platform harus ios atau android.', code: 'bad_platform' });
+    const build = q.build != null && /^\d{1,10}$/.test(q.build) ? Number(q.build) : null;
+    const b = req.brand ?? null;
+    const own = b?.hostname && !req.brandPreview ? `https://${b.hostname}` : null;
+    const origin = (own || process.env.DRIVER_PUBLIC_URL || process.env.CONSOLE_PUBLIC_URL || `${req.protocol}://${req.headers.host ?? 'localhost'}`).replace(/\/+$/, '');
+    reply.header('cache-control', 'private, max-age=60');
+    return appConfigFor({
+      brand: b, platform, version: q.version ? String(q.version).slice(0, 20) : null, build,
+      lang: await driverLang(req), roaming: !!(await emspOrgForApp(emspBrandOrg(req)).catch(() => null)), origin,
+    });
   });
 
   app.get('/d/v1/connectors/:id', async (req, reply) => {
@@ -331,28 +491,44 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  // Account deletion (G4): a code to the account's number (signed in) or to the number given (the web form), then
+  // delete with it. 409 with the blockers while money is owed or a charge, hold, reservation or queue place is open.
+  app.post('/d/v1/account/delete/start', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const r = await startDeletion(driver(req), b.phone ? String(b.phone).slice(0, 20) : null, { ip: req.ip, appName: req.brand?.appName });
+    if (!r.ok) return reply.status(r.status).send({ error: r.error });
+    return r;
+  });
+  app.post('/d/v1/account/delete', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const p = driver(req);
+    const r = await confirmDeletion(p, b.phone ? String(b.phone).slice(0, 20) : null, String(b.code ?? ''), p.account ? 'app' : 'web');
+    if (!r.ok) return reply.status(r.status).send(r.body);
+    return r;
+  });
+
   // ───────────────────────────────────────────────────────── charge
 
   app.post('/d/v1/charge/quote', async (req, reply) => {
     const b = (req.body ?? {}) as any;
-    const r = await quotePrepaid(String(b.connectorId ?? ''), Number(b.amountIdr), { principal: req.driver ?? null, promoCode: b.promoCode ? String(b.promoCode) : null });
+    const r = await quotePrepaid(String(b.connectorId ?? ''), Number(b.amountMinor), { principal: req.driver ?? null, promoCode: b.promoCode ? String(b.promoCode) : null });
     if (!r.ok) return reply.status(422).send(r);
     return r;
   });
 
-  app.post('/d/v1/charge/prepaid', async (req, reply) => {
+  app.post('/d/v1/charge/prepaid', locked(async (req, reply) => {
     const b = (req.body ?? {}) as any;
-    const r = await checkoutPrepaid(driver(req), String(b.connectorId ?? ''), Number(b.amountIdr), b.promoCode ? String(b.promoCode) : null, payOptions(req, b, 'charge'));
+    const r = await checkoutPrepaid(driver(req), String(b.connectorId ?? ''), Number(b.amountMinor), b.promoCode ? String(b.promoCode) : null, payOptions(req, b, 'charge'));
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
 
-  app.post('/d/v1/charge/fleet', async (req, reply) => {
+  app.post('/d/v1/charge/fleet', locked(async (req, reply) => {
     const b = (req.body ?? {}) as any;
     const r = await checkoutFleet(driver(req), String(b.connectorId ?? ''));
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
 
   app.post('/d/v1/charge/:id/confirm-payment', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -517,7 +693,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   app.post('/d/v1/live-activities', async (req, reply) => {
     if (!req.brand) return reply.status(409).send({ ok: false, error: 'Live Activity hanya untuk aplikasi operator.' });
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const r = await registerActivity(driver(req).deviceId, req.brand.orgId, b.ref, b.token);
+    const r = await registerActivity(driver(req).deviceId, req.brand.orgId, b.ref, b.token, { contentVersion: b.contentVersion === 2 ? 2 : 1 });
     return r.ok ? r : reply.status(422).send(r);
   });
   app.post('/d/v1/live-activities/start-token', async (req, reply) => {
@@ -526,6 +702,34 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     return r.ok ? r : reply.status(422).send(r);
   });
   app.post('/d/v1/live-activities/ended', async (req) => {
+    await endedOnPhone(driver(req).deviceId, ((req.body ?? {}) as Record<string, unknown>).ref);
+    return { ok: true };
+  });
+  // Android (FCM HTTP v1, G2): the app's registration token, for its brand's Firebase project.
+  app.post('/d/v1/push/fcm', async (req, reply) => {
+    if (!req.brand) return reply.status(409).send({ ok: false, error: 'Notifikasi Android hanya untuk aplikasi dengan merek.', code: 'no_brand' });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const r = await subscribeFcm(driver(req).deviceId, req.brand.orgId, b.token, String(b.lang ?? 'id'));
+    if (!r.ok) return reply.status(422).send(r);
+    return r;
+  });
+  app.post('/d/v1/push/fcm/remove', async (req, reply) => {
+    if (!req.brand) return reply.status(409).send({ ok: false, error: 'Notifikasi Android hanya untuk aplikasi dengan merek.', code: 'no_brand' });
+    await unsubscribeFcm(driver(req).deviceId, req.brand.orgId, ((req.body ?? {}) as Record<string, unknown>).token);
+    return { ok: true };
+  });
+  // Live sessions on both platforms (G3): iOS registers the Live Activity's update token, Android its FCM token for
+  // the session's ongoing notification. ref: the charge, the session (fleet card) or a partner-network charge.
+  app.post('/d/v1/live-sessions', async (req, reply) => {
+    if (!req.brand) return reply.status(409).send({ ok: false, error: 'Live Activity hanya untuk aplikasi operator.', code: 'no_brand' });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const platform = b.platform === 'android' ? 'android' : b.platform === 'ios' ? 'ios' : null;
+    if (!platform) return reply.status(422).send({ ok: false, error: 'platform harus ios atau android.' });
+    const r = await registerActivity(driver(req).deviceId, req.brand.orgId, b.ref, b.token,
+      { transport: platform === 'android' ? 'fcm' : 'apns', contentVersion: b.contentVersion === 2 ? 2 : 1 });
+    return r.ok ? r : reply.status(422).send(r);
+  });
+  app.post('/d/v1/live-sessions/ended', async (req) => {
     await endedOnPhone(driver(req).deviceId, ((req.body ?? {}) as Record<string, unknown>).ref);
     return { ok: true };
   });
@@ -611,13 +815,13 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   // The driver's live reservation: at a PlugSure charger (or a queue offer), and on a partner network.
   app.get('/d/v1/reservation', async (req) => ({ reservation: await currentReservation(driver(req)), partner: await currentRoamingReservation(driver(req)) }));
-  app.post('/d/v1/reservations', async (req, reply) => {
+  app.post('/d/v1/reservations', locked(async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     // A reservation fee is paid first (payment options as for a charge); free reservations hold at once.
     const r = await reserve(driver(req), String(b.connectorId ?? ''), payOptions(req, b, 'reservation'));
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
   // Paying a reservation fee: where it stands (the connector is held once paid), the mock payment, giving up.
   app.get('/d/v1/reservations/checkout/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -649,12 +853,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     const q = await siteQueue(siteId, req.driver ?? null);
     return q ?? reply.status(404).send({ error: 'Lokasi tidak ditemukan.' });
   });
-  app.post('/d/v1/queue', async (req, reply) => {
+  app.post('/d/v1/queue', locked(async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const r = await joinQueue(driver(req), String(b.siteId ?? ''), { current: b.current, type: b.type });
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
   app.post('/d/v1/queue/:id/leave', async (req, reply) => {
     const { id } = req.params as { id: string };
     const r = await leaveQueue(driver(req), id);
@@ -685,10 +889,11 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     const q = (req.query ?? {}) as Record<string, string>;
     const lat = Number(q.lat);
     const lon = Number(q.lon);
-    return listRoamingStations(driver(req), Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : undefined);
+    // Hosted operators that also joined the hub are listed once, as hosted (G5) — where the app lists every operator.
+    return listRoamingStations(driver(req), Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : undefined, emspBrandOrg(req), { dedupe: !brandOrg(req) });
   });
 
-  app.post('/d/v1/roaming/charge', async (req, reply) => {
+  app.post('/d/v1/roaming/charge', locked(async (req, reply) => {
     const base = ocpiBase(req);
     if (!base) return noOcpiBase(reply);
     const b = (req.body ?? {}) as Record<string, unknown>;
@@ -697,13 +902,17 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     const r = await startRoaming(driver(req), {
       partnerId: s('partnerId'), countryCode: s('countryCode'), partyId: s('partyId'), locationId: s('locationId'),
       evseUid: s('evseUid'), connectorId: s('connectorId') || undefined,
-    }, base);
+    }, base, emspBrandOrg(req), {
+      savedCardId: s('savedCardId') || null, saveCard: b.saveCard === true,
+      // Back to the app after a card checkout (the charge follows on from its status).
+      returnUrl: payOptions(req, b, 'roaming').returnUrl,
+    });
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
 
   // Reserving a partner operator's charger (OCPI RESERVE_NOW / CANCEL_RESERVATION).
-  app.post('/d/v1/roaming/reservations', async (req, reply) => {
+  app.post('/d/v1/roaming/reservations', locked(async (req, reply) => {
     const base = ocpiBase(req);
     if (!base) return noOcpiBase(reply);
     const b = (req.body ?? {}) as Record<string, unknown>;
@@ -714,7 +923,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     }, base);
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
   app.get('/d/v1/roaming/reservations/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const r = await roamingReservation(driver(req), id);
@@ -730,7 +939,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   });
   app.get('/d/v1/roaming/charge/:id/status', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const s = await roamingStatus(driver(req), id);
+    const s = await roamingStatus(driver(req), id, ocpiBase(req));
     if (!s) return reply.status(404).send({ error: 'not_found' });
     return s;
   });

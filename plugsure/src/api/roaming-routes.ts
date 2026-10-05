@@ -3,14 +3,19 @@ import { one, many, query, afterResponse, outsideRequestScope } from '../db/pool
 import { logger } from '../logger.js';
 import { assertCan } from '../services/authz.js';
 import { writeAudit } from '../services/audit.js';
-import { getParty, setParty, getPartner, renderLocations, type PartnerRow } from '../ocpi/store.js';
+import { getParty, getParties, setParty, removeParty, getPartner, renderLocations, type PartnerRow } from '../ocpi/store.js';
+import { isCountry, COUNTRY_CODES } from '../domain/country.js';
 import { createPartner, connectToPartner, closePartner, versionsUrlOf, RegistrationError, ocpiPublicBase } from '../ocpi/registration.js';
 import { syncOrg, replayFailed } from '../ocpi/push.js';
-import { setShared, importFromCpo, sendCommand, notifyCdr, EmspError, type OurCommand } from '../ocpi/emsp.js';
+import { setShared, importFromCpo, sendCommand, cdrAccepted, EmspError, type OurCommand } from '../ocpi/emsp.js';
+import { roamingSettingsOf, validateRoamingSettings, holdAmount } from '../driver/roaming-pay.js';
+import { CURRENCY_CODES } from '../domain/money.js';
+import { countryOfCurrency } from '../domain/country.js';
 import { csvCell } from '../services/session-query.js';
 import { listClients, pullHubClients } from '../ocpi/hubclients.js';
 import { profileLimitAt, type ChargingProfileIn } from '../ocpi/mapping.js';
 import { ampsToWatts } from '../services/smartcharging.js';
+import { hubPartiesChanged } from './hub-routes.js';
 
 /**
  * The console's Roaming page: this operator's roaming identity, its partners,
@@ -62,6 +67,7 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
   app.get('/v1/roaming', async (req) => {
     assertCan(req.principal, { permission: 'roaming:read' });
     const party = await getParty(org(req));
+    const parties = await getParties(org(req));
     const partners = await many(
       `SELECT ${PARTNER_COLS},
               (SELECT count(*) FROM ocpi_push o WHERE o.partner_id = p.id AND o.state = 'pending')::int AS queued,
@@ -76,7 +82,7 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
       [org(req)],
     );
     const sites = party
-      ? (await renderLocations(org(req), party, { onlyPublished: false })).map((l) => ({
+      ? (await renderLocations(org(req), parties, { onlyPublished: false })).map((l) => ({
           id: l.siteId, name: l.location.name, city: l.location.city, publish: l.published, problem: l.problem,
           evses: l.evses.length, tariffs: l.tariffIds.length,
         }))
@@ -85,6 +91,8 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     const pub = baseOrProblem(req);
     return {
       party,
+      // Every party (one per country, the home party first; docs/MULTI-COUNTRY-DESIGN.md §D8).
+      parties,
       versionsUrl: pub.url ? versionsUrlOf(pub.url) : null,
       // Why there is no versions URL (OCPI_PUBLIC_URL not set), for the console to show.
       publicUrlProblem: pub.problem,
@@ -109,11 +117,52 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     if (current && (current.country_code !== cc || current.party_id !== pid) && (connected?.n ?? 0) > 0) {
       return bad(reply, 409, 'Partners already know you by your current party ID. Disconnect them before changing it.');
     }
-    const taken = await one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [cc, pid, org(req)]);
+    const taken = await outsideRequestScope(() => one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [cc, pid, org(req)]));
     if (taken) return bad(reply, 409, `${cc}*${pid} is already used by another organisation on this platform`);
     const party = await setParty(org(req), { country_code: cc, party_id: pid, business_name: name, website: website || null });
     await audit(req, 'roaming.identity_set', 'ocpi_party', org(req), { ...party });
+    afterResponse(reply.raw, () => hubPartiesChanged(org(req)));
     return { party };
+  });
+
+  // ── one OCPI party per country (the home party is PUT /v1/roaming/party)
+  app.get('/v1/roaming/parties', async (req) => {
+    assertCan(req.principal, { permission: 'roaming:read' });
+    return { parties: await getParties(org(req)) };
+  });
+
+  app.put('/v1/roaming/parties/:country', async (req, reply) => {
+    assertCan(req.principal, { permission: 'roaming:write' });
+    const country = String((req.params as { country: string }).country ?? '').toUpperCase();
+    if (!isCountry(country)) return bad(reply, 400, `Country: one of ${COUNTRY_CODES.join(', ')}`);
+    const home = await getParty(org(req));
+    if (!home) return bad(reply, 409, 'Set your roaming identity (the home party) first');
+    if (home.country_code === country) return bad(reply, 409, 'That is the home party: change it with PUT /v1/roaming/party');
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const pid = String(b.partyId ?? '').trim().toUpperCase();
+    const name = String(b.businessName ?? '').trim();
+    const website = String(b.website ?? '').trim();
+    if (!/^[A-Z0-9]{3}$/.test(pid)) return bad(reply, 400, 'Party ID: three letters or digits, e.g. PLS');
+    if (!name) return bad(reply, 400, 'Enter the business name partners will see');
+    if (website && !/^https:\/\/\S+$/.test(website)) return bad(reply, 400, 'Website must start with https://');
+    // Across organisations, so outside the request's org scope: inside it row-level security hides other organisations'
+    // parties and the clash surfaced as a 500 from the UNIQUE constraint instead (v1.9.0).
+    const taken = await outsideRequestScope(() => one(`SELECT 1 FROM ocpi_party WHERE country_code = $1 AND party_id = $2 AND org_id <> $3`, [country, pid, org(req)]));
+    if (taken) return bad(reply, 409, `${country}*${pid} is already used by another organisation on this platform`);
+    const party = await setParty(org(req), { country_code: country, party_id: pid, business_name: name, website: website || null }, { home: false });
+    await audit(req, 'roaming.party_set', 'ocpi_party', org(req), { ...party, country_code: country });
+    afterResponse(reply.raw, () => hubPartiesChanged(org(req)));
+    return { party };
+  });
+
+  app.delete('/v1/roaming/parties/:country', async (req, reply) => {
+    assertCan(req.principal, { permission: 'roaming:write' });
+    const country = String((req.params as { country: string }).country ?? '').toUpperCase();
+    if (!isCountry(country)) return bad(reply, 400, `Country: one of ${COUNTRY_CODES.join(', ')}`);
+    if (!(await removeParty(org(req), country))) return bad(reply, 404, 'No party for that country (the home party cannot be removed)');
+    await audit(req, 'roaming.party_removed', 'ocpi_party', org(req), { country_code: country });
+    afterResponse(reply.raw, () => hubPartiesChanged(org(req)));
+    return { ok: true };
   });
 
   app.post('/v1/roaming/partners', async (req, reply) => {
@@ -299,9 +348,10 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
       await query(`UPDATE site SET city = $2 WHERE id = $1`, [id, String(b.city).trim().slice(0, 45) || null]);
     }
     if (b.publish !== undefined) {
-      const party = await getParty(org(req));
-      if (b.publish === true && party) {
-        const [l] = await renderLocations(org(req), party, { siteId: id, onlyPublished: false });
+      const parties = await getParties(org(req));
+      if (b.publish === true && parties.length) {
+        // Every party of the organisation: a site is shared under its own country's (none: refused with that problem).
+        const [l] = await renderLocations(org(req), parties, { siteId: id, onlyPublished: false });
         if (l?.problem) return bad(reply, 422, `This site cannot be shared yet: ${l.problem}.`);
       }
       await query(`UPDATE site SET roaming_publish = $2 WHERE id = $1`, [id, b.publish === true]);
@@ -317,11 +367,18 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     assertCan(req.principal, { permission: 'roaming:read' });
     return many(
       `SELECT t.id, t.uid, t.status, t.valid_to, t.holder_name, t.fleet_name, t.account_type, t.roaming_shared, t.contract_id,
-              t.energy_limit_wh, t.spend_limit_idr,
+              t.energy_limit_wh, t.spend_limit_minor, t.spend_limit_currency,
               (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.token_id = t.id AND r.status = 'accepted')::int AS roaming_cdrs,
               (SELECT count(*) FROM ocpi_remote_cdr r WHERE r.token_id = t.id AND r.status = 'held')::int AS roaming_cdrs_held,
-              (SELECT COALESCE(sum(COALESCE(r.total_incl_vat, r.total_excl_vat)), 0) FROM ocpi_remote_cdr r
-                WHERE r.token_id = t.id AND r.currency = 'IDR' AND r.status = 'accepted')::bigint AS roaming_idr
+              -- Roaming spend in the card's limit currency (what counts against its limit), and per currency (no FX: never added up).
+              (SELECT COALESCE(sum(COALESCE(r.total_incl_vat, r.total_excl_vat) * power(10, cu.exponent)), 0) FROM ocpi_remote_cdr r
+                 JOIN currency_unit cu ON cu.code = r.currency
+                WHERE r.token_id = t.id AND r.currency = t.spend_limit_currency AND r.status = 'accepted')::bigint AS roaming_minor,
+              t.spend_limit_currency AS roaming_currency,
+              (SELECT COALESCE(jsonb_object_agg(x.currency, x.minor), '{}'::jsonb) FROM (
+                 SELECT r.currency, sum(COALESCE(r.total_incl_vat, r.total_excl_vat) * power(10, cu.exponent))::bigint AS minor
+                   FROM ocpi_remote_cdr r JOIN currency_unit cu ON cu.code = r.currency
+                  WHERE r.token_id = t.id AND r.status = 'accepted' GROUP BY r.currency) x) AS roaming_by_currency
          FROM token t WHERE t.org_id = $1 AND t.kind = 'rfid'
         ORDER BY t.roaming_shared DESC, t.fleet_name NULLS LAST, t.holder_name NULLS LAST, t.uid LIMIT 2000`,
       [org(req)],
@@ -340,6 +397,26 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     await audit(req, shared ? 'roaming.cards_shared' : 'roaming.cards_unshared', 'token', ids === 'all-active' ? 'all-active' : ids.join(',').slice(0, 200), { count: n });
     syncSoon(req, reply);
     return { changed: n };
+  });
+
+  // Roaming for app drivers (docs/MULTI-COUNTRY-DESIGN.md §D7): on/off and the card hold per currency.
+  app.get('/v1/roaming/settings', async (req) => {
+    assertCan(req.principal, { permission: 'roaming:read' });
+    const s = await roamingSettingsOf(org(req));
+    return {
+      appDrivers: s.appDrivers,
+      holds: CURRENCY_CODES.map((c) => ({ currency: c, holdMinor: holdAmount(s, c), defaultMinor: countryOfCurrency(c)!.roamingHoldDefaultMinor, custom: s.holdMinor[c] != null })),
+    };
+  });
+
+  app.put('/v1/roaming/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'roaming:write' });
+    const v = validateRoamingSettings(req.body);
+    if ('error' in v) return bad(reply, 422, v.error);
+    const before = await roamingSettingsOf(org(req));
+    await query(`UPDATE organisation SET roaming_settings = roaming_settings || $2::jsonb WHERE id = $1`, [org(req), JSON.stringify(v.settings)]);
+    await audit(req, 'roaming.settings_changed', 'organisation', org(req), { before, after: v.settings });
+    return { ok: true, ...v.settings };
   });
 
   app.get('/v1/roaming/network', async (req) => {
@@ -504,9 +581,9 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
       }
       await audit(req, decision === 'accept' ? 'roaming.cdr_accepted' : 'roaming.cdr_rejected', 'ocpi_remote_cdr', row.id,
         { cdrId: row.cdr_id, partner: row.partner_name, currency: row.currency, total: Number(row.total), holdReason: row.hold_reason, note });
-      // The driver's receipt, held back while the record was in review.
+      // The driver's receipt (and an app driver's hold settlement), held back while the record was in review.
       if (decision === 'accept') {
-        afterResponse(reply.raw, async () => notifyCdr(row.token_id, row.id, row.location_name ?? row.partner_name, row.currency, Number(row.total)),
+        afterResponse(reply.raw, async () => cdrAccepted(row.id),
           (e) => logger.warn({ err: e.message }, 'roaming receipt push after review failed'));
       }
       return { id: row.id, status: decision === 'accept' ? 'accepted' : 'rejected' };
@@ -518,7 +595,7 @@ export async function registerRoamingRoutes(app: FastifyInstance): Promise<void>
     return many(
       `SELECT cs.id, cs.started_at, cs.ended_at, cs.state, cs.energy_wh, cs.ocpi_auth_method,
               p.name AS partner_name, t.contract_id, t.country_code, t.party_id, t.visual_number,
-              s.name AS site_name, cp.ocpp_identity, d.total_idr,
+              s.name AS site_name, cp.ocpp_identity, d.total_minor, cs.currency,
               (SELECT o.state FROM ocpi_push o WHERE o.partner_id = cs.ocpi_partner_id AND o.object_key = 'session:' || cs.id
                   AND o.module = 'cdrs' ORDER BY o.id DESC LIMIT 1) AS cdr_push_state
          FROM charging_session cs

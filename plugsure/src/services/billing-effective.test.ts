@@ -32,7 +32,7 @@ describe('e-Faktur: a faktur gabungan is dated in the month of delivery', () => 
     const xml = efakturXml({ npwp: '0987654321098765', nitku: null }, [{
       number: 'FLT/2026/10/0001', date: fakturDate('2026-09'),
       buyer: { taxId: '0012345678901000', kind: 'TIN', nitku: null, name: 'PT Buyer', address: 'Jakarta', email: null },
-      lines: [{ name: 'x', taxBaseIdr: 120_000, dppIdr: 110_000, ppnIdr: 13_200 }],
+      lines: [{ name: 'x', taxableMinor: 120_000, taxBaseMinor: 110_000, taxMinor: 13_200 }],
     }], { itemOpt: 'A', itemCode: '000000', unitCode: 'UM.0033' });
     assert.match(xml, /<TaxInvoiceDate>2026-09-30<\/TaxInvoiceDate>/);
     assert.match(xml, /<RefDesc>FLT\/2026\/10\/0001<\/RefDesc>/);
@@ -44,7 +44,7 @@ const layananKhusus = (components: Tariff['components']): Tariff => ({
 });
 const ctx = (kwh: number) => ({
   startedAt: new Date('2026-09-10T03:00:00Z'), endedAt: new Date('2026-09-10T04:00:00Z'),
-  energyWh: kwh * 1000, connectorMaxPowerW: 22_000, pbjtRateBps: 0,
+  energyWh: kwh * 1000, connectorMaxPowerW: 22_000, localTaxRateBps: 0, timezone: 'Asia/Jakarta',
 });
 
 describe('tariff: a zero-rate energy tier is free; the PLN formula only when asked for', () => {
@@ -56,17 +56,17 @@ describe('tariff: a zero-rate energy tier is free; the PLN formula only when ask
     const r = rateSession(t, ctx(8));
     const energy = r.lines.filter((l) => l.kind === 'energy');
     assert.equal(energy.length, 2);
-    assert.equal(energy[0]!.amountIdr, 0, 'the free band bills Rp 0, not the formula rate');
+    assert.equal(energy[0]!.amountMinor, 0, 'the free band bills Rp 0, not the formula rate');
     assert.equal(energy[1]!.unitRate, 1645 * 1.5);
-    assert.equal(r.tax.subtotalIdr, Math.round(3 * 1645 * 1.5));
+    assert.equal(r.tax.subtotalMinor, Math.round(3 * 1645 * 1.5));
   });
   test('formulaRate marks a band for the formula rate explicitly', () => {
     const r = rateSession(layananKhusus([{ kind: 'energy', rate: 0, formulaRate: true, touBlock: 'ANY' }]), ctx(2));
-    assert.equal(r.tax.subtotalIdr, Math.round(2 * 1645 * 1.5));
+    assert.equal(r.tax.subtotalMinor, Math.round(2 * 1645 * 1.5));
   });
   test('a free tariff with no PLN scheme is free, and a formula band with no scheme is flagged', () => {
     const free = rateSession({ ...layananKhusus([{ kind: 'energy', rate: 0, touBlock: 'ANY' }]), plnScheme: 'none' }, ctx(2));
-    assert.equal(free.tax.subtotalIdr, 0);
+    assert.equal(free.tax.subtotalMinor, 0);
     assert.ok(!free.flags.some((f) => f.code === 'NO_FORMULA_RATE'));
     const formula = rateSession({ ...layananKhusus([{ kind: 'energy', rate: 0, formulaRate: true, touBlock: 'ANY' }]), plnScheme: 'none' }, ctx(2));
     assert.ok(formula.flags.some((f) => f.code === 'NO_FORMULA_RATE'));
@@ -75,17 +75,17 @@ describe('tariff: a zero-rate energy tier is free; the PLN formula only when ask
 
 describe('receipt rounding: the lines add up to the total', () => {
   test('with ROUNDING_UNIT_IDR > 1 the rounding is its own amount', () => {
-    const before = config.tax.roundingUnitIdr;
-    (config.tax as { roundingUnitIdr: number }).roundingUnitIdr = 100;
+    const before = config.tax.id.roundingUnitIdr;
+    (config.tax.id as { roundingUnitIdr: number }).roundingUnitIdr = 100;
     try {
       for (const sub of [29_005, 41_333, 17_777, 50_000]) {
-        const t = computeTax({ subtotalIdr: sub, pbjtRateBps: 1000 });
-        assert.equal(t.totalIdr % 100, 0);
-        assert.equal(t.subtotalIdr + t.pbjtIdr + t.ppnIdr + t.roundingIdr, t.totalIdr);
-        assert.ok(Math.abs(t.roundingIdr) <= 50);
+        const t = computeTax({ subtotalMinor: sub, localTaxRateBps: 1000 });
+        assert.equal(t.totalMinor % 100, 0);
+        assert.equal(t.subtotalMinor + t.localTaxMinor + t.taxMinor + t.roundingMinor, t.totalMinor);
+        assert.ok(Math.abs(t.roundingMinor) <= 50);
       }
     } finally {
-      (config.tax as { roundingUnitIdr: number }).roundingUnitIdr = before;
+      (config.tax.id as { roundingUnitIdr: number }).roundingUnitIdr = before;
     }
   });
 });
@@ -148,7 +148,7 @@ if (DB_OK) {
       `INSERT INTO organisation (name, slug, pkp) VALUES ('Billing Effective Test', $1, true)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, pkp = true RETURNING id`, [SLUG]))!.id;
     siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Billing Effective Hub', 1000) RETURNING id`, [orgId]))!.id;
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Billing Effective Hub', 1000) RETURNING id`, [orgId]))!.id;
     cpId = (await one<{ id: string }>(
       `INSERT INTO charge_point (site_id, ocpp_identity, ocpp_version, status) VALUES ($1, $2, 'ocpp1.6', 'online') RETURNING id`, [siteId, IDENT]))!.id;
     const e = await one<{ id: string }>(`INSERT INTO evse (charge_point_id, evse_id, max_power_w) VALUES ($1, 1, 22000) RETURNING id`, [cpId]);
@@ -164,15 +164,15 @@ if (DB_OK) {
 
 /** A rated session (with its charge record) in September 2026 for a card. */
 async function ratedSession(tokenId: string, startedAt: string, subtotal = 100_000) {
-  const t = computeTax({ subtotalIdr: subtotal, pbjtRateBps: 1000 });
+  const t = computeTax({ subtotalMinor: subtotal, localTaxRateBps: 1000 });
   const s = await one<{ id: string; fleet_account_id: string | null }>(
     `INSERT INTO charging_session (org_id, site_id, connector_uuid, charge_point_id, idem_key, token_id, state, started_at, ended_at, energy_wh)
      VALUES ($1,$2,$3,$4,$5,$6,'ended',$7,$7::timestamptz + interval '1 hour',10000) RETURNING id, fleet_account_id`,
     [orgId, siteId, connectorId, cpId, `billeff-${Math.random()}`, tokenId, startedAt]);
   await query(
-    `INSERT INTO cdr (session_id, org_id, issued_at, lines, subtotal_idr, pbjt_rate_bps, pbjt_idr, ppn_dpp_idr, ppn_rate_bps, ppn_idr, total_idr, tariff_snapshot)
+    `INSERT INTO cdr (session_id, org_id, issued_at, lines, subtotal_minor, local_tax_rate_bps, local_tax_minor, tax_base_minor, tax_rate_bps, tax_minor, total_minor, tariff_snapshot)
      VALUES ($1,$2,$3::timestamptz + interval '1 hour','[]',$4,1000,$5,$6,$7,$8,$9,'{}')`,
-    [s!.id, orgId, startedAt, t.subtotalIdr, t.pbjtIdr, t.ppnDppIdr, t.ppnRateBps, t.ppnIdr, t.totalIdr]);
+    [s!.id, orgId, startedAt, t.subtotalMinor, t.localTaxMinor, t.taxBaseMinor, t.taxRateBps, t.taxMinor, t.totalMinor]);
   return s!;
 }
 
@@ -258,6 +258,6 @@ dbDescribe('tariff assignments are versioned', () => {
     assert.deepEqual(rates.rows.map((r) => (r.rate == null ? null : Number(r.rate))), [0, null]);
     const { loadTariffById } = await import('./tariff-store.js');
     const back = (await loadTariffById(t.tariffId!))!;
-    assert.equal(rateSession(back, ctx(8)).tax.subtotalIdr, Math.round(3 * 1645 * 1.5));
+    assert.equal(rateSession(back, ctx(8)).tax.subtotalMinor, Math.round(3 * 1645 * 1.5));
   });
 });

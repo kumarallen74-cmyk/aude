@@ -28,7 +28,7 @@ const actor = { type: 'system' as const };
 if (DB_OK) {
   before(async () => {
     const org = (await one<{ id: string }>(`INSERT INTO organisation (name, slug) VALUES ('PT Charger CA Test', $1) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
-    siteId = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'CA Test Hub', 1000) RETURNING id`, [org]))!.id;
+    siteId = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'CA Test Hub', 1000) RETURNING id`, [org]))!.id;
     await query(`DELETE FROM pnc_certificate WHERE charge_point_id IN (SELECT id FROM charge_point WHERE ocpp_identity = $1)`, [ID]);
     await query(`DELETE FROM charge_point WHERE ocpp_identity = $1`, [ID]);
     cpId = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity, status) VALUES ($1, $2, 'pending_adoption') RETURNING id`, [siteId, ID]))!.id;

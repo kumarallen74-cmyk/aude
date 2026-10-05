@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, attempt, registerView, pageHead, table, tag, icon, fmt, field, options, callout, download, debounce, toast,
+  $, $$, esc, api, attempt, registerView, pageHead, table, tag, icon, fmt, field, options, callout, download, debounce, toast, orgTimezone,
 } from '../core.js';
 
 /**
@@ -112,7 +112,7 @@ registerView('logs', {
         const r = await api(`/v1/charge-points/${encodeURIComponent(cp)}/frames?${qs}`);
         if (seq !== reqSeq) return;
         rows = r;
-        statusEl.textContent = `${rows.length} frame${rows.length === 1 ? '' : 's'} · times in WIB (Asia/Jakarta)${es ? ' · live' : ''}`;
+        statusEl.textContent = `${rows.length} frame${rows.length === 1 ? '' : 's'} · times in ${fmt.tz()} (${orgTimezone() ?? 'UTC'})${es ? ' · live' : ''}`;
         draw();
       } catch (e) {
         if (seq !== reqSeq) return;

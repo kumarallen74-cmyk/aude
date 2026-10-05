@@ -150,7 +150,7 @@ try {
   // ------------------------------------------------------------ a second site with a different PBJT rate, and a charger there
   const site2 = await sb('POST', '/v1/sites', {
     name: 'Sandbox Hub — Bekasi', address: 'Jl. Ahmad Yani, Bekasi', kabupatenKotaCode: '3275', lat: '-6.2383', lon: '106.9756',
-    gridTariffGroup: 'L/TR', connectedKva: '105', powerFactor: '0.95', phases: '3', pbjtRateBps: '500',
+    gridTariffGroup: 'L/TR', connectedKva: '105', powerFactor: '0.95', phases: '3', localTaxRateBps: '500',
   });
   const B = `SBX-BKS-${Date.now().toString().slice(-5)}`;
   await sb('POST', '/v1/charge-points', {
@@ -173,9 +173,9 @@ try {
     const a = (await sb('GET', `/v1/sessions?identity=${DC}`)).data;
     const b = (await sb('GET', `/v1/sessions?identity=${B}`)).data;
     return [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
-  }, (l) => l.length === 3 && l.every((s: any) => s.ended_at && s.total_idr != null), 60_000, 1500);
-  check('charging: three fleet sessions at two sites, rated with receipts', rated.length === 3 && rated.every((s: any) => s.total_idr > 0), rated.map((s: any) => [s.id_tag, s.energy_wh, s.total_idr]));
-  const receiptTotal = (card: string) => rated.filter((s: any) => s.id_tag === card).reduce((a: number, s: any) => a + s.total_idr, 0);
+  }, (l) => l.length === 3 && l.every((s: any) => s.ended_at && s.total_minor != null), 60_000, 1500);
+  check('charging: three fleet sessions at two sites, rated with receipts', rated.length === 3 && rated.every((s: any) => s.total_minor > 0), rated.map((s: any) => [s.id_tag, s.energy_wh, s.total_minor]));
+  const receiptTotal = (card: string) => rated.filter((s: any) => s.id_tag === card).reduce((a: number, s: any) => a + s.total_minor, 0);
 
   // ------------------------------------------------------------ this month: drafts only
   const cur = (await sb('GET', '/v1/fleet-billing/periods/2000-01')).data.current as string;
@@ -196,13 +196,13 @@ try {
   cc('/v1/fleet-accounts/{id}/statement', 'get', '200', draft.data);
   const t = draft.data.totals;
   const lines = draft.data.sites ?? [];
-  const lineOk = lines.every((l: any) => l.dppIdr === Math.round((l.taxBaseIdr * 11) / 12) && l.ppnIdr === Math.round((l.dppIdr * 1200) / 10000) && l.totalIdr === l.subtotalIdr + l.pbjtIdr + l.ppnIdr);
+  const lineOk = lines.every((l: any) => l.taxBaseMinor === Math.round((l.taxableMinor * 11) / 12) && l.taxMinor === Math.round((l.taxBaseMinor * 1200) / 10000) && l.totalMinor === l.subtotalMinor + l.localTaxMinor + l.taxMinor);
   check(`statement: one line per site (${lines.length}); DPP = 11/12 of the price, PPN = 12% of DPP, per line`,
-    draft.status === 200 && lines.length === 2 && lineOk && t.totalIdr === t.subtotalIdr + t.pbjtIdr + t.ppnIdr, draft.data.sites);
-  check(`statement: agrees with the session receipts (${t.receiptsTotalIdr}) within rounding (${t.roundingIdr})`,
-    t.receiptsTotalIdr === receiptTotal('SANDBOX-FLEET-0002') && Math.abs(t.roundingIdr) <= t.sessions && t.sessions === 2, t);
+    draft.status === 200 && lines.length === 2 && lineOk && t.totalMinor === t.subtotalMinor + t.localTaxMinor + t.taxMinor, draft.data.sites);
+  check(`statement: agrees with the session receipts (${t.receiptsTotalMinor}) within rounding (${t.roundingMinor})`,
+    t.receiptsTotalMinor === receiptTotal('SANDBOX-FLEET-0002') && Math.abs(t.roundingMinor) <= t.sessions && t.sessions === 2, t);
   check('statement: the two sites carry their own PBJT-TL rates (10% and 5%)',
-    lines.find((l: any) => /Bekasi/.test(l.siteName))?.pbjtIdr < lines.find((l: any) => !/Bekasi/.test(l.siteName))?.pbjtIdr * 1.2 && lines.every((l: any) => l.pbjtIdr > 0), lines.map((l: any) => [l.siteName, l.subtotalIdr, l.pbjtIdr]));
+    lines.find((l: any) => /Bekasi/.test(l.siteName))?.localTaxMinor < lines.find((l: any) => !/Bekasi/.test(l.siteName))?.localTaxMinor * 1.2 && lines.every((l: any) => l.localTaxMinor > 0), lines.map((l: any) => [l.siteName, l.subtotalMinor, l.localTaxMinor]));
   const draftHtml = await sb('GET', `/v1/fleet-accounts/${logistik.id}/statement.html?period=${prev}`);
   check('statement: printable draft', draftHtml.status === 200 && /Fleet statement \(draft\)/.test(draftHtml.text) && /DPP nilai lain/.test(draftHtml.text), draftHtml.status);
 
@@ -233,8 +233,8 @@ try {
   cc('/v1/fleet-invoices/{id}', 'get', '200', inv.data);
   const due = new Date(`${inv.data.issuedDate}T00:00:00Z`); due.setUTCDate(due.getUTCDate() + 30);
   check('invoice: frozen with the draft\'s figures, buyer NPWP, and due after the 30-day terms',
-    inv.data.status === 'issued' && inv.data.totals.totalIdr === t.totalIdr && inv.data.buyer.taxId === '0012345678901000' && inv.data.dueDate === due.toISOString().slice(0, 10),
-    { st: inv.data.status, tot: inv.data.totals?.totalIdr, due: inv.data.dueDate });
+    inv.data.status === 'issued' && inv.data.totals.totalMinor === t.totalMinor && inv.data.buyer.taxId === '0012345678901000' && inv.data.dueDate === due.toISOString().slice(0, 10),
+    { st: inv.data.status, tot: inv.data.totals?.totalMinor, due: inv.data.dueDate });
   const html = await sb('GET', `/v1/fleet-invoices/${rowL.invoiceId}/invoice.html`);
   const csv = await sb('GET', `/v1/fleet-invoices/${rowL.invoiceId}/invoice.csv`);
   check('invoice: printable invoice (number, seller and buyer NPWP, DPP/PPN, payment instructions) and a session CSV',
@@ -254,7 +254,7 @@ try {
     ef.status === 200 && (xml.match(/<TaxInvoice>/g) ?? []).length === 1 && /<TrxCode>04<\/TrxCode>/.test(xml) && /<TIN>0987654321098765<\/TIN>/.test(xml)
       && /<BuyerTin>0012345678901000<\/BuyerTin>/.test(xml) && skipped.some((s: any) => s.number === invDua.number && /NPWP/.test(s.reason)), { s: ef.status, skipped });
   check('e-Faktur: the XML carries exactly the invoice\'s DPP and PPN, one line per site',
-    vat === inv.data.totals.ppnIdr && otb === inv.data.totals.dppIdr && (xml.match(/<GoodService>/g) ?? []).length === 2 && new RegExp(`<RefDesc>${inv.data.number.replace(/\//g, '\\/')}</RefDesc>`).test(xml), { vat, otb, t: inv.data.totals });
+    vat === inv.data.totals.taxMinor && otb === inv.data.totals.taxBaseMinor && (xml.match(/<GoodService>/g) ?? []).length === 2 && new RegExp(`<RefDesc>${inv.data.number.replace(/\//g, '\\/')}</RefDesc>`).test(xml), { vat, otb, t: inv.data.totals });
 
   // ------------------------------------------------------------ e-mail
   await sb('PUT', '/v1/alert-routing/channels/email', { enabled: true, config: { host: '127.0.0.1', port: (smtp.address() as any).port, security: 'none', fromAddress: 'billing@sandbox.test', fromName: 'Sandbox Charge' } });
@@ -269,10 +269,10 @@ try {
   const vd = await sb('POST', `/v1/fleet-invoices/${rowL.invoiceId}/void`, { reason: 'Legal name corrected' });
   const redraft = await sb('GET', `/v1/fleet-accounts/${logistik.id}/statement?period=${prev}`);
   check('void: the invoice keeps its number; a faktur warning (it was exported); its sessions return to the draft',
-    vd.status === 200 && vd.data.invoice.status === 'void' && /Coretax/.test(vd.data.fakturWarning ?? '') && redraft.data.status === 'draft' && redraft.data.totals.totalIdr === t.totalIdr, vd.data);
+    vd.status === 200 && vd.data.invoice.status === 'void' && /Coretax/.test(vd.data.fakturWarning ?? '') && redraft.data.status === 'draft' && redraft.data.totals.totalMinor === t.totalMinor, vd.data);
   const re = await sb('POST', '/v1/fleet-invoices', { fleetAccountId: logistik.id, period: prev });
   check('re-issue: a new number, the same charges, nothing billed twice',
-    re.status === 201 && /0003$/.test(re.data.number) && re.data.totals.totalIdr === t.totalIdr && re.data.sessions.length === 2, re.data?.number);
+    re.status === 201 && /0003$/.test(re.data.number) && re.data.totals.totalMinor === t.totalMinor && re.data.sessions.length === 2, re.data?.number);
   const paid = await sb('POST', `/v1/fleet-invoices/${invDua.invoiceId}/pay`, { paidAt: '2026-10-20', reference: 'BCA 2026102012345' });
   const voidPaid = await sb('POST', `/v1/fleet-invoices/${invDua.invoiceId}/void`, { reason: 'test' });
   check('payment: recorded; a paid invoice cannot be voided (409)', paid.data.status === 'paid' && paid.data.paidReference === 'BCA 2026102012345' && voidPaid.status === 409, { p: paid.data.status, v: voidPaid.status });
@@ -300,25 +300,25 @@ try {
   check('PDF: this month\'s draft statement, marked as a draft', pdfDraft.status === 200 && /Draft \x97 not an invoice/.test(pdfDraft.text), pdfDraft.status);
 
   // ------------------------------------------------------------ credit notes
-  const total = re.data.totals.totalIdr as number;
-  const tooMuch = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Too much', lines: [{ description: 'More than the invoice', amountIdr: total + 1 }] });
-  const noReason = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { lines: [{ description: 'No reason given', amountIdr: 1000 }] });
+  const total = re.data.totals.totalMinor as number;
+  const tooMuch = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Too much', lines: [{ description: 'More than the invoice', amountMinor: total + 1 }] });
+  const noReason = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { lines: [{ description: 'No reason given', amountMinor: 1000 }] });
   const onVoid = await sb('POST', `/v1/fleet-invoices/${rowL.invoiceId}/credit-notes`, { reason: 'On a void invoice', full: true });
-  const untaxed = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Dodging PPN', lines: [{ description: 'Half without PPN', amountIdr: Math.round(total / 2), taxed: false }] });
+  const untaxed = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Dodging PPN', lines: [{ description: 'Half without PPN', amountMinor: Math.round(total / 2), taxed: false }] });
   check('credit: refused — more than the invoice, no reason, a void invoice, and an untaxed credit beyond the untaxed part of the invoice',
     tooMuch.status === 422 && noReason.status === 422 && onVoid.status === 409 && untaxed.status === 422 && /PPN/.test(untaxed.data.error), { tooMuch: tooMuch.data, noReason: noReason.data, onVoid: onVoid.data, untaxed: untaxed.data });
   const k1 = taxed(Math.floor(total / 5));
-  const cn1 = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Session at Bekasi billed twice', lines: [{ description: 'Duplicate session, Bekasi DC', amountIdr: k1.amount }] });
+  const cn1 = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Session at Bekasi billed twice', lines: [{ description: 'Duplicate session, Bekasi DC', amountMinor: k1.amount }] });
   cc('/v1/fleet-invoices/{id}/credit-notes', 'post', '201', cn1.data);
   const c1 = cn1.data.creditNote;
   const [cy, cm] = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit' }).format(new Date()).split('-');
   check(`credit: a partial credit on the unpaid invoice — numbered PREFIX-CN/YYYY/MM/0001, Rp ${k1.amount} split into price ${k1.base}, DPP ${k1.dpp} (11/12), PPN ${k1.ppn} (12%); settled on the invoice`,
-    cn1.status === 201 && c1.number === `SBX-CN/${cy}/${cm}/0001` && c1.totalIdr === k1.amount && c1.dppIdr === k1.dpp && c1.ppnIdr === k1.ppn && c1.lines[0].taxBaseIdr === k1.base && c1.settlement === 'invoice' && cn1.data.settledInvoice === false,
+    cn1.status === 201 && c1.number === `SBX-CN/${cy}/${cm}/0001` && c1.totalMinor === k1.amount && c1.taxBaseMinor === k1.dpp && c1.taxMinor === k1.ppn && c1.lines[0].taxableMinor === k1.base && c1.settlement === 'invoice' && cn1.data.settledInvoice === false,
     cn1.data);
   check('credit: a faktur warning, since the invoice\'s faktur pajak was recorded (nota pembatalan in Coretax)', /nota pembatalan/.test(cn1.data.fakturWarning ?? ''), cn1.data.fakturWarning);
   const afterCn = await sb('GET', `/v1/fleet-invoices/${re.data.id}`);
   cc('/v1/fleet-invoices/{id}', 'get', '200', afterCn.data);
-  check('credit: the invoice itself is unchanged; what is owed drops by the credit', afterCn.data.totals.totalIdr === total && afterCn.data.creditedIdr === k1.amount && afterCn.data.balanceIdr === total - k1.amount && afterCn.data.creditNotes?.length === 1, { c: afterCn.data.creditedIdr, b: afterCn.data.balanceIdr });
+  check('credit: the invoice itself is unchanged; what is owed drops by the credit', afterCn.data.totals.totalMinor === total && afterCn.data.creditedMinor === k1.amount && afterCn.data.balanceMinor === total - k1.amount && afterCn.data.creditNotes?.length === 1, { c: afterCn.data.creditedMinor, b: afterCn.data.balanceMinor });
   const pdfCn = await pdfGet(`/v1/fleet-credit-notes/${c1.id}/credit-note.pdf`, auth);
   const pdfInv2 = await pdfGet(`/v1/fleet-invoices/${re.data.id}/invoice.pdf`, auth);
   const due1 = `Rp ${new Intl.NumberFormat('id-ID').format(total - k1.amount)}`;
@@ -329,22 +329,22 @@ try {
   const full = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Customer goodwill: the month is on us', full: true });
   const settled = await sb('GET', `/v1/fleet-invoices/${re.data.id}`);
   check('credit: crediting the rest settles the invoice (paid, "Settled by credit note …")',
-    full.status === 201 && full.data.settledInvoice === true && full.data.creditNote.totalIdr === total - k1.amount && full.data.creditNote.ppnIdr === re.data.totals.ppnIdr - k1.ppn
+    full.status === 201 && full.data.settledInvoice === true && full.data.creditNote.totalMinor === total - k1.amount && full.data.creditNote.taxMinor === re.data.totals.taxMinor - k1.ppn
       && settled.data.status === 'paid' && settled.data.paidReference === `Settled by credit note ${full.data.creditNote.number}`, { full: full.data, st: settled.data.status, ref: settled.data.paidReference });
-  const nothingLeft = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Again', lines: [{ description: 'One more', amountIdr: 100 }] });
+  const nothingLeft = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Again', lines: [{ description: 'One more', amountMinor: 100 }] });
   const vcn = await sb('POST', `/v1/fleet-credit-notes/${full.data.creditNote.id}/void`, { reason: 'Goodwill not approved' });
   const reopened = await sb('GET', `/v1/fleet-invoices/${re.data.id}`);
   const voidInvWithCredit = await sb('POST', `/v1/fleet-invoices/${re.data.id}/void`, { reason: 'test' });
   check('credit: nothing left to credit (409); voiding the settling note reopens the invoice; an invoice with credit notes cannot be voided (409)',
-    nothingLeft.status === 409 && vcn.status === 200 && vcn.data.status === 'void' && reopened.data.status === 'issued' && reopened.data.balanceIdr === total - k1.amount && voidInvWithCredit.status === 409,
-    { n: nothingLeft.status, v: vcn.data?.status, r: reopened.data.status, b: reopened.data.balanceIdr, vi: voidInvWithCredit.data });
+    nothingLeft.status === 409 && vcn.status === 200 && vcn.data.status === 'void' && reopened.data.status === 'issued' && reopened.data.balanceMinor === total - k1.amount && voidInvWithCredit.status === 409,
+    { n: nothingLeft.status, v: vcn.data?.status, r: reopened.data.status, b: reopened.data.balanceMinor, vi: voidInvWithCredit.data });
   // A paid invoice: refunded, or deducted from the next invoice.
-  const duaTotal = (await sb('GET', `/v1/fleet-invoices/${invDua.invoiceId}`)).data.totals.totalIdr as number;
+  const duaTotal = (await sb('GET', `/v1/fleet-invoices/${invDua.invoiceId}`)).data.totals.totalMinor as number;
   const kR = taxed(Math.floor(duaTotal / 10));
   const kN = taxed(Math.floor(duaTotal / 5));
-  const refund = await sb('POST', `/v1/fleet-invoices/${invDua.invoiceId}/credit-notes`, { reason: 'Idle fee waived', lines: [{ description: 'Idle fee, 12 minutes', amountIdr: kR.amount }] });
-  const nextInv = await sb('POST', `/v1/fleet-invoices/${invDua.invoiceId}/credit-notes`, { reason: 'Tariff error on 3 sessions', settlement: 'next_invoice', lines: [{ description: 'Tariff correction', amountIdr: kN.amount }] });
-  const wrongSettle = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Refund on unpaid', settlement: 'refund', lines: [{ description: 'x x x', amountIdr: 100 }] });
+  const refund = await sb('POST', `/v1/fleet-invoices/${invDua.invoiceId}/credit-notes`, { reason: 'Idle fee waived', lines: [{ description: 'Idle fee, 12 minutes', amountMinor: kR.amount }] });
+  const nextInv = await sb('POST', `/v1/fleet-invoices/${invDua.invoiceId}/credit-notes`, { reason: 'Tariff error on 3 sessions', settlement: 'next_invoice', lines: [{ description: 'Tariff correction', amountMinor: kN.amount }] });
+  const wrongSettle = await sb('POST', `/v1/fleet-invoices/${re.data.id}/credit-notes`, { reason: 'Refund on unpaid', settlement: 'refund', lines: [{ description: 'x x x', amountMinor: 100 }] });
   const openList = await sb('GET', '/v1/fleet-credit-notes?open=1');
   cc('/v1/fleet-credit-notes', 'get', '200', openList.data);
   check('credit: on a paid invoice a credit is refunded (default) or deducted from the next invoice; "refund" on an unpaid one is refused; both are listed as open',
@@ -361,15 +361,15 @@ try {
     cnSent.status === 200 && !!cnMail && cnMail.raw.includes(`filename=${nextInv.data.creditNote.number.replace(/\//g, '_')}.pdf`) && /Content-Type: application\/pdf/i.test(cnMail.raw), cnSent.data);
   // A later month for the same account: the waiting credit comes off that invoice.
   await until(() => sb('POST', `/v1/sandbox/chargers/${DC}/simulate`, { event: 'tap-card', connectorId: 2, idTag: 'SANDBOX-RFID-0001', kwh: 1 }), (r) => r.status === 200, 30_000, 1500);
-  await until(() => sb('GET', `/v1/sessions?identity=${DC}`), (r) => (r.data ?? []).filter?.((s: any) => s.id_tag === 'SANDBOX-RFID-0001' && s.ended_at && s.total_idr != null).length === 2, 60_000, 1500);
+  await until(() => sb('GET', `/v1/sessions?identity=${DC}`), (r) => (r.data ?? []).filter?.((s: any) => s.id_tag === 'SANDBOX-RFID-0001' && s.ended_at && s.total_minor != null).length === 2, 60_000, 1500);
   const prev2 = (() => { const [py, pm] = prev.split('-').map(Number); return pm === 1 ? `${py! - 1}-12` : `${py}-${String(pm! - 1).padStart(2, '0')}`; })();
   await pg.query(`UPDATE cdr SET issued_at = (($2 || '-10')::timestamp AT TIME ZONE 'Asia/Jakarta') WHERE org_id = $1 AND issued_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Jakarta') AT TIME ZONE 'Asia/Jakarta'`, [sandboxId, prev2]);
   const later = await sb('POST', '/v1/fleet-invoices', { fleetAccountId: dua.data.id, period: prev2 });
   const nextState = await sb('GET', `/v1/fleet-credit-notes/${nextInv.data.creditNote.id}`);
   const voidApplied = await sb('POST', `/v1/fleet-credit-notes/${nextInv.data.creditNote.id}/void`, { reason: 'test' });
   check('credit: the next invoice deducts the waiting credit note (prior credit, amount due), which then shows where it went and can no longer be voided',
-    later.status === 201 && later.data.priorCreditIdr === kN.amount && later.data.balanceIdr === later.data.totals.totalIdr - kN.amount && later.data.priorCredits?.[0]?.number === nextInv.data.creditNote.number
-      && nextState.data.appliedInvoice === later.data.number && voidApplied.status === 409, { later: later.data?.priorCreditIdr, bal: later.data?.balanceIdr, applied: nextState.data.appliedInvoice, v: voidApplied.data });
+    later.status === 201 && later.data.priorCreditMinor === kN.amount && later.data.balanceMinor === later.data.totals.totalMinor - kN.amount && later.data.priorCredits?.[0]?.number === nextInv.data.creditNote.number
+      && nextState.data.appliedInvoice === later.data.number && voidApplied.status === 409, { later: later.data?.priorCreditMinor, bal: later.data?.balanceMinor, applied: nextState.data.appliedInvoice, v: voidApplied.data });
 
   // ------------------------------------------------------------ fleet customer portal
   const noAccount = await sb('POST', '/v1/users', { name: 'Portal No Account', email: `nofleet-${Date.now()}@logistik.test`, role: 'fleet_customer' });
@@ -393,7 +393,7 @@ try {
   const po = await portal('GET', '/v1/fleet-portal');
   const pinv = await portal('GET', `/v1/fleet-portal/${logistik.id}/invoices`);
   check('portal: what the account owes, its invoices (not the voided one) and credit notes (not the voided one)',
-    po.data.accounts?.[0]?.outstandingIdr === total - k1.amount && pinv.data.invoices.some((i: any) => i.id === re.data.id && i.balanceIdr === total - k1.amount)
+    po.data.accounts?.[0]?.outstandingMinor === total - k1.amount && pinv.data.invoices.some((i: any) => i.id === re.data.id && i.balanceMinor === total - k1.amount)
       && !pinv.data.invoices.some((i: any) => i.id === rowL.invoiceId) && pinv.data.creditNotes.length === 1 && pinv.data.creditNotes[0].id === c1.id,
     { acc: po.data.accounts, inv: pinv.data.invoices?.map((i: any) => [i.number, i.status]), cn: pinv.data.creditNotes?.map((c: any) => c.number) });
   const ph = { cookie: pcookie };
@@ -410,7 +410,7 @@ try {
   const opsPortal = await ops('GET', '/v1/fleet-portal');
   check('portal: an operator (not a fleet customer) gets nothing from the portal routes', opsPortal.status === 403, opsPortal.data);
   const pst = await portal('GET', `/v1/fleet-portal/${logistik.id}/statement`);
-  check('portal: this month so far, without the operator\'s notes', pst.status === 200 && pst.data.status === 'draft' && pst.data.warnings === undefined && typeof pst.data.totals?.totalIdr === 'number', { s: pst.status, w: pst.data.warnings });
+  check('portal: this month so far, without the operator\'s notes', pst.status === 200 && pst.data.status === 'draft' && pst.data.warnings === undefined && typeof pst.data.totals?.totalMinor === 'number', { s: pst.status, w: pst.data.warnings });
   const pcards = await portal('GET', `/v1/fleet-portal/${logistik.id}/cards`);
   const card = pcards.data.cards?.find((c: any) => c.uid === 'SANDBOX-FLEET-0002');
   const blk = await portal('POST', `/v1/fleet-portal/${logistik.id}/cards/${card?.id}/block`, { blocked: true });

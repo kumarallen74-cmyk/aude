@@ -6,7 +6,7 @@ const t0 = new Date('2026-09-28T10:00:00Z');
 const at = (s: number) => new Date(t0.getTime() + s * 1000);
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   sessionState: 'active', energyWh: 5000, powerW: 50_000, socPercent: 40, progressPct: null,
-  startedAt: t0, endedAt: null, cdrTotalIdr: null, ...over,
+  startedAt: t0, endedAt: null, cdrTotalMinor: null, ...over,
 });
 
 test('payloads: update with a stale date, end with a dismissal date, start (push-to-start) with attributes and an alert', () => {
@@ -49,14 +49,14 @@ test('planning the end: "finished" once, then the end with the cost when rated, 
   assert.deepEqual([fin.action, (fin as any).priority, (fin as any).content.status, (fin as any).content.powerW], ['update', 10, 'finished', null]);
   const finished = { content: (fin as any).content, status: 'finished', sentAt: at(121) };
   assert.equal(planFor(finished, ended, at(150)).action, 'none', 'said once');
-  const rated = planFor(finished, snap({ sessionState: 'rated', endedAt: at(120), energyWh: 12_500, cdrTotalIdr: 31_450 }), at(160));
+  const rated = planFor(finished, snap({ sessionState: 'rated', endedAt: at(120), energyWh: 12_500, cdrTotalMinor: 31_450 }), at(160));
   assert.deepEqual([rated.action, (rated as any).content.costIdr], ['end', 31_450]);
   assert.equal(planFor(finished, ended, at(120 + END_WITHOUT_CDR_S)).action, 'end', 'no charge record: end anyway');
 });
 
 test('the cost so far: carried while charging, replaced by the final cost, and an update only for a real change', () => {
   assert.equal(contentOf(snap({ estimateIdr: 23_415.4 })).estimateIdr, 23_415, 'whole rupiah');
-  const rated = contentOf(snap({ sessionState: 'rated', endedAt: at(120), cdrTotalIdr: 31_450, estimateIdr: 31_000 }));
+  const rated = contentOf(snap({ sessionState: 'rated', endedAt: at(120), cdrTotalMinor: 31_450, estimateIdr: 31_000 }));
   assert.deepEqual([rated.costIdr, rated.estimateIdr], [31_450, null], 'never an estimate beside the final cost');
   // Finished but not rated yet: the estimate stays, so the lock screen is not blank for up to 5 minutes.
   assert.equal(contentOf(snap({ sessionState: 'ended', endedAt: at(120), estimateIdr: 31_000 })).estimateIdr, 31_000);
@@ -68,4 +68,17 @@ test('the cost so far: carried while charging, replaced by the final cost, and a
   assert.equal(planFor(last, snap({ estimateIdr: 20_000 + ESTIMATE_STEP_IDR }), soon).action, 'update', 'idle fee rising');
   assert.equal(planFor(last, snap({ estimateIdr: 25_000 }), at(5 + MIN_INTERVAL_S - 1)).action, 'none', 'still at most every 30 s');
   assert.equal(planFor({ ...last, content: contentOf(snap()) as ContentState }, snap({ estimateIdr: 100 }), soon).action, 'update', 'the first estimate arrives');
+});
+
+test('a ringgit or Singapore-dollar session carries no cost: the installed widget formats costIdr / estimateIdr as rupiah', () => {
+  for (const currency of ['MYR', 'SGD']) {
+    const running = contentOf({ ...snap(), currency, estimateIdr: 1234 });
+    assert.equal(running.estimateIdr, null);
+    assert.equal(running.costIdr, null);
+    assert.equal(running.currency, currency);
+    assert.equal(contentOf({ ...snap(), currency, sessionState: 'rated', cdrTotalMinor: 1234 }).costIdr, null);
+  }
+  // Rupiah exactly as v1.6.
+  assert.equal(contentOf({ ...snap(), currency: 'IDR', estimateIdr: 12345 }).estimateIdr, 12345);
+  assert.equal(contentOf({ ...snap(), sessionState: 'rated', cdrTotalMinor: 30000 }).costIdr, 30000);
 });

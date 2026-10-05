@@ -154,14 +154,14 @@ try {
   const session = live.data.find?.((s: any) => !s.ended_at);
   check(`api: a session is metered on the virtual charger (${Math.round((Date.now() - t0) / 100) / 10} s)`, !!session && session.energy_wh > 0, live.data);
   const stop = await sb('POST', `/v1/charge-points/${DC}/remote-stop`, { transactionId: session?.ocpp_transaction_id });
-  const rated = await until(() => sb('GET', `/v1/sessions/${session?.id}`), (r) => !!r.data.ended_at && (r.data.state === 'rated' || r.data.total_idr != null), 30_000, 1000);
+  const rated = await until(() => sb('GET', `/v1/sessions/${session?.id}`), (r) => !!r.data.ended_at && (r.data.state === 'rated' || r.data.total_minor != null), 30_000, 1000);
   check('api: remote stop ends the session, which is rated', stop.status === 200 && !!rated.data.ended_at, { stop: stop.data, s: rated.data?.state });
   const receipt = await sb('GET', `/v1/sessions/${session?.id}/receipt`);
   check('api: the tax receipt shows PPN and PBJT-TL', receipt.status === 200 && /PPN/.test(receipt.text) && /PBJT/.test(receipt.text), receipt.status);
   const gotStart = await until(async () => hooksOf('session.started', (d) => d.sessionId === session?.id), (l) => l.length > 0, 15_000);
   const gotCdr = await until(async () => hooksOf('cdr.created', (d) => d.sessionId === session?.id), (l) => l.length > 0, 20_000);
   check('webhooks: session.started and cdr.created arrive, signed with the endpoint secret',
-    gotStart.length > 0 && gotCdr.length > 0 && [...gotStart, ...gotCdr].every((h) => h.ok) && gotCdr[0]!.body.data.totalIdr > 0, { s: gotStart.length, c: gotCdr.length });
+    gotStart.length > 0 && gotCdr.length > 0 && [...gotStart, ...gotCdr].every((h) => h.ok) && gotCdr[0]!.body.data.totalMinor > 0, { s: gotStart.length, c: gotCdr.length });
 
   // ------------------------------------------------------------ simulated events
   const tap = await sb('POST', `/v1/sandbox/chargers/${DC}/simulate`, { event: 'tap-card', connectorId: 2, idTag: 'SANDBOX-FLEET-0002', kwh: 1 });

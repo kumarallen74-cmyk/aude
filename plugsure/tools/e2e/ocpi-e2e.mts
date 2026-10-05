@@ -11,9 +11,9 @@
 // seeded operator). The mock partner listens on E2E_OCPI_MOCK_PORT (9311).
 //     npx tsx tools/e2e/ocpi-e2e.mts
 // NEVER point this at production.
-import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
+import { MockEmspPartner, decodeToken as decode, type PeerGot } from './lib/ocpi-fakes.mts';
 
 const API = process.env.E2E_API ?? 'http://127.0.0.1:9200';
 const OCPP = process.env.E2E_OCPP ?? 'ws://127.0.0.1:9220/ocpp';
@@ -59,73 +59,17 @@ async function ocpi(method: string, url: string, token: string | null, body?: un
   return { status: r.status, body: d, headers: r.headers };
 }
 
-// ─────────────────────────────────────────── the mock eMSP
-interface Got { method: string; path: string; headers: http.IncomingHttpHeaders; body: any; at: number }
-const got: Got[] = [];
+// ─────────────────────────────────────────── the mock eMSP (tools/e2e/lib/ocpi-fakes.mts)
+type Got = PeerGot;
 const TOKEN_B = 'mock-emsp-token-B-' + randomUUID();    // partner 1: what PlugSure presents to the mock
 const TOKEN_A2 = 'mock-emsp2-token-A-' + randomUUID();  // partner 2 (we connect to it): its registration token
 const TOKEN_C2 = 'mock-emsp2-token-C-' + randomUUID();  // partner 2: what PlugSure presents after registering
-let ourTokenB2 = '';                                      // partner 2: what the mock presents to PlugSure
-const realtime: Record<string, { allowed: string; ref?: string }> = {};
-const decode = (h?: string) => (h?.startsWith('Token ') ? Buffer.from(h.slice(6), 'base64').toString() : '');
-
-function envelope(data: unknown, status = 1000) { return JSON.stringify({ ...(data === undefined ? {} : { data }), status_code: status, timestamp: new Date().toISOString() }); }
-
-const mock = http.createServer((req, res) => {
-  const chunks: Buffer[] = [];
-  req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
-    const path = (req.url ?? '').split('?')[0]!;
-    let body: any = null; try { body = JSON.parse(Buffer.concat(chunks).toString() || 'null'); } catch {}
-    got.push({ method: req.method!, path: req.url!, headers: req.headers, body, at: Date.now() });
-    const send = (status: number, data: unknown, ocpiStatus = 1000, extra: Record<string, string> = {}) => {
-      res.writeHead(status, { 'content-type': 'application/json', ...extra }); res.end(envelope(data, ocpiStatus));
-    };
-    const auth = decode(req.headers.authorization);
-    // Partner 1 (it registers with us)
-    if (path.startsWith('/emsp/')) {
-      if (auth !== TOKEN_B) return send(401, undefined, 2000);
-      if (path === '/emsp/versions') return send(200, [{ version: '2.2.1', url: `${MOCK}/emsp/2.2.1` }]);
-      if (path === '/emsp/2.2.1') return send(200, { version: '2.2.1', endpoints: [
-        { identifier: 'credentials', role: 'RECEIVER', url: `${MOCK}/emsp/2.2.1/credentials` },
-        { identifier: 'locations', role: 'RECEIVER', url: `${MOCK}/emsp/2.2.1/locations` },
-        { identifier: 'tariffs', role: 'RECEIVER', url: `${MOCK}/emsp/2.2.1/tariffs` },
-        { identifier: 'sessions', role: 'RECEIVER', url: `${MOCK}/emsp/2.2.1/sessions` },
-        { identifier: 'cdrs', role: 'RECEIVER', url: `${MOCK}/emsp/2.2.1/cdrs` },
-        { identifier: 'tokens', role: 'SENDER', url: `${MOCK}/emsp/2.2.1/tokens` },
-        { identifier: 'commands', role: 'SENDER', url: `${MOCK}/emsp/2.2.1/commands` },
-      ] });
-      const rt = /^\/emsp\/2\.2\.1\/tokens\/([^/]+)\/authorize$/.exec(path);
-      if (rt) {
-        const r = realtime[decodeURIComponent(rt[1]!)] ?? { allowed: 'NOT_ALLOWED' };
-        return send(200, { allowed: r.allowed, token: { uid: decodeURIComponent(rt[1]!) }, ...(r.ref ? { authorization_reference: r.ref } : {}) });
-      }
-      if (path === '/emsp/2.2.1/cdrs' && req.method === 'POST') return send(201, undefined, 1000, { location: `${MOCK}/emsp/2.2.1/cdrs/${body?.id}` });
-      return send(200, undefined);
-    }
-    // Partner 2 (we connect to it)
-    if (path.startsWith('/emsp2/')) {
-      const known = path === '/emsp2/versions' || path === '/emsp2/2.2.1' || path === '/emsp2/2.2.1/credentials' ? [TOKEN_A2, TOKEN_C2] : [TOKEN_C2];
-      if (!known.includes(auth)) return send(401, undefined, 2000);
-      if (path === '/emsp2/versions') return send(200, [{ version: '2.1.1', url: `${MOCK}/emsp2/2.1.1` }, { version: '2.2.1', url: `${MOCK}/emsp2/2.2.1` }]);
-      if (path === '/emsp2/2.2.1') return send(200, { version: '2.2.1', endpoints: [
-        { identifier: 'credentials', role: 'RECEIVER', url: `${MOCK}/emsp2/2.2.1/credentials` },
-        { identifier: 'locations', role: 'RECEIVER', url: `${MOCK}/emsp2/2.2.1/locations` },
-      ] });
-      if (path === '/emsp2/2.2.1/credentials' && req.method === 'POST') {
-        ourTokenB2 = String(body?.token ?? '');
-        return send(200, { token: TOKEN_C2, url: `${MOCK}/emsp2/versions`, roles: [{ role: 'EMSP', country_code: 'ID', party_id: 'EM2', business_details: { name: 'E2E eMSP Two' } }] });
-      }
-      return send(200, undefined);
-    }
-    // Command results (response_url)
-    if (path.startsWith('/cmd/')) return send(200, undefined);
-    send(404, undefined, 2000);
-  });
-});
-await new Promise<void>((r) => mock.listen(MOCK_PORT, '127.0.0.1', () => r()));
-const received = (pred: (g: Got) => boolean, after = 0) => got.find((g) => g.at >= after && pred(g));
-const waitReceived = (pred: (g: Got) => boolean, after = 0, ms = 20_000) => until(() => received(pred, after), (v) => !!v, ms, 250);
+const mock = new MockEmspPartner({ port: MOCK_PORT, tokenB: TOKEN_B, tokenA2: TOKEN_A2, tokenC2: TOKEN_C2 });
+const got = mock.got;
+const realtime = mock.realtime;
+await mock.start();
+const received = (pred: (g: Got) => boolean, after = 0) => mock.received(pred, after);
+const waitReceived = (pred: (g: Got) => boolean, after = 0, ms = 20_000) => mock.waitReceived(pred, after, ms);
 
 // ─────────────────────────────────────────── a raw OCPP 1.6 charger
 class Raw {
@@ -189,9 +133,9 @@ try {
   }
 
   const site = await ops('POST', '/v1/sites', { name: 'Roaming E2E Hub', address: 'Jl. Jend. Sudirman Kav. 52-53', city: 'Jakarta Selatan', postalCode: '12190',
-    lat: '-6.2254', lon: '106.8076', kabupatenKotaCode: '3174', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+    lat: '-6.2254', lon: '106.8076', kabupatenKotaCode: '3174', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   siteId = site.data.id;
-  const noGeo = await ops('POST', '/v1/sites', { name: 'Roaming E2E No Map', address: 'Jl. Tanpa Peta', kabupatenKotaCode: '3174', gridTariffGroup: 'L/TR', connectedKva: '50', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const noGeo = await ops('POST', '/v1/sites', { name: 'Roaming E2E No Map', address: 'Jl. Tanpa Peta', kabupatenKotaCode: '3174', gridTariffGroup: 'L/TR', connectedKva: '50', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Roaming E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true,
     components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }, { kind: 'session', rate: 5000, touBlock: 'ANY' }, { kind: 'idle', rate: 1000, touBlock: 'ANY', fromMinutes: 15, toMinutes: 60 }] });
   const tariffId = tariff.data.tariffId as string;
@@ -227,7 +171,7 @@ try {
   const eps = details.body.data?.endpoints ?? [];
   const ep = (id: string, role: string) => eps.find((e: any) => e.identifier === id && e.role === role)?.url as string;
   check('register: we offer locations/tariffs/sessions/cdrs as SENDER, tokens/commands as RECEIVER',
-    ['locations', 'tariffs', 'sessions', 'cdrs'].every((m) => ep(m, 'SENDER')) && ep('tokens', 'RECEIVER') && ep('commands', 'RECEIVER'), eps);
+    !!(['locations', 'tariffs', 'sessions', 'cdrs'].every((m) => ep(m, 'SENDER')) && ep('tokens', 'RECEIVER') && ep('commands', 'RECEIVER')), eps);
   const early = await ocpi('GET', ep('locations', 'SENDER'), TOKEN_A);
   check('register: token A cannot read locations before registering', early.status === 401, early.body);
   const creds = await ocpi('POST', ep('credentials', 'RECEIVER'), TOKEN_A, {
@@ -325,11 +269,11 @@ try {
   const cdr = await waitReceived((g) => g.method === 'POST' && g.path === '/emsp/2.2.1/cdrs' && g.body?.session_id === sessionId, mark);
   const ours = await ops('GET', `/v1/sessions/search?identity=${ID}&limit=5`);
   const row = (ours.data?.rows ?? []).find((r: any) => r.id === sessionId);
-  check('charge: the final session is PUT as COMPLETED with its total cost', !!putDone && putDone.body.kwh === 8 && putDone.body.total_cost?.incl_vat === Number(row?.total_idr), { p: putDone?.body?.total_cost, t: row?.total_idr });
+  check('charge: the final session is PUT as COMPLETED with its total cost', !!putDone && putDone.body.kwh === 8 && putDone.body.total_cost?.incl_vat === Number(row?.total_minor), { p: putDone?.body?.total_cost, t: row?.total_minor });
   check('charge: the CDR is POSTed: 8 kWh, our total incl. taxes, excl_vat = subtotal + PBJT, the tariff that priced it',
-    !!cdr && cdr.body.total_energy === 8 && cdr.body.total_cost.incl_vat === Number(row?.total_idr)
-      && cdr.body.total_cost.excl_vat === Number(row?.subtotal_idr) + Number(row?.pbjt_idr) && cdr.body.tariffs?.[0]?.id === tariffId && cdr.body.cdr_location?.evse_uid === evseUid,
-    { cdr: cdr?.body?.total_cost, row: row && { s: row.subtotal_idr, p: row.pbjt_idr, t: row.total_idr } });
+    !!cdr && cdr.body.total_energy === 8 && cdr.body.total_cost.incl_vat === Number(row?.total_minor)
+      && cdr.body.total_cost.excl_vat === Number(row?.subtotal_minor) + Number(row?.local_tax_minor) && cdr.body.tariffs?.[0]?.id === tariffId && cdr.body.cdr_location?.evse_uid === evseUid,
+    { cdr: cdr?.body?.total_cost, row: row && { s: row.subtotal_minor, p: row.local_tax_minor, t: row.total_minor } });
   check('charge: the order was PUT → PATCH → PUT → CDR', (() => {
     const seq = got.filter((g) => g.at >= mark && (g.path.includes(`/sessions/ID/PLS/${sessionId}`) || (g.path === '/emsp/2.2.1/cdrs' && g.body?.session_id === sessionId))).map((g) => g.method);
     return seq[0] === 'PUT' && seq.at(-1) === 'POST' && seq.indexOf('POST') === seq.length - 1;
@@ -429,8 +373,8 @@ try {
   const conn2 = await ops('POST', `/v1/roaming/partners/${partner2Id}/connect`, { versionsUrl: `${MOCK}/emsp2/versions`, token: TOKEN_A2 });
   check('connect: PlugSure registers with a partner from its versions URL and token A (picks 2.2.1 of two versions)', conn2.status === 200 && conn2.data?.state === 'connected' && conn2.data?.party_id === 'EM2', conn2.data);
   const p2Creds = received((g) => g.method === 'POST' && g.path === '/emsp2/2.2.1/credentials');
-  check('connect: our POST carried our versions URL, our token B and the CPO role', !!ourTokenB2 && /\/ocpi\/versions$/.test(p2Creds?.body?.url) && p2Creds?.body?.roles?.[0]?.role === 'CPO', p2Creds?.body);
-  const p2Pull = await ocpi('GET', ep('locations', 'SENDER'), ourTokenB2, undefined, { 'ocpi-from-party-id': 'EM2' });
+  check('connect: our POST carried our versions URL, our token B and the CPO role', !!mock.ourTokenB2 && /\/ocpi\/versions$/.test(p2Creds?.body?.url) && p2Creds?.body?.roles?.[0]?.role === 'CPO', p2Creds?.body);
+  const p2Pull = await ocpi('GET', ep('locations', 'SENDER'), mock.ourTokenB2, undefined, { 'ocpi-from-party-id': 'EM2' });
   check('connect: partner two reads our locations with the token we gave it', p2Pull.status === 200, p2Pull.body);
   const p2Push = await waitReceived((g) => g.method === 'PUT' && g.path === `/emsp2/2.2.1/locations/ID/PLS/${siteId}` && decode(g.headers.authorization as string) === TOKEN_C2);
   check('connect: partner two receives our locations, signed with its token C', !!p2Push, got.filter((g) => g.path.startsWith('/emsp2')).map((g) => [g.method, g.path]));

@@ -114,7 +114,7 @@ try {
   // ================================================================ setup
   const login = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   const features = (await ops('GET', '/v1/meta')).data;
-  const site = await ops('POST', '/v1/sites', { name: 'Onboarding E2E Hub', address: 'Jl. Gatot Subroto', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Onboarding E2E Hub', address: 'Jl. Gatot Subroto', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const ca = await ops('GET', '/v1/charger-ca');
   cc('/v1/charger-ca', 'get', '200', ca.data);
   const caX = new X509Certificate(ca.data.certificatePem);

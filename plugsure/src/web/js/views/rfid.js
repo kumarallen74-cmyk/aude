@@ -1,7 +1,11 @@
 import {
   $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, modal, confirmDialog, html, field, options,
-  formValues, fieldErrors, toast, callout, kpi, debounce, sites as loadSites,
+  formValues, fieldErrors, toast, callout, kpi, debounce, sites as loadSites, phoneExample,
+  countryCurrency, isRupiah, toMinor, toMajor, zonedDayStartIso
 } from '../core.js';
+
+/** Currencies a card's spending limit can be in: those of the organisation's sites, the home country's first. */
+const limitCurrencies = () => [...new Set([countryCurrency(state.me?.org?.homeCountry), ...(state.me?.org?.countries ?? []).map((c) => c.currency)])];
 
 /**
  * Module 7 — RFID Card Inventory & Access Control Center.
@@ -192,7 +196,7 @@ function cardFormHtml(t, isEdit) {
         </fieldset>`}
     <fieldset style="margin-top:14px"><legend>Cardholder & account</legend><div class="form">
       ${field('Cardholder name', '<input name="holderName" maxlength="200" placeholder="Budi Santoso">')}
-      ${field('Mobile phone', '<input name="holderPhone" inputmode="tel" maxlength="20" placeholder="+62 812 3456 7890">', { opt: true })}
+      ${field('Mobile phone', `<input name="holderPhone" inputmode="tel" maxlength="20" placeholder="${esc(phoneExample())}">`, { opt: true })}
       ${field('Account type', `<select name="accountType">${options(accountTypes().map((a) => ({ value: a.code, label: a.label })), t?.account_type ?? 'retail')}</select>`)}
       <div data-fleet>${field('Fleet / company name', '<input name="fleetName" maxlength="200" placeholder="PT Logistik Nusantara">')}</div>
       <div data-fleet>${field('App PIN', '<input name="pin" type="password" inputmode="numeric" maxlength="8" autocomplete="new-password">', { opt: true, help: pinHelp })}
@@ -204,9 +208,11 @@ function cardFormHtml(t, isEdit) {
         opt: true,
         help: `Cumulative over the card's lifetime. Once reached, the card is refused.${isEdit ? ` Used so far: ${esc(kwh1(t.lifetime_energy_wh))}.` : ''}`,
       })}
-      ${field('Spending limit', '<div class="inputgroup"><input name="spendLimitIdr" inputmode="numeric" placeholder="No cap"><span class="suffix">IDR</span></div>', {
+      ${field('Spending limit', `<div class="inputgroup"><input name="spendLimitMinor" inputmode="${limitCurrencies().length > 1 || !isRupiah(limitCurrencies()[0]) ? 'decimal' : 'numeric'}" placeholder="No cap">${limitCurrencies().length > 1
+        ? `<select name="spendLimitCurrency" style="max-width:90px">${options(limitCurrencies().map((c) => ({ value: c, label: c })), t?.spend_limit_currency ?? limitCurrencies()[0])}</select>`
+        : `<span class="suffix">${esc(limitCurrencies()[0])}</span><input type="hidden" name="spendLimitCurrency" value="${esc(limitCurrencies()[0])}">`}</div>`, {
         opt: true,
-        help: `Cumulative, including tax. Once reached, the card is refused.${isEdit ? ` Spent so far: ${esc(fmt.idr(t.lifetime_spend_idr ?? 0))}.` : ''}`,
+        help: `Cumulative, including tax. Once reached, the card is refused.${limitCurrencies().length > 1 ? ' Charges in another currency are refused.' : ''}${isEdit ? ` Spent so far: ${esc(fmt.money(t.lifetime_spend_minor ?? 0, t.spend_limit_currency))}.` : ''}`,
       })}
       <div class="full"><label class="check"><input type="checkbox" name="offlineAllowed">
         <span><b>Allow offline charging</b><div class="help small muted">Include this card in the chargers' local authorisation list so it still starts sessions when a charger cannot reach the CSMS.</div></span></label></div>
@@ -227,15 +233,27 @@ function payloadFrom(form, t, isEdit) {
     if (!Number.isFinite(n) || n <= 0) errs[name] = 'Enter a positive number, or leave blank for no cap';
     return n;
   };
+  // Rupiah as before (whole rupiah, "1.000.000" accepted); ringgit / dollars with their cents.
+  const limitMinor = () => {
+    const cur = v.spendLimitCurrency;
+    if (isRupiah(cur)) return num('spendLimitMinor', true);
+    const x = s(v.spendLimitMinor);
+    if (!x) return null;
+    const n = toMinor(x.replace(/,/g, ''), cur);
+    if (!Number.isFinite(n) || n <= 0) errs.spendLimitMinor = 'Enter a positive amount, or leave blank for no cap';
+    return n;
+  };
   const fleet = v.accountType === 'fleet';
   const body = {
     holderName: s(v.holderName) || null,
     holderPhone: s(v.holderPhone) || null,
     accountType: v.accountType,
     fleetName: fleet ? s(v.fleetName) || null : null,
-    validTo: YMD.test(s(v.validTo)) ? `${s(v.validTo)}T23:59:59+07:00` : null,
+    // The end of that day in the organisation's time zone.
+    validTo: YMD.test(s(v.validTo)) ? new Date(Date.parse(zonedDayStartIso(s(v.validTo))) + 86_399_000).toISOString() : null,
     energyLimitKwh: num('energyLimitKwh', false),
-    spendLimitIdr: num('spendLimitIdr', true),
+    spendLimitMinor: limitMinor(),
+    ...(v.spendLimitCurrency ? { spendLimitCurrency: v.spendLimitCurrency } : {}),
     offlineAllowed: Boolean(v.offlineAllowed),
     notes: s(v.notes) || null,
   };
@@ -267,7 +285,7 @@ export function openCardModal(t = null, onSaved) {
     ? `<div class="card pad" style="margin-bottom:14px"><dl class="kv">
         <dt>Card UID</dt><dd class="mono">${esc(t.uid)} <span class="cell-sub">(read-only — a new UID is a new card)</span></dd>
         <dt>Status</dt><dd>${statusTag(t)}</dd>
-        <dt>Lifetime use</dt><dd>${esc(kwh1(t.lifetime_energy_wh))} · ${esc(fmt.num(t.total_sessions ?? 0))} sessions · ${esc(fmt.idr(t.lifetime_spend_idr ?? 0))}</dd>
+        <dt>Lifetime use</dt><dd>${esc(kwh1(t.lifetime_energy_wh))} · ${esc(fmt.num(t.total_sessions ?? 0))} sessions · ${esc(fmt.money(t.lifetime_spend_minor ?? 0, t.spend_limit_currency))}</dd>
         <dt>Last used</dt><dd>${t.last_used_at ? `${esc(fmt.time(t.last_used_at))} (${esc(fmt.ago(t.last_used_at))})` : 'never'}</dd>
         <dt>Issued</dt><dd>${esc(fmt.date(t.created_at))}</dd>
       </dl></div>`
@@ -322,7 +340,7 @@ export function openCardModal(t = null, onSaved) {
     set('holderName', t.holder_name); set('holderPhone', t.holder_phone); set('accountType', t.account_type);
     set('fleetName', t.fleet_name); set('validTo', fmt.isoDate(t.valid_to)); set('notes', t.notes);
     set('energyLimitKwh', t.energy_limit_wh != null ? Number(t.energy_limit_wh) / 1000 : null);
-    set('spendLimitIdr', t.spend_limit_idr != null ? Number(t.spend_limit_idr) : null);
+    set('spendLimitMinor', t.spend_limit_minor != null ? toMajor(t.spend_limit_minor, t.spend_limit_currency) : null);
     set('status', t.status);
     $('[name=offlineAllowed]', form).checked = Boolean(t.offline_allowed);
   } else {
@@ -504,7 +522,7 @@ registerView('rfid', {
             label: 'Limits',
             render: (t) => {
               const e = usageBar('Energy', t.lifetime_energy_wh, t.energy_limit_wh, kwh1);
-              const s = usageBar('Spend', t.lifetime_spend_idr, t.spend_limit_idr, fmt.idr);
+              const s = usageBar('Spend', t.lifetime_spend_minor, t.spend_limit_minor, (n) => fmt.money(n, t.spend_limit_currency));
               return (e || s) ? `${e}${e && s ? '<div style="height:6px"></div>' : ''}${s}` : '<span class="muted small">no cap</span>';
             },
           },

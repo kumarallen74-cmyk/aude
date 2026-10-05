@@ -1,0 +1,7 @@
+{
+  "name": "plugsure-live-update",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Expo module (Kotlin): the charging session as an Android 16 Live Update (Notification.ProgressStyle, promoted ongoing), with a standard progress notification before Android 16.",
+  "main": "index.ts"
+}

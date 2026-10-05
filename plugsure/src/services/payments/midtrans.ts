@@ -100,7 +100,7 @@ export class MidtransProvider implements PaymentProvider {
       // settlement, capture, and a payment refunded since (refund, partial_refund): the money was taken.
       : 'captured';
     return {
-      status, acquirerStatus: st, amountIdr: j.gross_amount != null && Number.isFinite(Number(j.gross_amount)) ? Math.round(Number(j.gross_amount)) : null,
+      status, acquirerStatus: st, amountMinor: j.gross_amount != null && Number.isFinite(Number(j.gross_amount)) ? Math.round(Number(j.gross_amount)) : null,
       ...(j.transaction_id ? { providerPaymentId: String(j.transaction_id) } : {}), raw: j,
     };
   }
@@ -113,17 +113,17 @@ export class MidtransProvider implements PaymentProvider {
       method: 'POST', headers: this.headers(),
       body: JSON.stringify({
         payment_type: 'qris',
-        transaction_details: { order_id: orderId, gross_amount: Math.round(a.amountIdr) },
+        transaction_details: { order_id: orderId, gross_amount: Math.round(a.amountMinor) },
         qris: { acquirer: this.cfg.acquirer || 'gopay' },
         custom_expiry: { expiry_duration: minutes, unit: 'minute' },
-        ...(a.description ? { item_details: [{ id: 'charging', price: Math.round(a.amountIdr), quantity: 1, name: a.description.slice(0, 50) }] } : {}),
+        ...(a.description ? { item_details: [{ id: 'charging', price: Math.round(a.amountMinor), quantity: 1, name: a.description.slice(0, 50) }] } : {}),
       }),
     });
     const j = r.body ?? {};
     if (String(j.status_code) !== '201' || !j.qr_string) {
       throw new Error(`Midtrans QRIS charge failed: ${j.status_code ?? r.status} ${j.status_message ?? r.text.slice(0, 200)}`);
     }
-    return { providerRef: orderId, qrString: j.qr_string, amountIdr: a.amountIdr, expiresAt: new Date(Date.now() + minutes * 60_000).toISOString(), status: 'pending' };
+    return { providerRef: orderId, qrString: j.qr_string, amountMinor: a.amountMinor, expiresAt: new Date(Date.now() + minutes * 60_000).toISOString(), status: 'pending' };
   }
 
   /** The signature Midtrans puts on a notification. */
@@ -146,7 +146,7 @@ export class MidtransProvider implements PaymentProvider {
     const savedCard = (paid || authorised) && j.saved_token_id
       ? { token: String(j.saved_token_id), brand: cardBrand(j.masked_card), last4: last4Of(j.masked_card), tokenExpiresAt: j.saved_token_id_expired_at ? jakartaIso(String(j.saved_token_id_expired_at)) : null }
       : undefined;
-    return { providerRef: String(j.order_id), paid, authorised, status: st, amountIdr: Math.round(Number(j.gross_amount)), paymentId: j.transaction_id ? String(j.transaction_id) : undefined, ...(savedCard ? { savedCard } : {}) };
+    return { providerRef: String(j.order_id), paid, authorised, status: st, amountMinor: Math.round(Number(j.gross_amount)), paymentId: j.transaction_id ? String(j.transaction_id) : undefined, ...(savedCard ? { savedCard } : {}) };
   }
 
   verifyWebhook(rawBody: string): boolean { return this.parseNotification(rawBody) !== null; }
@@ -155,7 +155,7 @@ export class MidtransProvider implements PaymentProvider {
   async refund(a: RefundArgs): Promise<RefundResult> {
     const r = await providerFetch(`${this.base()}/v2/${encodeURIComponent(a.providerRef)}/refund`, {
       method: 'POST', headers: this.headers(),
-      body: JSON.stringify({ refund_key: a.idempotencyKey.slice(0, 50), amount: Math.round(a.amountIdr), reason: a.reason.slice(0, 100) }),
+      body: JSON.stringify({ refund_key: a.idempotencyKey.slice(0, 50), amount: Math.round(a.amountMinor), reason: a.reason.slice(0, 100) }),
     });
     const j = r.body ?? {};
     if (String(j.status_code) === '200') return { status: 'refunded', refundRef: String(j.refund_key ?? a.idempotencyKey), raw: j };
@@ -192,7 +192,7 @@ export class MidtransProvider implements PaymentProvider {
     const orderId = this.orderRef(a.referenceId);
     const minutes = Math.max(1, Math.round((a.expiresInS ?? 900) / 60));
     const expiresAt = new Date(Date.now() + minutes * 60_000).toISOString();
-    const details = { order_id: orderId, gross_amount: Math.round(a.amountIdr) };
+    const details = { order_id: orderId, gross_amount: Math.round(a.amountMinor) };
     if (a.channel === 'CARD') {
       const r = await providerFetch(`${this.snapBase()}/snap/v1/transactions`, {
         method: 'POST', headers: this.headers(),
@@ -227,7 +227,7 @@ export class MidtransProvider implements PaymentProvider {
       method: 'POST', headers: this.headers(),
       body: JSON.stringify({
         payment_type: 'credit_card',
-        transaction_details: { order_id: orderId, gross_amount: Math.round(a.amountIdr) },
+        transaction_details: { order_id: orderId, gross_amount: Math.round(a.amountMinor) },
         credit_card: {
           token_id: a.token, authentication: this.cfg.savedCard3ds !== false, ...(a.preauth ? { type: 'authorize' } : {}),
           ...(this.cfg.savedCard3ds !== false ? { callback_url: a.returnUrl } : {}),
@@ -325,7 +325,7 @@ export class MidtransProvider implements PaymentProvider {
     const r = await providerFetch(`${this.base()}/v2/charge`, {
       method: 'POST', headers: this.headers(),
       body: JSON.stringify({
-        payment_type: 'gopay', transaction_details: { order_id: orderId, gross_amount: Math.round(a.amountIdr) },
+        payment_type: 'gopay', transaction_details: { order_id: orderId, gross_amount: Math.round(a.amountMinor) },
         gopay: { account_id: t.accountId, payment_option_token: token, callback_url: a.returnUrl },
       }),
     });
@@ -361,20 +361,20 @@ export class MidtransProvider implements PaymentProvider {
     if (!a.providerPaymentId) return { ok: false, error: 'the Midtrans transaction id of the hold is unknown (its notification never arrived)' };
     const r = await providerFetch(`${this.base()}/v2/capture`, {
       method: 'POST', headers: this.headers(),
-      body: JSON.stringify({ transaction_id: a.providerPaymentId, gross_amount: Math.round(a.amountIdr) }),
+      body: JSON.stringify({ transaction_id: a.providerPaymentId, gross_amount: Math.round(a.amountMinor) }),
     });
     const j = r.body ?? {};
     if (String(j.status_code) === '200' && (j.transaction_status ?? 'capture') === 'capture') return { ok: true, raw: j };
     // Refused. /v2/capture takes no idempotency key: a retry after an answer that was lost (the capture went through)
     // is refused as "already captured". Ask Midtrans where the order stands: captured is what this capture wanted.
     const now = await this.paymentStatus(a.providerRef).catch(() => null);
-    if (now?.status === 'captured') return { ok: true, raw: { ...j, reconciled: now.acquirerStatus, gross_amount: now.amountIdr } };
+    if (now?.status === 'captured') return { ok: true, raw: { ...j, reconciled: now.acquirerStatus, gross_amount: now.amountMinor } };
     // 407 "Expired transaction": the authorisation lapsed before this capture.
     const expired = String(j.status_code) === '407' || j.transaction_status === 'expire';
     return { ok: false, error: `${j.status_code ?? r.status} ${j.status_message ?? r.text.slice(0, 200)}`.trim(), raw: j, ...(expired ? { expired: true } : {}) };
   }
 
-  async releaseHold(a: Omit<HoldArgs, 'amountIdr'>): Promise<HoldResult> {
+  async releaseHold(a: Omit<HoldArgs, 'amountMinor'>): Promise<HoldResult> {
     const r = await providerFetch(`${this.base()}/v2/${encodeURIComponent(a.providerRef)}/cancel`, { method: 'POST', headers: this.headers() });
     const j = r.body ?? {};
     // 412: already cancelled / expired; 407: expired — nothing is held any more.

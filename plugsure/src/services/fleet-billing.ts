@@ -1,9 +1,14 @@
 import { one, many, query, tx } from '../db/pool.js';
+import { upgradeLegacyKeys, isCurrency, currencyOr, formatMoney, moneyText, LEGACY_CURRENCY, CURRENCY_CODES, type CurrencyCode } from '../domain/money.js';
+import { countryOfCurrency } from '../domain/country.js';
+import { LOCALE_TAG } from '../domain/locale.js';
+import { resolveTaxContext } from './tax/index.js';
 import { config } from '../config.js';
+import { billingZone, todayIn } from './org-timezone.js';
 import { unseal } from './secrets.js';
 import { sendEmail } from './notify-transports.js';
 import { PERIOD_RE, currentPeriod } from './commission.js';
-import { computeFleetStatement, splitFees, type FeeLine, type FleetSession, type FleetRoaming, type TaxCfg } from './fleet-calc.js';
+import { computeFleetStatement, splitFees, type FeeLine, type FleetSession, type FleetRoaming, type TaxCfg, type InvoiceTax, extractInclusiveTax } from './fleet-calc.js';
 import { efakturXml, fakturDate, settingsProblem, buyerProblem, feeItemProblem, normaliseNpwp, nitkuFor, type EfakturSettings, type EfakturInvoice } from './efaktur.js';
 import { membershipFeesFor } from './benefits.js';
 
@@ -32,7 +37,7 @@ export class FleetBillingError extends Error {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const TAX: () => TaxCfg = () => ({ ppnRateBps: config.tax.ppnRateBps, dppNum: config.tax.ppnDppNumerator, dppDen: config.tax.ppnDppDenominator });
+const TAX: () => TaxCfg = () => ({ ppnRateBps: config.tax.id.ppnRateBps, dppNum: config.tax.id.ppnDppNumerator, dppDen: config.tax.id.ppnDppDenominator });
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 export const monthName = (period: string) => { const [y, m] = period.split('-'); return `${MONTHS[Number(m) - 1]} ${y}`; };
@@ -41,14 +46,24 @@ const bulan = (period: string) => { const [y, m] = period.split('-'); return `${
 function mustPeriod(period: string) {
   if (!PERIOD_RE.test(String(period))) throw new FleetBillingError(400, 'period must be YYYY-MM');
 }
+/** The currency of a statement (one invoice per account, month AND currency); absent = IDR. */
+export function mustCurrency(c: unknown): CurrencyCode {
+  if (c == null || c === '') return LEGACY_CURRENCY;
+  if (!isCurrency(c)) throw new FleetBillingError(400, 'currency must be IDR, MYR or SGD');
+  return c;
+}
 function mustId(id: string, what: string) {
   if (!UUID_RE.test(String(id))) throw new FleetBillingError(404, `${what} not found`);
 }
-/** [start, end) of a month in the billing time zone, as timestamps. */
-async function monthBounds(period: string): Promise<{ from: Date; to: Date }> {
+/**
+ * [start, end) of a month as timestamps, in the organisation's billing zone for the statement's currency
+ * (services/org-timezone.ts: Indonesia and rupiah as v1.6 — BILLING_TIMEZONE; a Singapore invoice in SGT).
+ */
+async function monthBounds(period: string, orgId: string | null = null, currency: CurrencyCode | null = null): Promise<{ from: Date; to: Date }> {
+  const tz = await billingZone(orgId, currency);
   const r = await one<{ from: Date; to: Date }>(
     `SELECT (($1 || '-01')::timestamp AT TIME ZONE $2) AS from, ((($1 || '-01')::date + interval '1 month')::timestamp AT TIME ZONE $2) AS to`,
-    [period, config.billing.timeZone],
+    [period, tz],
   );
   return r!;
 }
@@ -125,12 +140,16 @@ export async function listAccounts(orgId: string, includeArchived = false) {
     `SELECT ${ACCOUNT_COLS},
             (SELECT count(*)::int FROM token t WHERE t.fleet_account_id = a.id) AS cards,
             (SELECT count(*)::int FROM fleet_invoice i WHERE i.fleet_account_id = a.id AND i.status = 'issued') AS open_invoices,
-            (SELECT COALESCE(sum(GREATEST(0, i.total_idr - i.credited_idr - i.prior_credit_idr)), 0)::bigint FROM fleet_invoice i WHERE i.fleet_account_id = a.id AND i.status = 'issued') AS outstanding_idr,
+            -- What is owed, per currency (never added across currencies); outstanding_minor is the rupiah figure (v1.6).
+            (SELECT COALESCE(sum(GREATEST(0, i.total_minor - i.credited_minor - i.prior_credit_minor)), 0)::bigint FROM fleet_invoice i WHERE i.fleet_account_id = a.id AND i.status = 'issued' AND i.currency = $3) AS outstanding_minor,
+            (SELECT COALESCE(jsonb_object_agg(x.currency, x.owed), '{}'::jsonb) FROM (
+               SELECT i.currency, sum(GREATEST(0, i.total_minor - i.credited_minor - i.prior_credit_minor))::bigint AS owed
+                 FROM fleet_invoice i WHERE i.fleet_account_id = a.id AND i.status = 'issued' GROUP BY i.currency) x) AS outstanding_by_currency,
             (SELECT count(*)::int FROM user_role ur WHERE ur.scope_type = 'fleet' AND ur.scope_id = a.id) AS portal_users
        FROM fleet_account a
       WHERE a.org_id = $1 AND ($2 OR a.archived_at IS NULL)
       ORDER BY a.name`,
-    [orgId, includeArchived],
+    [orgId, includeArchived, LEGACY_CURRENCY],
   );
 }
 
@@ -265,22 +284,22 @@ export async function assignCards(orgId: string, id: string, uids: string[], rem
 
 // ─────────────────────────────────────────── the month
 
-async function loadMonth(orgId: string, accountId: string, period: string) {
-  const { from, to } = await monthBounds(period);
+async function loadMonth(orgId: string, accountId: string, period: string, currency: CurrencyCode = LEGACY_CURRENCY) {
+  const { from, to } = await monthBounds(period, orgId, currency);
   // The session's own fleet (at its start), not the card's fleet today.
   const sessions = await many<any>(
     `SELECT cs.id, cs.started_at, cs.ended_at, cs.site_id, s.name AS site_name, cp.ocpp_identity, t.uid, t.holder_name,
-            cs.energy_wh, d.subtotal_idr, d.pbjt_idr, d.ppn_dpp_idr, d.ppn_rate_bps, d.ppn_idr, d.total_idr
+            cs.energy_wh, d.subtotal_minor, d.local_tax_minor, d.tax_base_minor, d.tax_rate_bps, d.tax_minor, d.total_minor
        FROM cdr d
        JOIN charging_session cs ON cs.id = d.session_id
        JOIN token t ON t.id = cs.token_id
        JOIN site s ON s.id = cs.site_id
        JOIN charge_point cp ON cp.id = cs.charge_point_id
       WHERE d.org_id = $1 AND cs.fleet_account_id = $2 AND d.issued_at >= $3 AND d.issued_at < $4
-        AND COALESCE(cs.payment_mode, '') <> 'prepurchase'
+        AND COALESCE(cs.payment_mode, '') <> 'prepurchase' AND d.currency = $5
         AND NOT EXISTS (SELECT 1 FROM fleet_invoice_item i WHERE i.kind = 'session' AND i.ref_id = cs.id)
       ORDER BY cs.started_at`,
-    [orgId, accountId, from, to],
+    [orgId, accountId, from, to, currency],
   );
   const roaming = await many<any>(
     `SELECT r.id, p.name AS operator, r.data->'cdr_location'->>'name' AS location, t.uid, r.start_date_time, r.end_date_time,
@@ -293,16 +312,17 @@ async function loadMonth(orgId: string, accountId: string, period: string) {
         -- the month an operator accepted it (its own month may be invoiced by then).
         AND r.status = 'accepted'
         AND COALESCE(r.reviewed_at, r.received_at) >= $3 AND COALESCE(r.reviewed_at, r.received_at) < $4
+        AND r.currency = $5
         AND NOT EXISTS (SELECT 1 FROM fleet_invoice_item i WHERE i.kind = 'roaming' AND i.ref_id = r.id)
       ORDER BY r.start_date_time`,
-    [orgId, accountId, from, to],
+    [orgId, accountId, from, to, currency],
   );
   const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
   return {
     sessions: sessions.map((r): FleetSession => ({
       id: r.id, startedAt: iso(r.started_at)!, endedAt: iso(r.ended_at), siteId: r.site_id, siteName: r.site_name,
       ocppIdentity: r.ocpp_identity, cardUid: r.uid, holder: r.holder_name, energyWh: Number(r.energy_wh),
-      subtotalIdr: r.subtotal_idr, pbjtIdr: r.pbjt_idr, ppnDppIdr: r.ppn_dpp_idr, ppnRateBps: r.ppn_rate_bps, ppnIdr: r.ppn_idr, totalIdr: r.total_idr,
+      subtotalMinor: r.subtotal_minor, localTaxMinor: r.local_tax_minor, taxBaseMinor: r.tax_base_minor, ppnRateBps: r.tax_rate_bps, taxMinor: r.tax_minor, totalMinor: r.total_minor,
     })),
     roaming: roaming.map((r): FleetRoaming => ({
       id: r.id, operator: r.operator, location: r.location, cardUid: r.uid, startedAt: iso(r.start_date_time)!, endedAt: iso(r.end_date_time)!,
@@ -316,21 +336,22 @@ async function loadMonth(orgId: string, accountId: string, period: string) {
  * cards (the fee was set on the site; waived ones — refused by the charger, or
  * cancelled at once — are not here). Counted in the month the connector was held.
  */
-async function reservationFeesFor(orgId: string, accountId: string, from: Date, to: Date): Promise<FeeLine[]> {
+async function reservationFeesFor(orgId: string, accountId: string, from: Date, to: Date, currency: CurrencyCode = LEGACY_CURRENCY): Promise<FeeLine[]> {
   const rows = await many<any>(
-    `SELECT r.id, r.held_at, r.expires_at, r.fee_idr, r.fee_dpp_idr, r.fee_ppn_idr, r.fee_total_idr, s.name AS site_name, t.uid
+    `SELECT r.id, r.held_at, r.expires_at, r.fee_minor, r.fee_tax_base_minor, r.fee_tax_minor, r.fee_total_minor, s.name AS site_name, t.uid
        FROM driver_reservation r
        JOIN charge_point cp ON cp.id = r.charge_point_id
        JOIN site s ON s.id = cp.site_id
        JOIN token t ON t.id = r.token_id
       WHERE r.org_id = $1 AND r.fleet_account_id = $2 AND r.fee_state = 'invoice' AND r.held_at >= $3 AND r.held_at < $4
+        AND r.currency = $5
         AND NOT EXISTS (SELECT 1 FROM fleet_invoice_item i WHERE i.kind = 'reservation' AND i.ref_id = r.id)
       ORDER BY r.held_at`,
-    [orgId, accountId, from, to],
+    [orgId, accountId, from, to, currency],
   );
   return rows.map((r) => ({
     kind: 'reservation' as const, reservationId: r.id, subscriptionId: '', planName: r.site_name, subscriber: r.uid,
-    feeIdr: r.fee_idr, taxBaseIdr: r.fee_ppn_idr > 0 ? r.fee_idr : 0, dppIdr: r.fee_dpp_idr, ppnIdr: r.fee_ppn_idr, totalIdr: r.fee_total_idr,
+    feeMinor: r.fee_minor, taxableMinor: r.fee_tax_minor > 0 ? r.fee_minor : 0, taxBaseMinor: r.fee_tax_base_minor, taxMinor: r.fee_tax_minor, totalMinor: r.fee_total_minor,
     periodStart: new Date(r.held_at).toISOString(), periodEnd: new Date(r.expires_at).toISOString(),
   }));
 }
@@ -342,28 +363,49 @@ function buyerOf(a: any) {
 }
 
 /** A month for one account: the live invoice if there is one, else a draft of what is not yet invoiced. */
-export async function statementFor(orgId: string, accountId: string, period: string) {
+export async function statementFor(orgId: string, accountId: string, period: string, currencyIn?: unknown) {
   mustPeriod(period);
+  const currency = mustCurrency(currencyIn);
   const a = await getAccount(orgId, accountId);
   const inv = await one<any>(
-    `SELECT * FROM fleet_invoice WHERE fleet_account_id = $1 AND period = ($2 || '-01')::date AND status <> 'void'`,
-    [accountId, period],
+    `SELECT * FROM fleet_invoice WHERE fleet_account_id = $1 AND period = ($2 || '-01')::date AND status <> 'void' AND currency = $3`,
+    [accountId, period, currency],
   );
   if (inv) return withCredits(inv);
-  return draftFor(orgId, a, period);
+  return draftFor(orgId, a, period, currency);
 }
 
-async function draftFor(orgId: string, a: any, period: string) {
+/**
+ * The tax of a statement in a currency: IDR the Indonesian PPN/DPP per invoice line (v1.6);
+ * ringgit / Singapore dollars the engine of the operator's registration in that country,
+ * extracted from each invoice line's gross (fleet-calc.ts extractInclusiveTax).
+ */
+async function invoiceTaxFor(orgId: string, currency: CurrencyCode, period: string): Promise<{ invoiceTax?: InvoiceTax; scheme: string; rateBps: number; registrationNo: string | null }> {
+  if (currency === LEGACY_CURRENCY) return { scheme: 'ID_PPN_PBJT', rateBps: config.tax.id.ppnRateBps, registrationNo: null };
+  const c = countryOfCurrency(currency)!;
+  const { to } = await monthBounds(period, orgId, currency);
+  const ctx = await resolveTaxContext({ orgId, country: c.code, at: new Date(to.getTime() - 1), timezone: c.timezones[0] });
+  return {
+    // Extracted from the receipts' gross (fleet-calc.ts extractInclusiveTax): never more than the prices shown.
+    invoiceTax: extractInclusiveTax(ctx.scheme === 'NONE' ? 0 : ctx.rateBps),
+    scheme: ctx.scheme, rateBps: ctx.scheme === 'NONE' ? 0 : ctx.rateBps, registrationNo: ctx.registrationNo,
+  };
+}
+
+async function draftFor(orgId: string, a: any, period: string, currency: CurrencyCode = LEGACY_CURRENCY) {
   const { seller, settings } = await getSettings(orgId);
-  const m = await loadMonth(orgId, a.id, period);
-  const { from, to } = await monthBounds(period);
+  const m = await loadMonth(orgId, a.id, period, currency);
+  const { from, to } = await monthBounds(period, orgId, currency);
   // Memberships, and connector reservations made with the fleet's cards in the driver app.
-  const fees = [...(await membershipFeesFor(orgId, a.id, from, to)), ...(await reservationFeesFor(orgId, a.id, from, to))];
-  const calc = computeFleetStatement(m.sessions, m.roaming, { includeRoaming: a.include_roaming, cfg: TAX(), fees });
+  const fees = [...(await membershipFeesFor(orgId, a.id, from, to, currency)), ...(await reservationFeesFor(orgId, a.id, from, to, currency))];
+  const tax = await invoiceTaxFor(orgId, currency, period);
+  const calc = computeFleetStatement(m.sessions, m.roaming, { includeRoaming: a.include_roaming, cfg: TAX(), fees, currency, invoiceTax: tax.invoiceTax });
   const warnings = [...calc.warnings];
-  if (!seller.pkp && calc.totals.ppnIdr > 0) warnings.push('Sessions carry PPN but your organisation is not marked PKP.');
-  if (seller.pkp && calc.totals.ppnIdr > 0 && buyerProblem({ taxId: a.tax_id, kind: a.tax_id_kind, nitku: a.nitku, name: '', address: null, email: null })) {
-    warnings.push('The fleet account has no NPWP/NIK: a faktur pajak cannot be prepared for it.');
+  if (currency === LEGACY_CURRENCY) {
+    if (!seller.pkp && calc.totals.taxMinor > 0) warnings.push('Sessions carry PPN but your organisation is not marked PKP.');
+    if (seller.pkp && calc.totals.taxMinor > 0 && buyerProblem({ taxId: a.tax_id, kind: a.tax_id_kind, nitku: a.nitku, name: '', address: null, email: null })) {
+      warnings.push('The fleet account has no NPWP/NIK: a faktur pajak cannot be prepared for it.');
+    }
   }
   if (!a.billing_email) warnings.push('No billing e-mail: the invoice cannot be e-mailed.');
   return {
@@ -371,17 +413,39 @@ async function draftFor(orgId: string, a: any, period: string) {
     ended: period < currentPeriod(),
     account: { id: a.id, name: a.name }, buyer: buyerOf(a), seller, paymentInstructions: settings.paymentInstructions,
     ...calc, warnings,
+    // Outside Indonesia: the tax scheme the invoice was taxed with (frozen with the invoice).
+    ...(currency === LEGACY_CURRENCY ? {} : { taxScheme: tax.scheme, taxRateBps: tax.rateBps, taxRegistrationNo: tax.registrationNo }),
   };
 }
 
+/** The currencies an account has anything in for a month (sessions, partner records, fees), IDR first. */
+export async function currenciesFor(orgId: string, accountId: string, period: string): Promise<CurrencyCode[]> {
+  // Each currency's month is in its own zone (monthBounds): look a day wider than the home zone's month, so a
+  // currency whose month starts or ends earlier is still found (its statement then takes exactly its own month).
+  const b = await monthBounds(period, orgId);
+  const from = new Date(b.from.getTime() - 86_400_000), to = new Date(b.to.getTime() + 86_400_000);
+  const rows = await many<{ c: string }>(
+    `SELECT DISTINCT d.currency AS c FROM cdr d JOIN charging_session cs ON cs.id = d.session_id
+      WHERE d.org_id = $1 AND cs.fleet_account_id = $2 AND d.issued_at >= $3 AND d.issued_at < $4
+     UNION SELECT DISTINCT r.currency FROM ocpi_remote_cdr r
+      WHERE r.org_id = $1 AND r.fleet_account_id = $2 AND r.status = 'accepted' AND COALESCE(r.reviewed_at, r.received_at) >= $3 AND COALESCE(r.reviewed_at, r.received_at) < $4
+     UNION SELECT DISTINCT r.currency FROM driver_reservation r WHERE r.org_id = $1 AND r.fleet_account_id = $2 AND r.fee_state = 'invoice' AND r.held_at >= $3 AND r.held_at < $4
+     UNION SELECT DISTINCT p.currency FROM subscription s JOIN subscription_plan p ON p.id = s.plan_id LEFT JOIN token t ON t.id = s.token_id
+      WHERE s.org_id = $1 AND s.billing = 'invoice' AND (s.fleet_account_id = $2 OR t.fleet_account_id = $2) AND p.monthly_fee_minor > 0`,
+    [orgId, accountId, from, to],
+  );
+  const set = new Set(rows.map((r) => r.c).filter(isCurrency));
+  return CURRENCY_CODES.filter((c) => c === LEGACY_CURRENCY || set.has(c));
+}
+
 /** What is still owed on an invoice: its total less credit notes against it and earlier credits deducted from it. */
-export const balanceOf = (inv: { status: string; total_idr: unknown; credited_idr?: unknown; prior_credit_idr?: unknown }) =>
-  inv.status === 'issued' ? Math.max(0, Number(inv.total_idr) - Number(inv.credited_idr ?? 0) - Number(inv.prior_credit_idr ?? 0)) : 0;
+export const balanceOf = (inv: { status: string; total_minor: unknown; credited_minor?: unknown; prior_credit_minor?: unknown }) =>
+  inv.status === 'issued' ? Math.max(0, Number(inv.total_minor) - Number(inv.credited_minor ?? 0) - Number(inv.prior_credit_minor ?? 0)) : 0;
 
 function frozen(inv: any) {
   return {
-    ...inv.data,
-    creditedIdr: Number(inv.credited_idr ?? 0), priorCreditIdr: Number(inv.prior_credit_idr ?? 0), balanceIdr: balanceOf(inv),
+    ...upgradeLegacyKeys(inv.data),
+    creditedMinor: Number(inv.credited_minor ?? 0), priorCreditMinor: Number(inv.prior_credit_minor ?? 0), balanceMinor: balanceOf(inv),
     status: inv.status, id: inv.id, number: inv.number, issuedAt: inv.issued_at, dueDate: fmtDate(inv.due_date),
     paidAt: inv.paid_at ? fmtDate(inv.paid_at) : null, paidReference: inv.paid_reference,
     voidedAt: inv.voided_at, voidReason: inv.void_reason, efakturExportedAt: inv.efaktur_exported_at, efakturNumber: inv.efaktur_number,
@@ -391,13 +455,13 @@ function frozen(inv: any) {
 /** A stored invoice with the credit notes issued against it (for the documents and the console). */
 async function withCredits(inv: any) {
   const creditNotes = await many<any>(
-    `SELECT id, number, status, settlement, reason, total_idr, ppn_idr, issued_at, refunded_at, applied_invoice_id
+    `SELECT id, number, status, settlement, reason, total_minor, tax_minor, issued_at, refunded_at, applied_invoice_id
        FROM fleet_credit_note WHERE invoice_id = $1 ORDER BY issued_at`, [inv.id]);
   return {
     ...frozen(inv),
     creditNotes: creditNotes.map((c) => ({
-      id: c.id, number: c.number, status: c.status, settlement: c.settlement, reason: c.reason, totalIdr: Number(c.total_idr),
-      ppnIdr: Number(c.ppn_idr), issuedAt: c.issued_at, refundedAt: c.refunded_at ? fmtDate(c.refunded_at) : null, applied: !!c.applied_invoice_id,
+      id: c.id, number: c.number, status: c.status, settlement: c.settlement, reason: c.reason, totalMinor: Number(c.total_minor),
+      taxMinor: Number(c.tax_minor), issuedAt: c.issued_at, refundedAt: c.refunded_at ? fmtDate(c.refunded_at) : null, applied: !!c.applied_invoice_id,
     })),
   };
 }
@@ -412,26 +476,27 @@ export async function periodOverview(orgId: string, period: string) {
     [orgId, period],
   );
   const rows = [];
-  for (const a of accounts) {
-    const live = invoices.find((i) => i.fleet_account_id === a.id && i.status !== 'void');
-    const voided = invoices.filter((i) => i.fleet_account_id === a.id && i.status === 'void').length;
+  // One row per account AND currency: a fleet charging in Indonesia and Malaysia gets a rupiah and a ringgit invoice.
+  for (const a of accounts) for (const currency of await currenciesFor(orgId, a.id, period)) {
+    const live = invoices.find((i) => i.fleet_account_id === a.id && i.status !== 'void' && i.currency === currency);
+    const voided = invoices.filter((i) => i.fleet_account_id === a.id && i.status === 'void' && i.currency === currency).length;
     if (live) {
       rows.push({
-        accountId: a.id, name: a.name, legalName: a.legal_name, status: live.status, invoiceId: live.id, number: live.number,
-        sessions: live.sessions, energyWh: Number(live.energy_wh), ppnIdr: Number(live.ppn_idr), roamingIdr: Number(live.roaming_total_idr),
-        totalIdr: Number(live.total_idr), balanceIdr: balanceOf(live), dueDate: fmtDate(live.due_date),
+        accountId: a.id, name: a.name, legalName: a.legal_name, currency, status: live.status, invoiceId: live.id, number: live.number,
+        sessions: live.sessions, energyWh: Number(live.energy_wh), taxMinor: Number(live.tax_minor), roamingMinor: Number(live.roaming_total_minor),
+        totalMinor: Number(live.total_minor), balanceMinor: balanceOf(live), dueDate: fmtDate(live.due_date),
         overdue: live.status === 'issued' && balanceOf(live) > 0 && fmtDate(live.due_date) < todayLocal(),
         efakturExported: !!live.efaktur_exported_at, efakturNumber: live.efaktur_number, sent: !!live.sent_at, voided, warnings: 0,
       });
       continue;
     }
     if (a.archived_at) continue;
-    const d = await draftFor(orgId, a, period);
+    const d = await draftFor(orgId, a, period, currency);
     if (!d.totals.sessions && !d.totals.roamingSessions && !d.fees.length) continue;
     rows.push({
-      accountId: a.id, name: a.name, legalName: a.legal_name, status: 'draft', invoiceId: null, number: null,
-      sessions: d.totals.sessions, energyWh: d.totals.energyWh, ppnIdr: d.totals.ppnIdr, roamingIdr: d.totals.roamingIdr,
-      totalIdr: d.totals.totalIdr, dueDate: null, overdue: false, efakturExported: false, efakturNumber: null, sent: false, voided, warnings: d.warnings.length,
+      accountId: a.id, name: a.name, legalName: a.legal_name, currency, status: 'draft', invoiceId: null, number: null,
+      sessions: d.totals.sessions, energyWh: d.totals.energyWh, taxMinor: d.totals.taxMinor, roamingMinor: d.totals.roamingMinor,
+      totalMinor: d.totals.totalMinor, dueDate: null, overdue: false, efakturExported: false, efakturNumber: null, sent: false, voided, warnings: d.warnings.length,
     });
   }
   const unassigned = await unassignedFleetSessions(orgId, period);
@@ -444,32 +509,39 @@ export async function periodOverview(orgId: string, period: string) {
  * does not bill its earlier sessions).
  */
 async function unassignedFleetSessions(orgId: string, period: string) {
-  const { from, to } = await monthBounds(period);
-  const r = await one<{ n: number; total: number }>(
-    `SELECT count(*)::int AS n, COALESCE(sum(d.total_idr), 0)::bigint AS total
+  const { from, to } = await monthBounds(period, orgId);
+  const rows = await many<{ n: number; total: number; currency: string }>(
+    `SELECT count(*)::int AS n, COALESCE(sum(d.total_minor), 0)::bigint AS total, d.currency
        FROM cdr d JOIN charging_session cs ON cs.id = d.session_id JOIN token t ON t.id = cs.token_id
       WHERE d.org_id = $1 AND t.account_type = 'fleet' AND cs.fleet_account_id IS NULL
-        AND d.issued_at >= $2 AND d.issued_at < $3 AND COALESCE(cs.payment_mode, '') <> 'prepurchase'`,
-    [orgId, from, to],
+        AND d.issued_at >= $2 AND d.issued_at < $3 AND COALESCE(cs.payment_mode, '') <> 'prepurchase'
+      GROUP BY d.currency ORDER BY d.currency = $4 DESC, d.currency`,
+    [orgId, from, to, LEGACY_CURRENCY],
   );
-  return { sessions: r?.n ?? 0, totalIdr: Number(r?.total ?? 0) };
+  // The rupiah figure as before; other currencies listed beside it (never added up: no FX).
+  const idr = rows.find((r) => r.currency === LEGACY_CURRENCY);
+  return {
+    sessions: rows.reduce((a, r) => a + r.n, 0), totalMinor: Number(idr?.total ?? 0),
+    byCurrency: rows.map((r) => ({ currency: r.currency, sessions: r.n, totalMinor: Number(r.total) })),
+  };
 }
 
 // ─────────────────────────────────────────── invoices
 
-export async function issueInvoice(orgId: string, accountId: string, period: string, actor: string) {
+export async function issueInvoice(orgId: string, accountId: string, period: string, actor: string, currencyIn?: unknown) {
   mustPeriod(period);
+  const currency = mustCurrency(currencyIn);
   if (period >= currentPeriod()) throw new FleetBillingError(409, 'Only a month that has ended can be invoiced.');
   return tx(async () => {
     await query(`SELECT pg_advisory_xact_lock(hashtextextended('fleet-invoice:' || $1::text, 0))`, [orgId]);
     const a = await getAccount(orgId, accountId);
     if (a.archived_at) throw new FleetBillingError(409, 'The fleet account is archived.');
-    const live = await one(`SELECT number FROM fleet_invoice WHERE fleet_account_id = $1 AND period = ($2 || '-01')::date AND status <> 'void'`, [accountId, period]);
+    const live = await one(`SELECT number FROM fleet_invoice WHERE fleet_account_id = $1 AND period = ($2 || '-01')::date AND status <> 'void' AND currency = $3`, [accountId, period, currency]);
     if (live) throw new FleetBillingError(409, `Already invoiced (${(live as any).number}).`);
-    const st = await draftFor(orgId, a, period);
+    const st = await draftFor(orgId, a, period, currency);
     if (!st.totals.sessions && !st.totals.roamingSessions && !st.fees.length) throw new FleetBillingError(409, 'Nothing to invoice for this month.');
     const { settings } = await getSettings(orgId);
-    const issued = todayLocal();
+    const issued = todayIn(await billingZone(orgId, currency));
     const [y, mo] = issued.split('-');
     const stem = `${settings.prefix}/${y}/${mo}/`;
     const last = await one<{ seq: number }>(
@@ -481,27 +553,28 @@ export async function issueInvoice(orgId: string, accountId: string, period: str
     const due = new Date(`${issued}T00:00:00Z`);
     due.setUTCDate(due.getUTCDate() + a.payment_terms_days);
     // Credit notes on earlier (paid) invoices that are to be deducted from the next one: whole notes, while they fit.
-    const open = await many<{ id: string; number: string; total_idr: string; invoice_number: string }>(
-      `SELECT c.id, c.number, c.total_idr, i.number AS invoice_number FROM fleet_credit_note c JOIN fleet_invoice i ON i.id = c.invoice_id
+    const open = await many<{ id: string; number: string; total_minor: string; invoice_number: string }>(
+      `SELECT c.id, c.number, c.total_minor, i.number AS invoice_number FROM fleet_credit_note c JOIN fleet_invoice i ON i.id = c.invoice_id
         WHERE c.fleet_account_id = $1 AND c.org_id = $2 AND c.status = 'issued' AND c.settlement = 'next_invoice' AND c.applied_invoice_id IS NULL
-        ORDER BY c.issued_at FOR UPDATE OF c`, [accountId, orgId]);
-    const priorCredits: Array<{ id: string; number: string; invoiceNumber: string; totalIdr: number }> = [];
-    let room = st.totals.totalIdr;
+          AND c.currency = $3
+        ORDER BY c.issued_at FOR UPDATE OF c`, [accountId, orgId, currency]);
+    const priorCredits: Array<{ id: string; number: string; invoiceNumber: string; totalMinor: number }> = [];
+    let room = st.totals.totalMinor;
     for (const c of open) {
-      const amt = Number(c.total_idr);
+      const amt = Number(c.total_minor);
       if (amt > room) continue;
-      priorCredits.push({ id: c.id, number: c.number, invoiceNumber: c.invoice_number, totalIdr: amt });
+      priorCredits.push({ id: c.id, number: c.number, invoiceNumber: c.invoice_number, totalMinor: amt });
       room -= amt;
     }
-    const priorCreditIdr = priorCredits.reduce((a, c) => a + c.totalIdr, 0);
+    const priorCreditMinor = priorCredits.reduce((a, c) => a + c.totalMinor, 0);
     const data = { ...st, status: 'issued', number, issuedDate: issued, priorCredits };
     const t = st.totals;
     const inv = await one<{ id: string }>(
-      `INSERT INTO fleet_invoice (org_id, fleet_account_id, period, number, due_date, sessions, energy_wh, subtotal_idr, pbjt_idr,
-                                  tax_base_idr, dpp_idr, ppn_idr, own_total_idr, roaming_total_idr, total_idr, data, issued_by, fees_total_idr, prior_credit_idr)
-       VALUES ($1,$2,($3 || '-01')::date,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
-      [orgId, accountId, period, number, due.toISOString().slice(0, 10), t.sessions, t.energyWh, t.subtotalIdr, t.pbjtIdr,
-       t.taxBaseIdr, t.dppIdr, t.ppnIdr, t.ownTotalIdr, t.roamingIdr, t.totalIdr, JSON.stringify(data), actor, t.feesIdr, priorCreditIdr],
+      `INSERT INTO fleet_invoice (org_id, fleet_account_id, period, number, due_date, sessions, energy_wh, subtotal_minor, local_tax_minor,
+                                  taxable_minor, tax_base_minor, tax_minor, own_total_minor, roaming_total_minor, total_minor, data, issued_by, fees_total_minor, prior_credit_minor, currency)
+       VALUES ($1,$2,($3 || '-01')::date,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+      [orgId, accountId, period, number, due.toISOString().slice(0, 10), t.sessions, t.energyWh, t.subtotalMinor, t.localTaxMinor,
+       t.taxableMinor, t.taxBaseMinor, t.taxMinor, t.ownTotalMinor, t.roamingMinor, t.totalMinor, JSON.stringify(data), actor, t.feesMinor, priorCreditMinor, currency],
     );
     if (priorCredits.length) {
       await query(`UPDATE fleet_credit_note SET applied_invoice_id = $1 WHERE id = ANY($2::uuid[])`, [inv!.id, priorCredits.map((c) => c.id)]);
@@ -511,9 +584,9 @@ export async function issueInvoice(orgId: string, accountId: string, period: str
     for (const f of st.fees) {
       if (f.kind === 'reservation') continue; // the reservation itself is the invoiced item
       const ch = await one<{ id: string }>(
-        `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, fleet_invoice_id, days_billed, days_in_period)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'invoice',$9,$10,$11) ON CONFLICT DO NOTHING RETURNING id`,
-        [f.subscriptionId, orgId, f.periodStart, f.periodEnd, f.feeIdr, f.dppIdr, f.ppnIdr, f.totalIdr, inv!.id, f.days ?? null, f.daysInPeriod ?? null],
+        `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_minor, tax_base_minor, tax_minor, total_minor, via, fleet_invoice_id, days_billed, days_in_period, currency)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'invoice',$9,$10,$11,$12) ON CONFLICT DO NOTHING RETURNING id`,
+        [f.subscriptionId, orgId, f.periodStart, f.periodEnd, f.feeMinor, f.taxBaseMinor, f.taxMinor, f.totalMinor, inv!.id, f.days ?? null, f.daysInPeriod ?? null, currency],
       );
       if (!ch) throw new FleetBillingError(409, 'A membership fee was just invoiced elsewhere; try again.');
       feeCharges.push(ch.id);
@@ -527,21 +600,21 @@ export async function issueInvoice(orgId: string, accountId: string, period: str
       );
       if (!r.rowCount) throw new FleetBillingError(409, 'Some of these charges were just invoiced elsewhere; try again.');
     }
-    return { id: inv!.id, number, totalIdr: t.totalIdr, priorCreditIdr, balanceIdr: t.totalIdr - priorCreditIdr };
+    return { id: inv!.id, number, currency, totalMinor: t.totalMinor, priorCreditMinor, balanceMinor: t.totalMinor - priorCreditMinor };
   });
 }
 
 /** Issue every account's invoice for a month (those with charges and no invoice yet). */
 export async function issueAll(orgId: string, period: string, actor: string) {
   const o = await periodOverview(orgId, period);
-  const issued: Array<{ accountId: string; number: string }> = [];
-  const skipped: Array<{ accountId: string; reason: string }> = [];
+  const issued: Array<{ accountId: string; number: string; currency: string }> = [];
+  const skipped: Array<{ accountId: string; reason: string; currency: string }> = [];
   for (const r of o.rows.filter((x) => x.status === 'draft')) {
     try {
-      const inv = await issueInvoice(orgId, r.accountId, period, actor);
-      issued.push({ accountId: r.accountId, number: inv.number });
+      const inv = await issueInvoice(orgId, r.accountId, period, actor, r.currency);
+      issued.push({ accountId: r.accountId, number: inv.number, currency: r.currency });
     } catch (e) {
-      skipped.push({ accountId: r.accountId, reason: (e as Error).message });
+      skipped.push({ accountId: r.accountId, reason: (e as Error).message, currency: r.currency });
     }
   }
   return { issued, skipped };
@@ -561,8 +634,8 @@ export async function getInvoice(orgId: string, id: string) {
 export async function listInvoices(orgId: string, f: { accountId?: string; status?: string; limit?: number } = {}) {
   const rows = await many<any>(
     `SELECT i.id, i.number, to_char(i.period, 'YYYY-MM') AS period, i.status, i.issued_at, i.due_date, i.sessions, i.energy_wh,
-            i.ppn_idr, i.roaming_total_idr, i.total_idr, i.credited_idr, i.prior_credit_idr, i.paid_at, i.paid_reference, i.voided_at, i.efaktur_exported_at, i.efaktur_number,
-            i.sent_at, a.id AS account_id, a.name AS account_name
+            i.tax_minor, i.roaming_total_minor, i.total_minor, i.credited_minor, i.prior_credit_minor, i.paid_at, i.paid_reference, i.voided_at, i.efaktur_exported_at, i.efaktur_number,
+            i.sent_at, i.currency, a.id AS account_id, a.name AS account_name
        FROM fleet_invoice i JOIN fleet_account a ON a.id = i.fleet_account_id
       WHERE i.org_id = $1 AND ($2::uuid IS NULL OR i.fleet_account_id = $2) AND ($3::text IS NULL OR i.status = $3)
       ORDER BY i.issued_at DESC LIMIT $4`,
@@ -570,7 +643,7 @@ export async function listInvoices(orgId: string, f: { accountId?: string; statu
   );
   const today = todayLocal();
   return rows.map((r) => ({
-    ...r, due_date: fmtDate(r.due_date), paid_at: r.paid_at ? fmtDate(r.paid_at) : null, balance_idr: balanceOf(r),
+    ...r, due_date: fmtDate(r.due_date), paid_at: r.paid_at ? fmtDate(r.paid_at) : null, balance_minor: balanceOf(r),
     overdue: r.status === 'issued' && balanceOf(r) > 0 && fmtDate(r.due_date) < today,
   }));
 }
@@ -621,7 +694,7 @@ export async function setFakturNumber(orgId: string, id: string, number: string 
 // ─────────────────────────────────────────── e-Faktur
 
 const lineName = (site: string, period: string, sessions: number, kwh: number) =>
-  `Pengisian listrik kendaraan listrik (SPKLU) ${site} — ${bulan(period)} — ${sessions} sesi, ${kwh.toLocaleString('id-ID', { maximumFractionDigits: 3 })} kWh`;
+  `Pengisian listrik kendaraan listrik (SPKLU) ${site} — ${bulan(period)} — ${sessions} sesi, ${kwh.toLocaleString(LOCALE_TAG.id, { maximumFractionDigits: 3 })} kWh`;
 
 /**
  * The Coretax import file for a month's invoices: the live ones with PPN not yet
@@ -645,16 +718,21 @@ export async function efakturExport(orgId: string, period: string, ids?: string[
   const included: string[] = [];
   const skipped: Array<{ number: string; reason: string }> = [];
   for (const inv of rows) {
+    // e-Faktur is Indonesia's (services/einvoice): an invoice in another currency never carries a faktur pajak.
+    if (inv.currency !== LEGACY_CURRENCY) {
+      if (byId) skipped.push({ number: inv.number, reason: `a ${inv.currency} invoice is not Indonesian: no faktur pajak` });
+      continue;
+    }
     if (inv.efaktur_exported_at && !byId && !opts.reexport) {
       skipped.push({ number: inv.number, reason: `already exported ${fmtDate(new Date(inv.efaktur_exported_at))} (export it by id, or with reexport=true, to export it again)` });
       continue;
     }
-    const d = inv.data;
-    const lines = (d.sites as any[]).filter((l) => l.taxBaseIdr > 0).map((l) => ({
+    const d = upgradeLegacyKeys(inv.data);
+    const lines = (d.sites as any[]).filter((l) => l.taxableMinor > 0).map((l) => ({
       name: lineName(l.siteName, d.period, l.sessions - l.untaxedSessions, Math.round(l.energyWh) / 1000),
-      taxBaseIdr: l.taxBaseIdr, dppIdr: l.dppIdr, ppnIdr: l.ppnIdr,
+      taxableMinor: l.taxableMinor, taxBaseMinor: l.taxBaseMinor, taxMinor: l.taxMinor,
     }));
-    const fees = ((d.fees ?? []) as any[]).filter((f) => f.taxBaseIdr > 0);
+    const fees = ((d.fees ?? []) as any[]).filter((f) => f.taxableMinor > 0);
     if (fees.length) {
       const fp = feeItemProblem(settings.efaktur as any);
       if (fp) { skipped.push({ number: inv.number, reason: fp }); continue; }
@@ -664,7 +742,7 @@ export async function efakturExport(orgId: string, period: string, ids?: string[
           name: f.kind === 'reservation'
             ? `Reservasi konektor ${f.planName} ${String(f.periodStart).slice(0, 10)} (kartu ${f.subscriber})`
             : `Keanggotaan ${f.planName} (${f.subscriber}) — ${bulan(d.period)}`,
-          taxBaseIdr: f.taxBaseIdr, dppIdr: f.dppIdr, ppnIdr: f.ppnIdr,
+          taxableMinor: f.taxableMinor, taxBaseMinor: f.taxBaseMinor, taxMinor: f.taxMinor,
           item: { itemOpt: ef.feeItemOpt, itemCode: ef.feeItemCode, unitCode: ef.feeUnitCode },
         } as any);
       }
@@ -680,7 +758,7 @@ export async function efakturExport(orgId: string, period: string, ids?: string[
     included.push(inv.id);
   }
   if (!invoices.length) throw new FleetBillingError(409, skipped.length ? `No invoice can carry a faktur: ${skipped.map((s) => `${s.number} (${s.reason})`).join('; ')}` : 'No invoices for this month.');
-  const xml = efakturXml({ npwp: seller.npwp!, nitku: seller.nitku }, invoices, settings.efaktur as EfakturSettings, config.tax.ppnRateBps / 100);
+  const xml = efakturXml({ npwp: seller.npwp!, nitku: seller.nitku }, invoices, settings.efaktur as EfakturSettings, config.tax.id.ppnRateBps / 100);
   await query(`UPDATE fleet_invoice SET efaktur_exported_at = now() WHERE id = ANY($1::uuid[])`, [included]);
   return { xml, included: invoices.map((i) => i.number), skipped, sellerNpwp: normaliseNpwp(seller.npwp), sellerNitku: nitkuFor(normaliseNpwp(seller.npwp), seller.nitku) };
 }
@@ -688,35 +766,63 @@ export async function efakturExport(orgId: string, period: string, ids?: string[
 // ─────────────────────────────────────────── documents
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"'`]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' })[c]!);
-const idr = (n: unknown) => 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(Number(n ?? 0)));
-const kwh = (wh: number) => (wh / 1000).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('id-ID', { timeZone: config.billing.timeZone, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
+/** A rupiah amount as v1.6 printed it ("Rp 12.345"); other currencies through docTax(st).m. */
+const idr = (n: unknown) => moneyText(Math.round(Number(n ?? 0)), LEGACY_CURRENCY, 'id');
+const kwh = (wh: number) => (wh / 1000).toLocaleString(LOCALE_TAG.id, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString(LOCALE_TAG.id, { timeZone: config.billing.timeZone, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
 const dmy = (d: string | null) => (d ? new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '—');
 
 /** The deductions printed under an invoice's total: earlier credits taken off it, and credit notes against it. */
-export function creditRows(st: any): Array<{ label: string; amountIdr: number }> {
+export function creditRows(st: any): Array<{ label: string; amountMinor: number }> {
   return [
-    ...((st.priorCredits ?? []) as any[]).map((c) => ({ label: `Credit note ${c.number} (on invoice ${c.invoiceNumber})`, amountIdr: Number(c.totalIdr) })),
+    ...((st.priorCredits ?? []) as any[]).map((c) => ({ label: `Credit note ${c.number} (on invoice ${c.invoiceNumber})`, amountMinor: Number(c.totalMinor) })),
     ...((st.creditNotes ?? []) as any[]).filter((c) => c.status === 'issued' && c.settlement === 'invoice')
-      .map((c) => ({ label: `Credit note ${c.number}: ${c.reason}`, amountIdr: Number(c.totalIdr) })),
+      .map((c) => ({ label: `Credit note ${c.number}: ${c.reason}`, amountMinor: Number(c.totalMinor) })),
   ];
+}
+
+/**
+ * How a statement's amounts and taxes are written (docs/MULTI-COUNTRY-DESIGN.md §D10): a rupiah
+ * statement exactly as v1.6 (PBJT-TL, DPP nilai lain, PPN); a ringgit or Singapore-dollar one in
+ * its currency with its own tax (GST 9 %, service tax 8 %) or none (not registered), no local tax
+ * and no DPP. Shared by the HTML, the PDF and the e-mail.
+ */
+export function docTax(st: any) {
+  const cur = currencyOr(st?.currency);
+  if (cur === LEGACY_CURRENCY) {
+    return { cur, id: true, m: idr, tax: 'PPN', taxPct: config.tax.id.ppnRateBps / 100, registered: !!st?.seller?.pkp, scheme: 'ID_PPN_PBJT', noTaxNote: 'The seller is not a PKP: no PPN is charged.', regLabel: null as string | null };
+  }
+  const scheme = String(st?.taxScheme ?? 'NONE');
+  const pct = Number(st?.taxRateBps ?? 0) / 100;
+  const sg = cur === 'SGD';
+  return {
+    cur, id: false, m: (n: unknown) => formatMoney(Math.round(Number(n ?? 0)), cur, 'en'),
+    tax: scheme === 'SG_GST' ? `GST ${pct}%` : scheme === 'MY_SST' ? `Service tax ${pct}%` : sg ? 'GST' : 'Tax',
+    taxPct: pct, registered: scheme !== 'NONE', scheme,
+    noTaxNote: sg ? 'The seller is not GST-registered: no GST is charged.' : 'No service tax is charged (the seller is not registered for service tax on EV charging).',
+    regLabel: scheme === 'SG_GST' ? 'GST Reg. No.' : scheme === 'MY_SST' ? 'SST No.' : null,
+  };
 }
 
 export function invoiceHtml(st: any): string {
   const t = st.totals;
   const fees = splitFees(st.fees);
-  const dppFrac = `${config.tax.ppnDppNumerator}/${config.tax.ppnDppDenominator}`;
-  const ppnPct = config.tax.ppnRateBps / 100;
+  const dppFrac = `${config.tax.id.ppnDppNumerator}/${config.tax.id.ppnDppDenominator}`;
+  const ppnPct = config.tax.id.ppnRateBps / 100;
+  const dx = docTax(st);
+  const idr = dx.m;
   const b = st.buyer;
   const s = st.seller;
   const title = st.number ? `Invoice ${st.number}` : `Draft statement ${st.period}`;
-  const siteRows = st.sites.map((l: any) => `<tr><td><b>${esc(l.siteName)}</b>${l.untaxedSessions ? `<div class="muted">${l.untaxedSessions} session(s) without PPN</div>` : ''}</td>
-    <td class="n">${l.sessions}</td><td class="n">${kwh(l.energyWh)}</td><td class="n">${idr(l.subtotalIdr)}</td><td class="n">${idr(l.pbjtIdr)}</td>
-    <td class="n">${idr(l.dppIdr)}</td><td class="n">${idr(l.ppnIdr)}</td><td class="n"><b>${idr(l.totalIdr)}</b></td></tr>`).join('');
+  const siteRows = dx.id ? st.sites.map((l: any) => `<tr><td><b>${esc(l.siteName)}</b>${l.untaxedSessions ? `<div class="muted">${l.untaxedSessions} session(s) without PPN</div>` : ''}</td>
+    <td class="n">${l.sessions}</td><td class="n">${kwh(l.energyWh)}</td><td class="n">${idr(l.subtotalMinor)}</td><td class="n">${idr(l.localTaxMinor)}</td>
+    <td class="n">${idr(l.taxBaseMinor)}</td><td class="n">${idr(l.taxMinor)}</td><td class="n"><b>${idr(l.totalMinor)}</b></td></tr>`).join('')
+    : st.sites.map((l: any) => `<tr><td><b>${esc(l.siteName)}</b></td>
+    <td class="n">${l.sessions}</td><td class="n">${kwh(l.energyWh)}</td><td class="n">${idr(l.subtotalMinor)}</td><td class="n">${idr(l.taxMinor)}</td><td class="n"><b>${idr(l.totalMinor)}</b></td></tr>`).join('');
   const roamRows = st.roaming.map((x: any) => `<tr><td>${esc(dt(x.startedAt))}</td><td>${esc(x.operator)}${x.location ? `<div class="muted">${esc(x.location)}</div>` : ''}</td>
-    <td class="mono">${esc(x.cardUid)}</td><td class="n">${x.energyKwh.toLocaleString('id-ID', { maximumFractionDigits: 3 })}</td><td class="n">${idr(x.amountIdr)}</td></tr>`).join('');
+    <td class="mono">${esc(x.cardUid)}</td><td class="n">${x.energyKwh.toLocaleString(LOCALE_TAG.id, { maximumFractionDigits: 3 })}</td><td class="n">${idr(x.amountMinor)}</td></tr>`).join('');
   const sessRows = st.sessions.map((x: any) => `<tr><td>${esc(dt(x.startedAt))}</td><td>${esc(x.siteName)}<div class="muted mono">${esc(x.ocppIdentity)}</div></td>
-    <td class="mono">${esc(x.cardUid)}${x.holder ? `<div class="muted">${esc(x.holder)}</div>` : ''}</td><td class="n">${kwh(x.energyWh)}</td><td class="n">${idr(x.totalIdr)}</td></tr>`).join('');
+    <td class="mono">${esc(x.cardUid)}${x.holder ? `<div class="muted">${esc(x.holder)}</div>` : ''}</td><td class="n">${kwh(x.energyWh)}</td><td class="n">${idr(x.totalMinor)}</td></tr>`).join('');
   const statusBanner = st.status === 'draft'
     ? `<div class="banner info">Draft — not an invoice. Figures change until the month is invoiced.</div>`
     : st.status === 'void' ? `<div class="banner crit">VOID — ${esc(st.voidReason ?? '')}</div>`
@@ -754,46 +860,49 @@ ${st.efakturNumber ? `<br>Faktur pajak: ${esc(st.efakturNumber)}` : ''}</div></d
 ${statusBanner}
 <div class="parties">
   <div class="box"><div class="muted">From</div><b>${esc(s.name)}</b>
-    ${s.npwp ? `<div class="muted">NPWP ${esc(s.npwp)}${s.pkp ? ' · PKP' : ''}</div>` : ''}${s.address ? `<div class="muted">${esc(s.address)}</div>` : ''}</div>
+    ${dx.id ? (s.npwp ? `<div class="muted">NPWP ${esc(s.npwp)}${s.pkp ? ' · PKP' : ''}</div>` : '') : dx.regLabel && st.taxRegistrationNo ? `<div class="muted">${esc(dx.regLabel)} ${esc(st.taxRegistrationNo)}</div>` : ''}${s.address ? `<div class="muted">${esc(s.address)}</div>` : ''}</div>
   <div class="box"><div class="muted">Bill to</div><b>${esc(b.name)}</b>
     ${b.taxId ? `<div class="muted">${b.taxIdKind === 'TIN' ? 'NPWP' : esc(b.taxIdKind)} ${esc(b.taxId)}</div>` : ''}${b.address ? `<div class="muted">${esc(b.address)}</div>` : ''}
     ${b.contact ? `<div class="muted">Attn. ${esc(b.contact)}</div>` : ''}</div>
 </div>
 ${(st.warnings ?? []).map((w: string) => `<div class="warn">${esc(w)}</div>`).join('')}
 <h2>Charging at our stations</h2>
-<table><thead><tr><th>Site</th><th class="n">Sessions</th><th class="n">kWh</th><th class="n">Energy &amp; fees</th><th class="n">PBJT-TL</th><th class="n">DPP</th><th class="n">PPN</th><th class="n">Amount</th></tr></thead>
-<tbody>${siteRows || '<tr><td colspan="8" class="muted">No sessions.</td></tr>'}</tbody></table>
+${dx.id ? `<table><thead><tr><th>Site</th><th class="n">Sessions</th><th class="n">kWh</th><th class="n">Energy &amp; fees</th><th class="n">PBJT-TL</th><th class="n">DPP</th><th class="n">PPN</th><th class="n">Amount</th></tr></thead>
+<tbody>${siteRows || '<tr><td colspan="8" class="muted">No sessions.</td></tr>'}</tbody></table>` : `<table><thead><tr><th>Site</th><th class="n">Sessions</th><th class="n">kWh</th><th class="n">Energy &amp; fees</th><th class="n">${esc(dx.tax)}</th><th class="n">Amount (${esc(dx.cur)})</th></tr></thead>
+<tbody>${siteRows || '<tr><td colspan="6" class="muted">No sessions.</td></tr>'}</tbody></table>`}
 ${st.roaming.length ? `<h2>Charging on partner networks (re-billed at cost)</h2>
 <table><thead><tr><th>When</th><th>Operator</th><th>Card</th><th class="n">kWh</th><th class="n">Amount</th></tr></thead><tbody>${roamRows}</tbody></table>` : ''}
 ${fees.memberships.length ? `<h2>Memberships</h2>
-<table><thead><tr><th>Plan</th><th>For</th><th class="n">Fee</th><th class="n">PPN</th><th class="n">Amount</th></tr></thead><tbody>${fees.memberships.map((f: any) => `<tr><td>${esc(f.planName)}</td><td>${esc(f.subscriber)}</td><td class="n">${idr(f.feeIdr)}</td><td class="n">${idr(f.ppnIdr)}</td><td class="n"><b>${idr(f.totalIdr)}</b></td></tr>`).join('')}</tbody></table>` : ''}
+<table><thead><tr><th>Plan</th><th>For</th><th class="n">Fee</th><th class="n">${dx.id ? 'PPN' : esc(dx.tax)}</th><th class="n">Amount</th></tr></thead><tbody>${fees.memberships.map((f: any) => `<tr><td>${esc(f.planName)}</td><td>${esc(f.subscriber)}</td><td class="n">${idr(f.feeMinor)}</td><td class="n">${idr(f.taxMinor)}</td><td class="n"><b>${idr(f.totalMinor)}</b></td></tr>`).join('')}</tbody></table>` : ''}
 ${fees.reservations.length ? `<h2>Connector reservations</h2>
-<table><thead><tr><th>Held</th><th>Site</th><th>Card</th><th class="n">Fee</th><th class="n">PPN</th><th class="n">Amount</th></tr></thead><tbody>${fees.reservations.map((f: any) => `<tr><td>${esc(dt(f.periodStart))}</td><td>${esc(f.planName)}</td><td class="mono">${esc(f.subscriber)}</td><td class="n">${idr(f.feeIdr)}</td><td class="n">${idr(f.ppnIdr)}</td><td class="n"><b>${idr(f.totalIdr)}</b></td></tr>`).join('')}</tbody></table>` : ''}
+<table><thead><tr><th>Held</th><th>Site</th><th>Card</th><th class="n">Fee</th><th class="n">${dx.id ? 'PPN' : esc(dx.tax)}</th><th class="n">Amount</th></tr></thead><tbody>${fees.reservations.map((f: any) => `<tr><td>${esc(dt(f.periodStart))}</td><td>${esc(f.planName)}</td><td class="mono">${esc(f.subscriber)}</td><td class="n">${idr(f.feeMinor)}</td><td class="n">${idr(f.taxMinor)}</td><td class="n"><b>${idr(f.totalMinor)}</b></td></tr>`).join('')}</tbody></table>` : ''}
 <h2>Summary</h2>
 <table><tbody>
-<tr><td>Energy, service and admin fees</td><td class="n">${idr(t.subtotalIdr)}</td></tr>
-<tr><td>PBJT-TL (regional tax on electricity)</td><td class="n">${idr(t.pbjtIdr)}</td></tr>
-<tr><td class="muted">Price subject to PPN</td><td class="n muted">${idr(t.taxBaseIdr)}</td></tr>
-<tr><td class="muted">DPP nilai lain (${esc(dppFrac)} × price)</td><td class="n muted">${idr(t.dppIdr)}</td></tr>
-<tr><td>PPN ${ppnPct}% × DPP</td><td class="n">${idr(t.ppnIdr)}</td></tr>
-<tr><td><b>Charging at our stations</b></td><td class="n"><b>${idr(t.ownTotalIdr)}</b></td></tr>
-${fees.membershipsIdr ? `<tr><td>Memberships (incl. PPN)</td><td class="n">${idr(fees.membershipsIdr)}</td></tr>` : ''}
-${fees.reservationsIdr ? `<tr><td>Connector reservations (${fees.reservations.length}, incl. PPN)</td><td class="n">${idr(fees.reservationsIdr)}</td></tr>` : ''}
-${t.roamingSessions ? `<tr><td>Partner networks (${t.roamingSessions} session${t.roamingSessions === 1 ? '' : 's'}, as billed by the operators, incl. their taxes)</td><td class="n">${idr(t.roamingIdr)}</td></tr>` : ''}
-${creditRows(st).length ? `<tr><td><b>Invoice total</b></td><td class="n"><b>${idr(t.totalIdr)}</b></td></tr>`
-  + creditRows(st).map((c) => `<tr><td>${esc(c.label)}</td><td class="n">− ${idr(c.amountIdr)}</td></tr>`).join('')
-  + `<tr class="grand"><td>${st.status === 'paid' ? 'Paid' : 'Amount due'}</td><td class="n">${idr(st.status === 'paid' ? t.totalIdr - creditRows(st).reduce((a, c) => a + c.amountIdr, 0) : st.balanceIdr)}</td></tr>`
-  : `<tr class="grand"><td>${st.number ? 'Total due' : 'Total so far'}</td><td class="n">${idr(t.totalIdr)}</td></tr>`}
+${dx.id ? `<tr><td>Energy, service and admin fees</td><td class="n">${idr(t.subtotalMinor)}</td></tr>
+<tr><td>PBJT-TL (regional tax on electricity)</td><td class="n">${idr(t.localTaxMinor)}</td></tr>
+<tr><td class="muted">Price subject to PPN</td><td class="n muted">${idr(t.taxableMinor)}</td></tr>
+<tr><td class="muted">DPP nilai lain (${esc(dppFrac)} × price)</td><td class="n muted">${idr(t.taxBaseMinor)}</td></tr>
+<tr><td>PPN ${ppnPct}% × DPP</td><td class="n">${idr(t.taxMinor)}</td></tr>` : `<tr><td>Energy, service and admin fees (before tax)</td><td class="n">${idr(t.subtotalMinor)}</td></tr>
+${dx.registered ? `<tr><td class="muted">Price subject to ${esc(dx.tax.replace(/ \d.*$/, ''))}</td><td class="n muted">${idr(t.taxableMinor)}</td></tr>
+<tr><td>${esc(dx.tax)}</td><td class="n">${idr(t.taxMinor)}</td></tr>` : `<tr><td>${esc(dx.noTaxNote)}</td><td class="n">${idr(0)}</td></tr>`}`}
+<tr><td><b>Charging at our stations</b></td><td class="n"><b>${idr(t.ownTotalMinor)}</b></td></tr>
+${fees.membershipsMinor ? `<tr><td>Memberships (incl. ${dx.id ? 'PPN' : esc(dx.tax)})</td><td class="n">${idr(fees.membershipsMinor)}</td></tr>` : ''}
+${fees.reservationsMinor ? `<tr><td>Connector reservations (${fees.reservations.length}, incl. ${dx.id ? 'PPN' : esc(dx.tax)})</td><td class="n">${idr(fees.reservationsMinor)}</td></tr>` : ''}
+${t.roamingSessions ? `<tr><td>Partner networks (${t.roamingSessions} session${t.roamingSessions === 1 ? '' : 's'}, as billed by the operators, incl. their taxes)</td><td class="n">${idr(t.roamingMinor)}</td></tr>` : ''}
+${creditRows(st).length ? `<tr><td><b>Invoice total</b></td><td class="n"><b>${idr(t.totalMinor)}</b></td></tr>`
+  + creditRows(st).map((c) => `<tr><td>${esc(c.label)}</td><td class="n">− ${idr(c.amountMinor)}</td></tr>`).join('')
+  + `<tr class="grand"><td>${st.status === 'paid' ? 'Paid' : 'Amount due'}</td><td class="n">${idr(st.status === 'paid' ? t.totalMinor - creditRows(st).reduce((a, c) => a + c.amountMinor, 0) : st.balanceMinor)}</td></tr>`
+  : `<tr class="grand"><td>${st.number ? 'Total due' : 'Total so far'}</td><td class="n">${idr(t.totalMinor)}</td></tr>`}
 </tbody></table>
-<div class="muted" style="margin-top:6px">${t.sessions} session${t.sessions === 1 ? '' : 's'} · ${kwh(t.energyWh)} kWh at our stations${t.roundingIdr ? ` · the per-session receipts add up to ${idr(t.receiptsTotalIdr)} (PPN is calculated per invoice line here; difference ${idr(t.roundingIdr)})` : ''}</div>
+<div class="muted" style="margin-top:6px">${t.sessions} session${t.sessions === 1 ? '' : 's'} · ${kwh(t.energyWh)} kWh at our stations${t.roundingMinor ? ` · the per-session receipts add up to ${idr(t.receiptsTotalMinor)} (${dx.id ? 'PPN' : esc(dx.tax.replace(/ \d.*$/, ''))} is calculated per invoice line here; difference ${idr(t.roundingMinor)})` : ''}${dx.id ? '' : ` · all amounts in ${esc(dx.cur)}`}</div>
 ${st.paymentInstructions ? `<h2>How to pay</h2><div class="pay">${esc(st.paymentInstructions)}</div>` : ''}
 ${st.number ? `<div class="muted" style="margin-top:8px">Please quote <b>${esc(st.number)}</b> with your payment.</div>` : ''}
 <div class="note">Sessions count in the month their charge record was issued (${esc(config.billing.timeZone)}). Each session also has its own tax receipt.
-${s.pkp ? 'The faktur pajak for the PPN is issued through e-Faktur (Coretax) under this invoice number.' : 'The seller is not a PKP: no PPN is charged.'}
-${t.roamingSessions ? 'Partner-network charging is re-billed at the amount the partner operator charged; it is not part of our faktur pajak.' : ''}</div>
+${dx.id ? (s.pkp ? 'The faktur pajak for the PPN is issued through e-Faktur (Coretax) under this invoice number.' : 'The seller is not a PKP: no PPN is charged.') : dx.registered ? `${esc(dx.tax)} is calculated on each line's total before tax.` : esc(dx.noTaxNote)}
+${t.roamingSessions ? `Partner-network charging is re-billed at the amount the partner operator charged; it is not part of our ${dx.id ? 'faktur pajak' : 'tax invoice'}.` : ''}</div>
 ${st.sessions.length || st.roaming.length ? `<div class="appendix"><h2>Appendix — sessions by card</h2>
 <table><thead><tr><th>Card</th><th>Holder</th><th class="n">Sessions</th><th class="n">kWh</th><th class="n">At our stations</th><th class="n">Partner networks</th></tr></thead><tbody>
-${st.cards.map((c: any) => `<tr><td class="mono">${esc(c.uid)}</td><td>${esc(c.holder ?? '')}</td><td class="n">${c.sessions}</td><td class="n">${kwh(c.energyWh)}</td><td class="n">${idr(c.totalIdr)}</td><td class="n">${c.roamingIdr ? idr(c.roamingIdr) : '—'}</td></tr>`).join('')}
+${st.cards.map((c: any) => `<tr><td class="mono">${esc(c.uid)}</td><td>${esc(c.holder ?? '')}</td><td class="n">${c.sessions}</td><td class="n">${kwh(c.energyWh)}</td><td class="n">${idr(c.totalMinor)}</td><td class="n">${c.roamingMinor ? idr(c.roamingMinor) : '—'}</td></tr>`).join('')}
 </tbody></table>
 ${st.sessions.length ? `<h2>Sessions at our stations (receipt amounts)</h2><table><thead><tr><th>Started</th><th>Site / charger</th><th>Card</th><th class="n">kWh</th><th class="n">Receipt</th></tr></thead><tbody>${sessRows}</tbody></table>` : ''}
 </div>` : ''}
@@ -807,17 +916,22 @@ const csvCell = (v: unknown) => {
 };
 
 export function invoiceCsv(st: any): string {
-  const head = ['Invoice', 'Period', 'Fleet', 'Kind', 'Started', 'Ended', 'Site / operator', 'Charger', 'Card', 'Holder', 'Energy kWh',
-    'Energy & fees', 'PBJT-TL', 'PPN (receipt)', 'Receipt / amount'];
+  const dx = docTax(st);
+  // Amounts in minor units of the statement's currency (rupiah, sen, cents): named in the header outside Indonesia.
+  const head = dx.id
+    ? ['Invoice', 'Period', 'Fleet', 'Kind', 'Started', 'Ended', 'Site / operator', 'Charger', 'Card', 'Holder', 'Energy kWh',
+      'Energy & fees', 'PBJT-TL', 'PPN (receipt)', 'Receipt / amount']
+    : ['Invoice', 'Period', 'Fleet', 'Kind', 'Started', 'Ended', 'Site / operator', 'Charger', 'Card', 'Holder', 'Energy kWh',
+      `Energy & fees (${dx.cur} minor)`, 'Local tax', `${dx.tax.replace(/ \d.*$/, '')} (receipt)`, `Receipt / amount (${dx.cur} minor)`];
   const rows = [
     ...st.sessions.map((x: any) => [st.number ?? 'DRAFT', st.period, st.buyer.fleetName, 'session', x.startedAt, x.endedAt ?? '', x.siteName, x.ocppIdentity,
-      x.cardUid, x.holder ?? '', (x.energyWh / 1000).toFixed(3), x.subtotalIdr, x.pbjtIdr, x.ppnIdr, x.totalIdr]),
+      x.cardUid, x.holder ?? '', (x.energyWh / 1000).toFixed(3), x.subtotalMinor, x.localTaxMinor, x.taxMinor, x.totalMinor]),
     ...st.roaming.map((x: any) => [st.number ?? 'DRAFT', st.period, st.buyer.fleetName, 'partner network', x.startedAt, x.endedAt, x.operator + (x.location ? ` — ${x.location}` : ''), '',
-      x.cardUid, '', x.energyKwh.toFixed(3), '', '', '', x.amountIdr]),
+      x.cardUid, '', x.energyKwh.toFixed(3), '', '', '', x.amountMinor]),
     ...(st.fees ?? []).map((x: any) => x.kind === 'reservation'
-      ? [st.number ?? 'DRAFT', st.period, st.buyer.fleetName, 'reservation', x.periodStart, x.periodEnd, x.planName, '', x.subscriber, '', '', x.feeIdr, '', x.ppnIdr, x.totalIdr]
+      ? [st.number ?? 'DRAFT', st.period, st.buyer.fleetName, 'reservation', x.periodStart, x.periodEnd, x.planName, '', x.subscriber, '', '', x.feeMinor, '', x.taxMinor, x.totalMinor]
       : [st.number ?? 'DRAFT', st.period, st.buyer.fleetName, 'membership', x.periodStart, x.periodEnd, x.planName, '',
-      x.subscriber, '', '', x.feeIdr, '', x.ppnIdr, x.totalIdr]),
+      x.subscriber, '', '', x.feeMinor, '', x.taxMinor, x.totalMinor]),
   ];
   return [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
@@ -835,8 +949,9 @@ export async function sendInvoice(orgId: string, id: string, overrideTo?: string
   let secret: string | null = null;
   try { secret = ch.secret ? unseal(ch.secret) : null; } catch { secret = null; }
   const html = invoiceHtml(st);
+  const idr = docTax(st).m;
   const file = st.number.replace(/[^\w.-]+/g, '_');
-  const text = `${st.seller.name}\nInvoice ${st.number} — ${st.periodLabel}\nFleet: ${st.buyer.fleetName}\n${st.status === 'issued' ? `Amount due: ${idr(st.balanceIdr)} by ${dmy(st.dueDate)}` : `Invoice total: ${idr(st.totals.totalIdr)} (${st.status})`}${st.priorCreditIdr ? ` (after ${idr(st.priorCreditIdr)} of earlier credit notes)` : ''}\n\n` +
+  const text = `${st.seller.name}\nInvoice ${st.number} — ${st.periodLabel}\nFleet: ${st.buyer.fleetName}\n${st.status === 'issued' ? `Amount due: ${idr(st.balanceMinor)} by ${dmy(st.dueDate)}` : `Invoice total: ${idr(st.totals.totalMinor)} (${st.status})`}${st.priorCreditMinor ? ` (after ${idr(st.priorCreditMinor)} of earlier credit notes)` : ''}\n\n` +
     `${st.totals.sessions} sessions, ${kwh(st.totals.energyWh)} kWh${st.totals.roamingSessions ? `, plus ${st.totals.roamingSessions} on partner networks` : ''}.\n` +
     (st.paymentInstructions ? `\nHow to pay:\n${st.paymentInstructions}\n` : '') + `\nThe invoice and the session list are attached.`;
   const res = await sendEmail(ch.config, secret, to, {

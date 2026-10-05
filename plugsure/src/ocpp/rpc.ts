@@ -26,7 +26,25 @@ import type { OcppVersion } from '../domain/canonical.js';
 
 export const MessageType = { CALL: 2, CALLRESULT: 3, CALLERROR: 4 } as const;
 
-/** OCPP 1.6 §4.2.3. */
+/**
+ * OCPP 2.1 only (OCPP-J 2.1 §4.1): two extra message types. Neither is ever
+ * answered — CALLRESULTERROR tells us the charger could not process one of OUR
+ * CALLRESULTs, and SEND is an unconfirmed (fire-and-forget) message.
+ */
+export const MessageType21 = { CALLRESULTERROR: 5, SEND: 6 } as const;
+
+/**
+ * Every RPC error code we may put on, or accept from, the wire.
+ *
+ * OCPP 1.6 §4.2.3 and OCPP 2.0.1/2.1 Part 4 §4.3 use DIFFERENT lists:
+ *   - 1.6 spells the payload-syntax error `FormationViolation`; 2.0.1 renamed
+ *     it `FormatViolation` (the 1.6 spelling is not a valid 2.0.1 code).
+ *   - 2.0.1 adds `RpcFrameworkError` (the frame is not a valid RPC message —
+ *     e.g. the MessageId cannot be read) and `MessageTypeNotSupported`.
+ * Internally the codebase keeps speaking the 1.6 names (validate.ts, handlers);
+ * `wireErrorCode()` translates at the one place a CALLERROR leaves, so a 2.x
+ * charger never sees a 1.6-only code and a 1.6 charger never sees a 2.x-only one.
+ */
 export type OcppErrorCode =
   | 'NotImplemented'
   | 'NotSupported'
@@ -37,9 +55,14 @@ export type OcppErrorCode =
   | 'PropertyConstraintViolation'
   | 'OccurrenceConstraintViolation'
   | 'TypeConstraintViolation'
-  | 'GenericError';
+  | 'GenericError'
+  // OCPP 2.0.1 / 2.1 only
+  | 'FormatViolation'
+  | 'RpcFrameworkError'
+  | 'MessageTypeNotSupported';
 
-const VALID_ERROR_CODES: ReadonlySet<string> = new Set<OcppErrorCode>([
+/** OCPP 1.6 §4.2.3. Unchanged: a 1.6 charger's codes are judged exactly as before. */
+const VALID_ERROR_CODES_16: ReadonlySet<string> = new Set<OcppErrorCode>([
   'NotImplemented',
   'NotSupported',
   'InternalError',
@@ -51,6 +74,65 @@ const VALID_ERROR_CODES: ReadonlySet<string> = new Set<OcppErrorCode>([
   'TypeConstraintViolation',
   'GenericError',
 ]);
+
+/** OCPP 2.0.1 Part 4 §4.3 (2.1 keeps the same list). */
+const VALID_ERROR_CODES_2X: ReadonlySet<string> = new Set<OcppErrorCode>([
+  'FormatViolation',
+  'GenericError',
+  'InternalError',
+  'MessageTypeNotSupported',
+  'NotImplemented',
+  'NotSupported',
+  'OccurrenceConstraintViolation',
+  'PropertyConstraintViolation',
+  'ProtocolError',
+  'RpcFrameworkError',
+  'SecurityError',
+  'TypeConstraintViolation',
+]);
+
+function is2x(version: OcppVersion): boolean {
+  return version !== 'ocpp1.6';
+}
+
+/**
+ * The code to put on the wire for this connection's OCPP version.
+ *
+ * 2.x: the 1.6 spelling `FormationViolation` becomes `FormatViolation`.
+ * 1.6: a 2.x-only code (only ever produced if a handler throws one) falls back
+ * to its nearest 1.6 equivalent. No 1.6 code path produced these before, so
+ * every code a 1.6 charger used to receive is still sent unchanged.
+ */
+export function wireErrorCode(code: string, version: OcppVersion): string {
+  if (is2x(version)) return code === 'FormationViolation' ? 'FormatViolation' : code;
+  switch (code) {
+    case 'FormatViolation':
+      return 'FormationViolation';
+    case 'RpcFrameworkError':
+    case 'MessageTypeNotSupported':
+      return 'ProtocolError';
+    default:
+      return code;
+  }
+}
+
+/**
+ * The error code of a CALLERROR a charger sent us, as the code the rest of the
+ * gateway sees. Anything outside the version's list becomes GenericError (and
+ * is logged). A 2.x charger using the 1.6 spelling `FormationViolation` is a
+ * harmless, common slip; it is read as `FormatViolation` rather than lost.
+ */
+export function inboundErrorCode(raw: unknown, version: OcppVersion): { code: OcppErrorCode; standard: boolean } {
+  if (typeof raw !== 'string') return { code: 'GenericError', standard: false };
+  if (!is2x(version)) {
+    return VALID_ERROR_CODES_16.has(raw)
+      ? { code: raw as OcppErrorCode, standard: true }
+      : { code: 'GenericError', standard: raw === 'GenericError' };
+  }
+  if (VALID_ERROR_CODES_2X.has(raw)) return { code: raw as OcppErrorCode, standard: true };
+  if (raw === 'FormationViolation') return { code: 'FormatViolation', standard: false };
+  return { code: 'GenericError', standard: false };
+}
 
 /** Spec cap on MessageId. A charger sending more is malformed, not merely odd. */
 const MAX_UNIQUE_ID = 36;
@@ -325,7 +407,29 @@ export class OcppRpcConnection {
     }
   }
 
+  private get version(): OcppVersion {
+    return this.opts.version ?? 'ocpp1.6';
+  }
+
+  /**
+   * The code for a frame that is not a valid RPC message at all (not JSON, not
+   * an array, no readable MessageId / Action). 1.6 has no dedicated code and
+   * this layer has always answered `fallback16` there — unchanged. 2.0.1 and
+   * 2.1 define `RpcFrameworkError` for exactly this case ("Content of the call
+   * is not a valid RPC Request, for example: MessageId could not be read").
+   */
+  private frameErrorCode(fallback16: OcppErrorCode): OcppErrorCode {
+    return is2x(this.version) ? 'RpcFrameworkError' : fallback16;
+  }
+
   private send(frame: unknown[], action?: string, uniqueId?: string) {
+    // Every CALLERROR leaves through here, whichever path built it (frame checks,
+    // schema validation, handler errors, the replay cache), so the version
+    // translation of its code cannot be bypassed.
+    if (frame[0] === MessageType.CALLERROR && typeof frame[2] === 'string') {
+      const code = wireErrorCode(frame[2], this.version);
+      if (code !== frame[2]) frame = [frame[0], frame[1], code, ...frame.slice(3)];
+    }
     const text = JSON.stringify(frame);
     this.ws.send(text);
     this.opts.frameSink?.({
@@ -362,12 +466,12 @@ export class OcppRpcConnection {
     } catch {
       // Spec: when the MessageId cannot be recovered, answer with "-1".
       logger.warn({ cp: this.id, sample: text.slice(0, 120) }, 'unparseable frame');
-      this.sendCallError(UNKNOWN_ID, 'FormationViolation', 'Message is not valid JSON');
+      this.sendCallError(UNKNOWN_ID, this.frameErrorCode('FormationViolation'), 'Message is not valid JSON');
       return;
     }
 
     if (!Array.isArray(frame)) {
-      this.sendCallError(UNKNOWN_ID, 'FormationViolation', 'Message must be a JSON array');
+      this.sendCallError(UNKNOWN_ID, this.frameErrorCode('FormationViolation'), 'Message must be a JSON array');
       return;
     }
 
@@ -375,15 +479,15 @@ export class OcppRpcConnection {
     const uniqueId = typeof rawId === 'string' ? rawId : undefined;
 
     if (frame.length < 2) {
-      this.sendCallError(uniqueId ?? UNKNOWN_ID, 'ProtocolError', 'Message array is too short');
+      this.sendCallError(uniqueId ?? UNKNOWN_ID, this.frameErrorCode('ProtocolError'), 'Message array is too short');
       return;
     }
     if (uniqueId === undefined) {
-      this.sendCallError(UNKNOWN_ID, 'ProtocolError', 'MessageId must be a string');
+      this.sendCallError(UNKNOWN_ID, this.frameErrorCode('ProtocolError'), 'MessageId must be a string');
       return;
     }
     if (uniqueId.length === 0 || uniqueId.length > MAX_UNIQUE_ID) {
-      this.sendCallError(UNKNOWN_ID, 'ProtocolError', `MessageId must be 1-${MAX_UNIQUE_ID} characters`, {
+      this.sendCallError(UNKNOWN_ID, this.frameErrorCode('ProtocolError'), `MessageId must be 1-${MAX_UNIQUE_ID} characters`, {
         length: uniqueId.length,
         limit: MAX_UNIQUE_ID,
       });
@@ -407,18 +511,55 @@ export class OcppRpcConnection {
       case MessageType.CALLERROR:
         this.handleReply(uniqueId, messageType, frame);
         return;
-      default:
-        this.sendCallError(uniqueId, 'ProtocolError', 'Unsupported MessageTypeId', {
-          messageTypeId: typeof messageType === 'number' ? messageType : String(messageType),
-        });
-        return;
+      case MessageType21.CALLRESULTERROR:
+      case MessageType21.SEND:
+        if (this.version === 'ocpp2.1') {
+          this.handle21Unanswered(uniqueId, messageType, frame);
+          return;
+        }
+        break;
     }
+    // 2.x has a dedicated code for this; 1.6 has always answered ProtocolError.
+    this.sendCallError(uniqueId, is2x(this.version) ? 'MessageTypeNotSupported' : 'ProtocolError', 'Unsupported MessageTypeId', {
+      messageTypeId: typeof messageType === 'number' ? messageType : String(messageType),
+    });
+  }
+
+  /**
+   * OCPP 2.1 CALLRESULTERROR (5) and SEND (6). The spec forbids answering either
+   * — not even with a CALLERROR — so both are logged and dropped here.
+   *
+   *  - CALLRESULTERROR: the charger could not process a CALLRESULT we sent. The
+   *    call it refers to has already been answered, so there is nothing to retry;
+   *    the record is the log line (and the frame log, via frameSink above).
+   *  - SEND: an unconfirmed message (e.g. NotifyPeriodicEventStream). No handler
+   *    here consumes one yet; dropping it is safe because the sender expects no
+   *    answer and keeps no state on our behalf.
+   *
+   * Answering these with ProtocolError (as before) made a 2.1 charger see an
+   * error for a frame it is never meant to receive a reply to.
+   */
+  private handle21Unanswered(uniqueId: string, messageType: number, frame: unknown[]) {
+    if (messageType === MessageType21.CALLRESULTERROR) {
+      logger.warn(
+        {
+          cp: this.id,
+          uniqueId,
+          code: typeof frame[2] === 'string' ? frame[2].slice(0, 64) : undefined,
+          description: typeof frame[3] === 'string' ? frame[3].slice(0, 255) : undefined,
+        },
+        'charger could not process one of our CALLRESULTs (OCPP 2.1 CALLRESULTERROR); nothing to answer',
+      );
+      return;
+    }
+    const action = typeof frame[2] === 'string' ? frame[2].replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64) : undefined;
+    logger.info({ cp: this.id, uniqueId, action }, 'OCPP 2.1 SEND (unconfirmed message) received; not handled, nothing to answer');
   }
 
   private async handleCall(uniqueId: string, frame: unknown[]) {
     const action = frame[2];
     if (typeof action !== 'string' || action.length === 0) {
-      this.sendCallError(uniqueId, 'ProtocolError', 'Action must be a non-empty string');
+      this.sendCallError(uniqueId, this.frameErrorCode('ProtocolError'), 'Action must be a non-empty string');
       return;
     }
 
@@ -569,13 +710,13 @@ export class OcppRpcConnection {
         p.resolve(frame[2]);
       }
     } else {
+      // Judged against the list for THIS connection's version: a 2.0.1 charger's
+      // FormatViolation / RpcFrameworkError / MessageTypeNotSupported used to be
+      // flattened to GenericError, losing the one diagnostic it gave us.
       const rawCode = frame[2];
-      const code: OcppErrorCode =
-        typeof rawCode === 'string' && VALID_ERROR_CODES.has(rawCode)
-          ? (rawCode as OcppErrorCode)
-          : 'GenericError';
-      if (code === 'GenericError' && rawCode !== 'GenericError') {
-        logger.warn({ cp: this.id, rawCode: String(rawCode) }, 'charger sent a non-standard CALLERROR code');
+      const { code, standard } = inboundErrorCode(rawCode, this.version);
+      if (!standard) {
+        logger.warn({ cp: this.id, rawCode: String(rawCode).slice(0, 64), readAs: code }, 'charger sent a non-standard CALLERROR code');
       }
       const description = typeof frame[3] === 'string' ? frame[3] : '';
       const details = frame[4] && typeof frame[4] === 'object' ? (frame[4] as Record<string, unknown>) : {};

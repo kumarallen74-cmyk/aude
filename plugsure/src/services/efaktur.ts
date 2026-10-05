@@ -34,7 +34,7 @@ export interface EfakturInvoice {
   date: string;
   buyer: { taxId: string | null; kind: 'TIN' | 'NIK' | 'Passport' | 'Other'; nitku: string | null; name: string; address: string | null; email: string | null };
   /** A line may carry its own item settings (a membership fee is not electricity). */
-  lines: Array<{ name: string; taxBaseIdr: number; dppIdr: number; ppnIdr: number; item?: EfakturSettings }>;
+  lines: Array<{ name: string; taxableMinor: number; taxBaseMinor: number; taxMinor: number; item?: EfakturSettings }>;
 }
 
 /**
@@ -115,13 +115,13 @@ export function efakturXml(seller: { npwp: string; nitku: string | null }, invoi
           <Code>${x(it.itemCode)}</Code>
           <Name>${x(l.name)}</Name>
           <Unit>${x(it.unitCode)}</Unit>
-          <Price>${n(l.taxBaseIdr)}</Price>
+          <Price>${n(l.taxableMinor)}</Price>
           <Qty>1</Qty>
           <TotalDiscount>0</TotalDiscount>
-          <TaxBase>${n(l.taxBaseIdr)}</TaxBase>
-          <OtherTaxBase>${n(l.dppIdr)}</OtherTaxBase>
+          <TaxBase>${n(l.taxableMinor)}</TaxBase>
+          <OtherTaxBase>${n(l.taxBaseMinor)}</OtherTaxBase>
           <VATRate>${ppnRatePct}</VATRate>
-          <VAT>${n(l.ppnIdr)}</VAT>
+          <VAT>${n(l.taxMinor)}</VAT>
           <STLGRate>0</STLGRate>
           <STLG>0</STLG>
         </GoodService>`; }).join('');

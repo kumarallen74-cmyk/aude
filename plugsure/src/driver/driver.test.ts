@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { one, pool, query } from '../db/pool.js';
 import { databaseTestLock } from '../db/test-lock.js';
 import { hashPassword } from '../services/users.js';
-import { fleetLogin, issueDevice } from './identity.js';
+import { fleetLogin, issueDevice, FLEET_LOGIN_FAILED } from './identity.js';
 import { listStations, connectorDetail as connectorDetailAny, resolveCode } from './stations.js';
 
 /** Without a white-label brand there is no "other operator" result. */
@@ -34,6 +34,8 @@ let connectorId = '';
 let deviceId = '';
 
 async function cleanup(): Promise<void> {
+  // Fleet sign-in budgets are keyed by the typed organisation and card, so they outlive the rows.
+  await query(`DELETE FROM driver_auth_limit WHERE key LIKE $1`, [`pin-card:${SLUG}:%`]);
   const org = await one<{ id: string }>(`SELECT id FROM organisation WHERE slug = $1`, [SLUG]);
   if (!org) return;
   await query(`DELETE FROM driver_device WHERE fleet_token_id IN (SELECT id FROM token WHERE org_id = $1)`, [org.id]);
@@ -53,7 +55,7 @@ if (DB_OK) {
       [SLUG],
     ))!.id;
     siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Driver Align Hub', 1000) RETURNING id`,
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Driver Align Hub', 1000) RETURNING id`,
       [orgId],
     ))!.id;
     const cp = await one<{ id: string }>(
@@ -163,7 +165,10 @@ dbDescribe('fleet sign-in with a PIN set in the v1.3 RFID centre', () => {
     for (let i = 0; i < 5; i++) assert.equal((await fleetLogin(deviceId, SLUG, 'LOCK-01', '000000')).ok, false);
     const r = await fleetLogin(deviceId, SLUG, 'LOCK-01', '246810');
     assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /Terlalu banyak/);
+    // The same answer as a wrong PIN (a distinct one would mark the card as real).
+    if (!r.ok) assert.equal(r.error, FLEET_LOGIN_FAILED);
+    const t = await one<{ locked: boolean }>(`SELECT (pin_locked_until > now()) AS locked FROM token WHERE org_id = $1 AND uid = 'LOCK-01'`, [orgId]);
+    assert.equal(t!.locked, true);
   });
 
   test('an expired card is refused at sign-in', async () => {
@@ -173,7 +178,8 @@ dbDescribe('fleet sign-in with a PIN set in the v1.3 RFID centre', () => {
     );
     const r = await fleetLogin(deviceId, SLUG, 'EXP-01', '135790');
     assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /kedaluwarsa/);
+    // Refused with the one fleet sign-in answer; the reason ("card expired") is in the log.
+    if (!r.ok) assert.equal(r.error, FLEET_LOGIN_FAILED);
   });
 
   test('a card over its RFID-centre energy limit is refused before the charger is asked', async () => {

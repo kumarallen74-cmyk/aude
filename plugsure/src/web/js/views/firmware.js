@@ -1,6 +1,6 @@
 import {
   $, $$, on, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, html, field,
-  options, fieldErrors, toast, callout, kpi, sites as loadSites, download, copy, debounce, onLive, onlineTag,
+  options, fieldErrors, toast, callout, kpi, sites as loadSites, download, copy, debounce, onLive, onlineTag, orgTimezone,
 } from '../core.js';
 
 /**
@@ -415,7 +415,7 @@ export async function openCampaignWizard({ imageId = null } = {}) {
             const bad = here.filter((c) => !compatible(i, c.model)).length;
             return `<label class="check" style="padding:7px 10px;border-bottom:1px solid var(--line);align-items:center">
               <input type="checkbox" data-site="${esc(s.id)}"${selSite.has(s.id) ? ' checked' : ''}${here.length ? '' : ' disabled'}>
-              <span class="grow"><b>${esc(s.name)}</b><span class="cell-sub" style="display:block">${esc(plural(here.length, 'charger'))} · ${esc(here.filter((c) => c.online).length)} online · ${esc(s.timezone ?? 'Asia/Jakarta')}</span></span>
+              <span class="grow"><b>${esc(s.name)}</b><span class="cell-sub" style="display:block">${esc(plural(here.length, 'charger'))} · ${esc(here.filter((c) => c.online).length)} online · ${esc(s.timezone ?? orgTimezone() ?? '—')}</span></span>
               ${bad ? tag('t-crit', `${bad} incompatible`) : here.length ? tag('t-ok', 'all compatible') : tag('t-mute', 'no chargers')}</label>`;
           }).join('')
           : '<div class="empty-state small">No sites yet.</div>';

@@ -36,7 +36,7 @@ export interface PlugSureEvents {
   'session.started': OrgScoped & { sessionId: string; ocppIdentity: string; connectorId: number };
   'session.updated': OrgScoped & { sessionId: string; energyWh: number; powerW?: number };
   'session.ended': OrgScoped & { sessionId: string; energyWh: number; durationS: number; stopReason?: string };
-  'cdr.created': OrgScoped & { cdrId: string; sessionId: string; totalIdr: number };
+  'cdr.created': OrgScoped & { cdrId: string; sessionId: string; totalMinor: number; currency: string };
   /** A prepaid session has consumed its purchased energy and must be stopped. */
   'prepaid.exhausted': OrgScoped & {
     sessionId: string;
@@ -55,14 +55,14 @@ export interface PlugSureEvents {
     targetId?: string;
   };
   /** Money is owed back to a driver (unused prepaid balance, or paid but never started). */
-  'refund.due': OrgScoped & { paymentIntentId: string; amountIdr: number; reason: string };
-  'refund.completed': OrgScoped & { paymentIntentId: string; amountIdr: number; method: 'provider' | 'manual'; reference: string };
+  'refund.due': OrgScoped & { paymentIntentId: string; amountMinor: number; currency: string; reason: string };
+  'refund.completed': OrgScoped & { paymentIntentId: string; amountMinor: number; currency: string; method: 'provider' | 'manual'; reference: string };
   /** An unpaid session (expired card hold, failed post-pay charge) was paid by the driver in the app. */
   'payment.unpaid_settled': OrgScoped & { paymentIntentId: string };
   /** A card hold was captured for what the session cost; the rest was released. */
-  'payment.hold_captured': OrgScoped & { paymentIntentId: string; capturedIdr: number; releasedIdr: number };
+  'payment.hold_captured': OrgScoped & { paymentIntentId: string; capturedMinor: number; releasedMinor: number; currency: string };
   /** A card hold was released entirely (never used, or nothing delivered). */
-  'payment.hold_released': OrgScoped & { paymentIntentId: string; releasedIdr: number };
+  'payment.hold_released': OrgScoped & { paymentIntentId: string; releasedMinor: number; currency: string };
   'firmware.status': OrgScoped & { ocppIdentity: string; status: string; jobId?: string | null };
   'diagnostics.status': OrgScoped & { ocppIdentity: string; status: string; requestId?: string | null };
   /**

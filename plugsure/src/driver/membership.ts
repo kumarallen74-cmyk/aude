@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { defaultTimezone } from '../domain/timezone.js';
 import { appNameFor } from '../services/brand.js';
 import { one, many, query, tx } from '../db/pool.js';
 import { config, isRelaxedEnv } from '../config.js';
@@ -6,7 +7,10 @@ import { logger } from '../logger.js';
 import { bus } from '../services/events.js';
 import { paymentsFor, PaymentsUnavailable, logPaymentCreated, startPayment, MethodUnavailable, type PreparedPayment } from '../services/payments/registry.js';
 import { CHANNEL_LABEL } from '../services/payments/provider.js';
-import { feeTax } from '../services/benefits.js';
+import { feeTaxerFor, type FeeTaxer } from '../services/benefits.js';
+import { currencyOr, moneyText, type CurrencyCode } from '../domain/money.js';
+import { countryOfCurrency } from '../domain/country.js';
+import { LOCALE_TAG } from '../domain/locale.js';
 import { qrDataUri, qrPngDataUri, paymentSetupFor, paymentView, type PayOptions } from './charge.js';
 import { notifyDevices } from './notify.js';
 import type { DriverPrincipal } from './identity.js';
@@ -39,13 +43,13 @@ const RENEW_BACKOFF_MS = [60, 360, 720].map((m) => m * 60_000);
  * The value, before tax, of the pass time left at `at`: each paid charge's fee over
  * the part of its own window still to come. Stacked renewals each count.
  */
-export function unusedValue(charges: Array<{ feeIdr: number; periodStart: Date; periodEnd: Date }>, at: Date): number {
+export function unusedValue(charges: Array<{ feeMinor: number; periodStart: Date; periodEnd: Date }>, at: Date): number {
   let v = 0;
   for (const c of charges) {
     const len = c.periodEnd.getTime() - c.periodStart.getTime();
     if (len <= 0 || c.periodEnd <= at) continue;
     const left = c.periodEnd.getTime() - Math.max(at.getTime(), c.periodStart.getTime());
-    v += (c.feeIdr * left) / len;
+    v += (c.feeMinor * left) / len;
   }
   return Math.floor(v);
 }
@@ -55,19 +59,19 @@ export function unusedValue(charges: Array<{ feeIdr: number; periodStart: Date; 
  * (for 30 days); a cheaper or equal one costs nothing and its window is lengthened
  * by what the credit has left over, at the new plan's daily price.
  */
-export function switchTerms(creditIdr: number, newFeeIdr: number): { payFeeIdr: number; creditUsedIdr: number; periodMs: number } {
-  if (creditIdr <= 0) return { payFeeIdr: newFeeIdr, creditUsedIdr: 0, periodMs: PASS_MS };
-  if (newFeeIdr <= 0) return { payFeeIdr: 0, creditUsedIdr: 0, periodMs: PASS_MS };
-  if (newFeeIdr > creditIdr) return { payFeeIdr: newFeeIdr - creditIdr, creditUsedIdr: creditIdr, periodMs: PASS_MS };
-  const extra = Math.floor(((creditIdr - newFeeIdr) / newFeeIdr) * PASS_MS);
-  return { payFeeIdr: 0, creditUsedIdr: creditIdr, periodMs: PASS_MS + extra };
+export function switchTerms(creditMinor: number, newFeeMinor: number): { payFeeMinor: number; creditUsedMinor: number; periodMs: number } {
+  if (creditMinor <= 0) return { payFeeMinor: newFeeMinor, creditUsedMinor: 0, periodMs: PASS_MS };
+  if (newFeeMinor <= 0) return { payFeeMinor: 0, creditUsedMinor: 0, periodMs: PASS_MS };
+  if (newFeeMinor > creditMinor) return { payFeeMinor: newFeeMinor - creditMinor, creditUsedMinor: creditMinor, periodMs: PASS_MS };
+  const extra = Math.floor(((creditMinor - newFeeMinor) / newFeeMinor) * PASS_MS);
+  return { payFeeMinor: 0, creditUsedMinor: creditMinor, periodMs: PASS_MS + extra };
 }
 
 async function paidCharges(subscriptionId: string) {
   return (await many<any>(
-    `SELECT fee_idr, period_start, period_end FROM subscription_charge WHERE subscription_id = $1 AND state = 'paid' AND via <> 'invoice'`,
+    `SELECT fee_minor, period_start, period_end FROM subscription_charge WHERE subscription_id = $1 AND state = 'paid' AND via <> 'invoice'`,
     [subscriptionId],
-  )).map((c) => ({ feeIdr: Number(c.fee_idr), periodStart: new Date(c.period_start), periodEnd: new Date(c.period_end) }));
+  )).map((c) => ({ feeMinor: Number(c.fee_minor), periodStart: new Date(c.period_start), periodEnd: new Date(c.period_end) }));
 }
 
 /** The driver's live pass at this operator on another plan, with days left, and what it is worth now. */
@@ -84,19 +88,19 @@ const methodLabel = (m: { kind: string; channel: string | null; brand: string | 
 
 export async function membershipOverview(p: DriverPrincipal) {
   const plans = await many<any>(
-    `SELECT pl.id, pl.name, pl.description, pl.monthly_fee_idr, pl.energy_discount_bps, pl.member_rate_idr::float8 AS member_rate_idr,
-            pl.included_kwh::float8 AS included_kwh, pl.waive_session_fees, pl.current_type, o.name AS operator, o.pkp, o.id AS org_id
+    `SELECT pl.id, pl.name, pl.description, pl.monthly_fee_minor, pl.energy_discount_bps, pl.member_rate::float8 AS member_rate,
+            pl.included_kwh::float8 AS included_kwh, pl.waive_session_fees, pl.current_type, o.name AS operator, o.pkp, o.id AS org_id, pl.currency
        FROM subscription_plan pl JOIN organisation o ON o.id = pl.org_id
       WHERE pl.active AND pl.offered_in_app AND o.sandbox_of_org_id IS NULL AND o.archived_at IS NULL
-      ORDER BY o.name, pl.monthly_fee_idr`,
+      ORDER BY o.name, pl.currency, pl.monthly_fee_minor`,
   );
   const mine = p.appDriverId
     ? await many<any>(
         `SELECT s.id, s.org_id, s.status, s.current_period_start, s.current_period_end, s.auto_renew, s.renew_error, s.renew_next_at,
-                pl.id AS plan_id, pl.name, pl.included_kwh::float8 AS included_kwh, o.name AS operator,
+                pl.id AS plan_id, pl.name, pl.included_kwh::float8 AS included_kwh, o.name AS operator, pl.currency,
                 m.id AS method_id, m.kind AS method_kind, m.channel AS method_channel, m.brand AS method_brand, m.last4 AS method_last4, m.account_label AS method_account,
                 COALESCE((SELECT used_kwh::float8 FROM subscription_usage u WHERE u.subscription_id = s.id AND u.period_start = s.current_period_start), 0) AS used_kwh,
-                (SELECT json_build_object('chargeId', c.id, 'checkoutUrl', c.checkout_url, 'channel', c.channel, 'totalIdr', c.total_idr)
+                (SELECT json_build_object('chargeId', c.id, 'checkoutUrl', c.checkout_url, 'channel', c.channel, 'totalMinor', c.total_minor)
                    FROM subscription_charge c WHERE c.subscription_id = s.id AND c.state = 'pending' AND c.auto_renewal ORDER BY c.created_at DESC LIMIT 1) AS pending_renewal
            FROM subscription s JOIN subscription_plan pl ON pl.id = s.plan_id JOIN organisation o ON o.id = s.org_id
            LEFT JOIN driver_card m ON m.id = s.renew_method_id AND m.removed_at IS NULL
@@ -106,39 +110,50 @@ export async function membershipOverview(p: DriverPrincipal) {
       )
     : [];
   const now = new Date();
+  // Payment methods and fee tax per operator AND currency: a ringgit plan is paid through the operator's Malaysian acquirer.
   const methods = new Map<string, Awaited<ReturnType<typeof paymentSetupFor>>>();
-  for (const org of new Set(plans.map((x) => x.org_id as string))) methods.set(org, await paymentSetupFor(org, p));
-  // The value a switch would credit, per operator where the driver has a pass.
-  const credits = new Map<string, { planId: string; creditIdr: number }>();
+  const taxers = new Map<string, FeeTaxer>();
+  for (const x of plans) {
+    const k = `${x.org_id}:${x.currency}`;
+    if (methods.has(k)) continue;
+    const cur = currencyOr(x.currency);
+    methods.set(k, await paymentSetupFor(x.org_id, p, countryOfCurrency(cur)!.code));
+    taxers.set(k, await feeTaxerFor(x.org_id, cur, x.pkp));
+  }
+  // The value a switch would credit, per operator where the driver has a pass (only to a plan in the same currency).
+  const credits = new Map<string, { planId: string; creditMinor: number; currency: string }>();
   for (const m of mine) {
     if (m.status === 'active' && m.current_period_end && new Date(m.current_period_end) > now) {
-      credits.set(m.org_id, { planId: m.plan_id, creditIdr: unusedValue(await paidCharges(m.id), now) });
+      credits.set(m.org_id, { planId: m.plan_id, creditMinor: unusedValue(await paidCharges(m.id), now), currency: m.currency });
     }
   }
   return {
     signedIn: !!p.appDriverId,
     plans: plans.map((x) => {
       const cr = credits.get(x.org_id);
-      const sw = cr && cr.planId !== x.id ? switchTerms(cr.creditIdr, x.monthly_fee_idr) : null;
+      const sw = cr && cr.planId !== x.id && cr.currency === x.currency ? switchTerms(cr.creditMinor, x.monthly_fee_minor) : null;
+      const k = `${x.org_id}:${x.currency}`;
+      const tax = taxers.get(k)!;
       return {
-        paymentMethods: methods.get(x.org_id)?.paymentMethods ?? [],
+        paymentMethods: methods.get(k)?.paymentMethods ?? [],
         // A pass is a sale, never a hold; saved cards and saving apply.
-        canSaveCard: methods.get(x.org_id)?.canSaveCard ?? false,
-        savedCards: methods.get(x.org_id)?.savedCards ?? [],
-        linkedWallets: methods.get(x.org_id)?.linkedWallets ?? [],
+        canSaveCard: methods.get(k)?.canSaveCard ?? false,
+        savedCards: methods.get(k)?.savedCards ?? [],
+        linkedWallets: methods.get(k)?.linkedWallets ?? [],
         id: x.id, name: x.name, description: x.description, operator: x.operator,
-        monthlyFeeIdr: x.monthly_fee_idr, totalIdr: feeTax(x.monthly_fee_idr, x.pkp).total,
-        energyDiscountPercent: x.energy_discount_bps / 100, memberRateIdr: x.member_rate_idr, includedKwh: x.included_kwh,
+        currency: tax.currency, pricesIncludeTax: tax.inclusive,
+        monthlyFeeMinor: x.monthly_fee_minor, totalMinor: tax(x.monthly_fee_minor).total,
+        energyDiscountPercent: x.energy_discount_bps / 100, memberRate: x.member_rate, includedKwh: x.included_kwh,
         waiveSessionFees: x.waive_session_fees, currentType: x.current_type, days: PASS_DAYS,
         // Switching from the driver's current plan at this operator: what the unused days are worth, and what is left to pay.
         switch: sw ? {
-          creditIdr: sw.creditUsedIdr, payFeeIdr: sw.payFeeIdr, payTotalIdr: sw.payFeeIdr ? feeTax(sw.payFeeIdr, x.pkp).total : 0,
+          creditMinor: sw.creditUsedMinor, payFeeMinor: sw.payFeeMinor, payTotalMinor: sw.payFeeMinor ? tax(sw.payFeeMinor).total : 0,
           days: Math.floor(sw.periodMs / DAY_MS),
         } : null,
       };
     }),
     memberships: mine.map((x) => ({
-      id: x.id, planId: x.plan_id, name: x.name, operator: x.operator,
+      id: x.id, planId: x.plan_id, name: x.name, operator: x.operator, currency: x.currency,
       status: x.status === 'active' && x.current_period_end && new Date(x.current_period_end).getTime() > now.getTime() ? 'active' : x.status === 'pending_payment' ? 'pending_payment' : 'ended',
       periodStart: x.current_period_start, periodEnd: x.current_period_end,
       includedKwh: x.included_kwh, remainingKwh: Math.max(0, x.included_kwh - x.used_kwh),
@@ -176,12 +191,15 @@ export async function buyPass(p: DriverPrincipal, planId: string, pay: PayOption
     }
   }
   const switching = !!live && live.plan_id !== plan.id && live.status === 'active' && !!live.current_period_end && new Date(live.current_period_end) > now;
-  const credit = switching ? await switchCredit(live, plan.id, now) : 0;
-  const terms = switching ? switchTerms(credit, plan.monthly_fee_idr) : { payFeeIdr: plan.monthly_fee_idr, creditUsedIdr: 0, periodMs: PASS_MS };
-  const tax = feeTax(terms.payFeeIdr, plan.pkp);
+  // The plan's currency decides the acquirer (its country's), the tax engine and every amount below.
+  const currency = currencyOr(plan.currency);
+  const livePlanCurrency = switching ? (await one<{ currency: string }>(`SELECT currency FROM subscription_plan WHERE id = $1`, [live.plan_id]))?.currency : null;
+  const credit = switching && livePlanCurrency === currency ? await switchCredit(live, plan.id, now) : 0;
+  const terms = switching ? switchTerms(credit, plan.monthly_fee_minor) : { payFeeMinor: plan.monthly_fee_minor, creditUsedMinor: 0, periodMs: PASS_MS };
+  const tax = (await feeTaxerFor(plan.org_id, currency, plan.pkp, now))(terms.payFeeMinor);
   let acq: Awaited<ReturnType<typeof paymentsFor>> | null = null;
   if (tax.total > 0) {
-    try { acq = await paymentsFor(plan.org_id); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false as const, error: 'Pembayaran belum tersedia di operator ini.' }; throw e; }
+    try { acq = await paymentsFor(plan.org_id, countryOfCurrency(currency)!.code); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false as const, error: 'Pembayaran belum tersedia di operator ini.' }; throw e; }
   }
   /**
    * The charge is RECORDED (and committed) before the acquirer is asked for money.
@@ -214,11 +232,11 @@ export async function buyPass(p: DriverPrincipal, planId: string, pay: PayOption
     const pending = await one<any>(`SELECT * FROM subscription_charge WHERE subscription_id = $1 AND state = 'pending'`, [subId]);
     if (pending) await query(`UPDATE subscription_charge SET state = 'void' WHERE id = $1`, [pending.id]);
     const ch = await one<{ id: string }>(
-      `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, provider, integration_id,
-                                        credit_idr, switch_to_plan_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-      [subId, plan.org_id, cur, end, plan.monthly_fee_idr, tax.dpp, tax.ppn, tax.total, acq ? 'qris' : 'credit', acq?.provider.name ?? null,
-       acq?.resolved.integrationId ?? null, terms.creditUsedIdr, switching ? plan.id : null],
+      `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_minor, tax_base_minor, tax_minor, total_minor, via, provider, integration_id,
+                                        credit_minor, switch_to_plan_id, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+      [subId, plan.org_id, cur, end, plan.monthly_fee_minor, tax.dpp, tax.ppn, tax.total, acq ? 'qris' : 'credit', acq?.provider.name ?? null,
+       acq?.resolved.integrationId ?? null, terms.creditUsedMinor, switching ? plan.id : null, currency],
     );
     return { subId, chargeId: ch!.id, start: cur, end };
   });
@@ -234,7 +252,7 @@ export async function buyPass(p: DriverPrincipal, planId: string, pay: PayOption
       started = await startPayment(acq, {
         channel: pay.channel, customerPhone: pay.phone ?? p.account?.phone ?? null, returnUrl: pay.returnUrl,
         appDriverId: p.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: false, walletId: pay.walletId ?? null,
-        referenceId: `membership:${r.chargeId}`, amountIdr: tax.total, description: `${await appNameFor(plan.org_id)} ${plan.name}`,
+        referenceId: `membership:${r.chargeId}`, amountMinor: tax.total, currency, description: `${await appNameFor(plan.org_id)} ${plan.name}`,
         prepare: record,
       });
     } catch (e) {
@@ -257,19 +275,19 @@ export async function buyPass(p: DriverPrincipal, planId: string, pay: PayOption
     ok: true as const,
     chargeId: r.chargeId, subscriptionId: r.subId, plan: plan.name, operator: plan.operator,
     periodStart: r.start.toISOString(), periodEnd: r.end.toISOString(),
-    feeIdr: plan.monthly_fee_idr, creditIdr: terms.creditUsedIdr, ppnIdr: tax.ppn, totalIdr: tax.total,
+    currency, feeMinor: plan.monthly_fee_minor, creditMinor: terms.creditUsedMinor, taxMinor: tax.ppn, totalMinor: tax.total,
     paid: !started || started.immediate === 'captured',
     // Sandbox acquirer only: the app offers the demo payment button.
     demo: acq?.provider.demo === true,
     ...(started ? { payment: paymentView(started, tax.total) } : {}),
-    ...(started?.qrString ? { qr: { qrString: started.qrString, qrImage: await qrDataUri(started.qrString), qrPng: await qrPngDataUri(started.qrString), providerRef: started.providerRef, amountIdr: tax.total, expiresAt: started.expiresAt } } : {}),
+    ...(started?.qrString ? { qr: { qrString: started.qrString, qrImage: await qrDataUri(started.qrString), qrPng: await qrPngDataUri(started.qrString), providerRef: started.providerRef, amountMinor: tax.total, expiresAt: started.expiresAt } } : {}),
   };
 }
 
 /** Turn automatic renewal on (with a saved card or linked e-wallet usable at the plan's operator) or off. */
 export async function setAutoRenew(p: DriverPrincipal, subscriptionId: string, b: { enabled?: unknown; methodId?: unknown }) {
   if (!p.appDriverId || !UUID_RE.test(String(subscriptionId))) return { ok: false as const, status: 404, error: 'Langganan tidak ditemukan.' };
-  const s = await one<any>(`SELECT id, org_id, status FROM subscription WHERE id = $1 AND app_driver_id = $2 AND billing = 'qris'`, [subscriptionId, p.appDriverId]);
+  const s = await one<any>(`SELECT s.id, s.org_id, s.status, pl.currency FROM subscription s JOIN subscription_plan pl ON pl.id = s.plan_id WHERE s.id = $1 AND s.app_driver_id = $2 AND s.billing = 'qris'`, [subscriptionId, p.appDriverId]);
   if (!s || !['active', 'pending_payment'].includes(s.status)) return { ok: false as const, status: 404, error: 'Langganan tidak ditemukan.' };
   if (b.enabled === false) {
     await query(`UPDATE subscription SET auto_renew = false, renew_next_at = NULL WHERE id = $1`, [s.id]);
@@ -278,7 +296,7 @@ export async function setAutoRenew(p: DriverPrincipal, subscriptionId: string, b
   const methodId = String(b.methodId ?? '');
   if (!UUID_RE.test(methodId)) return { ok: false as const, status: 422, error: 'Pilih kartu tersimpan atau e-wallet terhubung untuk perpanjangan otomatis.' };
   let acq: Awaited<ReturnType<typeof paymentsFor>>;
-  try { acq = await paymentsFor(s.org_id); } catch { return { ok: false as const, status: 409, error: 'Pembayaran belum tersedia di operator ini.' }; }
+  try { acq = await paymentsFor(s.org_id, countryOfCurrency(currencyOr(s.currency))!.code); } catch { return { ok: false as const, status: 409, error: 'Pembayaran belum tersedia di operator ini.' }; }
   const m = await one<any>(
     `SELECT id, kind, status FROM driver_card
       WHERE id = $1 AND app_driver_id = $2 AND removed_at IS NULL AND provider = $3 AND integration_id IS NOT DISTINCT FROM $4`,
@@ -306,7 +324,7 @@ export async function passStatus(p: DriverPrincipal, id: string) {
   if (!c) return null;
   return {
     id: c.id, state: c.state, plan: c.plan, periodStart: c.period_start, periodEnd: c.period_end,
-    feeIdr: c.fee_idr, creditIdr: c.credit_idr, dppIdr: c.dpp_idr, ppnIdr: c.ppn_idr, totalIdr: c.total_idr, paidAt: c.paid_at,
+    feeMinor: c.fee_minor, creditMinor: c.credit_minor, taxBaseMinor: c.tax_base_minor, taxMinor: c.tax_minor, totalMinor: c.total_minor, paidAt: c.paid_at,
     membership: c.sub_status === 'active' ? 'active' : c.sub_status,
   };
 }
@@ -353,45 +371,67 @@ export async function markPassPaid(chargeId: string): Promise<boolean> {
   // An automatic renewal went through: tell the driver.
   if (!done.already && done.c.auto_renewal && done.s) {
     await tellDriver(done.s.app_driver_id, 'membership.renewed', `membership.renewed:${chargeId}`,
-      (plan, day) => ({ title: `${plan} diperpanjang sampai ${day}`, body: `Rp ${Number(done.c.total_idr).toLocaleString('id-ID')} ditagihkan. Matikan perpanjangan otomatis kapan saja di Akun.` }),
-      (plan, day) => ({ title: `${plan} renewed until ${day}`, body: `Rp ${Number(done.c.total_idr).toLocaleString('id-ID')} charged. Turn off automatic renewal any time under Account.` }),
+      (plan, day) => ({ title: `${plan} diperpanjang sampai ${day}`, body: `${moneyText(Number(done.c.total_minor), currencyOr(done.c.currency))} ditagihkan. Matikan perpanjangan otomatis kapan saja di Akun.` }),
+      (plan, day) => ({ title: `${plan} renewed until ${day}`, body: `${moneyText(Number(done.c.total_minor), currencyOr(done.c.currency))} charged. Turn off automatic renewal any time under Account.` }),
       done.s.id, new Date(done.c.period_end)).catch(() => {});
   }
   return true;
 }
 
 /**
+ * Money the acquirer took for a pass charge that will not activate a pass, recorded as a payment (mode 'pass', on the
+ * account that took it) and queued for a full refund — refunded through the acquirer at once when it came from a linked
+ * e-wallet. Shared by a payment after the checkout was voided and a payment for less than the pass costs; each has its
+ * own idempotency key, so a repeated notification records nothing twice. `created` is false when an earlier copy of
+ * the notification already recorded it (the caller raises its alert only once). Null when there is nothing to refund
+ * (an invoice or credit charge, a charge already paid, or nothing was taken).
+ */
+export async function recordPassPaymentForRefund(
+  chargeId: string,
+  acquirer: { provider: string; integrationId: string | null },
+  paid: { amountMinor: number | null; paymentId: string | null; status: string },
+  why: { idemPrefix: string; reason: string; event?: Record<string, unknown> },
+): Promise<{ id: string | null; created: boolean; amountMinor: number; orgId: string; currency: CurrencyCode } | null> {
+  const c = await one<any>(`SELECT * FROM subscription_charge WHERE id = $1`, [chargeId]);
+  if (!c || c.state === 'paid' || !['qris', 'ewallet', 'card'].includes(c.via)) return null;
+  const amount = Math.round(Number(paid.amountMinor ?? c.total_minor));
+  if (!(amount > 0)) return null;
+  const row = await one<{ id: string }>(
+    `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_minor, amount_captured_minor, captured_at,
+                                 idem_key, integration_id, channel, provider_payment_id, driver_card_id, raw_events, currency)
+     VALUES ($1, $2, $3, $4, 'pass', 'captured', $5, $6, now(), $7, $8, $9, $10, $11, $12::jsonb, $13)
+     ON CONFLICT (idem_key) DO NOTHING RETURNING id`,
+    [c.org_id, c.provider ?? acquirer.provider, c.provider_ref, c.via, Number(c.total_minor), amount, `${why.idemPrefix}:${chargeId}`,
+     c.integration_id ?? acquirer.integrationId, c.channel, paid.paymentId, c.driver_card_id,
+     JSON.stringify([{ at: new Date(), status: paid.status, amountMinor: paid.amountMinor, subscriptionChargeId: chargeId, ...why.event }]), currencyOr(c.currency)],
+  );
+  if (!row) return { id: null, created: false, amountMinor: amount, orgId: c.org_id, currency: currencyOr(c.currency) }; // already recorded (a repeated notification)
+  const { markRefundDue } = await import('../services/refunds.js');
+  await markRefundDue(row.id, amount, why.reason);
+  return { id: row.id, created: true, amountMinor: amount, orgId: c.org_id, currency: currencyOr(c.currency) };
+}
+
+/**
  * A pass payment the acquirer confirmed for a charge that can no longer be paid: replaced by a newer checkout, or
- * cancelled (void). The money arrived, so it is owed back: recorded as a payment (mode 'pass', on the account that took
- * it) in the refund queue — refunded through the acquirer at once when it came from a linked e-wallet — with an alert.
- * Idempotent per charge. False when there is nothing to refund (an invoice charge, or nothing was taken).
+ * cancelled (void). The money arrived, so it is owed back: recorded in the refund queue (recordPassPaymentForRefund)
+ * with an alert. Idempotent per charge. False when there is nothing to refund (an invoice charge, or nothing was taken).
  */
 export async function passPaidAfterVoid(
   chargeId: string,
   acquirer: { provider: string; integrationId: string | null },
-  paid: { amountIdr: number | null; paymentId: string | null; status: string },
+  paid: { amountMinor: number | null; paymentId: string | null; status: string },
 ): Promise<boolean> {
-  const c = await one<any>(`SELECT * FROM subscription_charge WHERE id = $1`, [chargeId]);
-  if (!c || c.state === 'paid' || !['qris', 'ewallet', 'card'].includes(c.via)) return false;
-  const amount = Math.round(Number(paid.amountIdr ?? c.total_idr));
-  if (!(amount > 0)) return false;
-  const row = await one<{ id: string }>(
-    `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr, amount_captured_idr, captured_at,
-                                 idem_key, integration_id, channel, provider_payment_id, driver_card_id, raw_events)
-     VALUES ($1, $2, $3, $4, 'pass', 'captured', $5, $6, now(), $7, $8, $9, $10, $11, $12::jsonb)
-     ON CONFLICT (idem_key) DO NOTHING RETURNING id`,
-    [c.org_id, c.provider ?? acquirer.provider, c.provider_ref, c.via, Number(c.total_idr), amount, `pass-after-void:${chargeId}`,
-     c.integration_id ?? acquirer.integrationId, c.channel, paid.paymentId, c.driver_card_id,
-     JSON.stringify([{ at: new Date(), status: paid.status, amountIdr: paid.amountIdr, subscriptionChargeId: chargeId }])],
-  );
-  if (!row) return true; // already recorded (a repeated notification)
-  const { markRefundDue } = await import('../services/refunds.js');
-  await markRefundDue(row.id, amount, 'A 30-day pass was paid after its checkout had been replaced or cancelled; the payment is refunded in full');
-  logger.warn({ charge: chargeId, intent: row.id, amountIdr: amount }, 'pass paid after its charge was voided; refund due');
+  const rec = await recordPassPaymentForRefund(chargeId, acquirer, paid, {
+    idemPrefix: 'pass-after-void',
+    reason: 'A 30-day pass was paid after its checkout had been replaced or cancelled; the payment is refunded in full',
+  });
+  if (!rec) return false;
+  if (!rec.created) return true;
+  logger.warn({ charge: chargeId, intent: rec.id, amountMinor: rec.amountMinor }, 'pass paid after its charge was voided; refund due');
   bus.emit('alert.raised', {
-    orgId: c.org_id, kind: 'payment.refund_due', severity: 'warning',
-    message: `A driver paid Rp ${amount.toLocaleString('id-ID')} for a 30-day pass whose checkout had already been replaced or cancelled. A full refund is due — see Refunds.`,
-    targetType: 'payment_intent', targetId: row.id,
+    orgId: rec.orgId, kind: 'payment.refund_due', severity: 'warning',
+    message: `A driver paid ${moneyText(rec.amountMinor, rec.currency)} for a 30-day pass whose checkout had already been replaced or cancelled. A full refund is due — see Refunds.`,
+    targetType: 'payment_intent', targetId: rec.id!,
   });
   return true;
 }
@@ -434,9 +474,13 @@ async function tellDriver(
 ): Promise<number> {
   const devices = (await many<{ id: string }>(`SELECT id FROM driver_device WHERE app_driver_id = $1`, [appDriverId])).map((d) => d.id);
   if (!devices.length) return 0;
-  const plan = (await one<{ name: string }>(`SELECT pl.name FROM subscription s JOIN subscription_plan pl ON pl.id = s.plan_id WHERE s.id = $1`, [subscriptionId]))?.name ?? 'Pass';
-  const dayId = day.toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'long' });
-  const dayEn = day.toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'long' });
+  const r = await one<{ name: string; tz: string | null }>(
+    `SELECT pl.name, o.timezone AS tz FROM subscription s JOIN subscription_plan pl ON pl.id = s.plan_id JOIN organisation o ON o.id = s.org_id WHERE s.id = $1`, [subscriptionId]);
+  const plan = r?.name ?? 'Pass';
+  // The operator's zone (§D5): a pass is the operator's, not one site's.
+  const tz = r?.tz || defaultTimezone(null);
+  const dayId = day.toLocaleDateString(LOCALE_TAG.id, { timeZone: tz, day: 'numeric', month: 'long' });
+  const dayEn = day.toLocaleDateString('en-GB', { timeZone: tz, day: 'numeric', month: 'long' });
   return notifyDevices(devices, kind, dedupe, { id: id(plan, dayId), en: en(plan, dayEn), url: '/app/#account', tag: `membership-${subscriptionId}` });
 }
 
@@ -447,7 +491,7 @@ async function tellDriver(
 export async function renewPasses(): Promise<{ renewed: number; waiting: number; failed: number }> {
   const due = await many<any>(
     `SELECT s.id, s.org_id, s.app_driver_id, s.plan_id, s.current_period_end, s.renew_method_id, s.renew_attempts,
-            pl.name AS plan_name, pl.monthly_fee_idr, pl.active AND pl.offered_in_app AS offered, o.pkp, d.phone,
+            pl.name AS plan_name, pl.monthly_fee_minor, pl.active AND pl.offered_in_app AS offered, o.pkp, d.phone, pl.currency,
             m.kind AS method_kind
        FROM subscription s JOIN subscription_plan pl ON pl.id = s.plan_id JOIN organisation o ON o.id = s.org_id
        JOIN app_driver d ON d.id = s.app_driver_id
@@ -473,10 +517,11 @@ export async function renewPasses(): Promise<{ renewed: number; waiting: number;
     if (!s.offered) { await stop('Paket ini tidak ditawarkan lagi.', 'This plan is no longer offered.'); continue; }
     if (!s.renew_method_id || !s.method_kind) { await stop('Kartu atau e-wallet untuk perpanjangan sudah dihapus.', 'The card or e-wallet chosen for renewal was removed.'); continue; }
     let acq: Awaited<ReturnType<typeof paymentsFor>>;
-    try { acq = await paymentsFor(s.org_id); } catch { await query(`UPDATE subscription SET renew_next_at = now() + interval '1 hour' WHERE id = $1`, [s.id]); continue; }
+    const currency = currencyOr(s.currency);
+    try { acq = await paymentsFor(s.org_id, countryOfCurrency(currency)!.code); } catch { await query(`UPDATE subscription SET renew_next_at = now() + interval '1 hour' WHERE id = $1`, [s.id]); continue; }
     const start = new Date(s.current_period_end);
     const end = new Date(start.getTime() + PASS_MS);
-    const tax = feeTax(s.monthly_fee_idr, s.pkp);
+    const tax = (await feeTaxerFor(s.org_id, currency, s.pkp, start))(s.monthly_fee_minor);
     // A checkout the driver abandoned for the same window makes way (before any money moves, so the renewal's record always fits).
     await query(`UPDATE subscription_charge SET state = 'void' WHERE subscription_id = $1 AND state = 'pending' AND NOT auto_renewal AND period_start = $2`, [s.id, start]);
     // The renewal's charge is recorded (pending) BEFORE the card or e-wallet is charged, with the acquirer's reference
@@ -486,18 +531,18 @@ export async function renewPasses(): Promise<{ renewed: number; waiting: number;
     let chargeId: string | null = null;
     const record = async (p: PreparedPayment) => {
       chargeId = (await one<{ id: string }>(
-        `INSERT INTO subscription_charge (id, subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, provider_ref, provider, integration_id,
-                                          channel, driver_card_id, auto_renewal)
-         VALUES ($15,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,true) RETURNING id`,
-        [s.id, s.org_id, start, end, s.monthly_fee_idr, tax.dpp, tax.ppn, tax.total, p.method, p.providerRef, acq.provider.name, acq.resolved.integrationId,
-         p.channel, s.renew_method_id, newCharge],
+        `INSERT INTO subscription_charge (id, subscription_id, org_id, period_start, period_end, fee_minor, tax_base_minor, tax_minor, total_minor, via, provider_ref, provider, integration_id,
+                                          channel, driver_card_id, auto_renewal, currency)
+         VALUES ($15,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,true,$16) RETURNING id`,
+        [s.id, s.org_id, start, end, s.monthly_fee_minor, tax.dpp, tax.ppn, tax.total, p.method, p.providerRef, acq.provider.name, acq.resolved.integrationId,
+         p.channel, s.renew_method_id, newCharge, currency],
       ))!.id;
     };
     try {
       const started = await startPayment(acq, {
         appDriverId: s.app_driver_id, customerPhone: s.phone, returnUrl: '/app/paid.html', allowHold: false,
         ...(s.method_kind === 'ewallet' ? { walletId: s.renew_method_id } : { savedCardId: s.renew_method_id, channel: 'CARD' }),
-        referenceId: `membership-renew:${newCharge}`, amountIdr: tax.total, description: `${await appNameFor(s.org_id)} ${s.plan_name} (renewal)`,
+        referenceId: `membership-renew:${newCharge}`, amountMinor: tax.total, currency, description: `${await appNameFor(s.org_id)} ${s.plan_name} (renewal)`,
         prepare: record,
       });
       if (!chargeId) await record({ providerRef: started.providerRef, mode: started.mode, method: started.method, channel: started.channel, savedCardId: started.savedCardId, saveCard: false });

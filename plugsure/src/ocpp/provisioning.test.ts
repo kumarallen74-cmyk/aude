@@ -108,7 +108,7 @@ dbDescribe('charging rate units are per charger; the model value needs consensus
     profileId = (await one<{ id: string }>(`INSERT INTO quirk_profile (vendor, model, findings) VALUES ($1, $2, '{}') RETURNING id`, [context.vendor, context.model]))!.id;
     for (let i = 0; i < CONSENSUS_MIN_ORGS + 1; i++) {
       const org = (await one<{ id: string }>(`INSERT INTO organisation (name, slug) VALUES ($1, $2) RETURNING id`, [`Rate Unit Org ${i}`, `rate-unit-${sfx}-${i}`]))!.id;
-      const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Rate Hub', 1000) RETURNING id`, [org]))!.id;
+      const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Rate Hub', 1000) RETURNING id`, [org]))!.id;
       const cp = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity, status, quirk_profile_id) VALUES ($1, $2, 'online', $3) RETURNING id`, [site, `RATE-${sfx}-${i}`, profileId]))!.id;
       orgs.push(org); sites.push(site); cps.push(cp);
     }

@@ -1,9 +1,12 @@
 import { one, many, query } from '../db/pool.js';
+import { defaultTimezone, localParts } from '../domain/timezone.js';
+import { moneyText, currencyOr, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
 import { logger } from '../logger.js';
 import { bus } from '../services/events.js';
 import { sendPush, endpointProblem } from '../services/webpush.js';
 import { sendToDevice, outcomeOf, type ApnsEnv } from '../services/apns.js';
-import { apnsCredentialsFor, markApnsRefused, brandForOrg } from '../services/brand.js';
+import { apnsCredentialsFor, markApnsRefused, brandForOrg, fcmCredentialsFor, markFcmRefused, isNetworkOrg } from '../services/brand.js';
+import { sendFcm, outcomeOfFcm, type FcmChannel } from '../services/fcm.js';
 import { chargeCardPath } from '../services/charge-card.js';
 
 /**
@@ -14,8 +17,9 @@ import { chargeCardPath } from '../services/charge-card.js';
  * gets each notification once, in the language it subscribed in; a subscription
  * the push service says is gone (404/410) is deleted.
  *
- * Two kinds of subscription: Web Push (browsers and the web app on a home screen)
- * and APNs (a white-label iOS app, which cannot use Web Push inside its shell).
+ * Three kinds of subscription: Web Push (browsers and the web app on a home screen),
+ * APNs (a native or white-label iOS app, which cannot use Web Push inside its shell)
+ * and FCM (a native Android app, v1.9: the brand's Firebase project, HTTP v1 API).
  *
  * Who is told about a session: the phone that started it from the app, and for a
  * fleet card, every phone signed in with that card.
@@ -39,10 +43,15 @@ type Msg = Record<Lang, { title: string; body: string; detail?: string }> & {
   image?: Record<Lang, string>;
 };
 
-const rp = (n: number) => `Rp ${Math.round(n).toLocaleString('id-ID')}`;
+/** Money in a push: an IDR amount exactly as v1.6 wrote it (in both languages), other currencies in English format. */
+const rp = (n: number, cur: string = LEGACY_CURRENCY) => moneyText(Math.round(n), currencyOr(cur), 'id');
 const kwhId = (wh: number) => (wh / 1000).toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 const kwhEn = (wh: number) => (wh / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
-const hhmm = (d: Date) => d.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' });
+/** Clock time in the site's zone (§D5); Indonesian zone and format when the caller has no zone (v1.6). */
+const hhmm = (d: Date, tz?: string | null) => {
+  const p = localParts(d, tz || defaultTimezone('ID'));
+  return `${p.hour}.${p.minute}`;
+};
 
 export async function subscribe(deviceId: string, s: any, lang: string): Promise<{ ok: boolean; error?: string }> {
   const endpoint = typeof s?.endpoint === 'string' ? s.endpoint : '';
@@ -93,13 +102,42 @@ export async function unsubscribeApns(deviceId: string, brandOrgId: string, toke
   await query(`DELETE FROM push_subscription WHERE device_id = $1 AND endpoint = $2`, [deviceId, `apns:${brandOrgId}:${String(tokenRaw ?? '').trim().toLowerCase()}`]);
 }
 
+/** FCM registration tokens: base64url-ish with ':' (about 150–200 characters today). */
+const FCM_TOKEN = /^[A-Za-z0-9_:\-]{64,4096}$/;
+
+/**
+ * The Android app's FCM registration token, for its brand's Firebase project. The endpoint column holds
+ * fcm:<org>:<token>, so the same token is one subscription (re-registering moves it to this device).
+ */
+export async function subscribeFcm(deviceId: string, brandOrgId: string, tokenRaw: unknown, lang: string): Promise<{ ok: boolean; error?: string }> {
+  const token = String(tokenRaw ?? '').trim();
+  if (!FCM_TOKEN.test(token)) return { ok: false, error: 'Token notifikasi Android tidak valid.' };
+  if (!(await fcmCredentialsFor(brandOrgId))) return { ok: false, error: 'Notifikasi belum tersedia di aplikasi ini.' };
+  await query(
+    `INSERT INTO push_subscription (device_id, endpoint, kind, brand_org_id, lang) VALUES ($1, $2, 'fcm', $3, $4)
+     ON CONFLICT (endpoint) DO UPDATE SET device_id = EXCLUDED.device_id, lang = EXCLUDED.lang, failures = 0`,
+    [deviceId, `fcm:${brandOrgId}:${token}`, brandOrgId, lang === 'en' ? 'en' : 'id'],
+  );
+  await query(
+    `DELETE FROM push_subscription WHERE device_id = $1 AND id NOT IN
+       (SELECT id FROM push_subscription WHERE device_id = $1 ORDER BY created_at DESC LIMIT 5)`,
+    [deviceId],
+  );
+  return { ok: true };
+}
+
+export async function unsubscribeFcm(deviceId: string, brandOrgId: string, tokenRaw: unknown): Promise<void> {
+  await query(`DELETE FROM push_subscription WHERE device_id = $1 AND endpoint = $2`, [deviceId, `fcm:${brandOrgId}:${String(tokenRaw ?? '').trim()}`]);
+}
+
 export async function unsubscribe(deviceId: string, endpoint: string): Promise<void> {
   await query(`DELETE FROM push_subscription WHERE device_id = $1 AND endpoint = $2`, [deviceId, endpoint]);
 }
 
 export async function pushStatus(deviceId: string) {
-  const r = await one<{ n: number }>(`SELECT count(*)::int AS n FROM push_subscription WHERE device_id = $1`, [deviceId]);
-  return { subscribed: (r?.n ?? 0) > 0 };
+  const rows = await many<{ kind: string; n: number }>(`SELECT kind, count(*)::int AS n FROM push_subscription WHERE device_id = $1 GROUP BY kind`, [deviceId]);
+  const kinds = Object.fromEntries(rows.map((r) => [r.kind, r.n]));
+  return { subscribed: rows.some((r) => r.n > 0), webpush: kinds.webpush ?? 0, apns: kinds.apns ?? 0, fcm: kinds.fcm ?? 0 };
 }
 
 /** Queue one message for every subscription of these phones. */
@@ -129,12 +167,12 @@ export async function notifyDevices(deviceIds: string[], kind: string, dedupeKey
  * The iOS app's badge is the number of sessions waiting to be paid. Every notification to an
  * iPhone carries it; when one is paid, the phones get a badge-only update (nothing shown).
  */
-export async function unpaidCount(deviceId: string, orgId: string): Promise<number> {
+export async function unpaidCount(deviceId: string, orgId: string | null): Promise<number> {
   const r = await one<{ n: number }>(
     `SELECT count(DISTINCT pi.id)::int AS n
        FROM payment_intent pi JOIN driver_charge dc ON dc.payment_intent_id = pi.id
       WHERE (dc.device_id = $1 OR dc.app_driver_id = (SELECT app_driver_id FROM driver_device WHERE id = $1))
-        AND dc.org_id = $2 AND pi.hold_state = 'capture_failed'
+        AND ($2::uuid IS NULL OR dc.org_id = $2) AND pi.hold_state = 'capture_failed'
         AND (pi.mode = 'postpay' OR (pi.mode = 'preauth' AND pi.hold_error LIKE 'hold expired:%'))`,
     [deviceId, orgId],
   );
@@ -210,42 +248,50 @@ async function onSessionEnded(sessionId: string, energyWh: number) {
   });
 }
 
-async function onCdr(sessionId: string, totalIdr: number) {
+async function onCdr(sessionId: string, totalMinor: number, cur: string = LEGACY_CURRENCY) {
   const d = await devicesForSession(sessionId);
   if (!d?.devices.length) return;
   await notifyDevices(d.devices, 'cdr.created', `cdr:${sessionId}`, {
-    id: { title: 'Struk siap', body: `${d.site} · ${rp(totalIdr)}`, detail: `Total ${rp(totalIdr)}` },
-    en: { title: 'Receipt ready', body: `${d.site} · ${rp(totalIdr)}`, detail: `Total ${rp(totalIdr)}` },
+    id: { title: 'Struk siap', body: `${d.site} · ${rp(totalMinor, cur)}`, detail: `Total ${rp(totalMinor, cur)}` },
+    en: { title: 'Receipt ready', body: `${d.site} · ${rp(totalMinor, cur)}`, detail: `Total ${rp(totalMinor, cur)}` },
     url: d.chargeId ? `/app/#s/${d.chargeId}` : '/app/#history', tag: `s-${sessionId}`, site: d.site,
     category: 'PS_RECEIPT', actions: { receipt: receiptUrl(d.chargeId) },
   });
 }
 
-async function onRefund(paymentIntentId: string, amountIdr: number) {
+async function onRefund(paymentIntentId: string, amountMinor: number, cur: string = LEGACY_CURRENCY) {
   const rows = await many<{ device_id: string; id: string }>(`SELECT device_id, id FROM driver_charge WHERE payment_intent_id = $1`, [paymentIntentId]);
   if (!rows.length) return;
   await notifyDevices(rows.map((r) => r.device_id), 'refund.completed', `refund:${paymentIntentId}`, {
-    id: { title: 'Dana dikembalikan', body: `${rp(amountIdr)} kembali ke pembayaran Anda` },
-    en: { title: 'Refund paid', body: `${rp(amountIdr)} returned to your payment` },
+    id: { title: 'Dana dikembalikan', body: `${rp(amountMinor, cur)} kembali ke pembayaran Anda` },
+    en: { title: 'Refund paid', body: `${rp(amountMinor, cur)} returned to your payment` },
     url: `/app/#s/${rows[0]!.id}`, tag: `refund-${paymentIntentId}`,
     category: 'PS_RECEIPT', actions: { receipt: receiptUrl(rows[0]!.id) },
   });
 }
 
-/** A partner operator's charge record for a card: tell the phones signed in with it. */
-export async function notifyRoamingCdr(tokenId: string, cdrId: string, site: string, totalIdr: number | null) {
-  const rows = await many<{ id: string }>(`SELECT id FROM driver_device WHERE fleet_token_id = $1`, [tokenId]);
+/** A partner operator's charge record for a card (or an app driver's roaming token): tell the phones of that driver. */
+export async function notifyRoamingCdr(tokenId: string, cdrId: string, site: string, total: { totalMinor: number; currency: CurrencyCode } | null) {
+  const rows = await many<{ id: string }>(
+    `SELECT id FROM driver_device WHERE fleet_token_id = $1
+     UNION
+     SELECT d.id FROM driver_device d
+      WHERE d.app_driver_id IS NOT NULL AND d.app_driver_id IN (SELECT rc.app_driver_id FROM driver_roaming_charge rc WHERE rc.token_id = $1)
+     UNION
+     SELECT rc.device_id FROM driver_roaming_charge rc WHERE rc.token_id = $1 AND rc.app_driver_id IS NOT NULL`,
+    [tokenId]);
   if (!rows.length) return;
-  const amount = totalIdr != null ? ` · ${rp(totalIdr)}` : '';
+  const money = total ? rp(total.totalMinor, total.currency) : null;
+  const amount = money ? ` · ${money}` : '';
   await notifyDevices(rows.map((r) => r.id), 'roaming.cdr', `roaming.cdr:${cdrId}`, {
-    id: { title: 'Tagihan jaringan mitra siap', body: `${site}${amount}`, ...(totalIdr != null ? { detail: `Total ${rp(totalIdr)}` } : {}) },
-    en: { title: 'Partner network charge ready', body: `${site}${amount}`, ...(totalIdr != null ? { detail: `Total ${rp(totalIdr)}` } : {}) },
-    url: `/app/#rr/${cdrId}`, tag: `rr-${cdrId}`, ...(totalIdr != null ? { site } : {}),
+    id: { title: 'Tagihan jaringan mitra siap', body: `${site}${amount}`, ...(money ? { detail: `Total ${money}` } : {}) },
+    en: { title: 'Partner network charge ready', body: `${site}${amount}`, ...(money ? { detail: `Total ${money}` } : {}) },
+    url: `/app/#rr/${cdrId}`, tag: `rr-${cdrId}`, ...(money ? { site } : {}),
     category: 'PS_RECEIPT', actions: { receipt: `/app/#rr/${cdrId}` },
   });
 }
 
-export async function notifyReservation(deviceId: string, reservationId: string, kind: 'reminder' | 'expired' | 'released', site: string, expiresAt: Date) {
+export async function notifyReservation(deviceId: string, reservationId: string, kind: 'reminder' | 'expired' | 'released', site: string, expiresAt: Date, tz?: string | null) {
   // The operator suspended the charger (v1.4.4): the reservation is cancelled, any fee refunded.
   if (kind === 'released') {
     const m: Msg = {
@@ -257,8 +303,8 @@ export async function notifyReservation(deviceId: string, reservationId: string,
     return;
   }
   const m: Msg = kind === 'reminder'
-    ? { id: { title: 'Reservasi berakhir dalam 5 menit', body: `${site} · mulai isi sebelum ${hhmm(expiresAt)}`, detail: `Mulai isi sebelum ${hhmm(expiresAt)}` },
-        en: { title: 'Reservation ends in 5 minutes', body: `${site} · start charging before ${hhmm(expiresAt)}`, detail: `Start charging before ${hhmm(expiresAt)}` },
+    ? { id: { title: 'Reservasi berakhir dalam 5 menit', body: `${site} · mulai isi sebelum ${hhmm(expiresAt, tz)}`, detail: `Mulai isi sebelum ${hhmm(expiresAt, tz)}` },
+        en: { title: 'Reservation ends in 5 minutes', body: `${site} · start charging before ${hhmm(expiresAt, tz)}`, detail: `Start charging before ${hhmm(expiresAt, tz)}` },
         url: '/app/#home', tag: `res-${reservationId}`, site, urgent: true,
         category: 'PS_RESERVATION', actions: { cancel: `reservation-cancel:${reservationId}` } }
     : { id: { title: 'Reservasi berakhir', body: `${site} · konektor dilepas`, detail: 'Konektor dilepas' },
@@ -268,13 +314,13 @@ export async function notifyReservation(deviceId: string, reservationId: string,
 }
 
 /** The site queue: your turn (a connector is held for you), you missed it, your wait ended, or you were taken off. */
-export async function notifyQueue(deviceId: string, entryId: string, kind: 'offer' | 'missed' | 'expired' | 'removed' | 'closed' | 'requeued', site: string, until: Date | null) {
+export async function notifyQueue(deviceId: string, entryId: string, kind: 'offer' | 'missed' | 'expired' | 'removed' | 'closed' | 'requeued', site: string, until: Date | null, tz?: string | null) {
   const q = (idTitle: string, idDetail: string, enTitle: string, enDetail: string, extra: Partial<Msg> = {}): Msg => ({
     id: { title: idTitle, body: `${site} · ${idDetail}`, detail: idDetail.charAt(0).toUpperCase() + idDetail.slice(1) },
     en: { title: enTitle, body: `${site} · ${enDetail}`, detail: enDetail.charAt(0).toUpperCase() + enDetail.slice(1) },
     url: '/app/#home', tag: `q-${entryId}`, site, ...extra,
   });
-  const at = until ? hhmm(until) : '';
+  const at = until ? hhmm(until, tz) : '';
   const m: Record<typeof kind, Msg> = {
     offer: q('Giliran Anda!', `konektor ditahan untuk Anda sampai ${at}`, 'Your turn!', `a connector is held for you until ${at}`,
       { urgent: true, category: 'PS_QUEUE', actions: { leave: `queue-leave:${entryId}` } }),
@@ -293,8 +339,8 @@ export async function notifyQueue(deviceId: string, entryId: string, kind: 'offe
  */
 export const UNPAID_REMINDER_STAGES_MIN = [15, 24 * 60, 3 * 24 * 60];
 export async function remindUnpaidSessions(): Promise<number> {
-  const rows = await many<{ intent_id: string; charge_id: string; device_id: string; app_driver_id: string | null; owed: number; site: string; age_min: number }>(
-    `SELECT pi.id AS intent_id, dc.id AS charge_id, dc.device_id, dc.app_driver_id, pi.hold_capture_idr AS owed, si.name AS site,
+  const rows = await many<{ intent_id: string; charge_id: string; device_id: string; app_driver_id: string | null; owed: number; currency: string; site: string; age_min: number }>(
+    `SELECT pi.id AS intent_id, dc.id AS charge_id, dc.device_id, dc.app_driver_id, pi.hold_capture_minor AS owed, pi.currency, si.name AS site,
             floor(extract(epoch FROM now() - cs.ended_at) / 60)::int AS age_min
        FROM payment_intent pi
        JOIN driver_charge dc ON dc.payment_intent_id = pi.id
@@ -312,8 +358,8 @@ export async function remindUnpaidSessions(): Promise<number> {
       ? [...new Set([r.device_id, ...(await many<{ id: string }>(`SELECT id FROM driver_device WHERE app_driver_id = $1`, [r.app_driver_id])).map((d) => d.id)])]
       : [r.device_id];
     n += await notifyDevices(devices, 'session.unpaid', `unpaid:${r.intent_id}:${stage}`, {
-      id: { title: 'Sesi pengisian belum dibayar', body: `${r.site} · ${rp(Number(r.owed))} · ketuk untuk membayar`, detail: `${rp(Number(r.owed))} · ketuk untuk membayar` },
-      en: { title: 'Charging session unpaid', body: `${r.site} · ${rp(Number(r.owed))} · tap to pay`, detail: `${rp(Number(r.owed))} · tap to pay` },
+      id: { title: 'Sesi pengisian belum dibayar', body: `${r.site} · ${rp(Number(r.owed), r.currency)} · ketuk untuk membayar`, detail: `${rp(Number(r.owed), r.currency)} · ketuk untuk membayar` },
+      en: { title: 'Charging session unpaid', body: `${r.site} · ${rp(Number(r.owed), r.currency)} · tap to pay`, detail: `${rp(Number(r.owed), r.currency)} · tap to pay` },
       url: `/app/#r/${r.charge_id}`, tag: `unpaid-${r.intent_id}`, site: r.site,
       category: 'PS_UNPAID', actions: { pay: `/app/#r/${r.charge_id}` },
     });
@@ -325,8 +371,8 @@ export function registerDriverPushListeners(): void {
   const guard = (what: string, fn: () => Promise<unknown>) => void fn().catch((e) => logger.warn({ what, err: (e as Error).message }, 'push notification enqueue failed'));
   bus.on('session.started', (e) => guard('session.started', () => onSessionStarted(e.sessionId)));
   bus.on('session.ended', (e) => guard('session.ended', () => onSessionEnded(e.sessionId, e.energyWh)));
-  bus.on('cdr.created', (e) => guard('cdr.created', () => onCdr(e.sessionId, e.totalIdr)));
-  bus.on('refund.completed', (e) => guard('refund.completed', () => onRefund(e.paymentIntentId, e.amountIdr)));
+  bus.on('cdr.created', (e) => guard('cdr.created', () => onCdr(e.sessionId, e.totalMinor, e.currency)));
+  bus.on('refund.completed', (e) => guard('refund.completed', () => onRefund(e.paymentIntentId, e.amountMinor, e.currency)));
   // A session paid: iPhones' badges go down (paid in the app, or by the e-wallet on a retry).
   bus.on('payment.unpaid_settled', (e) => guard('badge', () => refreshUnpaidBadge(e.paymentIntentId)));
   bus.on('payment.hold_captured', (e) => guard('badge', () => refreshUnpaidBadge(e.paymentIntentId)));
@@ -337,7 +383,7 @@ const BACKOFF_S = [30, 300, 1800];
 /** Worker pass: send what is due. */
 export async function deliverPush(limit = 50): Promise<number> {
   const due = await many<{ id: string; subscription_id: string; payload: any; attempts: number; endpoint: string; p256dh: string; auth: string; kind: string;
-    sub_kind: 'webpush' | 'apns'; brand_org_id: string | null; apns_env: ApnsEnv | null; device_id: string }>(
+    sub_kind: 'webpush' | 'apns' | 'fcm'; brand_org_id: string | null; apns_env: ApnsEnv | null; device_id: string }>(
     `WITH picked AS (
        SELECT m.id FROM push_message m WHERE m.state = 'pending' AND m.next_attempt_at <= now()
         ORDER BY m.id LIMIT $1 FOR UPDATE SKIP LOCKED)
@@ -353,6 +399,7 @@ export async function deliverPush(limit = 50): Promise<number> {
     const timely = m.kind.startsWith('reservation.') || m.kind.startsWith('queue.');
     const ttlS = timely ? 600 : 86_400;
     if (m.sub_kind === 'apns') return deliverApns(m, ttlS, timely);
+    if (m.sub_kind === 'fcm') return deliverFcm(m, ttlS, timely);
     const r = await sendPush(m, m.payload, { ttlS, urgency: timely ? 'high' : 'normal', topic: m.payload?.tag });
     if (r.status != null && r.status >= 200 && r.status < 300) {
       await query(`UPDATE push_message SET state = 'sent', sent_at = now(), last_status = $2, last_error = NULL WHERE id = $1`, [m.id, r.status]);
@@ -394,7 +441,8 @@ async function deliverApns(
   }
   const p = m.payload ?? {};
   // The badge: sessions waiting to be paid, in this operator's app, counted when the message leaves.
-  const badge = await unpaidCount(m.device_id, m.brand_org_id!);
+  // The PlugSure app (network brand) counts sessions at every operator.
+  const badge = await unpaidCount(m.device_id, (await isNetworkOrg(m.brand_org_id)) ? null : m.brand_org_id!);
   const r = await sendToDevice(token, m.apns_env, creds, p.badgeOnly
     ? { title: '', body: '', badgeOnly: true, badge, priority: 5, ttlS }
     : {
@@ -420,6 +468,71 @@ async function deliverApns(
   } else {
     if (outcome === 'credentials') await markApnsRefused(m.brand_org_id!, `Apple refused the key while sending (${r.reason}). Check the Key ID, Team ID and bundle identifier, or upload a new key.`, creds);
     // Refused credentials are the operator's to fix: keep the message for the retries, not the phone's fault.
+    const dead = m.attempts >= BACKOFF_S.length || outcome === 'failed';
+    await query(
+      `UPDATE push_message SET state = $2, last_status = $3, last_error = $4, next_attempt_at = now() + make_interval(secs => $5::int) WHERE id = $1`,
+      [m.id, dead ? 'failed' : 'pending', r.status, err, BACKOFF_S[Math.min(m.attempts - 1, BACKOFF_S.length - 1)]!],
+    );
+    if (outcome !== 'credentials') await query(`UPDATE push_subscription SET failures = failures + 1 WHERE id = $1`, [m.subscription_id]);
+  }
+}
+
+/** The Android notification channel of a message (the app creates these channels; §12.1). */
+export function fcmChannelOf(kind: string): FcmChannel {
+  if (kind.startsWith('session.started') || kind === 'session.ended') return 'charging';
+  if (kind.startsWith('reservation.') || kind.startsWith('queue.')) return 'reservations';
+  if (kind === 'cdr.created' || kind === 'refund.completed' || kind === 'session.unpaid' || kind === 'roaming.cdr') return 'payments';
+  return 'account';
+}
+
+/** The FCM message for a queued notification: shown by the system, with the app's routing in `data` (strings only). */
+export function fcmMessageOf(kind: string, p: Record<string, any>, token: string, ttlS: number, timely: boolean, imageUrl: string | null) {
+  const url = typeof p.url === 'string' ? p.url : '';
+  // The charge / session / partner bill the notification is about, for the app's router (it also has `url`).
+  const ref = /#(?:s|r|rr)\/([0-9a-f-]{36})/i.exec(url)?.[1] ?? null;
+  const body = p.site && p.detail ? `${p.site} · ${p.detail}` : String(p.body ?? '');
+  return {
+    token,
+    notification: { title: String(p.title ?? ''), body, ...(imageUrl ? { image: imageUrl } : {}) },
+    data: {
+      type: kind, url, ...(ref ? { ref } : {}), ...(p.tag ? { tag: String(p.tag) } : {}), ...(p.category ? { category: String(p.category) } : {}),
+      ...(p.actions ? { actions: JSON.stringify(p.actions) } : {}), ...(p.urgent ? { urgent: '1' } : {}),
+    },
+    priority: (timely || p.urgent || kind.startsWith('session.') ? 'high' : 'normal') as 'high' | 'normal',
+    ttlS,
+    channelId: fcmChannelOf(kind),
+    ...(p.tag ? { tag: String(p.tag) } : {}),
+  };
+}
+
+/** One message to an Android app through FCM. */
+async function deliverFcm(
+  m: { id: string; kind: string; subscription_id: string; payload: any; attempts: number; endpoint: string; brand_org_id: string | null },
+  ttlS: number, timely: boolean,
+): Promise<void> {
+  const token = m.endpoint.split(':').slice(2).join(':');
+  const creds = m.brand_org_id ? await fcmCredentialsFor(m.brand_org_id) : null;
+  if (!creds) {
+    await query(`UPDATE push_message SET state = 'failed', last_error = 'no FCM service account' WHERE id = $1`, [m.id]);
+    return;
+  }
+  const p = m.payload ?? {};
+  // Badges on Android follow the notifications shown: nothing to send for a badge-only update.
+  if (p.badgeOnly) {
+    await query(`UPDATE push_message SET state = 'sent', sent_at = now(), last_error = 'badge-only: not sent to Android' WHERE id = $1`, [m.id]);
+    return;
+  }
+  const r = await sendFcm(creds, fcmMessageOf(m.kind, p, token, ttlS, timely, p.image ? await absoluteUrl(m.brand_org_id!, String(p.image)) : null));
+  const outcome = outcomeOfFcm(r);
+  const err = r.errorCode ? `FCM ${r.status ?? ''} ${r.errorCode}${r.detail ? `: ${r.detail}` : ''}`.trim().slice(0, 500) : null;
+  if (outcome === 'sent') {
+    await query(`UPDATE push_message SET state = 'sent', sent_at = now(), last_status = $2, last_error = NULL WHERE id = $1`, [m.id, r.status]);
+    await query(`UPDATE push_subscription SET last_success_at = now(), failures = 0 WHERE id = $1`, [m.subscription_id]);
+  } else if (outcome === 'gone') {
+    await query(`UPDATE push_message SET state = 'gone', last_status = $2, last_error = $3 WHERE id = $1`, [m.id, r.status, err]);
+    await query(`DELETE FROM push_subscription WHERE id = $1`, [m.subscription_id]);
+  } else {
+    if (outcome === 'credentials') await markFcmRefused(m.brand_org_id!, `Google refused the service account while sending (${r.errorCode}). Check its roles, or upload a new one.`, creds);
     const dead = m.attempts >= BACKOFF_S.length || outcome === 'failed';
     await query(
       `UPDATE push_message SET state = $2, last_status = $3, last_error = $4, next_attempt_at = now() + make_interval(secs => $5::int) WHERE id = $1`,

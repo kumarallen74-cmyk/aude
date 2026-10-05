@@ -100,7 +100,7 @@ try {
     check('suspending it again answers 409', again.s === 409, again);
     const rs = await call('POST', `/v1/charge-points/${CP}/remote-start`, { connectorId: 1, idTag: 'E2E-ANY' });
     check('a suspended charger refuses a remote start with 409', rs.s === 409 && /suspended/.test(rs.d?.error ?? ''), rs);
-    const qris = await call('POST', '/v1/checkout/qris', { ocppIdentity: CP, connectorId: 1, amountIdr: 50000 });
+    const qris = await call('POST', '/v1/checkout/qris', { ocppIdentity: CP, connectorId: 1, amountMinor: 50000 });
     check('a suspended charger sells no operator QRIS checkout (409)', qris.s === 409 && /suspended/.test(qris.d?.error ?? ''), qris);
     const audit = await call('GET', '/v1/audit');
     const entry = (audit.d?.entries ?? []).find((e: any) => e.action === 'charge_point.suspended' && e.target_id === CP);
