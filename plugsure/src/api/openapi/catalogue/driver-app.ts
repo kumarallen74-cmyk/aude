@@ -45,6 +45,37 @@ export const schemas: Record<string, Schema> = {
       apnsCheckedAt: nullable('string', { format: 'date-time' }),
       apnsCheckOk: nullable('boolean', { description: 'Apple accepted the key, Team ID and bundle identifier at the last check (or refused them while sending).' }),
       apnsCheckDetail: nullable('string'),
+      scope: { type: 'string', enum: ['operator', 'network'], description: 'operator: a white-label app limited to this operator’s chargers. network: the PlugSure app itself (PlugSure Mobility), every operator’s chargers.' },
+      fcmProjectId: nullable('string', { description: 'Android notifications: the Firebase project of the stored service account.' }),
+      fcmClientEmail: nullable('string'),
+      fcmConfigured: { type: 'boolean', description: 'A Firebase service account is stored: the Android app gets native notifications (FCM HTTP v1).' },
+      fcmCheckedAt: nullable('string', { format: 'date-time' }),
+      fcmCheckOk: nullable('boolean'),
+      fcmCheckDetail: nullable('string'),
+      appConfig: ref('DriverAppConfig'),
+    },
+  },
+  DriverAppConfig: {
+    type: 'object',
+    description: 'The native apps’ version gate and remote configuration, served to them by GET /d/v1/app/config. Every part is optional.',
+    properties: {
+      ios: ref('DriverAppRelease'),
+      android: ref('DriverAppRelease'),
+      maintenance: { type: 'object', properties: { active: B, messageId: { type: 'string', maxLength: 300 }, messageEn: { type: 'string', maxLength: 300 } } },
+      features: {
+        type: 'object', description: 'Feature switches (absent: the default). A switch cannot turn on what the server does not offer (roaming, reservations).',
+        properties: Object.fromEntries(['roaming', 'reservations', 'queue', 'memberships', 'favourites', 'liveActivities', 'accountDeletion', 'applePay', 'googlePay', 'routePlanner'].map((k) => [k, B])),
+        additionalProperties: false,
+      },
+      links: { type: 'object', properties: { support: S, faq: S, status: S } },
+    },
+  },
+  DriverAppRelease: {
+    type: 'object',
+    properties: {
+      minSupported: { type: 'string', pattern: '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,4}$', description: 'Older versions must update before anything else (blocking screen).' },
+      latest: { type: 'string', pattern: '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,4}$', description: 'Older versions see a dismissable "update available".' },
+      storeUrl: { type: 'string', description: 'https:// store page (Android default: the Play page of the package).' },
     },
   },
   DriverAppView: {
@@ -155,6 +186,53 @@ export const ops: Op[] = [
     description: 'The iOS app stops getting notifications; queued ones fail.',
     responses: { 200: { description: 'Removed', schema: OK } },
     errors: [404],
+  },
+  {
+    method: 'PUT', path: '/v1/driver-app/fcm', tag: 'Driver app',
+    summary: 'Upload the Android notifications service account (FCM)',
+    description:
+      'The Firebase project’s service account key (Firebase console → Project settings → Service accounts → Generate new private key), as the JSON object or its text. ' +
+      'It must be the project of the Android app’s google-services.json and hold the “Firebase Cloud Messaging API Admin” role. Stored encrypted, never returned, and checked with Google at once ' +
+      '(a validate-only send: nobody is notified; the result is in fcmCheckOk / fcmCheckDetail).',
+    body: {
+      schema: { type: 'object', required: ['serviceAccount'], properties: { serviceAccount: { anyOf: [{ type: 'object' }, S], description: 'The service account JSON.' } } },
+      example: { serviceAccount: { type: 'service_account', project_id: 'plugsure-app', private_key_id: '…', private_key: '-----BEGIN PRIVATE KEY-----\n…', client_email: 'fcm-sender@plugsure-app.iam.gserviceaccount.com', token_uri: 'https://oauth2.googleapis.com/token' } },
+    },
+    responses: { 200: { description: 'The app, with the check’s result', schema: { allOf: [ref('DriverAppView'), { type: 'object', properties: { androidPushDevices: { type: 'integer' } } }] } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'POST', path: '/v1/driver-app/fcm/check', tag: 'Driver app',
+    summary: 'Check the Android notifications service account with Google again',
+    description: 'A validate-only send to a token that cannot exist: Google checks the service account first, so nobody is notified.',
+    responses: { 200: { description: 'The app, with the check’s result', schema: { allOf: [ref('DriverAppView'), { type: 'object', properties: { androidPushDevices: { type: 'integer' } } }] } } },
+    errors: [409],
+  },
+  {
+    method: 'DELETE', path: '/v1/driver-app/fcm', tag: 'Driver app',
+    summary: 'Remove the Android notifications service account',
+    description: 'The Android app stops getting notifications; queued ones fail.',
+    responses: { 200: { description: 'Removed', schema: OK } },
+    errors: [404],
+  },
+  {
+    method: 'GET', path: '/v1/driver-app/app-config', tag: 'Driver app',
+    summary: 'The native apps’ version gate and remote configuration',
+    responses: { 200: { description: 'The configuration', schema: { type: 'object', required: ['appConfig'], properties: { appConfig: ref('DriverAppConfig') } } } },
+    errors: [404],
+  },
+  {
+    method: 'PUT', path: '/v1/driver-app/app-config', tag: 'Driver app',
+    summary: 'Change the native apps’ version gate and remote configuration',
+    description:
+      'Replaces the whole configuration. Apps below `minSupported` must update (blocking screen); below `latest` they offer an update. ' +
+      '`maintenance.active` shows the message (Indonesian / English) instead of the app. 422 with `fields` for a bad version, address or unknown feature.',
+    body: {
+      schema: ref('DriverAppConfig'),
+      example: { ios: { minSupported: '1.0.0', latest: '1.0.3', storeUrl: 'https://apps.apple.com/app/id0000000000' }, android: { minSupported: '1.0.0', latest: '1.0.3' }, maintenance: { active: false }, features: { routePlanner: false } },
+    },
+    responses: { 200: { description: 'The configuration as saved', schema: { type: 'object', required: ['appConfig'], properties: { appConfig: ref('DriverAppConfig') } } } },
+    errors: [404, 422],
   },
   {
     method: 'DELETE', path: '/v1/driver-app', tag: 'Driver app',

@@ -95,7 +95,7 @@ registerView('console-brand', {
           ${isPlatform ? `<div class="card" style="margin-bottom:14px"><div class="body">
             <div class="cell-title">Console web addresses <span class="cell-sub">(platform operator)</span></div>
             <p class="cell-sub" style="margin:6px 0 10px">Approve an address once its site block is on the web server (deploy/Caddyfile). Only one operator can have an address approved.</p>
-            ${claims.length ? `<table class="table"><tbody>${claims.map((c) => `<tr>
+            ${claims.length ? `<table class="t"><tbody>${claims.map((c) => `<tr>
               <td><div class="cell-title mono">${esc(c.hostname)}</div><div class="cell-sub">${esc(c.orgName)} · ${esc(c.productName)}</div></td>
               <td style="text-align:right;white-space:nowrap">${c.approvedAt
                 ? `${tag('t-ok', 'approved')} <button class="btn sm ghost" type="button" data-revoke="${esc(c.orgId)}">Withdraw</button>`

@@ -1,8 +1,10 @@
 import {
   $, $$, esc, el, api, state, icon, toast, views, parseHash, navigate, setUnauthorizedHandler, setPasswordChangeHandler,
-  startLive, stopLive, onLive, modal, formValues, fieldErrors, field, debounce, fmt, closeOverlays,
-  applyBrand, brandLogo, productName, productTagline, titleSuffix,
+  setMfaHoldHandler, startLive, stopLive, onLive, modal, formValues, fieldErrors, field, debounce, fmt, closeOverlays,
+  applyBrand, brandLogo, productName, productTagline, titleSuffix, setOrgZone,
 } from './core.js';
+import { enrolDialog, mfaDialog } from './mfa.js';
+import { msSignInButton, msMessage, takeMsOutcome, microsoftOffered, signInMultiCountry } from './microsoft.js';
 
 // Views register themselves on import.
 import './views/dashboard.js';
@@ -22,6 +24,7 @@ import './views/driver-app.js';
 import './views/alert-routing.js';
 import './views/statements.js';
 import './views/platform-billing.js';
+import './views/hub.js';
 import './views/billing.js';
 import './views/fleet-billing.js';
 import './views/pricing.js';
@@ -36,6 +39,7 @@ import './views/compliance.js';
 import './views/logs.js';
 import './views/users.js';
 import './views/console-brand.js';
+import './views/organisation.js';
 
 /**
  * Application shell: sign-in, the collapsible sidebar (built from the views the
@@ -84,23 +88,44 @@ async function loadHostBrand() {
   return hostBrand;
 }
 
-function renderLogin(message = '') {
-  stopLive();
-  applyBrand(hostBrand ?? null);
-  document.title = `Sign in — ${titleSuffix()}`;
-  root.innerHTML = `
+/**
+ * "Sign in with Microsoft" (v1.6.0): offered on this address? And the outcome the server put in
+ * the address on the way back from Microsoft (/?ms=<code>), shown once — on the sign-in page
+ * for a refusal, as a toast once signed in (a connected tenant, a failed connection).
+ */
+let msOn = false;
+let msOutcome = takeMsOutcome();
+
+/** The sign-in page around a form (the password step, or the two-step verification code). */
+function loginPage(formHtml) {
+  return `
   <div class="login-wrap">
     <section class="login-art">
       <div class="row login-brand" style="gap:12px"><span style="width:40px;height:40px;display:block">${brandLogo()}</span>
         <div><b style="font-size:18px;color:#fff">${esc(productName())}</b>${productTagline() ? `<div style="font-size:12px;opacity:.8">${esc(productTagline())}</div>` : ''}</div></div>
       <div>
         <h1>Run your charging network from one console.</h1>
-        <p>Onboard chargers, set PLN capacity limits, price sessions under Permen ESDM, and resolve faults remotely — without a terminal or a SQL prompt.</p>
-        <ul><li>OCPP 1.6-J &amp; 2.0.1 dual stack</li><li>Security profiles 1–3 with mutual TLS</li><li>PBJT-TL &amp; PPN (DPP nilai lain) invoicing</li></ul>
+        ${signInMultiCountry()
+          ? `<p>Onboard chargers, keep every site within its grid connection, price sessions in rupiah, ringgit and Singapore dollars, and resolve faults remotely — without a terminal or a SQL prompt.</p>
+        <ul><li>OCPP 1.6-J, 2.0.1 &amp; 2.1</li><li>Security profiles 1–3 with mutual TLS</li><li>Tax receipts for Indonesia (PPN, PBJT-TL), Malaysia (SST) and Singapore (GST)</li></ul>`
+          // An Indonesian installation (MULTI_COUNTRY off): v1.5's wording.
+          : `<p>Onboard chargers, set PLN capacity limits, price sessions under Permen ESDM, and resolve faults remotely — without a terminal or a SQL prompt.</p>
+        <ul><li>OCPP 1.6-J, 2.0.1 &amp; 2.1</li><li>Security profiles 1–3 with mutual TLS</li><li>PBJT-TL &amp; PPN (DPP nilai lain) invoicing</li></ul>`}
       </div>
       <div style="font-size:12px;opacity:.7">ISO 27001-aligned: every action is attributed and hash-chained in the audit log.</div>
     </section>
-    <section class="login-form">
+    <section class="login-form">${formHtml}</section>
+  </div>`;
+}
+
+function renderLogin(message = '') {
+  stopLive();
+  // Back from Microsoft with a refusal: that says more than "your session has ended". It stays
+  // until the person does something (boot can render this page more than once).
+  if (msOutcome && msOutcome !== 'linked') message = msMessage(msOutcome);
+  applyBrand(hostBrand ?? null);
+  document.title = `Sign in — ${titleSuffix()}`;
+  root.innerHTML = loginPage(`
       <form novalidate>
         <div><h2>Sign in</h2><p class="muted" style="margin:4px 0 0">Use the account your administrator created for you.</p></div>
         ${message ? `<div class="callout warn">${icon('warn')}<div>${esc(message)}</div></div>` : ''}
@@ -108,19 +133,21 @@ function renderLogin(message = '') {
         ${field('Password', '<input name="password" type="password" autocomplete="current-password" required>')}
         <div class="err" data-error role="alert"></div>
         <button class="btn primary" type="submit" style="height:38px">Sign in</button>
+        ${msOn ? `<div class="login-or">or</div>${msSignInButton()}` : ''}
         <p class="small muted">Forgotten your password? Ask a Super Administrator to reset it from <b>Users &amp; Roles</b>.</p>
-      </form>
-    </section>
-  </div>`;
+      </form>`);
   const form = $('form', root);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    msOutcome = null;
     const btn = $('button[type=submit]', form);
     btn.classList.add('busy');
     $('[data-error]', form).textContent = '';
     try {
       const v = formValues(form);
       const r = await api('/v1/auth/login', { method: 'POST', body: v });
+      // Two-step verification: the password was right, now the code.
+      if (r.mfaRequired) return renderCodeStep();
       await boot(r.mustChangePassword);
     } catch (err) {
       $('[data-error]', form).textContent = err.message;
@@ -131,7 +158,78 @@ function renderLogin(message = '') {
   setTimeout(() => $('input[name=email]', form)?.focus(), 30);
 }
 
-setUnauthorizedHandler(() => renderLogin('Your session has ended. Please sign in again.'));
+/**
+ * The second sign-in step: a six-digit code from the authenticator app, or a recovery code.
+ * The session is pending until then (the server answers nothing else); "Back" signs it out.
+ */
+function renderCodeStep(message = '') {
+  stopLive();
+  applyBrand(hostBrand ?? null);
+  document.title = `Two-step verification — ${titleSuffix()}`;
+  root.innerHTML = loginPage(`
+      <form novalidate>
+        <div><h2>Two-step verification</h2><p class="muted" style="margin:4px 0 0">Enter the six-digit code from your authenticator app.</p></div>
+        ${message ? `<div class="callout warn">${icon('warn')}<div>${esc(message)}</div></div>` : ''}
+        ${field('Code', '<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="24" required>', { help: 'Lost your phone? Enter one of your recovery codes instead.' })}
+        <div class="err" data-error role="alert"></div>
+        <button class="btn primary" type="submit" style="height:38px">Verify</button>
+        <button class="btn ghost" type="button" data-back>Back to sign in</button>
+      </form>`);
+  const form = $('form', root);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', form);
+    btn.classList.add('busy');
+    $('[data-error]', form).textContent = '';
+    try {
+      const r = await api('/v1/auth/mfa/verify', { method: 'POST', body: { code: String(formValues(form).code ?? '').trim() } });
+      if (r.recoveryCodesLeft !== undefined) {
+        toast(`Signed in with a recovery code: ${r.recoveryCodesLeft} left.${r.recoveryCodesLeft <= 3 ? ' Ask an administrator for a fresh set.' : ''}`, r.recoveryCodesLeft <= 3 ? 'warn' : 'ok');
+      }
+      await boot(r.mustChangePassword);
+    } catch (err) {
+      // 401: the lock-out ended the pending sign-in; start again from the password.
+      if (err.status === 401) return renderLogin(err.message);
+      $('[data-error]', form).textContent = err.message;
+      $('input[name=code]', form).select();
+    } finally {
+      btn.classList.remove('busy');
+    }
+  });
+  $('[data-back]', form).addEventListener('click', async () => {
+    await api('/v1/auth/logout', { method: 'POST' }).catch(() => {});
+    renderLogin();
+  });
+  setTimeout(() => $('input[name=code]', form)?.focus(), 30);
+}
+
+async function signOutTo(message = '') {
+  await api('/v1/auth/logout', { method: 'POST' }).catch(() => {});
+  state.me = null;
+  renderLogin(message);
+}
+
+/** An administrator without two-step verification: set it up, then the console loads. */
+let enrolling = false;
+function forcedEnrolment() {
+  if (enrolling) return;
+  enrolling = true;
+  root.innerHTML = '';
+  enrolDialog({
+    forced: true,
+    onDone: () => { enrolling = false; void boot(); },
+    onSignOut: () => { enrolling = false; void signOutTo(); },
+  });
+}
+
+// Before the console has loaded, a 401 only means "not signed in yet": no "session ended".
+setUnauthorizedHandler(() => renderLogin(state.me ? 'Your session has ended. Please sign in again.' : ''));
+// Safety net: the server holds the session for two-step verification (a reload during the
+// code step, or an account promoted to administrator while signed in).
+setMfaHoldHandler((code) => {
+  if (code === 'mfa_required') renderCodeStep();
+  else forcedEnrolment();
+});
 // Safety net: if the server ever answers "password change required" (it holds a
 // one-time password to that), ask for a new password once, then reload the console.
 let askingForPassword = false;
@@ -186,12 +284,15 @@ function changePasswordDialog(forced = false, onDone = null) {
 const portalMode = () => (state.me?.owners?.length ?? 0) > 0;
 /** Fleet customer portal: the user is a fleet customer's staff and sees only the fleet-portal page. */
 const fleetMode = () => !portalMode() && (state.me?.fleets?.length ?? 0) > 0;
+/** An external PlugSure Hub member's console (a hub-only organisation): its hub page, users and API keys only. */
+const hubOnlyMode = () => state.me?.org?.hubOnly === true;
 /** In a portal, only views flagged for it are shown. */
-const inPortal = (v) => (portalMode() ? !!v.portal : fleetMode() ? !!v.fleetPortal : !v.fleetPortal);
+const inPortal = (v) => (portalMode() ? !!v.portal : fleetMode() ? !!v.fleetPortal : hubOnlyMode() ? !!v.hubOnly : !v.fleetPortal);
 
 function visibleViews() {
   return [...views.values()]
-    .filter((v) => !v.hidden && (!v.perm || [].concat(v.perm).some((p) => state.can(p))) && inPortal(v))
+    // `when`: a view that exists only with a server feature (e.g. Hub, with HUB_ENABLED).
+    .filter((v) => !v.hidden && (!v.perm || [].concat(v.perm).some((p) => state.can(p))) && inPortal(v) && (!v.when || v.when()))
     .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
 }
 
@@ -221,11 +322,11 @@ function renderShell() {
         <button class="btn ghost icon" data-toggle title="Collapse sidebar" aria-label="Toggle sidebar">${icon('menu')}</button>
         <div class="crumbs" data-crumbs></div>
         <div class="spacer"></div>
-        <div class="search${fleetMode() ? ' hidden' : ''}" role="search">${icon('search')}
+        <div class="search${fleetMode() || hubOnlyMode() ? ' hidden' : ''}" role="search">${icon('search')}
           <input type="search" placeholder="${portalMode() ? 'Find one of your chargers…' : 'Find a charger, site or card…  ( / )'}" aria-label="Search" data-search autocomplete="off">
           <button class="btn ghost icon search-close" type="button" data-search-close aria-label="Close search">${icon('x')}</button>
           <div class="results hidden" data-results></div></div>
-        ${fleetMode() ? '' : `<button class="btn ghost icon mobile-only" type="button" data-search-open aria-label="Search" title="Search">${icon('search')}</button>`}
+        ${fleetMode() || hubOnlyMode() ? '' : `<button class="btn ghost icon mobile-only" type="button" data-search-open aria-label="Search" title="Search">${icon('search')}</button>`}
         ${portalMode() || fleetMode() ? '' : '<span class="row small muted" title="Live event stream"><span class="live-dot" data-live></span>live</span>'}
         <button class="userchip" data-user aria-haspopup="menu"><span class="avatar">${esc(initials)}</span>
           <span class="who"><b>${esc(me.user.name)}</b><small>${esc(roleLabel)}</small></span></button>
@@ -251,6 +352,7 @@ function renderShell() {
     const m = el(`<div class="menu" role="menu">
       <div style="padding:6px 10px 8px"><b></b><div class="small muted" data-email></div><div class="small muted" data-roles></div></div><hr>
       ${me.user.email ? `<button data-a="password">${icon('key')} Change password</button>` : ''}
+      ${me.user.email ? `<button data-a="mfa">${icon('phone')} Two-step verification${me.user.mfa?.enabled ? ': on' : ''}</button>` : ''}
       <button data-a="theme">${icon('sun')} Theme: <span data-theme-label></span></button>
       <hr><button data-a="logout">${icon('logout')} Sign out</button></div>`);
     $('b', m).textContent = me.user.name;
@@ -269,6 +371,7 @@ function renderShell() {
       }
       m.remove();
       if (a === 'password') changePasswordDialog(false);
+      if (a === 'mfa') void mfaDialog();
       if (a === 'logout') {
         await api('/v1/auth/logout', { method: 'POST' }).catch(() => {});
         state.me = null;
@@ -361,8 +464,10 @@ function wireSearch() {
 
 // ------------------------------------------------------------------ routing
 
+let routeSeq = 0;
 async function route() {
   if (!state.me) return;
+  const seq = ++routeSeq;
   // An overlay belongs to the page that opened it. Without this, drawers
   // survived navigation and stacked up (on a phone, covering the new page).
   // It also makes the phone's Back button close an open drawer.
@@ -386,8 +491,14 @@ async function route() {
   target.innerHTML = '<div class="skeleton" style="width:30%;height:22px;margin-bottom:14px"></div><div class="skeleton" style="height:160px"></div>';
   try {
     const r = await def.render(target, params);
-    if (typeof r === 'function') cleanupView = r;
+    if (typeof r === 'function') {
+      if (seq === routeSeq) cleanupView = r;
+      else try { r(); } catch {}
+    }
   } catch (e) {
+    // A view still loading when the operator moved on must not paint its failure over the new page
+    // (e.g. the dashboard right after sign-in, then a deep link).
+    if (seq !== routeSeq) return;
     target.innerHTML = `<div class="callout crit">${icon('warn')}<div><b>This view failed to load.</b><br>${esc(e.message)}</div></div>`;
   }
 }
@@ -404,24 +515,36 @@ window.addEventListener('ps-brand-changed', (e) => {
 // ------------------------------------------------------------------ boot
 
 async function boot(mustChangePassword = false) {
-  await loadHostBrand();
+  await Promise.all([loadHostBrand(), microsoftOffered().then((v) => { msOn = v; })]);
   try {
     const [me, meta] = await Promise.all([api('/v1/auth/me'), api('/v1/meta')]);
     state.me = me;
     state.meta = meta;
+    // Times without a site of their own show in the organisation's reporting zone (WIB, MYT, SGT, …).
+    setOrgZone(me.org?.timezone);
     applyBrand(me.consoleBrand ?? null);
   } catch (e) {
     if (e.status === 401) return renderLogin();
+    // The sign-in still needs its code: the hold handler has shown the code step.
+    if (e.status === 403 && e.data?.code === 'mfa_required') return;
     root.innerHTML = `<div class="content"><div class="callout crit">${icon('warn')}<div><b>Cannot reach the server.</b><br>${esc(e.message)}</div></div></div>`;
     return;
   }
-  const start = async () => { renderShell(); await route(); };
+  const start = async () => {
+    renderShell();
+    await route();
+    // Back from connecting the organisation's Microsoft tenant (or a refusal of it).
+    if (msOutcome) toast(msMessage(msOutcome), msOutcome === 'linked' ? 'ok' : 'crit');
+    msOutcome = null;
+  };
   if (mustChangePassword || state.me.user.mustChangePassword) {
-    // Nothing else is served until the one-time password is replaced.
+    // Nothing else is served until the one-time password is replaced. Then boot again:
+    // an administrator may still have two-step verification to set up.
     root.innerHTML = '';
-    changePasswordDialog(true, () => void start());
+    changePasswordDialog(true, () => void boot());
     return;
   }
+  if (state.me.user.mfaEnrolmentRequired) return forcedEnrolment();
   await start();
 }
 

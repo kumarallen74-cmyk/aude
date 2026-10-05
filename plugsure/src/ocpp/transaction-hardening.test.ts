@@ -200,7 +200,7 @@ if (DB_OK) {
       `INSERT INTO organisation (name, slug) VALUES ('Tx Hardening Test', $1)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
     const siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Tx Hardening Hub', 1000) RETURNING id`, [orgId]))!.id;
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Tx Hardening Hub', 1000) RETURNING id`, [orgId]))!.id;
     cpId = await addCp(siteId, IDENT, 'ocpp1.6', [1, 2, 3]);
     cp201Id = await addCp(siteId, IDENT201, 'ocpp2.0.1', [1, 2]);
     await query(`INSERT INTO token (org_id, kind, uid, status) VALUES ($1, 'rfid', $2, 'Accepted'), ($1, 'rfid', $3, 'Blocked')`, [orgId, CARD, BLOCKED]);
@@ -325,7 +325,7 @@ dbDescribe('B: refused transactions', () => {
     await freeAll();
     await query(`INSERT INTO token (org_id, kind, uid, status) VALUES ($1, 'prepaid', $2, 'Accepted') ON CONFLICT DO NOTHING`, [orgId, PP]);
     const pi = (await one<{ id: string }>(
-      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, amount_captured_idr, allowance_wh,
+      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, amount_captured_minor, allowance_wh,
                                    connector_uuid, claim_id_tag, claim_token_minted, captured_at)
        VALUES ($1, 'test', 'qris', 'prepurchase', 'captured', 50000, 50000, 20000, $2, $3, true, now()) RETURNING id`,
       [orgId, conn[1], PP]))!.id;
@@ -387,7 +387,7 @@ dbDescribe('C: 2.0.1 token presented after the start', () => {
     const c201 = (await one<{ id: string }>(
       `SELECT c.id FROM connector c JOIN evse e ON e.id = c.evse_uuid WHERE e.charge_point_id = $1 AND e.evse_id = 1`, [cp201Id]))!.id;
     const pi = (await one<{ id: string }>(
-      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, amount_captured_idr, allowance_wh,
+      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, amount_captured_minor, allowance_wh,
                                    connector_uuid, claim_id_tag, claim_token_minted, captured_at)
        VALUES ($1, 'test', 'qris', 'prepurchase', 'captured', 40000, 40000, 15000, $2, $3, true, now()) RETURNING id`,
       [orgId, c201, tag]))!.id;
@@ -445,11 +445,11 @@ dbDescribe('G: the prepaid claim window runs from payment', () => {
     const tag = `${PP}-LATE`;
     await query(`INSERT INTO token (org_id, kind, uid, status, valid_to) VALUES ($1, 'prepaid', $2, 'Accepted', now() - interval '10 minutes') ON CONFLICT DO NOTHING`, [orgId, tag]);
     const pi = (await one<{ id: string; paid_at: Date | null }>(
-      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted, created_at)
+      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted, created_at)
        VALUES ($1, 'test', 'qris', 'prepurchase', 'pending', 30000, 10000, $2, $3, true, now() - interval '40 minutes') RETURNING id, paid_at`,
       [orgId, conn[3], tag]))!;
     assert.equal(pi.paid_at, null);
-    await query(`UPDATE payment_intent SET state = 'captured', amount_captured_idr = 30000, captured_at = now() - interval '5 minutes' WHERE id = $1`, [pi.id]);
+    await query(`UPDATE payment_intent SET state = 'captured', amount_captured_minor = 30000, captured_at = now() - interval '5 minutes' WHERE id = $1`, [pi.id]);
     const paid = await one<{ paid_at: Date }>(`SELECT paid_at FROM payment_intent WHERE id = $1`, [pi.id]);
     assert.ok(Math.abs(new Date(paid!.paid_at).getTime() - (Date.now() - 300_000)) < 60_000, 'paid_at = the capture time');
 
@@ -470,7 +470,7 @@ dbDescribe('G: the prepaid claim window runs from payment', () => {
     const tag = `${PP}-OLD`;
     await query(`INSERT INTO token (org_id, kind, uid, status) VALUES ($1, 'prepaid', $2, 'Accepted') ON CONFLICT DO NOTHING`, [orgId, tag]);
     await query(
-      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, amount_captured_idr, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted, created_at, captured_at)
+      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, amount_captured_minor, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted, created_at, captured_at)
        VALUES ($1, 'test', 'qris', 'prepurchase', 'captured', 30000, 30000, 10000, $2, $3, true, now() - interval '45 minutes', now() - interval '40 minutes')`,
       [orgId, conn[3], tag]);
     assert.equal((await handle16Call(ctx(), 'Authorize', { idTag: tag })).idTagInfo.status, 'Expired');

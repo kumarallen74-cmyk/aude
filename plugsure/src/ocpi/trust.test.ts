@@ -45,7 +45,7 @@ describe('ocpi trust: pure rules', () => {
     assert.match(c({ excl: 900_000, incl: 999_000, energyKwh: 10 })!, /IDR\/kWh/);
     assert.match(c({ incl: 30_000 })!, /less than excl_vat/);
     assert.match(c({ end: new Date(at.getTime() + 8 * 24 * 3600_000) })!, /7 days/);
-    assert.equal(c({ currency: 'EUR', excl: 900, incl: 1000, energyKwh: 10 }), null, 'no price ceiling for currencies we never bill');
+    assert.match(String(c({ currency: 'EUR', excl: 900, incl: 1000, energyKwh: 10 })), /unsupported currency "EUR"/, 'a currency we cannot check is held (fail closed)');
   });
 
   test('our public origin: configured, else the request only in development/test', () => {

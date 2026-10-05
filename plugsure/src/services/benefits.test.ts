@@ -13,9 +13,9 @@ const tariff = {
 } as unknown as Tariff;
 const ctx = {
   startedAt: new Date('2026-09-10T03:00:00Z'), endedAt: new Date('2026-09-10T03:40:00Z'),
-  energyWh: 20_000, connectorMaxPowerW: 60_000, pbjtRateBps: 1000, timezone: 'Asia/Jakarta',
+  energyWh: 20_000, connectorMaxPowerW: 60_000, localTaxRateBps: 1000, timezone: 'Asia/Jakarta',
 };
-const sum = (lines: CdrLine[], kinds: string[]) => lines.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.amountIdr, 0);
+const sum = (lines: CdrLine[], kinds: string[]) => lines.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.amountMinor, 0);
 
 describe('memberships and promotions in rating', () => {
   const base = rateSession(tariff, ctx);
@@ -25,17 +25,17 @@ describe('memberships and promotions in rating', () => {
     const disc = r.lines.filter((l) => l.adjustment);
     assert.equal(disc.length, 1);
     assert.equal(disc[0]!.kind, 'energy');
-    assert.equal(disc[0]!.amountIdr, -Math.round(48_000 * 0.2));
+    assert.equal(disc[0]!.amountMinor, -Math.round(48_000 * 0.2));
     // PBJT is on electricity: it falls with the energy discount; PPN follows the lower price.
-    assert.equal(r.tax.subtotalIdr, base.tax.subtotalIdr - 9_600);
-    assert.equal(r.tax.pbjtIdr, Math.round(((48_000 - 9_600) * 1000) / 10_000));
-    assert.ok(r.tax.ppnIdr < base.tax.ppnIdr && r.tax.totalIdr < base.tax.totalIdr);
+    assert.equal(r.tax.subtotalMinor, base.tax.subtotalMinor - 9_600);
+    assert.equal(r.tax.localTaxMinor, Math.round(((48_000 - 9_600) * 1000) / 10_000));
+    assert.ok(r.tax.taxMinor < base.tax.taxMinor && r.tax.totalMinor < base.tax.totalMinor);
   });
 
   test('member price per kWh applies only where it is lower', () => {
-    const cheaper = applyAdjustments(structuredClone(base.lines), [{ source: 'subscription', id: 's', name: 'Member', energyRateIdr: 2000 }], 20);
+    const cheaper = applyAdjustments(structuredClone(base.lines), [{ source: 'subscription', id: 's', name: 'Member', energyRate: 2000 }], 20);
     assert.equal(sum(cheaper, ['energy']), 40_000);
-    const dearer = applyAdjustments(structuredClone(base.lines), [{ source: 'subscription', id: 's', name: 'Member', energyRateIdr: 3000 }], 20);
+    const dearer = applyAdjustments(structuredClone(base.lines), [{ source: 'subscription', id: 's', name: 'Member', energyRate: 3000 }], 20);
     assert.equal(sum(dearer, ['energy']), 48_000);
   });
 
@@ -44,10 +44,10 @@ describe('memberships and promotions in rating', () => {
     const lines = applyAdjustments(structuredClone(base.lines), [a], 20);
     assert.equal(sum(lines, ['energy']), 48_000 - 12_000);
     assert.equal(sum(lines, ['session', 'admin']), 0);
-    const big = applyAdjustments(structuredClone(base.lines), [{ source: 'promotion', id: 'p', name: 'Gratis', amountOffIdr: 1_000_000 }], 20);
+    const big = applyAdjustments(structuredClone(base.lines), [{ source: 'promotion', id: 'p', name: 'Gratis', amountOffMinor: 1_000_000 }], 20);
     assert.equal(sum(big, ['energy']), 0);
     assert.equal(sum(big, ['session']), 0);
-    assert.equal(adjustmentTotals(big).get('p')!.discountIdr, 53_000);
+    assert.equal(adjustmentTotals(big).get('p')!.discountMinor, 53_000);
   });
 
   test('a membership then a promotion: each works on what the one before left', () => {
@@ -57,8 +57,8 @@ describe('memberships and promotions in rating', () => {
     ], 20);
     assert.equal(sum(lines, ['energy']), Math.round(48_000 * 0.9) - Math.round(48_000 * 0.9 * 0.1));
     const t = adjustmentTotals(lines);
-    assert.equal(t.get('s')!.discountIdr, 4_800);
-    assert.equal(t.get('p')!.discountIdr, 4_320);
+    assert.equal(t.get('s')!.discountMinor, 4_800);
+    assert.equal(t.get('p')!.discountMinor, 4_320);
   });
 
   test('the cheapest allowed combination wins; a non-stacking promotion replaces the membership', () => {
@@ -73,9 +73,9 @@ describe('memberships and promotions in rating', () => {
     };
     const opts = adjustmentOptions(b, 20);
     assert.equal(opts.length, 3, 'the 50 kWh-minimum promotion is not offered for 20 kWh');
-    const best = pickCheapest(opts, (a) => { const r = rateSession(tariff, { ...ctx, adjustments: a }); return { ...r, total: r.tax.totalIdr }; });
+    const best = pickCheapest(opts, (a) => { const r = rateSession(tariff, { ...ctx, adjustments: a }); return { ...r, total: r.tax.totalMinor }; });
     assert.deepEqual(best.option.map((a) => a.id), ['p2'], '30% alone beats 10% + 5%');
-    const plain = pickCheapest(adjustmentOptions({ ...b, promotions: [] }, 20), (a) => { const r = rateSession(tariff, { ...ctx, adjustments: a }); return { ...r, total: r.tax.totalIdr }; });
+    const plain = pickCheapest(adjustmentOptions({ ...b, promotions: [] }, 20), (a) => { const r = rateSession(tariff, { ...ctx, adjustments: a }); return { ...r, total: r.tax.totalMinor }; });
     assert.deepEqual(plain.option.map((a) => a.id), ['s']);
   });
 

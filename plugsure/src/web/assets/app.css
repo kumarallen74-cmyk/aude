@@ -87,9 +87,19 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .hidden { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Icons (core.js icon()) have no intrinsic size: without this an icon fills its container
+   (a 900px shield beside a heading, a card-wide arrow in a link card). Zero specificity, so
+   every container rule that sizes its icons (.btn svg, .nav a svg, .plug svg…) still wins. */
+:where(svg.ic) { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; }
+/* A leading icon beside a block of text (first-run guidance). */
+.ic.lead { width: 24px; height: 24px; color: var(--accent); margin-top: 1px; }
 
 /* ------------------------------------------------------------------ shell */
-.shell { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh;
+  /* The sidebar is sticky and one viewport tall; paint its column the full height of the
+     page too, so a long page (or a full-page capture / print preview) never shows the panel
+     ending mid-page with bare background under it. */
+  background: linear-gradient(90deg, var(--panel) calc(var(--sidebar-w) - 1px), var(--line) 0 var(--sidebar-w), transparent 0); }
 .shell.collapsed { --sidebar-w: 60px; }
 .sidebar {
   position: sticky; top: 0; height: 100vh; overflow-y: auto; overflow-x: hidden;
@@ -168,7 +178,11 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .page-head p { margin: 2px 0 0; color: var(--muted); max-width: 90ch; }
 .page-head .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .section { margin-top: 22px; }
-.section > h2 { font-size: 14.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.section > h2, .section-head > h2 { font-size: 14.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.section > h2 svg, .section-head > h2 svg { width: 18px; height: 18px; color: var(--muted); }
+.section-head { margin: 4px 0 12px; }
+.section-head > h2 { margin-bottom: 4px; }
+.section-head > .muted { font-size: 12.5px; max-width: 90ch; }
 .hint { color: var(--muted); font-size: 12.5px; max-width: 90ch; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
@@ -187,6 +201,10 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
 .grid.three { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
 .grid > * { min-width: 0; }
+/* Main column beside a narrower side column (settings beside set-up, form beside a live
+   preview). Side by side on a desktop, stacked on a tablet or phone. */
+.grid.split { grid-template-columns: minmax(0, 3fr) minmax(300px, 2fr); gap: 16px; align-items: start; }
+.grid.split.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 
 /* ------------------------------------------------------------------ cards / kpis */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
@@ -194,6 +212,10 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .card > header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .card > header h3 { font-size: 13.5px; }
 .card > .body { padding: 14px 16px; }
+/* A whole card that is a link (Integrations → "Managed on their own pages"). */
+a.card.link { display: block; color: inherit; text-decoration: none; }
+a.card.link:hover { border-color: var(--line-2); background: var(--panel-2); text-decoration: none; }
+a.card.link .cell-title svg { width: 13px; height: 13px; margin-left: 3px; vertical-align: -1px; color: var(--muted); }
 .kpi { padding: 14px 16px; }
 .kpi .label { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
 .kpi .value { font-size: 24px; font-weight: 650; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; }
@@ -232,10 +254,10 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .btn.ghost:hover { background: var(--bg-2); }
 .btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
 .btn.icon { width: 32px; padding: 0; }
-.btn[disabled], .btn.busy { opacity: .55; cursor: not-allowed; pointer-events: none; }
-.btn.busy::after { content: ""; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 99px; animation: spin .7s linear infinite; }
+.btn[disabled], .btn.busy, .ms-signin[disabled], .ms-signin.busy { opacity: .55; cursor: not-allowed; pointer-events: none; }
+.btn.busy::after, .ms-signin.busy::after { content: ""; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 99px; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.seg { display: inline-flex; border: 1px solid var(--field-line); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel); }
+.seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--field-line); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel); }
 .seg button { border: 0; background: none; padding: 0 12px; height: 30px; font: 500 12.5px var(--sans); color: var(--ink-2); cursor: pointer; border-right: 1px solid var(--line); }
 .seg button:last-child { border-right: 0; }
 .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
@@ -335,12 +357,20 @@ pre.json { margin: 0; font: 11.5px/1.45 var(--mono); white-space: pre-wrap; word
 .callout.crit { background: var(--crit-soft); border-color: color-mix(in srgb, var(--crit) 30%, transparent); }
 .callout.ok { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .callout svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+/* The text column may shrink, and a long unbroken token (a config key, a URL) wraps instead
+   of pushing the page sideways on a phone. */
+.callout > div { min-width: 0; overflow-wrap: anywhere; }
 .card > header h3 svg { width: 18px; height: 18px; flex: none; vertical-align: -3px; margin-right: 4px; }
 .callout b { color: var(--ink); }
 .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
 .empty-state h3 { color: var(--ink); font-size: 15px; margin-bottom: 4px; }
 .skeleton { background: linear-gradient(90deg, var(--bg-2), var(--panel-2), var(--bg-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: 6px; height: 14px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+/* Inline "working…" indicator (e.g. an integration test in progress). */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 99px; animation: spin .7s linear infinite; vertical-align: -2px; color: var(--muted); }
+/* A configuration snippet to copy (Caddyfile, nginx). */
+pre.code { margin: 8px 0; padding: 10px 12px; font: 12px/1.5 var(--mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink-2); overflow-x: auto; }
 
 /* ------------------------------------------------------------------ key/value */
 dl.kv { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
@@ -435,6 +465,26 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
 .login-form form { width: min(360px, 100%); display: flex; flex-direction: column; gap: 14px; }
 .login-form h2 { font-size: 20px; }
 
+/* "Sign in with Microsoft" (v1.6.0): Microsoft's own button — the four-square mark, its wording
+   and its colours (light: white, #8C8C8C border, #5E5E5E text; dark: #2F2F2F, white text).
+   An <a> to /v1/auth/microsoft/start: a plain navigation, no script. */
+.ms-signin { display: inline-flex; align-items: center; justify-content: center; gap: 12px; height: 41px; padding: 0 12px;
+  background: #fff; color: #5e5e5e; border: 1px solid #8c8c8c; border-radius: 0; font: 600 15px/1 "Segoe UI", system-ui, -apple-system, sans-serif;
+  text-decoration: none; cursor: pointer; }
+.ms-signin:hover { background: #f3f3f3; text-decoration: none; }
+.ms-signin:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ms-signin svg { width: 21px; height: 21px; flex: none; }
+.ms-signin.sm { height: 34px; font-size: 13px; gap: 8px; }
+.ms-signin.sm svg { width: 16px; height: 16px; }
+.login-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.login-or::before, .login-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ms-signin { background: #2f2f2f; color: #fff; border-color: #2f2f2f; }
+  :root:not([data-theme="light"]) .ms-signin:hover { background: #3b3b3b; }
+}
+:root[data-theme="dark"] .ms-signin { background: #2f2f2f; color: #fff; border-color: #2f2f2f; }
+:root[data-theme="dark"] .ms-signin:hover { background: #3b3b3b; }
+
 /* ------------------------------------------------------------------ misc */
 .qr { background: #fff; padding: 10px; border-radius: 10px; border: 1px solid var(--line); width: 220px; }
 .qr img { width: 100%; display: block; }
@@ -447,13 +497,14 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
 
 .nav-scrim { display: none; }
 @media (max-width: 900px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: 1fr; background: none; }
   .sidebar { position: fixed; z-index: 70; width: 260px; transform: translateX(-100%); transition: transform .2s; }
   .shell.mobile-open .sidebar { transform: none; box-shadow: var(--shadow-lg); }
   /* Dim the page behind the open menu; a tap on it closes the menu instead of
      falling through to whatever control sits underneath. */
   .shell.mobile-open .nav-scrim { display: block; position: fixed; inset: 0; z-index: 65; background: var(--scrim); animation: fade .15s; }
   .content { padding: 16px; }
+  .grid.split, .grid.split.even { grid-template-columns: minmax(0, 1fr); }
   .topbar { padding: 0 12px; gap: 8px; }
   .search { display: none; }
   .topbar .mobile-only { display: inline-flex; }
@@ -522,10 +573,12 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
   .kpi .value { font-size: 20px; }
   .page-head h1 { font-size: 18px; }
   .page-head .actions { margin-left: 0; }
+  /* A button labelled with a file name (plugsure-charger-ca.pem) wraps instead of overflowing. */
+  .btn { white-space: normal; overflow-wrap: anywhere; max-width: 100%; text-align: center; }
 }
 @media print {
   .sidebar, .topbar, .page-head .actions, .filters { display: none !important; }
-  .shell { display: block; }
+  .shell { display: block; background: none; }
   body { background: #fff; }
 }
 
@@ -549,3 +602,18 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
 .da-checks li.todo { color: var(--muted); }
 .da-checks li.todo svg { color: var(--warn); }
 @media (max-width: 1100px) { .da-layout { grid-template-columns: 1fr; } .da-side { position: static; } .da-phone { height: 640px; } }
+[hidden] { display: none !important; }
+
+/* Platform → Hub: the legs of one correlation id (trace drawer). */
+.trace { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.trace > li { padding: 10px 12px; min-width: 0; }
+.trace > li.bad { border-color: color-mix(in srgb, var(--crit) 45%, var(--line)); }
+.trace > li .right { margin-left: auto; }
+/* Platform → Hub: the agreement matrix (CPO rows × provider columns). Its own class: the bare .matrix is
+   Users & Roles' permission matrix, whose role descriptions must wrap (nowrap there pushed half the
+   columns off the page). */
+table.t.hub-matrix th, table.t.hub-matrix td { text-align: center; vertical-align: middle; }
+table.t.hub-matrix th:first-child, table.t.hub-matrix td:first-child { text-align: left; }
+.field > .seg { align-self: flex-start; }
+table.t.hub-matrix th, table.t.hub-matrix td { white-space: nowrap; }
+table.t.hub-matrix .tag { white-space: nowrap; }

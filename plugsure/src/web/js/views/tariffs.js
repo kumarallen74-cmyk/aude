@@ -1,6 +1,7 @@
 import {
   $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, html,
-  field, options, formValues, fieldErrors, toast, callout, kpi, navigate, sites as loadSites, debounce,
+  field, options, formValues, fieldErrors, toast, callout, kpi, navigate, sites as loadSites, debounce, COUNTRIES, countryCurrency, isRupiah,
+  zonedYmd, onlyIndonesia,
 } from '../core.js';
 
 /**
@@ -76,12 +77,18 @@ const num = (v) => {
   return Number.isFinite(x) ? x : null;
 };
 
-/** Rupiah with decimals only when the value has them (ceilings like Rp 2.467,5). */
-const idrD = (n) => {
+/**
+ * A rate (major units) in the tariff's currency: rupiah with decimals only when the value has them
+ * (ceilings like Rp 2.467,5) as before; ringgit / Singapore dollars with their sen / cents (RM 0.455).
+ */
+const idrD = (n, cur) => {
   if (n == null || !Number.isFinite(Number(n))) return '—';
+  if (!isRupiah(cur)) return fmt.rate(Number(n), cur);
   const x = Number(n);
-  return 'Rp ' + new Intl.NumberFormat('id-ID', { minimumFractionDigits: Number.isInteger(x) ? 0 : 2, maximumFractionDigits: 2 }).format(x);
+  return fmt.rate(x).replace(/,(\d)$/, ',$10');
 };
+/** A per-session amount of a tariff (major units): rupiah whole as before, other currencies with decimals. */
+const feeD = (n, cur) => (isRupiah(cur) ? fmt.idr(n) : fmt.rate(Number(n ?? 0), cur));
 const qty = (n) => Number(n ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 });
 
 const comps = (t) => (Array.isArray(t?.components) ? t.components : []).map((c) => ({
@@ -118,18 +125,22 @@ function dayText(mask) {
 
 function energySummary(t) {
   const e = comps(t).filter((c) => c.kind === 'energy');
-  const ceiling = ceilingFor(t.pln_scheme, t.pln_base_rate);
+  const cur = t.currency;
+  // In the tariff's currency. (Was `const idrD0 = idrD; const idrD = …`: the inner const shadowed the
+  // module's idrD for the whole function, so idrD0 read it before initialisation and every tariff list threw.)
+  const rateD = (n) => idrD(n, cur);
+  const ceiling = (t.country_code ?? 'ID') === 'ID' ? ceilingFor(t.pln_scheme, t.pln_base_rate) : null;
   const over = ceiling != null && e.some((c) => c.rate > ceiling + 0.001);
-  const flag = over ? `<div>${tag('t-crit', 'above ceiling', `Legal ceiling ${idrD(ceiling)}/kWh`)}</div>` : '';
-  if (!e.length) return `<span class="muted">PLN formula rate</span>${flag}`;
+  const flag = over ? `<div>${tag('t-crit', 'above ceiling', `Legal ceiling ${rateD(ceiling)}/kWh`)}</div>` : '';
+  if (!e.length) return `<span class="muted">${(t.country_code ?? 'ID') === 'ID' ? 'PLN formula rate' : 'no energy price'}</span>${flag}`;
   if (e.some((c) => c.touBlock !== 'ANY')) {
-    return e.map((c) => `<div><span class="cell-sub">${esc(c.touBlock)}</span> ${esc(idrD(c.rate))}</div>`).join('') + flag;
+    return e.map((c) => `<div><span class="cell-sub">${esc(c.touBlock)}</span> ${esc(rateD(c.rate))}</div>`).join('') + flag;
   }
   if (e.length > 1) {
     const rates = e.map((c) => c.rate);
-    return `${esc(idrD(Math.min(...rates)))}–${esc(idrD(Math.max(...rates)))}<div class="cell-sub">${esc(e.length)} kWh tiers</div>${flag}`;
+    return `${esc(rateD(Math.min(...rates)))}–${esc(rateD(Math.max(...rates)))}<div class="cell-sub">${esc(e.length)} kWh tiers</div>${flag}`;
   }
-  return `${esc(idrD(e[0].rate))}<div class="cell-sub">per kWh</div>${flag}`;
+  return `${esc(rateD(e[0].rate))}<div class="cell-sub">per kWh</div>${flag}`;
 }
 
 function serviceSummary(t) {
@@ -137,15 +148,16 @@ function serviceSummary(t) {
   const s = c.filter((x) => x.kind === 'session').reduce((a, x) => a + x.rate, 0);
   const a = c.filter((x) => x.kind === 'admin').reduce((acc, x) => acc + x.rate, 0);
   if (!s && !a) return '<span class="muted">none</span>';
-  return `${esc(fmt.idr(s + a))}<div class="cell-sub">service ${esc(fmt.idr(s))} + admin ${esc(fmt.idr(a))}</div>`;
+  const cur = t.currency;
+  return `${esc(feeD(s + a, cur))}<div class="cell-sub">service ${esc(feeD(s, cur))} + admin ${esc(feeD(a, cur))}</div>`;
 }
 
 function idleSummary(t) {
   const c = idleComp(t);
   if (!c) return '<span class="muted">none</span>';
-  if (c.toMinutes == null) return `${esc(idrD(c.rate))}/min ${tag('t-crit', 'unbounded')}`;
+  if (c.toMinutes == null) return `${esc(idrD(c.rate, t.currency))}/min ${tag('t-crit', 'unbounded')}`;
   const worst = Math.max(0, c.toMinutes - c.fromMinutes) * c.rate;
-  return `${esc(idrD(c.rate))}/min<div class="cell-sub">after ${esc(c.fromMinutes)} min grace · max ${esc(fmt.idr(worst))}</div>`;
+  return `${esc(idrD(c.rate, t.currency))}/min<div class="cell-sub">after ${esc(c.fromMinutes)} min grace · max ${esc(feeD(worst, t.currency))}</div>`;
 }
 
 function assignmentSummary(t) {
@@ -291,6 +303,10 @@ export function openTariffWizard() {
   return new Promise((resolve) => {
     const R = reg();
     const wbp = wbpWindow();
+    // The tariff's country (§D4): Indonesia's PLN / Kepmen rules, or Malaysia / Singapore (no price regulation; consumer prices tax-inclusive).
+    const countries = Object.values(COUNTRIES).filter((c) => c.code === 'ID' || state.me?.features?.multiCountry || (state.me?.org?.countries ?? []).some((x) => x.country_code === c.code));
+    let cc = countries.some((c) => c.code === state.me?.org?.homeCountry) ? state.me.org.homeCountry : 'ID';
+    const cur = () => countryCurrency(cc);
     const st = {
       model: 'flat',
       flat: String(R.base * 1.5),
@@ -306,17 +322,19 @@ export function openTariffWizard() {
       subtitle: 'Regulatory ceilings are checked live and again by the server on save. An illegal plan cannot be stored.',
       size: 'xl',
       dismissable: false,
-      body: `<div style="display:grid;gap:16px;grid-template-columns:minmax(0,3fr) minmax(300px,2fr);align-items:start">
+      body: `<div class="grid split">
         <form novalidate data-form>
           <fieldset><legend>1 · Plan profile</legend><div class="form">
             ${field('Plan name', '<input name="name" maxlength="200" placeholder="Public DC Ultra-Fast Commercial 2026">', { full: true })}
             ${field('Description', '<textarea name="description" rows="2" maxlength="1000" placeholder="Who this plan is for and when it applies"></textarea>', { full: true, opt: true })}
+            ${countries.length > 1 ? field('Country', `<select name="countryCode">${options(countries.map((c) => ({ value: c.code, label: `${c.name} — prices in ${c.currency}` })), cc)}</select>`,
+              { help: 'A tariff prices sites of one country, in its currency. Indonesia: PLN and Kepmen ceilings apply. Malaysia and Singapore: no price regulation.' }) : ''}
             ${field('PLN scheme', `<select name="plnScheme">${options(Object.entries(SCHEME_LABEL).map(([value, label]) => ({ value, label })), 'layanan_khusus')}</select>`,
-              { help: 'How the site buys electricity from PLN. It sets the legal ceiling on your kWh price.' })}
+              { attrs: 'data-only="ID"', help: 'How the site buys electricity from PLN. It sets the legal ceiling on your kWh price.' })}
             ${field('PLN base rate', '<div class="inputgroup"><input name="plnBaseRate" inputmode="decimal"><span class="suffix">IDR/kWh</span></div>',
-              { help: 'Published quarterly by PLN (Q3-2026: Rp 1.645).' })}
+              { attrs: 'data-only="ID"', help: `Published quarterly by PLN (Q3-2026: ${esc(fmt.rate(1645))}).` })}
             ${field('Multiplier (N or Q)', '<input name="plnMultiplier" inputmode="decimal">',
-              { help: `Layanan khusus N: 1.0–${esc(R.nMax)}. Curah Q: ${CURAH_Q_MIN}–${CURAH_Q_MAX}.` })}
+              { attrs: 'data-only="ID"', help: `Layanan khusus N: 1.0–${esc(R.nMax)}. Curah Q: ${CURAH_Q_MIN}–${CURAH_Q_MAX}.` })}
             <div class="full" data-formula></div>
           </div></fieldset>
 
@@ -329,8 +347,8 @@ export function openTariffWizard() {
           <fieldset style="margin-top:14px"><legend>3 · Service &amp; convenience surcharges</legend><div class="form">
             ${field('Designed for', `<select name="designedFor">${options(DESIGN_FOR, 60000)}</select>`,
               { help: 'Connector nameplate power this plan targets. Checked again against real connectors on assignment.' })}
-            ${field('Service fee (biaya layanan)', '<div class="inputgroup"><input name="serviceFee" inputmode="numeric" placeholder="0"><span class="suffix">IDR/session</span></div>')}
-            ${field('Admin fee', '<div class="inputgroup"><input name="adminFee" inputmode="numeric" placeholder="0"><span class="suffix">IDR/session</span></div>',
+            ${field('Service fee (biaya layanan)', '<div class="inputgroup"><input name="serviceFee" inputmode="decimal" placeholder="0"><span class="suffix"><span data-cur-code>IDR</span>/session</span></div>')}
+            ${field('Admin fee', '<div class="inputgroup"><input name="adminFee" inputmode="decimal" placeholder="0"><span class="suffix"><span data-cur-code>IDR</span>/session</span></div>',
               { help: 'Counts toward the same cap: an admin fee on every session is a service fee under another name.' })}
             <div class="full" data-cap></div>
           </div></fieldset>
@@ -339,7 +357,7 @@ export function openTariffWizard() {
             <label class="check"><input type="checkbox" name="idleOn"><span>Charge an idle fee when a vehicle stays plugged in after charging finishes</span></label>
             <div class="form" data-idle-fields style="margin-top:10px">
               ${field('Grace period', `<select name="idleGrace">${options(GRACE.map((m) => ({ value: m, label: m ? `${m} minutes` : 'No grace period' })), 15)}</select>`)}
-              ${field('Penalty rate', '<div class="inputgroup"><input name="idleRate" inputmode="numeric"><span class="suffix">IDR/min</span></div>')}
+              ${field('Penalty rate', '<div class="inputgroup"><input name="idleRate" inputmode="decimal"><span class="suffix"><span data-cur-code>IDR</span>/min</span></div>')}
               ${field('Maximum billable idle minutes', '<div class="inputgroup"><input name="idleMax" inputmode="numeric"><span class="suffix">min</span></div>',
                 { help: 'Required. Unbounded idle fees are rejected by the server.' })}
               <div class="full" data-idle-calc></div>
@@ -347,6 +365,11 @@ export function openTariffWizard() {
           </fieldset>
 
           <fieldset style="margin-top:14px"><legend>5 · Tax &amp; statutory</legend>
+            <div data-not-id hidden>
+              <div class="row"><label class="switch green"><input type="checkbox" name="pricesIncludeTax" aria-label="Prices include tax"><span></span></label>
+                <div><b data-incl-label>Prices include GST</b><div class="small muted" data-incl-note></div></div></div>
+            </div>
+            <div data-only="ID">
             <div class="row"><label class="switch green"><input type="checkbox" name="ppnApplies" aria-label="Charge PPN"><span></span></label>
               <div><b>Charge PPN (VAT)</b><div class="small muted" data-ppn-rate></div></div></div>
             <div data-ppn-note style="margin-top:8px"></div>
@@ -354,6 +377,7 @@ export function openTariffWizard() {
             <div class="field" style="margin-top:12px"><span class="lbl">Payment gateway MDR (QRIS / e-wallet fee)</span>
               <label class="check"><input type="radio" name="mdrMode" value="absorb"><span>Absorbed by CPO</span></label>
               <label class="check" style="opacity:.6;cursor:not-allowed"><input type="radio" name="mdrMode" value="surcharge" disabled><span>Surcharged to customer — <span class="muted">not allowed: Bank Indonesia QRIS rules prohibit passing the MDR to the payer as a surcharge. Build the cost into the kWh price instead.</span></span></label>
+            </div>
             </div>
           </fieldset>
           <div data-save-flags style="margin-top:12px"></div>
@@ -364,8 +388,8 @@ export function openTariffWizard() {
           <div class="body">
             <div class="form" style="grid-template-columns:1fr 1fr">
               ${field('Energy delivered', '<div class="inputgroup"><input data-pv="kwh" inputmode="decimal"><span class="suffix">kWh</span></div>')}
-              ${field('Sample time', `<select data-pv="window">${options([{ value: 'off', label: 'Off-peak (10:00 WIB)' }, { value: 'peak', label: `Peak (WBP ${wbp.start}–${wbp.end})` }], 'off')}</select>`)}
-              ${field('Site PBJT-TL', '<div class="inputgroup"><input data-pv="pbjt" inputmode="numeric"><span class="suffix">bps</span></div>', { help: '<span data-pv-pbjt></span>' })}
+              ${field('Sample time', `<select data-pv="window">${options([{ value: 'off', label: 'Off-peak (10:00 WIB)' }, { value: 'peak', label: `Peak (WBP ${wbp.start}–${wbp.end})` }], 'off')}</select>`, { attrs: 'data-only="ID"' })}
+              ${field('Site PBJT-TL', '<div class="inputgroup"><input data-pv="pbjt" inputmode="numeric"><span class="suffix">bps</span></div>', { attrs: 'data-only="ID"', help: '<span data-pv-pbjt></span>' })}
               ${field('Idle after charging', '<div class="inputgroup"><input data-pv="idle" inputmode="numeric"><span class="suffix">min</span></div>')}
             </div>
             <div data-preview style="margin-top:12px"><div class="skeleton" style="width:60%"></div></div>
@@ -390,11 +414,13 @@ export function openTariffWizard() {
             const body = {
               name: v.name.trim(),
               description: v.description.trim() || undefined,
-              plnScheme: v.plnScheme,
-              plnBaseRate: num(v.plnBaseRate),
-              plnMultiplier: v.plnScheme === 'none' ? undefined : num(v.plnMultiplier),
+              ...(cc === 'ID' ? {
+                plnScheme: v.plnScheme,
+                plnBaseRate: num(v.plnBaseRate),
+                plnMultiplier: v.plnScheme === 'none' ? undefined : num(v.plnMultiplier),
+                ppnApplies: v.ppnApplies === true,
+              } : { countryCode: cc, currency: cur(), plnScheme: 'none', pricesIncludeTax: v.pricesIncludeTax === true }),
               pricingModel: st.model,
-              ppnApplies: v.ppnApplies === true,
               mdrMode: 'absorb',
               components: buildComponents(v),
               appliesToMaxPowerW: Number(v.designedFor),
@@ -449,12 +475,12 @@ export function openTariffWizard() {
       const ceil = ceilingFor(val('plnScheme'), num(val('plnBaseRate')));
       if (st.model === 'flat') {
         box.innerHTML = `<div class="form">
-          ${field('Energy price', '<div class="inputgroup"><input name="rateFlat" inputmode="decimal"><span class="suffix">IDR/kWh</span></div>',
+          ${field('Energy price', '<div class="inputgroup"><input name="rateFlat" inputmode="decimal"><span class="suffix"><span data-cur-code>IDR</span>/kWh</span></div>',
             { help: 'One price for every kWh at any time of day.' })}
-          <div class="field" style="justify-content:flex-end"><button type="button" class="btn sm" data-use-formula>Use PLN formula rate</button></div></div>`;
+          ${cc === 'ID' ? '<div class="field" style="justify-content:flex-end"><button type="button" class="btn sm" data-use-formula>Use PLN formula rate</button></div>' : ''}</div>`;
         setv('rateFlat', st.flat);
       } else if (st.model === 'tou') {
-        const eg = ceil != null ? `A Rp 2.850/kWh peak price, for example, is ${(2850 / ceil).toFixed(2)}× the ${esc(idrD(ceil))} ceiling and would be rejected.` : '';
+        const eg = ceil != null ? `A ${esc(fmt.rate(2850))}/kWh peak price, for example, is ${(2850 / ceil).toFixed(2)}× the ${esc(idrD(ceil))} ceiling and would be rejected.` : '';
         box.innerHTML = `<div class="form">
           ${field(`Peak (WBP) ${wbp.start}–${wbp.end} WIB`, '<div class="inputgroup"><input name="rateWbp" inputmode="decimal"><span class="suffix">IDR/kWh</span></div>',
             { help: 'Waktu Beban Puncak, PLN’s evening peak block.' })}
@@ -468,7 +494,7 @@ export function openTariffWizard() {
           ${st.tiers.map((_, i) => `<tr>
             <td class="num" style="vertical-align:middle"><span data-tier-from="${i}"></span> kWh</td>
             <td><div class="field"><div class="inputgroup"><input name="tierTo${i}" inputmode="decimal" placeholder="${i === st.tiers.length - 1 ? 'no limit' : ''}"><span class="suffix">kWh</span></div></div></td>
-            <td><div class="field"><div class="inputgroup"><input name="tierRate${i}" inputmode="decimal"><span class="suffix">IDR/kWh</span></div></div></td>
+            <td><div class="field"><div class="inputgroup"><input name="tierRate${i}" inputmode="decimal"><span class="suffix"><span data-cur-code>IDR</span>/kWh</span></div></div></td>
             <td>${st.tiers.length > 1 ? `<button type="button" class="btn sm ghost" data-rm-tier="${i}" aria-label="Remove band">${icon('x')}</button>` : ''}</td></tr>`).join('')}
           </tbody></table></div>
           <div class="row" style="margin-top:8px"><button type="button" class="btn sm" data-add-tier>${icon('plus')} Add band</button>
@@ -476,6 +502,9 @@ export function openTariffWizard() {
         st.tiers.forEach((t, i) => { setv(`tierTo${i}`, t.toKwh); setv(`tierRate${i}`, t.rate); });
         updateTierFrom();
       }
+      $$('[data-cur-code]', form).forEach((x) => { x.textContent = cur(); });
+      // Whole rupiah per session / minute (the numeric keypad, as in v1.5); sen / cents need a decimal point.
+      ['serviceFee', 'adminFee', 'idleRate'].forEach((n) => { const i = $(`[name=${n}]`, form); if (i) i.inputMode = isRupiah(cur()) ? 'numeric' : 'decimal'; });
     }
 
     function updateTierFrom() {
@@ -515,12 +544,14 @@ export function openTariffWizard() {
       return {
         id: 'draft',
         name: v.name.trim() || 'Draft tariff',
-        currency: 'IDR',
-        plnScheme: v.plnScheme,
-        plnBaseRate: num(v.plnBaseRate) ?? undefined,
-        plnMultiplier: v.plnScheme === 'none' ? undefined : (num(v.plnMultiplier) ?? undefined),
+        currency: cur(),
+        ...(cc === 'ID' ? {
+          plnScheme: v.plnScheme,
+          plnBaseRate: num(v.plnBaseRate) ?? undefined,
+          plnMultiplier: v.plnScheme === 'none' ? undefined : (num(v.plnMultiplier) ?? undefined),
+          ppnApplies: v.ppnApplies === true,
+        } : { countryCode: cc, plnScheme: 'none', pricesIncludeTax: v.pricesIncludeTax === true }),
         components: buildComponents(v),
-        ppnApplies: v.ppnApplies === true,
       };
     }
 
@@ -532,10 +563,10 @@ export function openTariffWizard() {
       const scheme = v.plnScheme;
       const base = num(v.plnBaseRate);
       const mult = num(v.plnMultiplier);
-      const ceil = ceilingFor(scheme, base);
+      const ceil = cc === 'ID' ? ceilingFor(scheme, base) : null;
       if (forSave && !v.name.trim()) out.push({ name: 'name', msg: 'Give the plan a name operators will recognise.' });
-      if (!(base > 0)) out.push({ name: 'plnBaseRate', msg: 'Enter the PLN base rate published for this quarter.' });
-      if (scheme !== 'none') {
+      if (cc === 'ID' && !(base > 0)) out.push({ name: 'plnBaseRate', msg: 'Enter the PLN base rate published for this quarter.' });
+      if (cc === 'ID' && scheme !== 'none') {
         if (mult == null) out.push({ name: 'plnMultiplier', msg: 'Enter the multiplier.' });
         else if (scheme === 'layanan_khusus' && (mult < 1 || mult > R.nMax)) out.push({ name: 'plnMultiplier', msg: `N must be 1.0–${R.nMax}. Values outside the range need Director-General approval.` });
         else if (scheme === 'curah' && (mult < CURAH_Q_MIN || mult > CURAH_Q_MAX)) out.push({ name: 'plnMultiplier', msg: `Q must be ${CURAH_Q_MIN}–${CURAH_Q_MAX}.` });
@@ -565,7 +596,7 @@ export function openTariffWizard() {
       if (sf < 0) out.push({ name: 'serviceFee', msg: 'Cannot be negative.' });
       if (af < 0) out.push({ name: 'adminFee', msg: 'Cannot be negative.' });
       const cls = classForW(v.designedFor);
-      const cap = R.serviceCap[cls];
+      const cap = cc === 'ID' ? R.serviceCap[cls] : null;
       if (cap != null && sf + af > cap) {
         out.push({ name: 'serviceFee', msg: `Service + admin = ${fmt.idr(sf + af)}, above the ${fmt.idr(cap)} per-session ceiling for ${CLASS_LABEL[cls]} charging (Kepmen ESDM 182.K/2023).` });
       }
@@ -574,7 +605,7 @@ export function openTariffWizard() {
         const max = num(v.idleMax);
         if (rate == null || rate < 0) out.push({ name: 'idleRate', msg: 'Enter a penalty rate (0 or more).' });
         if (max == null || max <= 0 || !Number.isInteger(max)) out.push({ name: 'idleMax', msg: 'Required: a whole number of minutes. The server rejects idle fees with no upper bound.' });
-        else if (rate != null && R.idleCap != null && rate * max > R.idleCap) {
+        else if (cc === 'ID' && rate != null && R.idleCap != null && rate * max > R.idleCap) {
           out.push({ name: 'idleMax', msg: `Worst case ${fmt.idr(rate * max)} is above the ${fmt.idr(R.idleCap)} per-session platform cap. Lower the rate or the minutes.` });
         }
       }
@@ -603,6 +634,25 @@ export function openTariffWizard() {
 
     function renderComputed() {
       const v = formValues(form);
+      // Malaysia / Singapore: no PLN formula, no Kepmen caps, no PPN; prices may include GST / service tax.
+      $$('[data-only]', ctx.body).forEach((x) => { x.hidden = x.dataset.only !== cc; });
+      $('[data-not-id]', form).hidden = cc === 'ID';
+      if (cc !== 'ID') {
+        $('[data-formula]', form).innerHTML = callout('info', `<b>No regulated price ceilings in ${esc(COUNTRIES[cc].name)}.</b> Prices are set commercially; the platform still bounds idle fees. Prices are in ${esc(cur())}.`);
+        $('[data-cap]', form).innerHTML = '';
+        $('[data-incl-label]', form).textContent = cc === 'SG' ? 'Prices include GST' : 'Prices include service tax';
+        $('[data-incl-note]', form).textContent = cc === 'SG'
+          ? 'Singapore: a GST-registered operator must show GST-inclusive prices (IRAS). The GST is worked out of each session total.'
+          : 'Malaysia: shown as the price drivers pay. No service tax is charged unless your organisation is registered for it (Settings → Organisation).';
+        const on = v.idleOn === true;
+        $$('input, select', $('[data-idle-fields]', form)).forEach((i) => { i.disabled = !on; });
+        const rate = num(v.idleRate);
+        const max = num(v.idleMax);
+        const worst = rate != null && max != null ? rate * max : null;
+        $('[data-idle-calc]', form).innerHTML = !on ? '' : worst == null ? callout('warn', 'Set the maximum billable minutes so the worst-case charge is known before it is billed.')
+          : callout('info', `<b>Worst case per session: ${esc(fmt.rate(worst, cur()))}</b> (${esc(max)} min × ${esc(fmt.rate(rate, cur()))}).`);
+        return;
+      }
       const scheme = v.plnScheme;
       const base = num(v.plnBaseRate);
       const mult = num(v.plnMultiplier);
@@ -648,12 +698,16 @@ export function openTariffWizard() {
     // ---- preview ---------------------------------------------------------
 
     function sampleWindow(which) {
-      const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+      // The sample session runs on a date in the country's first zone (WIB for Indonesia, as before).
+      const tz = (COUNTRIES[cc] ?? COUNTRIES.ID).timezones[0];
+      const day = zonedYmd(new Date(), tz);
+      if (cc !== 'ID') which = 'off';
       const [h, m] = (which === 'peak' ? wbp.start : '10:00').split(':').map(Number);
       const startMin = (h || 0) * 60 + (m || 0) + (which === 'peak' ? 15 : 0);
       const hh = String(Math.floor(startMin / 60) % 24).padStart(2, '0');
       const mm = String(startMin % 60).padStart(2, '0');
-      const start = new Date(`${day}T${hh}:${mm}:00+07:00`);
+      const offset = cc === 'ID' ? '+07:00' : '+08:00';
+      const start = new Date(`${day}T${hh}:${mm}:00${offset}`);
       return { startedAt: start.toISOString(), endedAt: new Date(start.getTime() + 45 * 60000).toISOString() };
     }
 
@@ -670,7 +724,7 @@ export function openTariffWizard() {
       const [p, vd] = await Promise.all([
         api('/v1/tariffs/preview', {
           method: 'POST',
-          body: { tariff: t, energyWh: Math.round(kwh * 1000), connectorMaxPowerW: powerW, pbjtRateBps: pbjt, idleMinutes: idle, ...win },
+          body: { tariff: { ...t, countryCode: cc }, energyWh: Math.round(kwh * 1000), connectorMaxPowerW: powerW, localTaxRateBps: pbjt, idleMinutes: idle, ...win },
         }).catch((e) => ({ error: e.message })),
         api('/v1/tariffs/validate', { method: 'POST', body: { tariff: t, connectorMaxPowerW: powerW } }).catch((e) => ({ error: e.message })),
       ]);
@@ -680,18 +734,32 @@ export function openTariffWizard() {
       const prev = $('[data-preview]', aside);
       if (p?.error) {
         prev.innerHTML = callout('crit', `Preview unavailable: ${esc(p.error)}`);
+      } else if (cc !== 'ID') {
+        // Amounts in minor units of the tariff's currency; the tax of the engine (GST / service tax / none).
+        const tx = p.tax ?? {};
+        const lines = p.lines ?? [];
+        const c = cur();
+        const taxed = tx.scheme && tx.scheme !== 'NONE';
+        const perKwh = kwh > 0 ? tx.totalMinor / kwh / 100 : null;
+        prev.innerHTML = `<div class="table-wrap"><table class="t"><thead><tr><th>Line</th><th class="num">Amount</th></tr></thead><tbody>
+          ${lines.length ? lines.map((l) => `<tr><td>${esc(l.description)}<div class="cell-sub">${esc(qty(l.quantity))} ${esc(l.unit)} × ${esc(fmt.rate(l.unitRate, c))}</div></td>
+            <td class="num">${esc(fmt.money(l.amountMinor, c))}</td></tr>`).join('') : '<tr><td class="empty" colspan="2">No billable lines.</td></tr>'}
+          <tr><td><b>Subtotal</b><div class="cell-sub">before tax</div></td><td class="num"><b>${esc(fmt.money(tx.subtotalMinor, c))}</b></td></tr>
+          <tr><td>${taxed ? `${esc(cc === 'SG' ? 'GST' : 'Service tax')} ${esc(((tx.taxRateBps ?? 0) / 100).toFixed(0))}%${tx.pricesIncludeTax ? ' (included in the prices)' : ''}` : 'No tax charged<div class="cell-sub">Not registered for tax in this country (Settings → Organisation)</div>'}</td><td class="num">${esc(fmt.money(tx.taxMinor, c))}</td></tr>
+          </tbody><tfoot><tr><td>Total payable</td><td class="num">${esc(fmt.money(tx.totalMinor, c))}</td></tr></tfoot></table></div>
+          <div class="row small muted" style="margin-top:6px">${tag('t-info', p.chargingClass ?? classForW(powerW))}<span>45-min session${perKwh != null ? ` · all-in ${esc(fmt.rate(Math.round(perKwh * 10000) / 10000, c))}/kWh` : ''}</span></div>`;
       } else {
         const tx = p.tax ?? {};
         const lines = p.lines ?? [];
-        const perKwh = kwh > 0 ? tx.totalIdr / kwh : null;
+        const perKwh = kwh > 0 ? tx.totalMinor / kwh : null;
         prev.innerHTML = `<div class="table-wrap"><table class="t"><thead><tr><th>Line</th><th class="num">Amount</th></tr></thead><tbody>
           ${lines.length ? lines.map((l) => `<tr><td>${esc(l.description)}<div class="cell-sub">${esc(qty(l.quantity))} ${esc(l.unit)} × ${esc(idrD(l.unitRate))}</div></td>
-            <td class="num">${esc(fmt.idr(l.amountIdr))}</td></tr>`).join('') : '<tr><td class="empty" colspan="2">No billable lines.</td></tr>'}
-          <tr><td><b>Subtotal</b></td><td class="num"><b>${esc(fmt.idr(tx.subtotalIdr))}</b></td></tr>
-          <tr><td>PBJT-TL ${esc(((tx.pbjtRateBps ?? 0) / 100).toFixed(2))}%<div class="cell-sub">on ${esc(fmt.idr(tx.pbjtBaseIdr))} (electricity)</div></td><td class="num">${esc(fmt.idr(tx.pbjtIdr))}</td></tr>
-          <tr><td>DPP nilai lain<div class="cell-sub">PPN base shown on the faktur pajak</div></td><td class="num">${esc(fmt.idr(tx.ppnDppIdr))}</td></tr>
-          <tr><td>PPN ${esc(((tx.ppnRateBps ?? 0) / 100).toFixed(0))}% of DPP${t.ppnApplies ? '' : ' <span class="muted">(off)</span>'}</td><td class="num">${esc(fmt.idr(tx.ppnIdr))}</td></tr>
-          </tbody><tfoot><tr><td>Total payable</td><td class="num">${esc(fmt.idr(tx.totalIdr))}</td></tr></tfoot></table></div>
+            <td class="num">${esc(fmt.idr(l.amountMinor))}</td></tr>`).join('') : '<tr><td class="empty" colspan="2">No billable lines.</td></tr>'}
+          <tr><td><b>Subtotal</b></td><td class="num"><b>${esc(fmt.idr(tx.subtotalMinor))}</b></td></tr>
+          <tr><td>PBJT-TL ${esc(((tx.localTaxRateBps ?? 0) / 100).toFixed(2))}%<div class="cell-sub">on ${esc(fmt.idr(tx.localTaxBaseMinor))} (electricity)</div></td><td class="num">${esc(fmt.idr(tx.localTaxMinor))}</td></tr>
+          <tr><td>DPP nilai lain<div class="cell-sub">PPN base shown on the faktur pajak</div></td><td class="num">${esc(fmt.idr(tx.taxBaseMinor))}</td></tr>
+          <tr><td>PPN ${esc(((tx.taxRateBps ?? 0) / 100).toFixed(0))}% of DPP${t.ppnApplies ? '' : ' <span class="muted">(off)</span>'}</td><td class="num">${esc(fmt.idr(tx.taxMinor))}</td></tr>
+          </tbody><tfoot><tr><td>Total payable</td><td class="num">${esc(fmt.idr(tx.totalMinor))}</td></tr></tfoot></table></div>
           <div class="row small muted" style="margin-top:6px">${tag('t-info', p.chargingClass ?? classForW(powerW))}<span>45-min session${perKwh != null ? ` · all-in ${esc(idrD(Math.round(perKwh * 100) / 100))}/kWh` : ''}</span></div>`;
       }
 
@@ -706,11 +774,25 @@ export function openTariffWizard() {
     // ---- wiring ----------------------------------------------------------
 
     const onEdit = () => { readState(); updateTierFrom(); renderComputed(); liveCheck(); schedule(); };
+    // Switching country: its currency, its rules, and sample prices of the right size.
+    $('[name=countryCode]', form)?.addEventListener('change', (e) => {
+      cc = e.target.value;
+      const sample = { ID: ['2450', '25000', '1000', true], MY: ['1.20', '0', '0.50', true], SG: ['0.65', '0', '0.30', true] }[cc] ?? ['0', '0', '0', true];
+      st.flat = sample[0]; st.wbp = sample[0]; st.lwbp = sample[0];
+      st.tiers = [{ toKwh: '20', rate: sample[0] }, { toKwh: '', rate: sample[0] }];
+      setv('serviceFee', sample[1]); setv('idleRate', sample[2]);
+      $('[name=pricesIncludeTax]', form).checked = cc !== 'ID';
+      if (cc !== 'ID' && st.model === 'tou') { st.model = 'flat'; $$('[data-model] button', form).forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.v === 'flat'))); }
+      $$('[data-model] button', form).forEach((x) => { x.hidden = cc !== 'ID' && x.dataset.v === 'tou'; });
+      renderEnergy();
+      onEdit();
+    });
     form.addEventListener('input', onEdit);
     form.addEventListener('change', onEdit);
     aside.addEventListener('input', () => { renderComputed(); schedule(); });
     aside.addEventListener('change', schedule);
 
+    if (cc !== 'ID') $('[name=countryCode]', form)?.dispatchEvent(new Event('change'));
     $$('[data-model] button', form).forEach((b) => b.addEventListener('click', () => {
       readState();
       st.model = b.dataset.v;
@@ -801,7 +883,25 @@ export function openTariffDrawer(tariffId, onChange = () => {}) {
           const capTags = ['fast', 'ultrafast'].filter((c) => R.serviceCap[c] != null).map((c) =>
             svc <= R.serviceCap[c] ? tag('t-ok', `legal on ${c}`, `Cap ${fmt.idr(R.serviceCap[c])}`) : tag('t-crit', `too high for ${c}`, `Cap ${fmt.idr(R.serviceCap[c])}`)).join(' ');
           const stored = parseFlags(t.validation);
-          body.innerHTML = `
+          const foreign = (t.country_code ?? 'ID') !== 'ID';
+          body.innerHTML = foreign ? `
+            ${t.description ? `<p class="muted" style="margin:0 0 12px"></p>` : ''}
+            <div class="grid two">
+              <div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">Country &amp; currency</h3><dl class="kv">
+                <dt>Country</dt><dd>${esc(COUNTRIES[t.country_code]?.name ?? t.country_code)}</dd>
+                <dt>Currency</dt><dd>${esc(t.currency)}</dd>
+                <dt>Price regulation</dt><dd>None (commercial prices); idle fees are bounded by the platform cap</dd>
+                <dt>Service + admin</dt><dd>${esc(feeD(svc, t.currency))} per session</dd>
+              </dl></div>
+              <div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">Tax</h3><dl class="kv">
+                <dt>Prices</dt><dd>${t.prices_include_tax ? tag('t-ok', `include ${t.country_code === 'SG' ? 'GST' : 'service tax'}`) : tag('t-mute', 'before tax')}</dd>
+                <dt>Tax</dt><dd>${esc(COUNTRIES[t.country_code]?.taxName ?? '—')}, per your registration in ${esc(COUNTRIES[t.country_code]?.name ?? t.country_code)} (Settings → Organisation)</dd>
+                <dt>Validated</dt><dd>${esc(fmt.time(t.validated_at))}</dd>
+                ${t.archived_at ? `<dt>Archived</dt><dd>${esc(fmt.time(t.archived_at))}</dd>` : ''}
+              </dl></div>
+            </div>
+            <div class="section"><h2>Components</h2><div class="card" data-comps></div></div>
+            <div class="section"><h2>Validation at save</h2><div data-stored></div></div>` : `
             ${t.description ? `<p class="muted" style="margin:0 0 12px"></p>` : ''}
             <div class="grid two">
               <div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">PLN basis &amp; ceiling</h3><dl class="kv">
@@ -843,15 +943,18 @@ export function openTariffDrawer(tariffId, onChange = () => {}) {
               {
                 label: 'Rate',
                 num: true,
-                render: (c) => esc(`${idrD(c.rate)}${c.kind === 'energy' ? '/kWh' : c.kind === 'idle' || c.kind === 'time' ? '/min' : '/session'}`),
+                render: (c) => esc(`${idrD(c.rate, t.currency)}${c.kind === 'energy' ? '/kWh' : c.kind === 'idle' || c.kind === 'time' ? '/min' : '/session'}`),
               },
               {
                 label: 'Check',
                 render: (c) => {
+                  // A Malaysian or Singapore price has no regulated ceiling (and no connector-class fee cap).
+                  if (foreign && (c.kind === 'energy' || c.kind === 'session' || c.kind === 'admin')) return tag('t-mute', 'no regulated cap');
                   if (c.kind === 'energy') return ceil != null && c.rate > ceil + 0.001 ? tag('t-crit', `${(c.rate / ceil).toFixed(2)}× ceiling`) : tag('t-ok', 'within ceiling');
                   if (c.kind === 'idle' || c.kind === 'time') {
                     if (c.toMinutes == null) return tag('t-crit', 'unbounded');
                     const worst = Math.max(0, c.toMinutes - c.fromMinutes) * c.rate;
+                    if ((t.country_code ?? 'ID') !== 'ID') return tag('t-ok', `max ${feeD(worst, t.currency)}`);
                     return R.idleCap != null && worst > R.idleCap ? tag('t-crit', `max ${fmt.idr(worst)}`) : tag('t-ok', `max ${fmt.idr(worst)}`);
                   }
                   return tag('t-mute', 'capped by connector class');
@@ -859,7 +962,7 @@ export function openTariffDrawer(tariffId, onChange = () => {}) {
               },
             ],
             rows: comps(t),
-            empty: 'No components: every kWh is billed at the PLN formula rate and no fees apply.',
+            empty: foreign ? 'No components: delivered energy is not priced, so sessions here are held for review.' : 'No components: every kWh is billed at the PLN formula rate and no fees apply.',
           });
           $('[data-stored]', body).innerHTML = flagsHtml(stored, callout('ok', 'No regulatory flags were recorded when this plan was saved.'));
         },
@@ -941,10 +1044,12 @@ registerView('tariffs', {
         columns: [
           { label: 'Plan name', render: (t) => `<div class="cell-title">${esc(t.name)}</div><div class="cell-sub">${esc(MODEL_LABEL[t.pricing_model] ?? 'Flat energy rate')}${t.description ? ` · ${esc(t.description)}` : ''}</div>` },
           { label: 'Assigned to', render: assignmentSummary },
-          { label: 'Base rate (IDR/kWh)', num: true, render: energySummary },
+          { label: onlyIndonesia() ? 'Base rate (IDR/kWh)' : 'Energy price (per kWh)', num: true, render: energySummary },
           { label: 'Service fee', num: true, render: serviceSummary },
           { label: 'Idle fee', num: true, render: idleSummary },
-          { label: 'Tax mode', render: (t) => `${t.ppn_applies === false ? tag('t-warn', 'PPN off') : tag('t-ok', 'PPN on')}<div class="cell-sub">+ PBJT-TL at each site’s rate</div>` },
+          { label: 'Tax mode', render: (t) => ((t.country_code ?? 'ID') !== 'ID'
+            ? `${tag('t-info', `${esc(COUNTRIES[t.country_code]?.name ?? t.country_code)} · ${esc(t.currency)}`)}<div class="cell-sub">${t.prices_include_tax ? 'prices include tax' : 'prices before tax'}</div>`
+            : `${t.ppn_applies === false ? tag('t-warn', 'PPN off') : tag('t-ok', 'PPN on')}<div class="cell-sub">+ PBJT-TL at each site’s rate</div>`) },
           { label: 'Status', render: (t) => (t.status === 'archived' ? tag('t-mute', 'archived') : tag('t-ok', 'active')) },
         ],
         rows,

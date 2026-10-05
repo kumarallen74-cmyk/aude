@@ -1,4 +1,5 @@
 import { one, many, query } from '../db/pool.js';
+import { isCurrency, CURRENCY_CODES } from '../domain/money.js';
 import * as commands from '../ocpp/commands.js';
 import type { Actor } from '../ocpp/commands.js';
 
@@ -30,7 +31,9 @@ export interface TokenInput {
   status?: string;
   validTo?: string | null;
   energyLimitKwh?: number | null;
-  spendLimitIdr?: number | null;
+  spendLimitMinor?: number | null;
+  /** The spending limit's currency (a card's limit is in one currency; charges in another are refused). */
+  spendLimitCurrency?: string;
   offlineAllowed?: boolean;
   notes?: string | null;
   pin?: string | null;
@@ -48,7 +51,8 @@ export function validateToken(t: TokenInput, creating: boolean): Record<string, 
   if (t.holderPhone && !/^\+?[0-9 ()-]{6,20}$/.test(t.holderPhone)) e.holderPhone = 'Phone number looks wrong';
   if (t.validTo && Number.isNaN(new Date(t.validTo).getTime())) e.validTo = 'Expiry must be a date';
   if (t.energyLimitKwh != null && (!Number.isFinite(t.energyLimitKwh) || t.energyLimitKwh <= 0)) e.energyLimitKwh = 'Energy limit must be positive';
-  if (t.spendLimitIdr != null && (!Number.isFinite(t.spendLimitIdr) || t.spendLimitIdr <= 0)) e.spendLimitIdr = 'Spending limit must be positive';
+  if (t.spendLimitMinor != null && (!Number.isFinite(t.spendLimitMinor) || t.spendLimitMinor <= 0)) e.spendLimitMinor = 'Spending limit must be positive';
+  if (t.spendLimitCurrency !== undefined && !isCurrency(t.spendLimitCurrency)) e.spendLimitCurrency = `Currency is one of ${CURRENCY_CODES.join(', ')}`;
   if (t.pin != null && t.pin !== '' && !/^\d{4,8}$/.test(t.pin)) e.pin = 'PIN is 4–8 digits';
   return e;
 }
@@ -62,16 +66,17 @@ export function normaliseUid(uid: string): string {
 export async function listTokens(orgId: string, f: { q?: string; status?: string; accountType?: string; limit?: number } = {}) {
   return many(
     `SELECT t.id, t.uid, t.kind, t.status, t.valid_to, t.offline_allowed, t.holder_name, t.holder_phone,
-            t.account_type, t.fleet_name, t.energy_limit_wh, t.spend_limit_idr, t.notes, t.created_at,
+            t.account_type, t.fleet_name, t.energy_limit_wh, t.spend_limit_minor, t.spend_limit_currency, t.notes, t.created_at,
             t.updated_at, (t.pin_hash IS NOT NULL) AS has_pin,
             COALESCE(u.energy_wh, 0)::bigint AS lifetime_energy_wh,
             COALESCE(u.sessions, 0)::int AS total_sessions,
-            COALESCE(u.spend_idr, 0)::bigint AS lifetime_spend_idr,
+            COALESCE(u.spend_minor, 0)::bigint AS lifetime_spend_minor,
             u.last_used_at
        FROM token t
        LEFT JOIN LATERAL (
          SELECT sum(cs.energy_wh) AS energy_wh, count(*) AS sessions,
-                sum(d.total_idr) AS spend_idr, max(cs.started_at) AS last_used_at
+                -- Spend in the card's limit currency (what counts against the limit; no FX).
+                sum(d.total_minor) FILTER (WHERE d.currency = t.spend_limit_currency) AS spend_minor, max(cs.started_at) AS last_used_at
            FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id
           WHERE cs.token_id = t.id
        ) u ON true
@@ -94,7 +99,8 @@ const COLS: Array<[keyof TokenInput, string, (v: any) => unknown]> = [
   ['status', 'status', (v) => v],
   ['validTo', 'valid_to', (v) => (v ? new Date(v) : null)],
   ['energyLimitKwh', 'energy_limit_wh', (v) => (v == null ? null : Math.round(Number(v) * 1000))],
-  ['spendLimitIdr', 'spend_limit_idr', (v) => (v == null ? null : Math.round(Number(v)))],
+  ['spendLimitMinor', 'spend_limit_minor', (v) => (v == null ? null : Math.round(Number(v)))],
+  ['spendLimitCurrency', 'spend_limit_currency', (v) => v],
   ['offlineAllowed', 'offline_allowed', (v) => Boolean(v)],
   ['notes', 'notes', (v) => v || null],
 ];

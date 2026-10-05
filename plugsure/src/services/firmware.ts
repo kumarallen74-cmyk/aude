@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { defaultTimezone } from '../domain/timezone.js';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
@@ -384,7 +385,7 @@ export async function tick(now = new Date(), origin?: string): Promise<{ dispatc
   for (const j of stale) await failOrRetry(j.id, j.attempts, j.max_retries, j.retry_interval_s, 'no status notification from the charger');
 
   const due = await many<any>(
-    `SELECT j.id, j.attempts, j.org_id, cp.id AS cp_id, cp.ocpp_identity, cp.firmware, s.timezone,
+    `SELECT j.id, j.attempts, j.org_id, cp.id AS cp_id, cp.ocpp_identity, cp.firmware, s.timezone, s.country_code,
             c.id AS campaign_id, c.window_start, c.window_end, c.max_retries, c.retry_interval_s,
             i.source, i.url, i.download_token, i.file_name, i.version
        FROM firmware_job j
@@ -402,7 +403,7 @@ export async function tick(now = new Date(), origin?: string): Promise<{ dispatc
   let dispatched = 0;
   for (const j of due) {
     if (!registry.isOnline(j.ocpp_identity)) continue;
-    if (!inWindow(now, j.timezone ?? 'Asia/Jakarta', j.window_start, j.window_end)) continue;
+    if (!inWindow(now, j.timezone ?? defaultTimezone(j.country_code), j.window_start, j.window_end)) continue;
     // One firmware job in flight per charger, across campaigns.
     const busy = await one(
       `SELECT 1 FROM firmware_job WHERE charge_point_id = $1 AND id <> $2 AND state = ANY($3::text[])`,

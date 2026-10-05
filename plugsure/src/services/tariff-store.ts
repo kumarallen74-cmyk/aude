@@ -1,6 +1,8 @@
 import { one, many, query, tx } from '../db/pool.js';
-import { validateTariff, type Tariff, type TariffComponent, type RegulatoryFlag } from './tariff.js';
+import { validateTariff, plnEnergyRate, type Tariff, type TariffComponent, type RegulatoryFlag } from './tariff.js';
 import { logger } from '../logger.js';
+import { countryOf, isCountry, type CountryCode } from '../domain/country.js';
+import { currencyOr } from '../domain/money.js';
 
 /**
  * Tariff resolution.
@@ -27,16 +29,25 @@ export interface ResolvedTariff {
   fallback: boolean;
 }
 
-/** The regulated layanan khusus formula at the ceiling multiplier, energy only. */
-function defaultTariff(): Tariff {
-  return {
-    id: 'default',
-    name: 'Default (layanan khusus, N=1.5)',
-    currency: 'IDR',
-    plnScheme: 'layanan_khusus',
-    plnMultiplier: 1.5,
-    components: [],
-  };
+/**
+ * The tariff when nothing is assigned. Indonesia: the regulated layanan khusus
+ * formula at the ceiling multiplier, energy only (v1.6). Malaysia / Singapore have
+ * no regulated price to fall back to: an empty tariff in the country's currency,
+ * which rates as NO_ENERGY_COMPONENT (a violation) — the session is parked for
+ * review instead of being billed at a made-up price (fail closed).
+ */
+export function defaultTariff(country: CountryCode = 'ID'): Tariff {
+  if (country === 'ID') {
+    return {
+      id: 'default',
+      name: 'Default (layanan khusus, N=1.5)',
+      currency: countryOf('ID').currency,
+      plnScheme: 'layanan_khusus',
+      plnMultiplier: 1.5,
+      components: [],
+    };
+  }
+  return { id: 'default', name: `Default (${country}: no tariff assigned)`, currency: countryOf(country).currency, countryCode: country, components: [] };
 }
 
 export async function loadTariffForConnector(
@@ -50,7 +61,7 @@ export async function loadTariffForConnector(
 
   const row = await one<any>(
     `WITH scope AS (
-        SELECT c.id AS connector_uuid, s.id AS site_id, s.org_id, c.current_type
+        SELECT c.id AS connector_uuid, s.id AS site_id, s.org_id, c.current_type, s.country_code
           FROM connector c
           JOIN evse e ON e.id = c.evse_uuid
           JOIN charge_point cp ON cp.id = e.charge_point_id
@@ -75,6 +86,9 @@ export async function loadTariffForConnector(
         -- AC-only / DC-only assignments (migration 009). NULL = any current type,
         -- which is every assignment made before 009, so resolution is unchanged for them.
         AND (ta.current_type IS NULL OR ta.current_type = scope.current_type)
+        -- Only a tariff of the site's country (and so its currency) prices it: an
+        -- organisation-wide rupiah tariff never reaches its Malaysian sites.
+        AND t.country_code = scope.country_code
       ORDER BY CASE ta.scope_type WHEN 'connector' THEN 0 WHEN 'site' THEN 1 ELSE 2 END,
                -- Within a scope, an assignment that names the current type is more specific.
                CASE WHEN ta.current_type IS NULL THEN 1 ELSE 0 END,
@@ -88,7 +102,10 @@ export async function loadTariffForConnector(
     // session that ran while it was live — the window above uses `at`, not now().
     // Reaching here means nothing was ever assigned for that instant.
     logger.warn({ connectorUuid, orgId, at: at.toISOString() }, 'no tariff effective at session start');
-    return { tariff: defaultTariff(), fallback: true };
+    const site = await one<{ country_code: string }>(
+      `SELECT s.country_code FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id
+         JOIN site s ON s.id = cp.site_id WHERE c.id = $1`, [connectorUuid]);
+    return { tariff: defaultTariff(isCountry(site?.country_code) ? site!.country_code : 'ID'), fallback: true };
   }
 
   return { tariff: await hydrate(row), fallback: false };
@@ -102,10 +119,15 @@ async function hydrate(row: any): Promise<Tariff> {
     [row.id],
   );
 
+  const country: CountryCode = isCountry(row.country_code) ? row.country_code : 'ID';
   return {
     id: row.id,
     name: row.name,
-    currency: 'IDR',
+    currency: currencyOr(row.currency),
+    // Only when not the Indonesian default, so an ID tariff (and its frozen CDR
+    // snapshot) is exactly what v1.6 produced.
+    ...(country !== 'ID' ? { countryCode: country } : {}),
+    ...(row.prices_include_tax === true ? { pricesIncludeTax: true } : {}),
     plnScheme: row.pln_scheme ?? 'none',
     plnBaseRate: row.pln_base_rate != null ? Number(row.pln_base_rate) : undefined,
     plnMultiplier: row.pln_multiplier != null ? Number(row.pln_multiplier) : undefined,
@@ -156,6 +178,10 @@ export interface TariffWriteInput {
   description?: string | null;
   pricingModel?: 'flat' | 'tou' | 'tiered';
   ppnApplies?: boolean;
+  /** The country whose regulation and tax apply; the currency follows (absent = ID). */
+  countryCode?: CountryCode;
+  /** Rates include the tax. Default: the country's display rule (SG and MY yes, ID no). */
+  pricesIncludeTax?: boolean;
 }
 
 export interface TariffWriteResult {
@@ -173,10 +199,14 @@ export interface TariffWriteResult {
  * This is the gate that was missing.
  */
 export async function createTariff(input: TariffWriteInput): Promise<TariffWriteResult> {
+  const country: CountryCode = input.countryCode ?? 'ID';
+  const inclusive = input.pricesIncludeTax ?? countryOf(country).displayPricesInclTax;
   const draft: Tariff = {
     id: 'draft',
     name: input.name,
-    currency: 'IDR',
+    currency: countryOf(country).currency,
+    ...(country !== 'ID' ? { countryCode: country } : {}),
+    ...(inclusive ? { pricesIncludeTax: true } : {}),
     plnScheme: input.plnScheme ?? 'none',
     plnBaseRate: input.plnBaseRate,
     plnMultiplier: input.plnMultiplier,
@@ -197,8 +227,8 @@ export async function createTariff(input: TariffWriteInput): Promise<TariffWrite
       await db.query<{ id: string }>(
         `INSERT INTO tariff (org_id, name, pln_scheme, pln_base_rate, pln_multiplier,
                              active_from, active_to, validated_at, validation, created_by,
-                             description, pricing_model, ppn_applies)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$10,$11,$12)
+                             description, pricing_model, ppn_applies, country_code, currency, prices_include_tax)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$10,$11,$12,$13,$14,$15)
          RETURNING id`,
         [
           input.orgId,
@@ -213,6 +243,9 @@ export async function createTariff(input: TariffWriteInput): Promise<TariffWrite
           input.description ?? null,
           input.pricingModel ?? 'flat',
           input.ppnApplies !== false,
+          country,
+          countryOf(country).currency,
+          inclusive,
         ],
       )
     ).rows[0];
@@ -268,6 +301,29 @@ export async function assignTariff(
 ): Promise<{ ok: boolean; flags: RegulatoryFlag[] }> {
   const tariff = await loadTariffById(tariffId);
   if (!tariff) throw new Error('tariff not found');
+  const tariffCountry: CountryCode = tariff.countryCode ?? 'ID';
+
+  // A tariff prices sites of its own country only (and so in their currency): an
+  // assignment to a site in another country is refused. An org-wide assignment
+  // applies to the org's sites in the tariff's country (the resolver filters).
+  if (scopeType !== 'org' && scopeId) {
+    const site = await one<{ country_code: string }>(
+      scopeType === 'site'
+        ? `SELECT country_code FROM site WHERE id = $1`
+        : `SELECT s.country_code FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id
+             JOIN site s ON s.id = cp.site_id WHERE c.id = $1`,
+      [scopeId],
+    );
+    if (site && site.country_code !== tariffCountry) {
+      return {
+        ok: false,
+        flags: [{
+          code: 'TARIFF_COUNTRY_MISMATCH', severity: 'violation',
+          message: `This tariff is for ${tariffCountry} (${tariff.currency}); the ${scopeType} is in ${site.country_code} (${countryOf(site.country_code).currency}).`,
+        }],
+      };
+    }
+  }
 
   // The most powerful connector in scope is the one with the tightest ceiling
   // it must satisfy... except that ceilings RISE with power, so the binding
@@ -286,8 +342,8 @@ export async function assignTariff(
              FROM connector c JOIN evse e ON e.id = c.evse_uuid
              JOIN charge_point cp ON cp.id = e.charge_point_id
              JOIN site s ON s.id = cp.site_id
-            WHERE s.org_id = $1 AND ($2::text IS NULL OR c.current_type = $2)`,
-    [scopeId, currentType],
+            WHERE s.org_id = $1 AND ($2::text IS NULL OR c.current_type = $2) AND s.country_code = $3`,
+    scopeType === 'org' ? [scopeId, currentType, tariffCountry] : [scopeId, currentType],
   );
 
   const flags: RegulatoryFlag[] = [];
@@ -378,6 +434,7 @@ export async function listTariffs(orgId: string) {
     `SELECT t.id, t.name, t.pln_scheme, t.pln_base_rate, t.pln_multiplier,
             t.active_from, t.active_to, t.validated_at, t.validation, t.status, t.description,
             t.pricing_model, t.ppn_applies, t.mdr_mode, t.archived_at, t.created_by,
+            t.country_code, t.currency, t.prices_include_tax,
             COALESCE((SELECT json_agg(json_build_object(
               -- rate NULL = the PLN formula rate (migration 051): listed as 0 with formulaRate.
               'kind', tc.kind, 'rate', COALESCE(tc.rate, 0), 'formulaRate', tc.rate IS NULL, 'touBlock', tc.tou_block,
@@ -402,4 +459,70 @@ export async function listTariffs(orgId: string) {
       ORDER BY t.status, t.active_from DESC`,
     [orgId],
   );
+}
+
+// ------------------------------------------------------------------ batched headline prices (driver map, G7)
+
+/**
+ * The headline energy rate (per kWh, major units) and "prices include tax" for MANY connectors at once, resolved
+ * exactly as loadTariffForConnector resolves each (most specific assignment in force at `at`, the site's country,
+ * the regulated default when nothing is assigned): two queries instead of two per connector.
+ * `rate` is the cheapest explicit energy component, else the PLN formula rate, else null.
+ */
+export async function headlinePrices(connectorIds: readonly string[], at: Date): Promise<Map<string, { rate: number | null; inclusive: boolean }>> {
+  const out = new Map<string, { rate: number | null; inclusive: boolean }>();
+  if (!connectorIds.length) return out;
+  const rows = await many<{ connector_uuid: string; country_code: string | null; tariff_id: string | null; pln_scheme: string | null; pln_base_rate: string | null;
+    pln_multiplier: string | null; prices_include_tax: boolean | null }>(
+    `WITH scope AS (
+        SELECT c.id AS connector_uuid, s.id AS site_id, s.org_id, c.current_type, s.country_code
+          FROM connector c
+          JOIN evse e ON e.id = c.evse_uuid
+          JOIN charge_point cp ON cp.id = e.charge_point_id
+          JOIN site s ON s.id = cp.site_id
+         WHERE c.id = ANY($1::uuid[])
+     ), best AS (
+        SELECT DISTINCT ON (scope.connector_uuid) scope.connector_uuid, t.id AS tariff_id, t.pln_scheme, t.pln_base_rate, t.pln_multiplier, t.prices_include_tax
+          FROM scope
+          JOIN tariff t ON t.org_id = scope.org_id AND t.country_code = scope.country_code
+                       AND t.active_from <= $2 AND (t.active_to IS NULL OR t.active_to > $2)
+          JOIN tariff_assignment ta ON ta.tariff_id = t.id
+                       AND ta.valid_from <= $2 AND (ta.valid_to IS NULL OR ta.valid_to > $2)
+                       AND ((ta.scope_type = 'connector' AND ta.scope_id = scope.connector_uuid) OR
+                            (ta.scope_type = 'site'      AND ta.scope_id = scope.site_id) OR
+                            (ta.scope_type = 'org'       AND (ta.scope_id IS NULL OR ta.scope_id = scope.org_id)))
+                       AND (ta.current_type IS NULL OR ta.current_type = scope.current_type)
+         ORDER BY scope.connector_uuid,
+                  CASE ta.scope_type WHEN 'connector' THEN 0 WHEN 'site' THEN 1 ELSE 2 END,
+                  CASE WHEN ta.current_type IS NULL THEN 1 ELSE 0 END,
+                  ta.priority DESC, t.active_from DESC
+     )
+     SELECT scope.connector_uuid, scope.country_code, best.tariff_id, best.pln_scheme, best.pln_base_rate, best.pln_multiplier, best.prices_include_tax
+       FROM scope LEFT JOIN best ON best.connector_uuid = scope.connector_uuid`,
+    [connectorIds, at],
+  );
+  const tariffIds = [...new Set(rows.map((r) => r.tariff_id).filter((x): x is string => !!x))];
+  const comps = tariffIds.length
+    ? await many<{ tariff_id: string; rate: string | null }>(`SELECT tariff_id, rate FROM tariff_component WHERE tariff_id = ANY($1::uuid[]) AND kind = 'energy'`, [tariffIds])
+    : [];
+  const explicit = new Map<string, number>();
+  for (const c of comps) {
+    const rate = c.rate == null ? 0 : Number(c.rate);
+    if (rate > 0 && (!explicit.has(c.tariff_id) || rate < explicit.get(c.tariff_id)!)) explicit.set(c.tariff_id, rate);
+  }
+  for (const r of rows) {
+    if (!r.tariff_id) {
+      // Nothing assigned: the regulated default (ID: the PLN formula; MY/SG: no price).
+      const t = defaultTariff(isCountry(r.country_code) ? r.country_code : 'ID');
+      out.set(r.connector_uuid, { rate: plnEnergyRate(t), inclusive: t.pricesIncludeTax === true });
+      continue;
+    }
+    const rate = explicit.get(r.tariff_id) ?? plnEnergyRate({
+      plnScheme: (r.pln_scheme ?? 'none') as Tariff['plnScheme'],
+      plnBaseRate: r.pln_base_rate != null ? Number(r.pln_base_rate) : undefined,
+      plnMultiplier: r.pln_multiplier != null ? Number(r.pln_multiplier) : undefined,
+    });
+    out.set(r.connector_uuid, { rate, inclusive: r.prices_include_tax === true });
+  }
+  return out;
 }

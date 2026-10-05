@@ -237,16 +237,16 @@ export const schemas: Record<string, Schema> = {
   // ---------------------------------------------------------------- sessions
   SessionBreakdown: obj(
     {
-      energySubtotalIdr: nN,
-      serviceFeeIdr: nN,
-      idleFeeIdr: nN,
-      pbjtIdr: nI,
-      dppIdr: nI,
-      ppnIdr: nI,
-      mdrIdr: { ...N, description: 'Estimated QRIS MDR (the operator’s cost, not charged to the driver).' },
-      grossTotalIdr: nN,
+      energySubtotalMinor: nN,
+      serviceFeeMinor: nN,
+      idleFeeMinor: nN,
+      localTaxMinor: nI,
+      taxBaseMinor: nI,
+      taxMinor: nI,
+      mdrMinor: { ...N, description: 'Estimated QRIS MDR (the operator’s cost, not charged to the driver).' },
+      grossTotalMinor: nN,
     },
-    ['mdrIdr'],
+    ['mdrMinor'],
   ),
   SessionListItem: obj(
     {
@@ -262,16 +262,16 @@ export const schemas: Record<string, Schema> = {
       flags: { type: 'array', description: 'Regulatory and integrity flags recorded on the session (unfiltered listing only).' },
       idle_minutes: I,
       payment_mode: nS,
-      prepaid_amount_idr: nI,
+      prepaid_amount_minor: nI,
       prepaid_energy_wh: { ...nI, description: 'Unfiltered listing only.' },
       ocpp_identity: S,
       evse_no: I,
       site_name: S,
-      total_idr: nI,
-      subtotal_idr: nI,
-      pbjt_idr: nI,
-      ppn_idr: nI,
-      ppn_dpp_idr: nI,
+      total_minor: nI,
+      subtotal_minor: nI,
+      local_tax_minor: nI,
+      tax_minor: nI,
+      tax_base_minor: nI,
       lines: { type: ['array', 'null'], description: 'Frozen CDR lines (unfiltered listing only; filtered results carry `breakdown` instead).' },
       regulatory_flags: { type: ['array', 'null'] },
       // Filtered (search) rows only:
@@ -285,8 +285,8 @@ export const schemas: Record<string, Schema> = {
       id_tag: { ...nS, description: 'RFID idTag; masked to the last 4 characters for site-scoped callers.' },
       holder_name: { ...nS, description: 'Always null for site-scoped callers.' },
       cdr_id: nullable('string', { format: 'uuid' }),
-      pbjt_rate_bps: nI,
-      ppn_rate_bps: nI,
+      local_tax_rate_bps: nI,
+      tax_rate_bps: nI,
       issued_at: nDT,
       payment_method: nS,
       payment_state: nS,
@@ -318,7 +318,7 @@ export const schemas: Record<string, Schema> = {
       meter_stop_wh: nI,
       energy_wh: I,
       duration_s: nI,
-      prepaid_amount_idr: nI,
+      prepaid_amount_minor: nI,
       prepaid_energy_wh: nI,
       payment_mode: nS,
       created_at: DT,
@@ -338,12 +338,12 @@ export const schemas: Record<string, Schema> = {
       ocpi_auth_method: nS,
       ocpi_authorization_reference: nS,
       lines: { type: ['array', 'null'], description: 'Frozen CDR lines; null until the session is rated.' },
-      subtotal_idr: nI,
-      pbjt_idr: nI,
-      pbjt_rate_bps: nI,
-      ppn_dpp_idr: nI,
-      ppn_idr: nI,
-      total_idr: nI,
+      subtotal_minor: nI,
+      local_tax_minor: nI,
+      local_tax_rate_bps: nI,
+      tax_base_minor: nI,
+      tax_minor: nI,
+      total_minor: nI,
       tariff_snapshot: { type: ['object', 'null'] },
       regulatory_flags: { type: ['array', 'null'] },
       energy_export_wh: { ...I, description: 'Energy the car gave back (bidirectional charging), from the export register.' },
@@ -367,8 +367,8 @@ export const schemas: Record<string, Schema> = {
           consent: B,
           consentSource: { type: ['string', 'null'], enum: ['driver', 'fleet', null] },
           minSocPercent: nI,
-          creditIdrPerKwh: nI,
-          creditIdr: I,
+          creditMinorPerKwh: nI,
+          creditMinor: I,
           discharging: B,
           dischargeW: nI,
           notDischargingBecause: nS,
@@ -502,23 +502,23 @@ export const schemas: Record<string, Schema> = {
     {
       lines: arrayOf(
         obj(
-          { kind: S, description: S, quantity: N, unit: S, unitRate: N, amountIdr: N, touBlock: S },
-          ['kind', 'description', 'quantity', 'unit', 'unitRate', 'amountIdr'],
+          { kind: S, description: S, quantity: N, unit: S, unitRate: N, amountMinor: N, touBlock: S },
+          ['kind', 'description', 'quantity', 'unit', 'unitRate', 'amountMinor'],
         ),
       ),
       chargingClass: { type: 'string', enum: ['slow', 'medium', 'fast', 'ultrafast'] },
       tax: obj(
         {
-          subtotalIdr: N,
-          pbjtBaseIdr: N,
-          pbjtRateBps: N,
-          pbjtIdr: N,
-          ppnDppIdr: N,
+          subtotalMinor: N,
+          localTaxBaseMinor: N,
+          localTaxRateBps: N,
+          localTaxMinor: N,
+          taxBaseMinor: N,
           ppnRateBps: N,
-          ppnIdr: N,
-          totalIdr: N,
+          taxMinor: N,
+          totalMinor: N,
         },
-        ['subtotalIdr', 'pbjtIdr', 'ppnDppIdr', 'ppnIdr', 'totalIdr'],
+        ['subtotalMinor', 'localTaxMinor', 'taxBaseMinor', 'taxMinor', 'totalMinor'],
       ),
       flags: arrayOf(ref('TariffFlag')),
       tariffSnapshot: { type: 'object' },
@@ -531,11 +531,11 @@ export const schemas: Record<string, Schema> = {
     {
       providerRef: S,
       qrString: { ...S, description: 'Payload to render as a QR code.' },
-      amountIdr: N,
+      amountMinor: N,
       expiresAt: DT,
       status: { type: 'string', enum: ['pending', 'paid', 'expired', 'failed'] },
     },
-    ['providerRef', 'qrString', 'amountIdr', 'expiresAt', 'status'],
+    ['providerRef', 'qrString', 'amountMinor', 'expiresAt', 'status'],
   ),
   CheckoutQrisResult: obj(
     {
@@ -543,13 +543,13 @@ export const schemas: Record<string, Schema> = {
       qr: ref('CheckoutQrisCharge'),
       allowanceWh: { ...N, description: 'Energy the payment buys, quoted against the worst-case tariff block.' },
       allowanceKwh: N,
-      estimatedMdrIdr: N,
+      estimatedMdrMinor: N,
       inZeroMdrBand: B,
       startToken: { ...S, description: 'The only idTag that can claim this payment. Show it to the driver.' },
       startTokenMinted: { ...B, description: 'true when PlugSure generated the token (walk-up), false when the caller supplied idToken.' },
       expiresInMinutes: I,
     },
-    ['paymentIntentId', 'qr', 'allowanceWh', 'allowanceKwh', 'estimatedMdrIdr', 'inZeroMdrBand', 'startToken', 'startTokenMinted', 'expiresInMinutes'],
+    ['paymentIntentId', 'qr', 'allowanceWh', 'allowanceKwh', 'estimatedMdrMinor', 'inZeroMdrBand', 'startToken', 'startTokenMinted', 'expiresInMinutes'],
   ),
 
   // ---------------------------------------------------------------- load management
@@ -633,7 +633,7 @@ export const schemas: Record<string, Schema> = {
       slo_issued_at: nDT,
       slo_expires_at: nDT,
       kabupaten_kota_code: nS,
-      pbjt_rate_bps: I,
+      local_tax_rate_bps: I,
       meters: arrayOf(ref('ComplianceMeter')),
       spkluParsed: {
         type: ['object', 'null'],
@@ -653,7 +653,7 @@ export const schemas: Record<string, Schema> = {
       municipalityMatchesSpklu: nullable('boolean'),
       sloDaysRemaining: nI,
     },
-    ['id', 'name', 'pbjt_rate_bps', 'meters', 'spkluParsed', 'spkluIdValid', 'municipalityMatchesSpklu', 'sloDaysRemaining'],
+    ['id', 'name', 'local_tax_rate_bps', 'meters', 'spkluParsed', 'spkluIdValid', 'municipalityMatchesSpklu', 'sloDaysRemaining'],
   ),
 
   // ---------------------------------------------------------------- audit
@@ -761,6 +761,23 @@ const commandResponse = { 200: { description: "The charger's answer.", schema: r
 // ------------------------------------------------------------ operations
 
 export const ops: Op[] = [
+  // ---------------------------------------------------------------- health
+  {
+    method: 'GET', path: '/v1/platform/health', tag: 'Platform administration', internal: 'platform administration',
+    summary: 'Platform health: database and background workers',
+    description:
+      'Platform operator only. The database check and every background worker\'s state (from the gateway in the split deployment): ' +
+      'failure streak, last success, last error, whether an operator alert is open, and the HEARTBEAT_URL ping. Always 200; `ok` is false when anything is unhealthy.',
+    responses: {
+      200: {
+        description: 'Health',
+        schema: {
+          type: 'object', required: ['ok', 'db', 'version', 'workers', 'time'],
+          properties: { ok: B, db: B, version: S, connectedChargePoints: I, workers: { type: ['object', 'null'] }, time: DT },
+        },
+      },
+    },
+  },
   // ---------------------------------------------------------------- fleet
   {
     method: 'GET',
@@ -1388,6 +1405,11 @@ export const ops: Op[] = [
         type: 'object',
         properties: {
           name: { type: 'string', default: 'Untitled' },
+          countryCode: {
+            type: 'string', enum: ['ID', 'MY', 'SG'], default: 'ID',
+            description: 'The tariff\'s country: its regulation, tax and currency (IDR, MYR, SGD). Rates are decimals in that currency\'s major unit. MY and SG need MULTI_COUNTRY=true.',
+          },
+          pricesIncludeTax: { type: 'boolean', description: 'The rates include the tax (default: SG and MY yes, ID no; Indonesian tariffs cannot).' },
           plnScheme: { type: 'string', enum: ['curah', 'layanan_khusus', 'none'] },
           plnBaseRate: { ...N, description: 'PLN base rate (IDR/kWh) the multiplier applies to.' },
           plnMultiplier: N,
@@ -1468,7 +1490,7 @@ export const ops: Op[] = [
           endedAt: { ...DT, description: 'Default now.' },
           energyWh: { type: 'integer', default: 20000 },
           connectorMaxPowerW: { type: 'integer', default: 60000 },
-          pbjtRateBps: { type: 'integer', default: 500, description: 'PBJT rate in basis points.' },
+          localTaxRateBps: { type: 'integer', default: 500, description: 'PBJT rate in basis points.' },
           idleMinutes: { type: 'integer', default: 0 },
         },
         required: ['tariff'],
@@ -1479,7 +1501,7 @@ export const ops: Op[] = [
         endedAt: '2026-09-26T19:15:00+07:00',
         energyWh: 32000,
         connectorMaxPowerW: 60000,
-        pbjtRateBps: 1000,
+        localTaxRateBps: 1000,
       },
     },
     responses: { 200: { description: 'The rating.', schema: ref('TariffRating') } },
@@ -1519,14 +1541,14 @@ export const ops: Op[] = [
       schema: {
         type: 'object',
         properties: {
-          amountIdr: { type: 'number', exclusiveMinimum: 0, maximum: 10000000 },
+          amountMinor: { type: 'number', exclusiveMinimum: 0, maximum: 10000000 },
           ocppIdentity: { ...S, description: 'The charge point.' },
           connectorId: { type: 'integer', default: 1 },
           idToken: { type: 'string', pattern: '^[\\x20-\\x7e]{1,20}$', description: 'A token this organisation issued to the driver; omit for a walk-up.' },
         },
-        required: ['amountIdr', 'ocppIdentity'],
+        required: ['amountMinor', 'ocppIdentity'],
       },
-      example: { amountIdr: 100000, ocppIdentity: 'AUTEL-DC60-SMB-002', connectorId: 1 },
+      example: { amountMinor: 100000, ocppIdentity: 'AUTEL-DC60-SMB-002', connectorId: 1 },
     },
     responses: { 200: { description: 'The QR to show and the claim token.', schema: ref('CheckoutQrisResult') } },
     errors: [400, 404, 409, 422],

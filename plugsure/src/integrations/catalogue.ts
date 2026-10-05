@@ -68,7 +68,10 @@ const walletField = (which: string): Field => ({
   help: 'The driver links the e-wallet once, approving in its app; later payments go through in one tap. The chosen amount is charged and unused balance is refunded automatically. E-wallet tokenisation must be enabled on your acquirer account, and the e-wallet must be ticked above.',
 });
 /** The payment methods drivers may choose, among those the acquirer offers. QRIS stays on unless the operator unticks it. */
-const METHOD_LABEL: Record<string, string> = { QRIS: 'QRIS (any bank or e-wallet app)', GOPAY: 'GoPay', SHOPEEPAY: 'ShopeePay', OVO: 'OVO', DANA: 'DANA', LINKAJA: 'LinkAja', CARD: 'Credit / debit card (3-D Secure, hosted page)' };
+const METHOD_LABEL: Record<string, string> = {
+  QRIS: 'QRIS (any bank or e-wallet app)', GOPAY: 'GoPay', SHOPEEPAY: 'ShopeePay', OVO: 'OVO', DANA: 'DANA', LINKAJA: 'LinkAja', CARD: 'Credit / debit card (3-D Secure, hosted page)',
+  PAYNOW: 'PayNow (Singapore: QR in any banking app)', FPX: 'FPX online banking (Malaysia)', GRABPAY: 'GrabPay (Malaysia, Singapore)',
+};
 const methodsField = (offered: string[], def: string[] = ['QRIS']): Field => ({
   key: 'methods', label: 'Payment methods offered to drivers', type: 'multiselect', required: true, default: def,
   options: offered.map((v) => ({ value: v, label: METHOD_LABEL[v]! })),
@@ -78,7 +81,7 @@ const methodsField = (offered: string[], def: string[] = ['QRIS']): Field => ({
 export const CATALOGUE: KindDef[] = [
   {
     kind: 'payments',
-    label: 'Payments (QRIS, e-wallets, cards)',
+    label: 'Payments (QRIS, e-wallets, cards; Stripe for Malaysia and Singapore)',
     description: 'The acquirer (PJP) that takes drivers\' payments for walk-up charging, app passes and console checkout: dynamic QRIS and, where the acquirer offers them, e-wallets (GoPay, OVO, DANA, ShopeePay, LinkAja) and cards on its hosted 3-D Secure page. It confirms payments by webhook and, where it can, refunds unused balance.',
     scope: 'org',
     providers: [
@@ -128,9 +131,24 @@ export const CATALOGUE: KindDef[] = [
         ],
       },
       {
+        id: 'stripe', label: 'Stripe (Malaysia, Singapore)', webhook: true, docs: 'https://docs.stripe.com/payments/payment-intents',
+        description: 'Stripe Malaysia or Stripe Singapore — one Stripe account per country, set as the integration\'s country. Cards on PlugSure\'s Stripe Payment Element page (3-D Secure; no e-mail or phone asked), held and captured for what was used when holds are on; PayNow (SG) as a QR code; FPX (MY) and GrabPay through Stripe\'s redirect. Confirmed by Stripe\'s signed webhooks (register the URL below in Stripe, with the events listed in deploy/STRIPE.md). Refunds by API.',
+        fields: [
+          { key: 'publishableKey', label: 'Publishable key', type: 'text', required: true, placeholder: 'pk_live_…', help: 'Used by the card page (Stripe.js). Same mode as the secret key.' },
+          { key: 'secretKey', label: 'Secret key (or restricted key)', type: 'secret', required: true, placeholder: 'rk_live_…', help: 'A restricted key with write access to PaymentIntents, Refunds, Customers and PaymentMethods, and read access to Balance and Account, is enough.' },
+          { key: 'webhookSecret', label: 'Webhook signing secret', type: 'secret', required: true, placeholder: 'whsec_…', help: 'Stripe Workbench → Webhooks → this endpoint → signing secret. While rolling it, paste the new and the old one separated by a space.' },
+          methodsField(['CARD', 'PAYNOW', 'FPX', 'GRABPAY'], ['CARD']),
+          ...cardFields(),
+          { key: 'allowTestMode', label: 'Allow Stripe test mode on this deployment', type: 'boolean', default: false, advanced: true,
+            help: 'Test keys (sk_test_…) are refused in production. Tick only on a staging deployment that runs with NODE_ENV=production.' },
+          { key: 'apiVersion', label: 'Stripe API version', type: 'text', advanced: true, placeholder: '2026-09-30.endive', help: 'Pinned by PlugSure (Stripe-Version). Change only after testing the newer version; give the webhook endpoint the same version.' },
+          baseUrl,
+        ],
+      },
+      {
         id: 'mock', label: 'Sandbox (no real money)', devOnly: true,
         description: 'Built-in test acquirer: QR codes that pay nothing, and a test checkout page for the e-wallets and cards; payments are confirmed with the demo button. Not available in production.',
-        fields: [methodsField(['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD'], ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD']), walletField('GoPay, OVO, DANA, ShopeePay and LinkAja'), ...postpayFields, ...cardFields()],
+        fields: [methodsField(['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD', 'PAYNOW', 'FPX', 'GRABPAY'], ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD', 'PAYNOW', 'FPX', 'GRABPAY']), walletField('GoPay, OVO, DANA, ShopeePay and LinkAja'), ...postpayFields, ...cardFields()],
       },
     ],
   },

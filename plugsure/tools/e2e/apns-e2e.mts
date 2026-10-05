@@ -199,7 +199,7 @@ try {
       [sessionId, new Date(started.getTime() + i * 5 * 60_000), 100_000 + Math.round(12_500 * Math.sin((i / 9) * Math.PI / 2))]);
   }
   const intentId = (await db.query(
-    `INSERT INTO payment_intent (org_id, provider, method, mode, session_id, hold_state, hold_capture_idr, hold_error, state)
+    `INSERT INTO payment_intent (org_id, provider, method, mode, session_id, hold_state, hold_capture_minor, hold_error, state)
      VALUES ($1, 'mock', 'ewallet', 'postpay', $2, 'capture_failed', 30000, 'charge failed: insufficient balance', 'pending') RETURNING id`,
     [brandOrg, sessionId])).rows[0].id as string;
   const chargeId = (await db.query(

@@ -1,6 +1,7 @@
 import { many, one, outsideRequestScope, query } from '../../db/pool.js';
 import { logger } from '../../logger.js';
 import { bus } from '../events.js';
+import { moneyText, currencyOr, LEGACY_CURRENCY } from '../../domain/money.js';
 import { extras, providerOfPayment } from './registry.js';
 import type pg from 'pg';
 import { unseal } from '../secrets.js';
@@ -59,23 +60,23 @@ export type HoldState = 'held' | 'capturing' | 'captured' | 'capture_failed' | '
 
 interface HoldRow {
   id: string; org_id: string; provider: string; provider_ref: string | null; provider_payment_id: string | null; integration_id: string | null;
-  hold_state: HoldState; hold_capture_idr: number | null; hold_attempts: number; amount_authorised_idr: number | null; session_id: string | null;
-  mode: string; driver_card_id: string | null; channel: string | null;
+  hold_state: HoldState; hold_capture_minor: number | null; hold_attempts: number; amount_authorised_minor: number | null; session_id: string | null;
+  mode: string; driver_card_id: string | null; channel: string | null; currency: string;
 }
 
 /** Settlement: capture what the session cost (capped at the hold), or release it all when nothing is owed. */
-export async function settleHold(intentId: string, invoicedIdr: number): Promise<{ captureIdr: number; shortIdr: number }> {
-  const row = await one<{ authorised: number | null }>(`SELECT amount_authorised_idr AS authorised FROM payment_intent WHERE id = $1`, [intentId]);
+export async function settleHold(intentId: string, invoicedMinor: number): Promise<{ captureMinor: number; shortMinor: number }> {
+  const row = await one<{ authorised: number | null }>(`SELECT amount_authorised_minor AS authorised FROM payment_intent WHERE id = $1`, [intentId]);
   const authorised = Number(row?.authorised ?? 0);
-  const captureIdr = Math.max(0, Math.min(Math.round(invoicedIdr), authorised));
+  const captureMinor = Math.max(0, Math.min(Math.round(invoicedMinor), authorised));
   await query(
-    `UPDATE payment_intent SET hold_state = $2, hold_capture_idr = $3, hold_attempts = 0, hold_error = NULL, hold_next_attempt_at = now(), updated_at = now()
+    `UPDATE payment_intent SET hold_state = $2, hold_capture_minor = $3, hold_attempts = 0, hold_error = NULL, hold_next_attempt_at = now(), updated_at = now()
       WHERE id = $1 AND hold_state IN ('held', 'capture_failed', 'release_failed')`,
-    [intentId, captureIdr > 0 ? 'capturing' : 'releasing', captureIdr],
+    [intentId, captureMinor > 0 ? 'capturing' : 'releasing', captureMinor],
   );
   // Not awaited: the charger's StopTransaction must not wait on the acquirer. The worker retries if this fails.
   setImmediate(() => { outsideRequestScope(() => attemptHold(intentId)).catch((e) => logger.warn({ intentId, err: (e as Error).message }, 'hold capture deferred to the worker')); });
-  return { captureIdr, shortIdr: Math.max(0, Math.round(invoicedIdr) - authorised) };
+  return { captureMinor, shortMinor: Math.max(0, Math.round(invoicedMinor) - authorised) };
 }
 
 /** Carry out the capture or release a hold is waiting for. Safe to repeat (idempotency keys at the acquirer). */
@@ -97,8 +98,8 @@ export async function attemptHold(intentId: string, opts: { worker?: boolean } =
     `UPDATE payment_intent SET hold_attempts = hold_attempts + 1, hold_next_attempt_at = now() + interval '5 minutes'
       WHERE id = $1 AND hold_state IN ('capturing', 'capture_failed', 'releasing', 'release_failed')
         AND (hold_next_attempt_at IS NULL OR hold_next_attempt_at <= now())
-      RETURNING id, org_id, provider, provider_ref, provider_payment_id, integration_id, hold_state, hold_capture_idr, hold_attempts, amount_authorised_idr, session_id,
-                mode, driver_card_id, channel`,
+      RETURNING id, org_id, provider, provider_ref, provider_payment_id, integration_id, hold_state, hold_capture_minor, hold_attempts, amount_authorised_minor, session_id,
+                mode, driver_card_id, channel, currency`,
     [intentId],
   );
   if (!h) {
@@ -116,7 +117,7 @@ export async function attemptHold(intentId: string, opts: { worker?: boolean } =
   else {
     try {
       result = capture
-        ? await provider.captureHold({ providerRef: h.provider_ref ?? '', providerPaymentId: h.provider_payment_id, amountIdr: Number(h.hold_capture_idr), idempotencyKey: `hold-capture-${h.id}` })
+        ? await provider.captureHold({ providerRef: h.provider_ref ?? '', providerPaymentId: h.provider_payment_id, amountMinor: Number(h.hold_capture_minor), idempotencyKey: `hold-capture-${h.id}` })
         : await provider.releaseHold({ providerRef: h.provider_ref ?? '', providerPaymentId: h.provider_payment_id, idempotencyKey: `hold-release-${h.id}` });
     } catch (e) {
       result = { ok: false, error: (e as Error).message };
@@ -128,21 +129,21 @@ export async function attemptHold(intentId: string, opts: { worker?: boolean } =
     if (!capture && result.expired) logger.info({ intent: h.id }, 'card hold had already expired at the acquirer: nothing held');
     if (capture) {
       await query(
-        `UPDATE payment_intent SET state = 'captured', amount_captured_idr = hold_capture_idr, captured_at = now(), hold_state = 'captured',
+        `UPDATE payment_intent SET state = 'captured', amount_captured_minor = hold_capture_minor, captured_at = now(), hold_state = 'captured',
                 hold_error = NULL, hold_next_attempt_at = NULL, released_at = now(), updated_at = now()
           WHERE id = $1`,
         [h.id],
       );
-      bus.emit('payment.hold_captured', { orgId: h.org_id, paymentIntentId: h.id, capturedIdr: Number(h.hold_capture_idr), releasedIdr: Number(h.amount_authorised_idr ?? 0) - Number(h.hold_capture_idr) });
+      bus.emit('payment.hold_captured', { orgId: h.org_id, paymentIntentId: h.id, capturedMinor: Number(h.hold_capture_minor), releasedMinor: Number(h.amount_authorised_minor ?? 0) - Number(h.hold_capture_minor), currency: h.currency });
     } else {
       await query(
         `UPDATE payment_intent SET state = 'voided', hold_state = 'released', hold_error = NULL, hold_next_attempt_at = NULL, released_at = now(), updated_at = now()
           WHERE id = $1`,
         [h.id],
       );
-      bus.emit('payment.hold_released', { orgId: h.org_id, paymentIntentId: h.id, releasedIdr: Number(h.amount_authorised_idr ?? 0) });
+      bus.emit('payment.hold_released', { orgId: h.org_id, paymentIntentId: h.id, releasedMinor: Number(h.amount_authorised_minor ?? 0), currency: h.currency });
     }
-    logger.info({ intent: h.id, action: capture ? 'capture' : 'release', amountIdr: h.hold_capture_idr }, 'card hold settled');
+    logger.info({ intent: h.id, action: capture ? 'capture' : 'release', amountMinor: h.hold_capture_minor }, 'card hold settled');
     return { ok: true, state: capture ? 'captured' : 'released' };
   }
   const delay = BACKOFF_MIN[h.hold_attempts - 1];
@@ -159,9 +160,9 @@ export async function attemptHold(intentId: string, opts: { worker?: boolean } =
       kind: h.mode === 'postpay' ? 'payment.postpay_failed' : capture ? 'payment.hold_capture_failed' : 'payment.hold_release_failed',
       severity: capture ? 'critical' : 'warning',
       message: h.mode === 'postpay'
-        ? `A post-pay e-wallet charge failed after ${h.hold_attempts} attempts (Rp ${Number(h.hold_capture_idr).toLocaleString('id-ID')}): ${result.error}. The driver cannot start another post-pay session until it is paid; they can pay from the app, or retry under Refunds → Holds and post-pay.`
+        ? `A post-pay e-wallet charge failed after ${h.hold_attempts} attempts (${moneyText(Number(h.hold_capture_minor), currencyOr(h.currency))}): ${result.error}. The driver cannot start another post-pay session until it is paid; they can pay from the app, or retry under Refunds → Holds and post-pay.`
         : capture
-        ? `A card hold could not be captured after ${h.hold_attempts} attempts (Rp ${Number(h.hold_capture_idr).toLocaleString('id-ID')}): ${result.error}. The authorisation expires at the acquirer; retry under Refunds → Card holds, or collect otherwise.`
+        ? `A card hold could not be captured after ${h.hold_attempts} attempts (${moneyText(Number(h.hold_capture_minor), currencyOr(h.currency))}): ${result.error}. The authorisation expires at the acquirer; retry under Refunds → Card holds, or collect otherwise.`
         : `A card hold could not be released after ${h.hold_attempts} attempts: ${result.error}. It will lapse at the acquirer; retry under Refunds → Card holds.`,
       targetType: 'payment_intent',
       targetId: h.id,
@@ -174,19 +175,20 @@ export async function attemptHold(intentId: string, opts: { worker?: boolean } =
  * The hold's authorisation expired at the acquirer before PlugSure captured it: nothing was
  * taken from the card and nothing can be any more. No more retries; one critical alert.
  */
-async function holdExpired(h: Pick<HoldRow, 'id' | 'org_id' | 'provider' | 'hold_capture_idr'>): Promise<{ ok: false; state: HoldState; error: string }> {
-  const owed = Number(h.hold_capture_idr ?? 0);
+async function holdExpired(h: Pick<HoldRow, 'id' | 'org_id' | 'provider' | 'hold_capture_minor'> & { currency?: string | null }): Promise<{ ok: false; state: HoldState; error: string }> {
+  const owed = Number(h.hold_capture_minor ?? 0);
+  const owedText = moneyText(owed, currencyOr(h.currency));
   const first = await one<{ id: string }>(
     `UPDATE payment_intent SET hold_state = 'capture_failed', hold_next_attempt_at = NULL, updated_at = now(),
             hold_error = $2
       WHERE id = $1 AND (hold_error IS NULL OR hold_error NOT LIKE 'hold expired:%') RETURNING id`,
-    [h.id, `${HOLD_EXPIRED} the card authorisation expired at ${h.provider} before it was captured; Rp ${owed.toLocaleString('id-ID')} can no longer be taken from the card`],
+    [h.id, `${HOLD_EXPIRED} the card authorisation expired at ${h.provider} before it was captured; ${owedText} can no longer be taken from the card`],
   );
   if (first) {
-    logger.warn({ intent: h.id, owedIdr: owed }, 'card hold expired at the acquirer before capture');
+    logger.warn({ intent: h.id, owedMinor: owed }, 'card hold expired at the acquirer before capture');
     bus.emit('alert.raised', {
       orgId: h.org_id, kind: 'payment.hold_expired', severity: 'critical',
-      message: `A card hold expired at the acquirer (${h.provider}) before it was captured: Rp ${owed.toLocaleString('id-ID')} for a charging session was not charged, and it can no longer be taken from the card. The driver is asked to pay it from the receipt in the app (this alert resolves when they do); otherwise collect it another way, or write it off (Refunds → Holds and post-pay).`,
+      message: `A card hold expired at the acquirer (${h.provider}) before it was captured: ${owedText} for a charging session was not charged, and it can no longer be taken from the card. The driver is asked to pay it from the receipt in the app (this alert resolves when they do); otherwise collect it another way, or write it off (Refunds → Holds and post-pay).`,
       targetType: 'payment_intent', targetId: h.id,
     });
   }
@@ -195,6 +197,13 @@ async function holdExpired(h: Pick<HoldRow, 'id' | 'org_id' | 'provider' | 'hold
 
 /** In hold_error of a hold (or post-pay session) the driver paid in the app, after its prefix. */
 export const PAID_IN_APP = 'paid by the driver in the app';
+
+/**
+ * SQL for an amount in MINOR units as its major-unit text: `12345` (IDR, exponent 0), `1.30` (SGD 130). The
+ * paid-in-app note used to print the minor units ("S$ 130" for S$ 1.30) for currencies with cents.
+ */
+export const MAJOR_AMOUNT_SQL = (minor: string, exponent: string) =>
+  `to_char(${minor}::numeric / (10 ^ ${exponent}), 'FM999999999990' || CASE WHEN ${exponent} > 0 THEN '.' || repeat('0', ${exponent}) ELSE '' END)`;
 
 /**
  * The driver paid an unpaid session in the app (a 'settlement' payment): an expired card hold, or a
@@ -206,21 +215,49 @@ export const PAID_IN_APP = 'paid by the driver in the app';
 export async function settlementPaid(settlementId: string): Promise<boolean> {
   const r = await one<{ id: string; org_id: string; mode: string; paid: number }>(
     `UPDATE payment_intent o
-        SET state = 'captured', amount_captured_idr = s.amount_captured_idr, captured_at = now(), hold_state = 'captured',
+        SET state = 'captured', amount_captured_minor = s.amount_captured_minor, captured_at = now(), hold_state = 'captured',
             hold_error = CASE WHEN o.mode = 'preauth' THEN 'hold expired: ' WHEN o.hold_error LIKE 'link ended:%' THEN 'link ended: ' WHEN o.hold_error LIKE 'pin not confirmed:%' THEN 'pin not confirmed: ' WHEN o.hold_error LIKE 'pin expired:%' THEN 'pin expired: ' WHEN o.hold_error LIKE 'pin denied:%' THEN 'pin denied: ' WHEN o.hold_error LIKE 'pin cancelled:%' THEN 'pin cancelled: ' ELSE 'charge failed: ' END || '${PAID_IN_APP} ('
-                         || COALESCE(s.channel, s.method) || ', Rp ' || s.amount_captured_idr || '; payment ' || s.id || ')',
+                         || COALESCE(s.channel, s.method) || ', ' || (SELECT cu.symbol || ' ' || ${MAJOR_AMOUNT_SQL('s.amount_captured_minor', 'cu.exponent')} FROM currency_unit cu WHERE cu.code = s.currency)
+                         || '; payment ' || s.id || ')',
             checkout_url = NULL, hold_next_attempt_at = NULL, released_at = COALESCE(o.released_at, now()), updated_at = now()
        FROM payment_intent s
       WHERE s.id = $1 AND s.mode = 'settlement' AND s.state = 'captured' AND o.id = s.settles_intent_id AND o.hold_state = 'capture_failed'
         AND ((o.mode = 'preauth' AND o.hold_error LIKE 'hold expired:%') OR o.mode = 'postpay')
-      RETURNING o.id, o.org_id, o.mode, s.amount_captured_idr AS paid`,
+      RETURNING o.id, o.org_id, o.mode, s.amount_captured_minor AS paid`,
     [settlementId],
   );
   if (!r) {
+    // A partner network charge's shortfall paid in the app (review fix 2): the roaming charge is paid.
+    const rc = await one<{ id: string; org_id: string; payment_intent_id: string }>(
+      `UPDATE driver_roaming_charge rc SET shortfall_paid_at = now(), shortfall_settlement_id = s.id
+         FROM payment_intent s
+        WHERE s.id = $1 AND s.mode = 'settlement' AND s.state = 'captured' AND rc.payment_intent_id = s.settles_intent_id
+          AND rc.shortfall_minor > 0 AND rc.shortfall_paid_at IS NULL
+        RETURNING rc.id, rc.org_id, rc.payment_intent_id`,
+      [settlementId],
+    );
+    if (rc) {
+      const { resolveAlertsFor } = await import('../alerts.js');
+      await resolveAlertsFor(rc.org_id, 'roaming.hold_shortfall', 'payment_intent', rc.payment_intent_id);
+      logger.info({ roamingCharge: rc.id, settlement: settlementId }, 'roaming shortfall paid in the app');
+      return true;
+    }
+    // A second payment for a roaming shortfall already paid: refunded in full.
+    const dupRoaming = await one<{ id: string; amount: number }>(
+      `SELECT s.id, s.amount_captured_minor AS amount FROM payment_intent s JOIN driver_roaming_charge rc ON rc.payment_intent_id = s.settles_intent_id
+        WHERE s.id = $1 AND s.mode = 'settlement' AND s.state = 'captured' AND rc.shortfall_paid_at IS NOT NULL AND rc.shortfall_settlement_id <> s.id`,
+      [settlementId]);
+    if (dupRoaming) {
+      const { markRefundDue } = await import('../refunds.js');
+      await markRefundDue(dupRoaming.id, Number(dupRoaming.amount), 'Paid twice for the same partner network charge; this second payment is refunded');
+      return false;
+    }
+    // The same payment again (a replayed notification) for a roaming shortfall: nothing more to do.
+    if (await one(`SELECT 1 FROM payment_intent s JOIN driver_roaming_charge rc ON rc.payment_intent_id = s.settles_intent_id WHERE s.id = $1`, [settlementId])) return false;
     // The session was already paid, by another of the driver's payments (e.g. a card page left open, then
     // QRIS) or by the e-wallet itself: this one is money taken twice for the same session, refunded in full.
     const dup = await one<{ id: string; amount: number }>(
-      `SELECT s.id, s.amount_captured_idr AS amount FROM payment_intent s JOIN payment_intent o ON o.id = s.settles_intent_id
+      `SELECT s.id, s.amount_captured_minor AS amount FROM payment_intent s JOIN payment_intent o ON o.id = s.settles_intent_id
         WHERE s.id = $1 AND s.mode = 'settlement' AND s.state = 'captured' AND o.hold_state = 'captured'
           AND position(s.id::text in COALESCE(o.hold_error, '')) = 0`,
       [settlementId],
@@ -233,7 +270,7 @@ export async function settlementPaid(settlementId: string): Promise<boolean> {
   }
   const { resolveAlertsFor } = await import('../alerts.js');
   await resolveAlertsFor(r.org_id, r.mode === 'postpay' ? 'payment.postpay_failed' : 'payment.hold_expired', 'payment_intent', r.id);
-  logger.info({ intent: r.id, mode: r.mode, settlement: settlementId, paidIdr: r.paid }, 'unpaid session paid in the app');
+  logger.info({ intent: r.id, mode: r.mode, settlement: settlementId, paidMinor: r.paid }, 'unpaid session paid in the app');
   bus.emit('payment.unpaid_settled', { orgId: r.org_id, paymentIntentId: r.id });
   return true;
 }
@@ -243,7 +280,7 @@ export async function settlementPaid(settlementId: string): Promise<boolean> {
  */
 export async function expireHold(intentId: string): Promise<'released' | 'expired' | null> {
   const h = await one<HoldRow>(
-    `SELECT id, org_id, provider, provider_ref, provider_payment_id, integration_id, hold_state, hold_capture_idr, hold_attempts, amount_authorised_idr, session_id, mode, driver_card_id, channel
+    `SELECT id, org_id, provider, provider_ref, provider_payment_id, integration_id, hold_state, hold_capture_minor, hold_attempts, amount_authorised_minor, session_id, mode, driver_card_id, channel, currency
        FROM payment_intent WHERE id = $1 AND mode = 'preauth'`, [intentId]);
   if (!h) return null;
   if (h.hold_state === 'capturing' || h.hold_state === 'capture_failed') { await holdExpired(h); return 'expired'; }
@@ -255,7 +292,7 @@ export async function expireHold(intentId: string): Promise<'released' | 'expire
     await query(
       `UPDATE token SET status = 'Expired' WHERE org_id = $1 AND kind = 'prepaid' AND uid = (SELECT claim_id_tag FROM payment_intent WHERE id = $2 AND session_id IS NULL)`,
       [h.org_id, h.id]);
-    bus.emit('payment.hold_released', { orgId: h.org_id, paymentIntentId: h.id, releasedIdr: Number(h.amount_authorised_idr ?? 0) });
+    bus.emit('payment.hold_released', { orgId: h.org_id, paymentIntentId: h.id, releasedMinor: Number(h.amount_authorised_minor ?? 0), currency: h.currency });
     return 'released';
   }
   return null;
@@ -309,7 +346,7 @@ async function chargePostpay(h: HoldRow, provider: Awaited<ReturnType<typeof pro
         return { ok: false, error: `${OUTCOME_UNKNOWN} the e-wallet charge ${unknown[1]} could not be looked up yet (${(e as Error).message}); it is looked up again before any new charge` };
       }
       if (st?.status === 'captured') {
-        logger.warn({ intent: h.id, ref: h.provider_ref, amountIdr: st.amountIdr }, 'post-pay charge whose answer was lost had gone through; recorded, not charged again');
+        logger.warn({ intent: h.id, ref: h.provider_ref, amountMinor: st.amountMinor }, 'post-pay charge whose answer was lost had gone through; recorded, not charged again');
         await query(`UPDATE payment_intent SET provider_payment_id = COALESCE($2, provider_payment_id), updated_at = now() WHERE id = $1`, [h.id, st.providerPaymentId ?? null]);
         return { ok: true };
       }
@@ -332,7 +369,7 @@ async function chargePostpay(h: HoldRow, provider: Awaited<ReturnType<typeof pro
   let c;
   try {
     c = await provider.chargeWallet({
-      referenceId, amountIdr: Number(h.hold_capture_idr), channel, token,
+      referenceId, amountMinor: Number(h.hold_capture_minor), channel, token,
       returnUrl: `${base}/app/paid.html?for=charge`, customerId: k.app_driver_id, description: 'PlugSure charging (post-pay)',
     });
   } catch (e) {
@@ -380,17 +417,17 @@ export async function outstandingPostpay(appDriverId: string | null | undefined)
  * A new post-pay session must fit the limit and the e-wallet's balance together with these; the caller holds the
  * driver's advisory lock while it decides (registry.startPayment), and passes its transaction's client.
  */
-export async function postpayExposure(appDriverId: string, channel: string, c?: pg.PoolClient): Promise<{ unpaid: boolean; heldIdr: number; heldOnWalletIdr: number }> {
+export async function postpayExposure(appDriverId: string, channel: string, c?: pg.PoolClient): Promise<{ unpaid: boolean; heldMinor: number; heldOnWalletMinor: number }> {
   const sql = `SELECT COALESCE(bool_or(pi.hold_state IN ('capturing', 'capture_failed')), false) AS unpaid,
-                      COALESCE(sum(pi.amount_authorised_idr) FILTER (WHERE pi.hold_state = 'held' OR pi.hold_state IS NULL), 0)::bigint AS held,
-                      COALESCE(sum(pi.amount_authorised_idr) FILTER (WHERE (pi.hold_state = 'held' OR pi.hold_state IS NULL) AND pi.channel = $2), 0)::bigint AS held_here
+                      COALESCE(sum(pi.amount_authorised_minor) FILTER (WHERE pi.hold_state = 'held' OR pi.hold_state IS NULL), 0)::bigint AS held,
+                      COALESCE(sum(pi.amount_authorised_minor) FILTER (WHERE (pi.hold_state = 'held' OR pi.hold_state IS NULL) AND pi.channel = $2), 0)::bigint AS held_here
                  FROM payment_intent pi
                 WHERE ${DRIVER_POSTPAY}
                   AND (pi.hold_state IN ('held', 'capturing', 'capture_failed')
                        OR (pi.hold_state IS NULL AND pi.state = 'pending' AND pi.created_at > now() - interval '1 hour'))`;
   type Row = { unpaid: boolean; held: number; held_here: number };
   const r = c ? (await c.query<Row>(sql, [appDriverId, channel])).rows[0] : await one<Row>(sql, [appDriverId, channel]);
-  return { unpaid: r?.unpaid === true, heldIdr: Number(r?.held ?? 0), heldOnWalletIdr: Number(r?.held_here ?? 0) };
+  return { unpaid: r?.unpaid === true, heldMinor: Number(r?.held ?? 0), heldOnWalletMinor: Number(r?.held_here ?? 0) };
 }
 
 /** The driver pays an unpaid post-pay session now: a new charge (or the e-wallet's confirmation link). */
@@ -411,6 +448,8 @@ export async function sweepHolds(): Promise<number> {
   const unused = await many<{ id: string; org_id: string; claim_id_tag: string | null }>(
     `UPDATE payment_intent SET hold_state = 'releasing', hold_attempts = 0, hold_next_attempt_at = now(), updated_at = now()
       WHERE mode IN ('preauth', 'postpay') AND hold_state = 'held' AND session_id IS NULL
+        -- A roaming hold has no session of ours: driver/roaming-pay.ts sweeps it (the 4-day rule).
+        AND roaming_charge_id IS NULL
         AND created_at < now() - make_interval(mins => $1::int)
       RETURNING id, org_id, claim_id_tag`,
     [UNUSED_AFTER_MIN],
@@ -439,9 +478,9 @@ export async function sweepHolds(): Promise<number> {
 /** Console: holds that need attention or are in progress, and recent ones. */
 export async function holdsOverview(orgId: string) {
   const rows = await many<any>(
-    `SELECT pi.id, pi.hold_state, pi.amount_authorised_idr, pi.hold_capture_idr, pi.amount_captured_idr, pi.hold_attempts, pi.hold_error,
+    `SELECT pi.id, pi.hold_state, pi.amount_authorised_minor, pi.hold_capture_minor, pi.amount_captured_minor, pi.hold_attempts, pi.hold_error,
             pi.hold_next_attempt_at, pi.authorised_at, pi.released_at, pi.provider, pi.provider_ref, pi.created_at, pi.session_id,
-            pi.mode, pi.channel, s.name AS site_name, cp.ocpp_identity
+            pi.mode, pi.channel, pi.currency, s.name AS site_name, cp.ocpp_identity
        FROM payment_intent pi
        LEFT JOIN connector c ON c.id = pi.connector_uuid
        LEFT JOIN evse e ON e.id = c.evse_uuid
@@ -454,13 +493,14 @@ export async function holdsOverview(orgId: string) {
     [orgId],
   );
   const holds = rows.map((r) => ({
-    id: r.id, kind: r.mode === 'postpay' ? 'postpay' : 'card_hold', channel: r.channel ?? null, state: r.hold_state, heldIdr: r.amount_authorised_idr, captureIdr: r.hold_capture_idr, capturedIdr: r.amount_captured_idr,
+    id: r.id, kind: r.mode === 'postpay' ? 'postpay' : 'card_hold', channel: r.channel ?? null, state: r.hold_state, heldMinor: r.amount_authorised_minor, captureMinor: r.hold_capture_minor, capturedMinor: r.amount_captured_minor,
     attempts: r.hold_attempts, error: r.hold_error, nextAttemptAt: r.hold_next_attempt_at, authorisedAt: r.authorised_at, settledAt: r.released_at,
     /** The authorisation expired at the acquirer before it was captured: it cannot be retried. */
     expired: String(r.hold_error ?? '').startsWith(HOLD_EXPIRED),
     /** An expired hold, or a post-pay session whose link ended, the driver has since paid in the app. */
     paidInApp: String(r.hold_error ?? '').includes(PAID_IN_APP) && r.hold_state === 'captured',
     provider: r.provider, providerRef: r.provider_ref, createdAt: r.created_at, sessionId: r.session_id, site: r.site_name, charger: r.ocpp_identity,
+    currency: r.currency,
   }));
   return {
     holds,
@@ -470,8 +510,10 @@ export async function holdsOverview(orgId: string) {
       failed: holds.filter((h) => h.state === 'capture_failed' || h.state === 'release_failed').length,
       /** Of the failed: card holds that expired before capture and are still unpaid (cannot be retried), and what they left uncollected. */
       expired: holds.filter((h) => h.expired && !h.paidInApp).length,
-      expiredIdr: holds.filter((h) => h.expired && !h.paidInApp).reduce((s, h) => s + Number(h.captureIdr ?? 0), 0),
-      heldIdr: holds.filter((h) => h.state === 'held').reduce((s, h) => s + Number(h.heldIdr ?? 0), 0),
+      // Rupiah (v1.6); the other currencies separately (never added up).
+      expiredMinor: holds.filter((h) => h.expired && !h.paidInApp && h.currency === LEGACY_CURRENCY).reduce((s, h) => s + Number(h.captureMinor ?? 0), 0),
+      expiredByCurrency: holds.filter((h) => h.expired && !h.paidInApp).reduce((o, h) => ({ ...o, [h.currency]: (o[h.currency] ?? 0) + Number(h.captureMinor ?? 0) }), {} as Record<string, number>),
+      heldMinor: holds.filter((h) => h.state === 'held' && h.currency === LEGACY_CURRENCY).reduce((s, h) => s + Number(h.heldMinor ?? 0), 0),
     },
   };
 }

@@ -4,8 +4,9 @@ import { writeAudit } from '../services/audit.js';
 import { sandboxInfo } from '../sandbox/provision.js';
 import {
   brandOf, saveBrand, saveIcon, deleteBrand, palette, readiness, buildKit, BrandError, ICON_SIZES, type Brand,
-  saveApnsKey, recheckApns, removeApnsKey,
+  saveApnsKey, recheckApns, removeApnsKey, saveFcmServiceAccount, recheckFcm, removeFcm, saveAppConfig,
 } from '../services/brand.js';
+import { validateAppConfig } from '../driver/app-config.js';
 import { one } from '../db/pool.js';
 import { liveActivityCounts } from '../services/live-activity.js';
 
@@ -20,6 +21,11 @@ import { liveActivityCounts } from '../services/live-activity.js';
  *   PUT    /v1/driver-app/apns     the iOS notifications key (.p8), checked with Apple
  *   POST   /v1/driver-app/apns/check   check it again
  *   DELETE /v1/driver-app/apns     remove it (the iOS app stops getting notifications)
+ *   PUT    /v1/driver-app/fcm      the Android notifications service account (Firebase, FCM HTTP v1), checked with Google
+ *   POST   /v1/driver-app/fcm/check    check it again
+ *   DELETE /v1/driver-app/fcm      remove it (the Android app stops getting notifications)
+ *   GET    /v1/driver-app/app-config   the native apps' version gate and remote configuration
+ *   PUT    /v1/driver-app/app-config   change it (GET /d/v1/app/config serves it to the apps)
  */
 export async function registerBrandRoutes(app: FastifyInstance): Promise<void> {
   const fail = (reply: FastifyReply, e: unknown) => {
@@ -30,6 +36,7 @@ export async function registerBrandRoutes(app: FastifyInstance): Promise<void> {
     writeAudit({ orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action, targetType: 'driver_app', targetId: req.principal.orgId, after: after ?? null, ip: req.ip });
 
   const iosDevices = async (b: Brand | null) => b ? Number((await one<{ n: number }>(`SELECT count(*)::int AS n FROM push_subscription WHERE kind = 'apns' AND brand_org_id = $1`, [b.orgId]))?.n ?? 0) : 0;
+  const androidDevices = async (b: Brand | null) => b ? Number((await one<{ n: number }>(`SELECT count(*)::int AS n FROM push_subscription WHERE kind = 'fcm' AND brand_org_id = $1`, [b.orgId]))?.n ?? 0) : 0;
   const view = (req: FastifyRequest, b: Brand | null, iosPushDevices = 0) => {
     const origin = (process.env.DRIVER_PUBLIC_URL || process.env.CONSOLE_PUBLIC_URL || `${req.protocol}://${req.headers.host ?? 'localhost'}`).replace(/\/+$/, '');
     return {
@@ -126,6 +133,59 @@ export async function registerBrandRoutes(app: FastifyInstance): Promise<void> {
     await removeApnsKey(req.principal.orgId);
     await audit(req, 'driver_app.apns_key_removed', { keyId: b.apnsKeyId });
     return { ok: true };
+  });
+
+  // ── Android notifications (FCM HTTP v1): the Firebase project's service account JSON.
+  app.put('/v1/driver-app/fcm', { bodyLimit: 64 * 1024 }, async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:write' });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const brand = await saveFcmServiceAccount(req.principal.orgId, b.serviceAccount);
+      await audit(req, 'driver_app.fcm_set', { projectId: brand.fcmProjectId, clientEmail: brand.fcmClientEmail, checkOk: brand.fcmCheckOk });
+      return { ...view(req, brand, await iosDevices(brand)), androidPushDevices: await androidDevices(brand) };
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  app.post('/v1/driver-app/fcm/check', async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:write' });
+    try {
+      const brand = await recheckFcm(req.principal.orgId);
+      return { ...view(req, brand, await iosDevices(brand)), androidPushDevices: await androidDevices(brand) };
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  app.delete('/v1/driver-app/fcm', async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:write' });
+    const b = await brandOf(req.principal.orgId);
+    if (!b?.fcmConfigured) return reply.status(404).send({ error: 'There is no Android notifications service account to remove.' });
+    await removeFcm(req.principal.orgId);
+    await audit(req, 'driver_app.fcm_removed', { projectId: b.fcmProjectId });
+    return { ok: true };
+  });
+
+  // ── The native apps' version gate and remote configuration.
+  app.get('/v1/driver-app/app-config', async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:read' });
+    const b = await brandOf(req.principal.orgId);
+    if (!b) return reply.status(404).send({ error: 'Set up the driver app first.' });
+    return { appConfig: b.appConfig };
+  });
+
+  app.put('/v1/driver-app/app-config', async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:write' });
+    const v = validateAppConfig(req.body ?? {});
+    if (!v.ok) return reply.status(422).send({ error: 'Check the highlighted fields.', fields: v.errors });
+    try {
+      const b = await saveAppConfig(req.principal.orgId, v.value as Record<string, unknown>);
+      await audit(req, 'driver_app.app_config_changed', { appConfig: b.appConfig });
+      return { appConfig: b.appConfig };
+    } catch (e) {
+      return fail(reply, e);
+    }
   });
 
   app.delete('/v1/driver-app', async (req, reply) => {

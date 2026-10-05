@@ -1,4 +1,8 @@
 import { one, many, query } from '../db/pool.js';
+import { taxContextForSite } from './tax/index.js';
+import { currencyOr, moneyText, LEGACY_CURRENCY } from '../domain/money.js';
+import { countryOf } from '../domain/country.js';
+import { defaultTimezone } from '../domain/timezone.js';
 import { logger } from '../logger.js';
 import { bus } from './events.js';
 import * as registry from '../ocpp/registry.js';
@@ -44,10 +48,18 @@ export async function recordRemoteStartRequest(args: {
     if (v == null || !(v >= 1) || v > 24 * 60) return { energyLimitWh, durationLimitS, error: 'Duration must be 1–1440 minutes' };
     durationLimitS = Math.round(v * 60);
   } else if (args.limitType === 'amount') {
-    if (v == null || !(v >= 1000) || v > 10_000_000) return { energyLimitWh, durationLimitS, error: 'Amount must be Rp 1,000 – Rp 10,000,000' };
     if (!args.connectorUuid) return { energyLimitWh, durationLimitS, error: 'Unknown connector' };
-    const c = await one<{ max_power_w: number; pbjt_rate_bps: number; timezone: string }>(
-      `SELECT c.max_power_w, s.pbjt_rate_bps, s.timezone
+    // The amount is in the connector's site currency (minor units): rupiah 1,000 – 10,000,000 as before; elsewhere 1.00 up to the country's largest pre-purchase.
+    const cc = await one<{ country_code: string }>(
+      `SELECT s.country_code FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id JOIN site s ON s.id = cp.site_id WHERE c.id = $1`,
+      [args.connectorUuid]);
+    const country = countryOf(cc?.country_code);
+    const lo = country.currency === LEGACY_CURRENCY ? 1_000 : 100;
+    const hi = country.currency === LEGACY_CURRENCY ? 10_000_000 : country.maxPrepaidMinor;
+    if (v == null || !(v >= lo) || v > hi) return { energyLimitWh, durationLimitS, error: `Amount must be ${moneyText(lo, country.currency, 'en')} – ${moneyText(hi, country.currency, 'en')}` };
+    const c = await one<{ max_power_w: number; local_tax_rate_bps: number; timezone: string; country_code: string; tax_overrides: any; currency: string }>(
+      `SELECT c.max_power_w, s.local_tax_rate_bps, s.timezone, s.country_code, s.tax_overrides,
+              (SELECT co.currency FROM country co WHERE co.code = s.country_code) AS currency
          FROM connector c JOIN evse e ON e.id = c.evse_uuid JOIN charge_point cp ON cp.id = e.charge_point_id
          JOIN site s ON s.id = cp.site_id WHERE c.id = $1`,
       [args.connectorUuid],
@@ -58,11 +70,13 @@ export async function recordRemoteStartRequest(args: {
       startedAt: now,
       endedAt: new Date(now.getTime() + 45 * 60_000),
       connectorMaxPowerW: c?.max_power_w ?? 22_000,
-      pbjtRateBps: c?.pbjt_rate_bps ?? 0,
-      timezone: c?.timezone ?? 'Asia/Jakarta',
+      localTaxRateBps: c?.local_tax_rate_bps ?? 0,
+      timezone: c?.timezone ?? defaultTimezone(c?.country_code ?? 'ID'),
+      currency: currencyOr(c?.currency),
+      tax: await taxContextForSite(args.orgId, c ?? {}, now),
     });
     if (energyLimitWh <= 0) {
-      return { energyLimitWh: null, durationLimitS, error: `Rp ${v} does not cover this connector's fixed fees` };
+      return { energyLimitWh: null, durationLimitS, error: `${moneyText(v, country.currency, 'plain')} does not cover this connector's fixed fees` };
     }
   }
 

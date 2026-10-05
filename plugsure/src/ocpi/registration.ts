@@ -3,7 +3,7 @@ import { one, query } from '../db/pool.js';
 import { config, isRelaxedEnv } from '../config.js';
 import { seal, unseal } from '../services/secrets.js';
 import { OCPI_VERSION, tokenHash, type Party } from './mapping.js';
-import { getParty, ROLE_OF_KIND, type PartnerRow, type Endpoint, type RoleEntry } from './store.js';
+import { getParty, getParties, ROLE_OF_KIND, type PartnerRow, type Endpoint, type RoleEntry } from './store.js';
 import { ocpiCall, partnerUrlProblem } from './client.js';
 
 /**
@@ -56,14 +56,23 @@ export function ourEndpoints(base: string): Endpoint[] {
   ];
 }
 
-export function ourCredentials(party: Party, token: string, base: string) {
-  const business_details = { name: party.business_name, ...(party.website ? { website: party.website } : {}) };
+/**
+ * Our credentials: a CPO role for every party of the operator (one per country, the
+ * home party first) and the eMSP role of the home party. "A platform can have the
+ * same role more than once, each with its own unique party_id and country_code"
+ * (OCPI 2.2.1 credentials). With one party this is exactly the v1.6 answer.
+ */
+export function ourCredentials(parties: Party | Party[], token: string, base: string) {
+  const list = Array.isArray(parties) ? parties : [parties];
+  const details = (p: Party) => ({ name: p.business_name, ...(p.website ? { website: p.website } : {}) });
+  const home = list[0]!;
   return {
     token,
     url: versionsUrlOf(base),
     roles: [
-      { role: 'CPO', party_id: party.party_id, country_code: party.country_code, business_details },
-      { role: 'EMSP', party_id: party.party_id, country_code: party.country_code, business_details },
+      { role: 'CPO', party_id: home.party_id, country_code: home.country_code, business_details: details(home) },
+      { role: 'EMSP', party_id: home.party_id, country_code: home.country_code, business_details: details(home) },
+      ...list.slice(1).map((p) => ({ role: 'CPO', party_id: p.party_id, country_code: p.country_code, business_details: details(p) })),
     ],
   };
 }
@@ -98,7 +107,7 @@ export async function createPartner(orgId: string, input: { name: string; kind?:
   const row = await one<PartnerRow>(
     `INSERT INTO ocpi_partner (org_id, name, kind, token_in_hash, token_in)
      VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [orgId, input.name.trim().slice(0, 120), input.kind === 'hub' || input.kind === 'cpo' ? input.kind : 'emsp', tokenHash(token), seal(token)],
+    [orgId, input.name.trim().slice(0, 120), input.kind === 'hub' || input.kind === 'cpo' || input.kind === 'authority' ? input.kind : 'emsp', tokenHash(token), seal(token)],
   );
   return { partner: row!, token };
 }
@@ -180,6 +189,7 @@ export async function registerFromPartner(partner: PartnerRow, body: any, base: 
   }
   const endpoints = await discover(partner.org_id, partner.id, url, theirToken, party);
   const tokenC = newCredentialsToken();
+  const parties = await getParties(partner.org_id);
   const who = primaryParty(roles);
   // Only from the state this request started from: two POSTs with token A racing
   // each other must not both register (the second would replace the first's token C).
@@ -194,7 +204,7 @@ export async function registerFromPartner(partner: PartnerRow, body: any, base: 
       who.country_code, who.party_id, tokenHash(tokenC), seal(tokenC), update ? 'connected' : 'pending', partner.token_in_hash],
   );
   if (!done) throw new RegistrationError(2000, update ? 'the registration changed meanwhile: try again' : 'already registered: use PUT to update', 405);
-  return ourCredentials(party, tokenC, base);
+  return ourCredentials(parties, tokenC, base);
 }
 
 /** The operator connects to a partner that gave it a versions URL and token A. */
@@ -212,7 +222,7 @@ export async function connectToPartner(orgId: string, partnerId: string, version
   // Accept requests signed with B from the moment we send it: the partner may
   // call our versions URL before it answers the POST.
   await query(`UPDATE ocpi_partner SET token_in_hash = $2, token_in = $3, updated_at = now() WHERE id = $1`, [partnerId, tokenHash(tokenB), seal(tokenB)]);
-  const r = await ocpiCall({ orgId, partnerId, method: 'POST', url: credentials.url, token: tokenA, body: ourCredentials(party, tokenB, base), from: party });
+  const r = await ocpiCall({ orgId, partnerId, method: 'POST', url: credentials.url, token: tokenA, body: ourCredentials(await getParties(orgId), tokenB, base), from: party });
   if (!r.ok || typeof r.data?.token !== 'string') {
     await query(`UPDATE ocpi_partner SET last_error = $2, updated_at = now() WHERE id = $1`, [partnerId, `registration refused: ${r.error ?? 'no credentials returned'}`]);
     throw new RegistrationError(3001, `the partner refused the registration (${r.error ?? 'no credentials in the answer'})`);
@@ -242,9 +252,9 @@ export async function connectToPartner(orgId: string, partnerId: string, version
 
 /** Our credentials as the partner currently holds them (GET /credentials). */
 export async function currentCredentials(partner: PartnerRow, base: string) {
-  const party = await getParty(partner.org_id);
-  if (!party || !partner.token_in) return null;
-  return ourCredentials(party, unseal(partner.token_in), base);
+  const parties = await getParties(partner.org_id);
+  if (!parties.length || !partner.token_in) return null;
+  return ourCredentials(parties, unseal(partner.token_in), base);
 }
 
 /**

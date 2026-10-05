@@ -122,7 +122,7 @@ try {
   await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   await ops('DELETE', '/v1/integrations/payments?scope=org');
   cleanup.push(() => ops('DELETE', '/v1/integrations/payments?scope=org'));
-  const site = await ops('POST', '/v1/sites', { name: 'Card Holds E2E Hub', address: 'Jl. Thamrin', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Card Holds E2E Hub', address: 'Jl. Thamrin', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Holds E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${site.data.id}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
   const ID = `HOLD-${Date.now().toString().slice(-6)}`;
@@ -150,19 +150,19 @@ try {
   const stations = await until(() => d('GET', '/v1/stations'), (r) => !!r.data.stations?.find((s: any) => s.siteId === site.data.id)?.connectors?.[0], 20_000, 800);
   const conn = stations.data.stations.find((s: any) => s.siteId === site.data.id).connectors[0].connectorId;
   const intentOf = async (ref: string) => (await pg.query(
-    `SELECT id, state, mode, hold_state, amount_authorised_idr, amount_captured_idr, hold_capture_idr, hold_error, refund_state, save_card, driver_card_id, session_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
+    `SELECT id, state, mode, hold_state, amount_authorised_minor, amount_captured_minor, hold_capture_minor, hold_error, refund_state, save_card, driver_card_id, session_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
   const refOf = (r: any) => r.data?.payment?.providerRef as string;
-  const cdrTotal = async (sessionId: string) => Number((await pg.query(`SELECT total_idr FROM cdr WHERE session_id = $1`, [sessionId])).rows[0]?.total_idr ?? -1);
+  const cdrTotal = async (sessionId: string) => Number((await pg.query(`SELECT total_minor FROM cdr WHERE session_id = $1`, [sessionId])).rows[0]?.total_minor ?? -1);
 
   // ================================================================ sandbox: holds and saved cards on
-  const off = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 });
+  const off = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 });
   const sb = await ops('PUT', '/v1/integrations/payments', { provider: 'mock', settings: { methods: ['QRIS', 'GOPAY', 'CARD'], cardHolds: true, saveCards: true } });
   cc('/v1/integrations/{kind}', 'put', '200', sb.data);
-  const q = await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 }), (r) => r.data.cardHolds === true, 20_000, 1000);
+  const q = await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 }), (r) => r.data.cardHolds === true, 20_000, 1000);
   check('holds and saved cards are off by default; switched on for the operator, the quote offers both (no saved card yet)',
     off.data.cardHolds === false && off.data.canSaveCard === false && sb.status === 200 && q.data.cardHolds === true && q.data.canSaveCard === true && q.data.savedCards.length === 0, { off: off.data, q: q.data });
 
-  const h1 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 50_000, method: 'CARD', saveCard: true });
+  const h1 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 50_000, method: 'CARD', saveCard: true });
   const i1 = await intentOf(refOf(h1));
   const page = await fetch(API + h1.data.payment.checkoutUrl).then((r) => r.text());
   check('card payment is a hold: mode preauth, save requested; the checkout page says hold only and that the card will be saved',
@@ -173,7 +173,7 @@ try {
   const i1b = await intentOf(refOf(h1));
   const cards = await d('GET', '/v1/cards');
   check('approved: authorised and held (nothing taken); the card saved for this driver as VISA ••1111, usable at this operator',
-    before.status === 400 && paid.data.outcome === 'authorised' && i1b.state === 'authorised' && i1b.hold_state === 'held' && i1b.amount_captured_idr === null
+    before.status === 400 && paid.data.outcome === 'authorised' && i1b.state === 'authorised' && i1b.hold_state === 'held' && i1b.amount_captured_minor === null
       && cards.data.cards.length === 1 && cards.data.cards[0].brand === 'VISA' && cards.data.cards[0].last4 === '1111' && !JSON.stringify(cards.data).includes('mock_tok_') && i1b.driver_card_id === cards.data.cards[0].id,
     { before: before.data, paid: paid.data, i1b, cards: cards.data });
   const st1 = await d('GET', `/v1/charge/${h1.data.chargeId}/status`);
@@ -183,15 +183,15 @@ try {
   const total1 = await cdrTotal(i1c.session_id);
   const rc1 = await until(() => d('GET', `/v1/charge/${h1.data.chargeId}/receipt`), (r) => r.data?.settlement?.hold?.state === 'captured', 10_000, 500);
   check('the held card starts the charge; after the session the rated total is captured and the rest released, with no refund',
-    st1.data.state === 'awaiting_start' && go1.status === 200 && total1 > 0 && total1 < 50_000 && i1c.state === 'captured' && i1c.amount_captured_idr === total1 && i1c.refund_state === null, { st1: st1.data, go1: go1.data, i1c, total1 });
+    st1.data.state === 'awaiting_start' && go1.status === 200 && total1 > 0 && total1 < 50_000 && i1c.state === 'captured' && i1c.amount_captured_minor === total1 && i1c.refund_state === null, { st1: st1.data, go1: go1.data, i1c, total1 });
   const hs = rc1.data.settlement?.hold;
   check('receipt: held Rp 50,000, charged the total, released the rest',
-    hs?.heldIdr === 50_000 && hs.chargedIdr === total1 && hs.releasedIdr === 50_000 - total1 && rc1.data.settlement.refundIdr === 0, rc1.data.settlement);
+    hs?.heldMinor === 50_000 && hs.chargedMinor === total1 && hs.releasedMinor === 50_000 - total1 && rc1.data.settlement.refundMinor === 0, rc1.data.settlement);
 
   // The saved card: one tap, no checkout page.
-  const q2 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 30_000 });
+  const q2 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 30_000 });
   const cardId = q2.data.savedCards?.[0]?.id;
-  const h2 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000, savedCardId: cardId });
+  const h2 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000, savedCardId: cardId });
   const i2 = await intentOf(refOf(h2));
   check('the saved card is offered and pays in one tap: held at once, no checkout page',
     q2.data.savedCards.length === 1 && h2.status === 200 && h2.data.payment.action === 'done' && h2.data.payment.checkoutUrl === null && i2.state === 'authorised' && i2.hold_state === 'held' && i2.driver_card_id === cardId, { q2: q2.data.savedCards, h2: h2.data.payment, i2 });
@@ -199,10 +199,10 @@ try {
   await runSession(h2.data.startToken, 0);
   const i2b = await until(() => intentOf(refOf(h2)), (i) => i.hold_state === 'released', 20_000, 500);
   check('a session that delivers nothing releases the whole hold (state voided, nothing captured, no refund)',
-    i2b.hold_state === 'released' && i2b.state === 'voided' && i2b.amount_captured_idr === null && i2b.refund_state === null, i2b);
+    i2b.hold_state === 'released' && i2b.state === 'voided' && i2b.amount_captured_minor === null && i2b.refund_state === null, i2b);
 
   // An unused hold is released by the worker, and its token stops working.
-  const h3 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 20_000, savedCardId: cardId });
+  const h3 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 20_000, savedCardId: cardId });
   await pg.query(`UPDATE payment_intent SET created_at = now() - interval '40 minutes' WHERE provider_ref = $1`, [refOf(h3)]);
   const i3 = await until(() => intentOf(refOf(h3)), (i) => i.hold_state === 'released', 100_000, 2000);
   const st3 = await d('GET', `/v1/charge/${h3.data.chargeId}/status`);
@@ -211,7 +211,7 @@ try {
     i3.hold_state === 'released' && i3.state === 'voided' && st3.data.state === 'released' && auth3.idTagInfo?.status !== 'Accepted', { i3, st3: st3.data.state, auth3 });
 
   // A 30-day pass with the saved card.
-  const plan = await ops('POST', '/v1/subscription-plans', { name: `Holds E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 20000, offeredInApp: true });
+  const plan = await ops('POST', '/v1/subscription-plans', { name: `Holds E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 20000, offeredInApp: true });
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${plan.data.id}`, { active: false, offeredInApp: false }));
   const mem = await d('GET', '/v1/memberships');
   const mp = mem.data.plans.find((p: any) => p.id === plan.data.id);
@@ -235,7 +235,7 @@ try {
   const { renewPasses } = await import('../../src/driver/membership.js');
   const ren = await renewPasses();
   const subAfter = (await pg.query(`SELECT current_period_end, auto_renew, renew_error, renew_attempts FROM subscription WHERE id = $1`, [subId])).rows[0];
-  const renCharge = (await pg.query(`SELECT state, via, auto_renewal, driver_card_id, total_idr, period_start FROM subscription_charge WHERE subscription_id = $1 AND auto_renewal ORDER BY created_at DESC LIMIT 1`, [subId])).rows[0];
+  const renCharge = (await pg.query(`SELECT state, via, auto_renewal, driver_card_id, total_minor, period_start FROM subscription_charge WHERE subscription_id = $1 AND auto_renewal ORDER BY created_at DESC LIMIT 1`, [subId])).rows[0];
   check('a day before the end, the worker charges the saved card: paid at once, the pass runs 30 more days from the old end',
     ren.renewed >= 1 && renCharge?.state === 'paid' && renCharge.via === 'card' && renCharge.driver_card_id === cardId && new Date(renCharge.period_start).getTime() === new Date(endBefore).getTime()
       && Math.round((new Date(subAfter.current_period_end).getTime() - new Date(endBefore).getTime()) / 86_400_000) === 30 && subAfter.renew_error === null,
@@ -245,8 +245,8 @@ try {
   check('run again: nothing more is charged (already renewed)', renCount === 1, { again2, renCount });
 
   // Switching plans: the unused value of the current pass is credited.
-  const dear = await ops('POST', '/v1/subscription-plans', { name: `Holds E2E Plus ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 60000, offeredInApp: true });
-  const cheap = await ops('POST', '/v1/subscription-plans', { name: `Holds E2E Lite ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 5000, offeredInApp: true });
+  const dear = await ops('POST', '/v1/subscription-plans', { name: `Holds E2E Plus ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 60000, offeredInApp: true });
+  const cheap = await ops('POST', '/v1/subscription-plans', { name: `Holds E2E Lite ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 5000, offeredInApp: true });
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${dear.data.id}`, { active: false, offeredInApp: false }));
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${cheap.data.id}`, { active: false, offeredInApp: false }));
   const ov = (await d('GET', '/v1/memberships')).data;
@@ -254,34 +254,34 @@ try {
   const swDown = ov.plans.find((p: any) => p.id === cheap.data.id)?.switch;
   // The driver holds two paid 30-day windows of Rp 20,000 (the first nearly unused, the renewal untouched).
   check('switching: the app quotes the credit for the unused days — a dearer plan costs the difference, a cheaper one is free and runs longer',
-    swUp && swUp.creditIdr > 20_000 && swUp.creditIdr <= 40_000 && swUp.payFeeIdr === 60_000 - swUp.creditIdr && swUp.days === 30
-      && swDown && swDown.payTotalIdr === 0 && swDown.days > 30, { swUp, swDown });
+    swUp && swUp.creditMinor > 20_000 && swUp.creditMinor <= 40_000 && swUp.payFeeMinor === 60_000 - swUp.creditMinor && swUp.days === 30
+      && swDown && swDown.payTotalMinor === 0 && swDown.days > 30, { swUp, swDown });
   const up = await d('POST', '/v1/memberships', { planId: dear.data.id, savedCardId: cardId });
   const upSub = (await pg.query(`SELECT plan_id, current_period_start, current_period_end, status FROM subscription WHERE id = $1`, [subId])).rows[0];
-  const upCharge = (await pg.query(`SELECT fee_idr, credit_idr, total_idr, switch_to_plan_id, state FROM subscription_charge WHERE subscription_id = $1 AND switch_to_plan_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`, [subId])).rows[0];
+  const upCharge = (await pg.query(`SELECT fee_minor, credit_minor, total_minor, switch_to_plan_id, state FROM subscription_charge WHERE subscription_id = $1 AND switch_to_plan_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`, [subId])).rows[0];
   check('switching up: the same membership moves to the new plan when paid, from now for 30 days; the charge is the fee less the credit (plus PPN)',
-    up.status === 200 && up.data.paid === true && up.data.creditIdr === swUp.creditIdr && upSub.plan_id === dear.data.id && upSub.status === 'active'
+    up.status === 200 && up.data.paid === true && up.data.creditMinor === swUp.creditMinor && upSub.plan_id === dear.data.id && upSub.status === 'active'
       && Math.round((new Date(upSub.current_period_end).getTime() - new Date(upSub.current_period_start).getTime()) / 86_400_000) === 30
-      && upCharge?.fee_idr === 60_000 && upCharge.credit_idr === swUp.creditIdr && upCharge.state === 'paid' && upCharge.switch_to_plan_id === dear.data.id,
+      && upCharge?.fee_minor === 60_000 && upCharge.credit_minor === swUp.creditMinor && upCharge.state === 'paid' && upCharge.switch_to_plan_id === dear.data.id,
     { up: up.data, upSub, upCharge });
   const down = await d('POST', '/v1/memberships', { planId: cheap.data.id });
   const downSub = (await pg.query(`SELECT plan_id, current_period_start, current_period_end FROM subscription WHERE id = $1`, [subId])).rows[0];
-  const downCharge = (await pg.query(`SELECT via, total_idr, credit_idr, state FROM subscription_charge WHERE subscription_id = $1 AND switch_to_plan_id = $2`, [subId, cheap.data.id])).rows[0];
+  const downCharge = (await pg.query(`SELECT via, total_minor, credit_minor, state FROM subscription_charge WHERE subscription_id = $1 AND switch_to_plan_id = $2`, [subId, cheap.data.id])).rows[0];
   // Only the Rp 60,000 pass is left to credit: the charges the first switch replaced ended at that switch (never credited twice).
   const downDays = (new Date(downSub.current_period_end).getTime() - new Date(downSub.current_period_start).getTime()) / 86_400_000;
   check('switching down: nothing to pay (no payment method needed) — only the current pass is credited, and it makes the cheaper pass run longer (about 360 days)',
-    down.status === 200 && down.data.paid === true && down.data.totalIdr === 0 && downSub.plan_id === cheap.data.id && downCharge?.via === 'credit' && downCharge.total_idr === 0 && downCharge.state === 'paid'
-      && downCharge.credit_idr > 59_000 && downCharge.credit_idr <= 60_000 && downDays > 358 && downDays < 361, { down: down.data, downSub, downCharge, downDays });
+    down.status === 200 && down.data.paid === true && down.data.totalMinor === 0 && downSub.plan_id === cheap.data.id && downCharge?.via === 'credit' && downCharge.total_minor === 0 && downCharge.state === 'paid'
+      && downCharge.credit_minor > 59_000 && downCharge.credit_minor <= 60_000 && downDays > 358 && downDays < 361, { down: down.data, downSub, downCharge, downDays });
 
   // Loyalty points: earned on what a session costs, spent automatically on the next one (before tax), expiring.
   const prevLoyalty = (await ops('GET', '/v1/loyalty')).data.program;
   cleanup.push(() => ops('PUT', '/v1/loyalty', prevLoyalty));
-  const badProgram = await ops('PUT', '/v1/loyalty', { enabled: true, pointValueIdr: 0 });
-  const lp = await ops('PUT', '/v1/loyalty', { enabled: true, earnPer1000Idr: 10, pointValueIdr: 1, maxRedeemBps: 5000, expiryMonths: 12 });
+  const badProgram = await ops('PUT', '/v1/loyalty', { enabled: true, pointValueMinor: 0 });
+  const lp = await ops('PUT', '/v1/loyalty', { enabled: true, earnPer1000Minor: 10, pointValueMinor: 1, maxRedeemBps: 5000, expiryMonths: 12 });
   cc('/v1/loyalty', 'put', '200', lp.data);
   check('loyalty: switched on (10 points per Rp 1,000, a point worth Rp 1, at most half a session); an invalid value is refused',
     lp.status === 200 && lp.data.program.enabled === true && badProgram.status === 422, { lp: lp.data, bad: badProgram.data });
-  const hA = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000, savedCardId: cardId });
+  const hA = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000, savedCardId: cardId });
   await d('POST', `/v1/charge/${hA.data.chargeId}/start`);
   await runSession(hA.data.startToken, 5_000);
   const iA = await until(() => intentOf(refOf(hA)), (i) => i.hold_state === 'captured', 20_000, 500);
@@ -293,20 +293,20 @@ try {
   check(`loyalty: a session (Rp ${totalA}) earns ${earnedA} points, shown on the receipt and in the app`,
     earnedA > 0 && rcA.data.loyalty?.earnedPoints === earnedA && rcA.data.loyalty.usedPoints === 0 && op?.balance === earnedA && op.autoRedeem === false, { loyalty: rcA.data.loyalty, op });
   const useOn = await d('PUT', `/v1/loyalty/${op.orgId}`, { autoRedeem: true });
-  const hB = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000, savedCardId: cardId });
+  const hB = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000, savedCardId: cardId });
   await d('POST', `/v1/charge/${hB.data.chargeId}/start`);
   await runSession(hB.data.startToken, 5_000);
   const iB = await until(() => intentOf(refOf(hB)), (i) => i.hold_state === 'captured', 20_000, 500);
-  const cdrB = (await pg.query(`SELECT lines, total_idr, subtotal_idr FROM cdr WHERE session_id = $1`, [iB.session_id])).rows[0];
+  const cdrB = (await pg.query(`SELECT lines, total_minor, subtotal_minor FROM cdr WHERE session_id = $1`, [iB.session_id])).rows[0];
   const ptsLine = (cdrB.lines as any[]).filter((l) => l.adjustment?.source === 'loyalty');
-  const usedIdr = -ptsLine.reduce((a, l) => a + l.amountIdr, 0);
+  const usedMinor = -ptsLine.reduce((a, l) => a + l.amountMinor, 0);
   const rcB = await until(() => d('GET', `/v1/charge/${hB.data.chargeId}/receipt`), (r) => !!r.data?.loyalty, 10_000, 500);
-  const earnedB = Math.floor((Number(cdrB.total_idr) * 10) / 1000);
+  const earnedB = Math.floor((Number(cdrB.total_minor) * 10) / 1000);
   const afterB = (await d('GET', '/v1/loyalty')).data.operators.find((o: any) => o.orgId === op.orgId);
   check('loyalty: with "use my points" on, the next session spends them — a discount line before tax, taken on the captured amount — and earns on what it cost',
-    useOn.status === 200 && ptsLine.length >= 1 && usedIdr === earnedA && Number(cdrB.total_idr) < totalA && iB.amount_captured_idr === Number(cdrB.total_idr)
+    useOn.status === 200 && ptsLine.length >= 1 && usedMinor === earnedA && Number(cdrB.total_minor) < totalA && iB.amount_captured_minor === Number(cdrB.total_minor)
       && rcB.data.loyalty?.usedPoints === earnedA && rcB.data.loyalty.earnedPoints === earnedB && afterB.balance === earnedB
-      && afterB.history.some((h: any) => h.kind === 'redeem' && h.points === -earnedA), { usedIdr, earnedA, totalA, totalB: cdrB.total_idr, rcB: rcB.data.loyalty, afterB });
+      && afterB.history.some((h: any) => h.kind === 'redeem' && h.points === -earnedA), { usedMinor, earnedA, totalA, totalB: cdrB.total_minor, rcB: rcB.data.loyalty, afterB });
   const stats = await ops('GET', '/v1/loyalty');
   cc('/v1/loyalty', 'get', '200', stats.data);
   const topM = await ops('GET', '/v1/loyalty/members');
@@ -314,7 +314,7 @@ try {
   const adj = await ops('POST', '/v1/loyalty/adjust', { appDriverId: meRow?.appDriverId, points: 100, note: 'Sorry for the wait at the charger' });
   const tooMuch = await ops('POST', '/v1/loyalty/adjust', { appDriverId: meRow?.appDriverId, points: -1_000_000, note: 'Too much' });
   check('loyalty (console): points outstanding and their value; the driver listed (phone masked); goodwill points added; never below zero',
-    stats.data.outstandingPoints >= earnedB && stats.data.liabilityIdr === stats.data.outstandingPoints && stats.data.thisMonth.redeemed >= earnedA
+    stats.data.outstandingPoints >= earnedB && stats.data.liabilityMinor === stats.data.outstandingPoints && stats.data.thisMonth.redeemed >= earnedA
       && !!meRow && /••••/.test(meRow.phone) && adj.status === 200 && adj.data.balance === earnedB + 100 && tooMuch.status === 409, { stats: stats.data, meRow, adj: adj.data, tooMuch: tooMuch.data });
   await pg.query(`UPDATE loyalty_entry SET expires_at = now() - interval '1 minute' WHERE app_driver_id = $1 AND remaining > 0`, [meRow.appDriverId]);
   const { expirePoints } = await import('../../src/services/loyalty.js');
@@ -325,12 +325,12 @@ try {
 
   // Someone else's card; a removed card.
   const other = await driver();
-  const steal = await other('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 20_000, savedCardId: cardId });
+  const steal = await other('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 20_000, savedCardId: cardId });
   const guestDev = (await raw('/d/v1/device', '{}')).data.deviceToken as string;
-  const gq = await fetch(`${API}/d/v1/charge/quote`, { method: 'POST', headers: { authorization: `Bearer ${guestDev}`, 'content-type': 'application/json' }, body: JSON.stringify({ connectorId: conn, amountIdr: 20_000 }) }).then((r) => r.json() as any);
+  const gq = await fetch(`${API}/d/v1/charge/quote`, { method: 'POST', headers: { authorization: `Bearer ${guestDev}`, 'content-type': 'application/json' }, body: JSON.stringify({ connectorId: conn, amountMinor: 20_000 }) }).then((r) => r.json() as any);
   const rm = await d('DELETE', `/v1/cards/${cardId}`);
   const after = await d('GET', '/v1/cards');
-  const useRemoved = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 20_000, savedCardId: cardId });
+  const useRemoved = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 20_000, savedCardId: cardId });
   check('another driver cannot use the card; a guest cannot save one (but still gets holds); a removed card is gone and cannot pay',
     steal.status === 422 && gq.canSaveCard === false && gq.cardHolds === true && rm.status === 200 && after.data.cards.length === 0 && useRemoved.status === 422, { steal: steal.data, gq, rm: rm.data, useRemoved: useRemoved.data });
   // The card chosen for renewal is gone: renewal stops, and says why.
@@ -346,9 +346,9 @@ try {
   // ================================================================ Midtrans: holds, a failed capture, saved cards per account
   const mt = await ops('PUT', '/v1/integrations/payments', { provider: 'midtrans', settings: { environment: 'sandbox', baseUrl: FAKE, methods: ['QRIS', 'CARD'], cardHolds: true, saveCards: true }, secrets: { serverKey: SERVER_KEY } });
   const hook = mt.data.webhookPath as string;
-  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 60_000 }), (r) => JSON.stringify(r.data.paymentMethods?.map((m: any) => m.channel)) === '["QRIS","CARD"]', 20_000, 1000);
+  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 60_000 }), (r) => JSON.stringify(r.data.paymentMethods?.map((m: any) => m.channel)) === '["QRIS","CARD"]', 20_000, 1000);
   const t1 = Date.now();
-  const m1 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 60_000, method: 'CARD', saveCard: true });
+  const m1 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 60_000, method: 'CARD', saveCard: true });
   const snap = JSON.parse(callsTo(/^\/snap\/v1\/transactions$/, t1)[0]?.body ?? '{}');
   check('Midtrans: Snap is asked for a hold (credit_card.type authorize) and to save the card for this driver (save_card, user_id)',
     m1.status === 200 && snap.credit_card?.type === 'authorize' && snap.credit_card?.save_card === true && typeof snap.user_id === 'string' && snap.user_id.length > 10, snap);
@@ -357,7 +357,7 @@ try {
   const auth = await raw(hook, JSON.stringify({ order_id: oid, status_code: '200', gross_amount: '60000.00', transaction_status: 'authorize', fraud_status: 'accept', transaction_id: `tx-${oid}`, payment_type: 'credit_card',
     masked_card: '521111-1117', saved_token_id: `521111TOK${oid}`, saved_token_id_expired_at: '2030-12-31 07:00:00', signature_key: sig(oid, '200', '60000.00') }));
   const im = await intentOf(oid);
-  const quoteMt = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 60_000 });
+  const quoteMt = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 60_000 });
   check('the signed authorize notification holds the payment and saves the Midtrans card; only Midtrans cards are offered here',
     auth.status === 200 && im.state === 'authorised' && im.hold_state === 'held' && quoteMt.data.savedCards.length === 1 && quoteMt.data.savedCards[0].brand === 'MASTERCARD' && quoteMt.data.savedCards[0].last4 === '1117', { im, saved: quoteMt.data.savedCards });
   behaviour.captureFailures = 1;
@@ -370,7 +370,7 @@ try {
   cc('/v1/card-holds', 'get', '200', holds.data);
   const listed = holds.data.holds?.find((h: any) => h.id === failed.id);
   check('Midtrans refuses the first capture: the hold is marked capture failed with its error and listed first under Card holds',
-    failed.hold_capture_idr === total2 && /500/.test(failed.hold_error ?? '') && listed?.state === 'capture_failed' && holds.data.holds[0].id === failed.id && holds.data.summary.failed >= 1, { failed, listed, summary: holds.data.summary });
+    failed.hold_capture_minor === total2 && /500/.test(failed.hold_error ?? '') && listed?.state === 'capture_failed' && holds.data.holds[0].id === failed.id && holds.data.summary.failed >= 1, { failed, listed, summary: holds.data.summary });
   const retry = await ops('POST', `/v1/card-holds/${failed.id}/retry`);
   cc('/v1/card-holds/{id}/retry', 'post', '200', retry.data);
   const cap = callsTo(/^\/v2\/capture$/, t2);
@@ -378,11 +378,11 @@ try {
   const again = await ops('POST', `/v1/card-holds/${failed.id}/retry`);
   check('retried from the console: captured at Midtrans for the rated total with the transaction id; a second retry has nothing to do (404)',
     retry.status === 200 && retry.data.state === 'captured' && cap.length === 2 && JSON.parse(cap[1]!.body).gross_amount === total2 && JSON.parse(cap[1]!.body).transaction_id === `tx-${oid}`
-      && done.state === 'captured' && done.amount_captured_idr === total2 && again.status === 404, { retry: retry.data, cap: cap.map((c) => c.body), done });
+      && done.state === 'captured' && done.amount_captured_minor === total2 && again.status === 404, { retry: retry.data, cap: cap.map((c) => c.body), done });
   const confirm = await raw(hook, JSON.stringify({ order_id: oid, status_code: '200', gross_amount: `${total2}.00`, transaction_status: 'capture', fraud_status: 'accept', transaction_id: `tx-${oid}`, signature_key: sig(oid, '200', `${total2}.00`) }));
-  check('Midtrans\' capture notification is recorded without changing the settled amount', confirm.status === 200 && (await intentOf(oid)).amount_captured_idr === total2);
+  check('Midtrans\' capture notification is recorded without changing the settled amount', confirm.status === 200 && (await intentOf(oid)).amount_captured_minor === total2);
   const t3 = Date.now();
-  const m2 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 40_000, savedCardId: quoteMt.data.savedCards[0].id });
+  const m2 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 40_000, savedCardId: quoteMt.data.savedCards[0].id });
   const oneClick = JSON.parse(callsTo(/^\/v2\/charge$/, t3)[0]?.body ?? '{}');
   check('a Midtrans saved card: charged on its token as a hold, with 3-D Secure again (the driver is sent to the bank page)',
     m2.status === 200 && m2.data.payment.action === 'redirect' && /3ds\.midtrans\.test/.test(m2.data.payment.checkoutUrl) && oneClick.credit_card?.token_id === `521111TOK${oid}` && oneClick.credit_card?.type === 'authorize' && oneClick.credit_card?.authentication === true, { m2: m2.data.payment, oneClick });
@@ -391,9 +391,9 @@ try {
   const savedId = quoteMt.data.savedCards[0].id;
   behaviour.tokenEnded = true;
   const t4 = Date.now();
-  const ended = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 40_000, savedCardId: savedId });
-  const qEnded = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 40_000 });
-  const endedAgain = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 40_000, savedCardId: savedId });
+  const ended = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 40_000, savedCardId: savedId });
+  const qEnded = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 40_000 });
+  const endedAgain = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 40_000, savedCardId: savedId });
   const cardsEnded = await d('GET', '/v1/cards');
   check('a saved card whose token Midtrans no longer accepts (411): "Mastercard •••• 1117 … tidak bisa dipakai", nothing charged, code saved_card_ended; the card is no longer offered or listed, and a second try is answered without asking Midtrans',
     ended.status === 422 && ended.data.code === 'saved_card_ended' && ended.data.error.startsWith('Mastercard •••• 1117 yang tersimpan sudah tidak bisa dipakai') && /Tidak ada yang ditagih/.test(ended.data.error)
@@ -402,11 +402,11 @@ try {
     { ended: ended.data, endedAgain: endedAgain.data, saved: qEnded.data.savedCards, calls: callsTo(/^\/v2\/charge$/, t4).length });
   behaviour.tokenEnded = false;
   // Saved again on the next card payment, and Midtrans gives the same token back: the card is offered again.
-  const m3 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000, method: 'CARD', saveCard: true });
+  const m3 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000, method: 'CARD', saveCard: true });
   const oid3 = refOf(m3);
   const authAgain = await raw(hook, JSON.stringify({ order_id: oid3, status_code: '200', gross_amount: '30000.00', transaction_status: 'authorize', fraud_status: 'accept', transaction_id: `tx-${oid3}`, payment_type: 'credit_card',
     masked_card: '521111-1117', saved_token_id: `521111TOK${oid}`, saved_token_id_expired_at: '2030-12-31 07:00:00', signature_key: sig(oid3, '200', '30000.00') }));
-  const qBack = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 40_000 });
+  const qBack = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 40_000 });
   check('saved again with the same token: the card is offered again',
     authAgain.status === 200 && (qBack.data.savedCards ?? []).some((k: any) => k.id === savedId), { authAgain: authAgain.status, saved: qBack.data.savedCards });
 
@@ -418,7 +418,7 @@ try {
     exp3.status === 200 && iExp3.hold_state === 'released' && iExp3.state === 'voided' && iExp3.hold_error === null && tok3 === 'Expired', { exp3: exp3.data, iExp3, tok3 });
 
   // A hold whose authorisation expired before the capture (Midtrans 407): no retries, a critical alert, and clear words for the operator and the driver.
-  const m4 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 50_000, method: 'CARD' });
+  const m4 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 50_000, method: 'CARD' });
   const oid4 = refOf(m4);
   await raw(hook, JSON.stringify({ order_id: oid4, status_code: '200', gross_amount: '50000.00', transaction_status: 'authorize', fraud_status: 'accept', transaction_id: `tx-${oid4}`, payment_type: 'credit_card', signature_key: sig(oid4, '200', '50000.00') }));
   await d('POST', `/v1/charge/${m4.data.chargeId}/start`);
@@ -437,12 +437,12 @@ try {
   const alerts = await ops('GET', '/v1/alerts');
   const alertEx = (alerts.data ?? []).find((a: any) => a.kind === 'payment.hold_expired' && new Date(a.last_raised_at ?? a.raised_at).getTime() >= t5 - 1000);
   check('a hold whose authorisation expired before the capture (Midtrans 407): no retries; listed as expired with the amount to collect, and the console retry explains instead of asking Midtrans again',
-    ex.hold_error?.startsWith('hold expired:') && ex.hold_capture_idr === total4 && nextTry === null && listedEx?.expired === true && holdsEx.data.summary.expired >= 1 && holdsEx.data.summary.expiredIdr >= total4
+    ex.hold_error?.startsWith('hold expired:') && ex.hold_capture_minor === total4 && nextTry === null && listedEx?.expired === true && holdsEx.data.summary.expired >= 1 && holdsEx.data.summary.expiredMinor >= total4
       && retryEx.status === 409 && /expired at the acquirer before it was captured/.test(retryEx.data.error ?? retryEx.data.message ?? '') && captures === 1,
     { ex, nextTry, listedEx, summary: holdsEx.data.summary, retry: retryEx.data, captures });
   check('the operator gets one critical alert with the amount; the driver\'s receipt says nothing was taken, the hold is back on the card, and the operator may ask them to pay',
     alertEx?.severity === 'critical' && alertEx.message.includes(`Rp ${total4.toLocaleString('id-ID')}`) && /can no longer be taken from the card/.test(alertEx.message)
-      && rcEx.data.settlement?.hold?.expired === true && rcEx.data.settlement.hold.chargedIdr === 0 && rcEx.data.settlement.hold.unpaidIdr === total4 && rcEx.data.settlement.paidIdr === 0,
+      && rcEx.data.settlement?.hold?.expired === true && rcEx.data.settlement.hold.chargedMinor === 0 && rcEx.data.settlement.hold.unpaidMinor === total4 && rcEx.data.settlement.paidMinor === 0,
     { alertEx, hold: rcEx.data.settlement?.hold });
   behaviour.captureExpired = false;
 
@@ -453,15 +453,15 @@ try {
   const viaCard = await d('POST', `/v1/charge/${m4.data.chargeId}/pay-expired`, { method: 'CARD', savedCardId: savedId });
   const viaQr = await d('POST', `/v1/charge/${m4.data.chargeId}/pay-expired`, { method: 'QRIS' });
   const stP = await d('GET', `/v1/charge/${m4.data.chargeId}/pay-expired`);
-  const settleRows = (await pg.query(`SELECT id, provider_ref, channel, mode, state, amount_authorised_idr, session_id, connector_uuid FROM payment_intent WHERE settles_intent_id = $1 ORDER BY created_at`, [ex.id])).rows;
+  const settleRows = (await pg.query(`SELECT id, provider_ref, channel, mode, state, amount_authorised_minor, session_id, connector_uuid FROM payment_intent WHERE settles_intent_id = $1 ORDER BY created_at`, [ex.id])).rows;
   const qrRow = settleRows.find((r: any) => r.channel === 'QRIS');
   const cardRow = settleRows.find((r: any) => r.channel === 'CARD');
   const qrCharge = JSON.parse(callsTo(/^\/v2\/charge$/, tP).find((c) => JSON.parse(c.body).payment_type === 'qris')?.body ?? '{}');
   check('the receipt offers the operator\'s methods and the saved card; the saved card goes to 3-D Secure (nothing paid yet), then QRIS instead: a QR for exactly the amount owed, as separate settlement payments that buy no energy',
     (po.paymentMethods ?? []).map((m: any) => m.channel).join() === 'QRIS,CARD' && (po.savedCards ?? []).some((k: any) => k.id === savedId)
       && viaCard.status === 200 && viaCard.data.paid === false && viaCard.data.payment.action === 'redirect' && /3ds\.midtrans\.test/.test(viaCard.data.payment.checkoutUrl)
-      && viaQr.status === 200 && viaQr.data.paid === false && !!viaQr.data.qr?.qrString && viaQr.data.amountIdr === total4 && qrCharge.transaction_details?.gross_amount === total4
-      && stP.data.paid === false && stP.data.owedIdr === total4 && settleRows.length === 2 && settleRows.every((r: any) => r.mode === 'settlement' && r.state === 'pending' && r.amount_authorised_idr === total4 && r.session_id === null && r.connector_uuid === null),
+      && viaQr.status === 200 && viaQr.data.paid === false && !!viaQr.data.qr?.qrString && viaQr.data.amountMinor === total4 && qrCharge.transaction_details?.gross_amount === total4
+      && stP.data.paid === false && stP.data.owedMinor === total4 && settleRows.length === 2 && settleRows.every((r: any) => r.mode === 'settlement' && r.state === 'pending' && r.amount_authorised_minor === total4 && r.session_id === null && r.connector_uuid === null),
     { po, viaCard: viaCard.data, viaQr: { ...viaQr.data, qr: !!viaQr.data.qr }, stP: stP.data, settleRows, qrCharge });
 
   const paidNote = await raw(hook, JSON.stringify({ order_id: qrRow?.provider_ref, status_code: '200', gross_amount: `${total4}.00`, transaction_status: 'settlement', transaction_id: `tx-${qrRow?.provider_ref}`, payment_type: 'qris', signature_key: sig(qrRow?.provider_ref, '200', `${total4}.00`) }));
@@ -476,19 +476,19 @@ try {
   const payAgain = await d('POST', `/v1/charge/${m4.data.chargeId}/pay-expired`, { method: 'QRIS' });
   const settleCount = Number((await pg.query(`SELECT count(*) AS n FROM payment_intent WHERE settles_intent_id = $1`, [ex.id])).rows[0].n);
   check('Midtrans\' signed notification pays it: the hold is paid in the app (receipt "paid in the app", the console "expired, paid in app" and no longer counted as owed), the alert resolves, and paying again does nothing',
-    paidNote.status === 200 && stPaid.data.paid === true && hold4.hold_state === 'captured' && hold4.state === 'captured' && hold4.amount_captured_idr === total4
-      && rcPaid.data.settlement?.hold?.paidInApp?.amountIdr === total4 && rcPaid.data.settlement.hold.paidInApp.channel === 'QRIS' && rcPaid.data.settlement.paidIdr === total4 && rcPaid.data.settlement.hold.payOptions === null
+    paidNote.status === 200 && stPaid.data.paid === true && hold4.hold_state === 'captured' && hold4.state === 'captured' && hold4.amount_captured_minor === total4
+      && rcPaid.data.settlement?.hold?.paidInApp?.amountMinor === total4 && rcPaid.data.settlement.hold.paidInApp.channel === 'QRIS' && rcPaid.data.settlement.paidMinor === total4 && rcPaid.data.settlement.hold.payOptions === null
       && listedPaid?.paidInApp === true && holdsPaid.data.summary.expired === holdsEx.data.summary.expired - 1 && !!alertPaid?.resolved_at
       && payAgain.status === 200 && payAgain.data.paid === true && settleCount === 2,
     { paidNote: paidNote.data, stPaid: stPaid.data, hold4, rc: rcPaid.data.settlement, listedPaid, summary: holdsPaid.data.summary, alertPaid, payAgain: payAgain.data, settleCount });
 
   // The abandoned card page is completed afterwards: paid twice, so that second payment is refunded in full.
   const lateNote = await raw(hook, JSON.stringify({ order_id: cardRow?.provider_ref, status_code: '200', gross_amount: `${total4}.00`, transaction_status: 'capture', fraud_status: 'accept', transaction_id: `tx-${cardRow?.provider_ref}`, payment_type: 'credit_card', signature_key: sig(cardRow?.provider_ref, '200', `${total4}.00`) }));
-  const late = (await pg.query(`SELECT state, refund_state, refund_due_idr, refund_reason FROM payment_intent WHERE id = $1`, [cardRow?.id])).rows[0];
+  const late = (await pg.query(`SELECT state, refund_state, refund_due_minor, refund_reason FROM payment_intent WHERE id = $1`, [cardRow?.id])).rows[0];
   const holdAfter = await intentOf(oid4);
   check('a second payment for the same expired hold (the abandoned card page completed later) is refunded in full; the hold stays paid once',
-    lateNote.status === 200 && late?.state === 'captured' && late.refund_state === 'due' && late.refund_due_idr === total4 && /paid twice/i.test(late.refund_reason ?? '')
-      && holdAfter.amount_captured_idr === total4 && /QRIS/.test(holdAfter.hold_error ?? ''),
+    lateNote.status === 200 && late?.state === 'captured' && late.refund_state === 'due' && late.refund_due_minor === total4 && /paid twice/i.test(late.refund_reason ?? '')
+      && holdAfter.amount_captured_minor === total4 && /QRIS/.test(holdAfter.hold_error ?? ''),
     { lateNote: lateNote.data, late, holdAfter });
 
   // ================================================================ console and app

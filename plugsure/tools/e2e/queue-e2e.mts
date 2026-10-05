@@ -121,7 +121,7 @@ let cp: RawCharger | null = null;
 try {
   // ------------------------------------------------------------ setup
   const login = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
-  const base = { address: 'Jl. Gatot Subroto', kabupatenKotaCode: '3171', lat: '-6.2297', lon: '106.8195', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' };
+  const base = { address: 'Jl. Gatot Subroto', kabupatenKotaCode: '3171', lat: '-6.2297', lon: '106.8195', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' };
   const badSite = await ops('POST', '/v1/sites', { ...base, name: 'Queue E2E bad', queueEnabled: true, queueOfferMinutes: 1, queueMaxLength: 500 });
   const site = await ops('POST', '/v1/sites', { ...base, name: `Queue E2E Hub ${Date.now().toString().slice(-5)}`, queueEnabled: true, queueOfferMinutes: 2, queueMaxLength: 3, queueMaxWaitMinutes: 15 });
   const siteId = site.data.id as string;
@@ -189,7 +189,7 @@ try {
     rnA?.payload?.connectorId === 2 && qa.entry?.offer?.connectorId === chademo && resA.data.reservation?.queue === true && resA.data.reservation.minutesLeft <= 2, { rn: rnA?.payload, qa: qa.entry, res: resA.data.reservation });
   const pa = await until(() => pushed(A), (r) => r.some((m) => m.kind === 'queue.offer'), 10_000);
   check('offer: A is told "Giliran Anda!"', pa.some((m) => m.kind === 'queue.offer' && m.title === 'Giliran Anda!'), pa);
-  const stealB = await B.post('/v1/charge/prepaid', { connectorId: chademo, amountIdr: 50000 });
+  const stealB = await B.post('/v1/charge/prepaid', { connectorId: chademo, amountMinor: 50000 });
   const detB = await B.get(`/v1/connectors/${chademo}`);
   check('offer: nobody else can take the held connector (B refused; shown Reserved)', stealB.status === 422 && detB.data.status === 'Reserved' && detB.data.available === false, { s: stealB.data, d: detB.data.status });
   check('position: B is now first of those waiting', (await entryOf(B)).entry?.position === 1, (await entryOf(B)).entry);
@@ -227,7 +227,7 @@ try {
   const rej = await cp.waitNew('ReserveNow', mark);
   await sleep(1000);
   const qc2 = await entryOf(C);
-  const walkUp = await B.post('/v1/charge/prepaid', { connectorId: ccs, amountIdr: 50000 });
+  const walkUp = await B.post('/v1/charge/prepaid', { connectorId: ccs, amountMinor: 50000 });
   const walkRes = await B.post('/v1/reservations', { connectorId: ccs });
   const walkDet = await guest.get(`/v1/connectors/${ccs}`);
   check('walk-up: the charger refused the hold, C keeps waiting; the free CCS2 is shown "Queued" and B can neither pay nor reserve it',
@@ -242,7 +242,7 @@ try {
   const qc3 = await until(() => entryOf(C), (r) => r.entry?.state === 'offered', 20_000);
   check('retry: the worker offers the CCS2 to C once the charger accepts the hold', rnC?.payload?.connectorId === 1 && qc3.entry?.offer?.connectorId === ccs, { rn: rnC?.payload, qc3: qc3.entry });
   await cp.status(1, 'Reserved');
-  const co = await C.post('/v1/charge/prepaid', { connectorId: ccs, amountIdr: 50000 });
+  const co = await C.post('/v1/charge/prepaid', { connectorId: ccs, amountMinor: 50000 });
   await C.post(`/v1/charge/${co.data.chargeId}/confirm-payment`);
   cp.handlers.RemoteStartTransaction = () => ({ status: 'Accepted' });
   mark = cp.calls.length;

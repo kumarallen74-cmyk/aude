@@ -543,3 +543,31 @@ async function warnOnWeakenedGuards(runtimeRole: boolean): Promise<void> {
     );
   }
 }
+
+/**
+ * Session advisory locks need a connection held for the whole critical section; they come from this small separate
+ * pool so code inside the section can still use `pool` freely (taking both from one pool could exhaust it).
+ */
+let lockPool: pg.Pool | null = null;
+export async function withAdvisoryLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (!lockPool) {
+    lockPool = new pg.Pool({ ...connectionWithBypass(config.databaseUrl), max: 8, idleTimeoutMillis: 30_000, allowExitOnIdle: true, connectionTimeoutMillis: poolLimits.connectionTimeoutMillis });
+    lockPool.on('error', (err) => logger.warn({ err: err.message }, 'advisory lock connection lost'));
+  }
+  const c = await lockPool.connect();
+  try {
+    await c.query('SELECT pg_advisory_lock(hashtext($1))', [key]);
+    try {
+      return await fn();
+    } finally {
+      await c.query('SELECT pg_advisory_unlock(hashtext($1))', [key]).catch(() => {});
+    }
+  } finally {
+    c.release();
+  }
+}
+export async function endLockPool(): Promise<void> {
+  const p = lockPool;
+  lockPool = null;
+  await p?.end().catch(() => {});
+}

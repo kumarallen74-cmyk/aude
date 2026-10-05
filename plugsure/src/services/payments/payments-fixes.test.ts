@@ -98,7 +98,7 @@ if (DB_OK) {
     ids.int_c = (await integ(ids.org_c!, 'xendit', { baseUrl: base }, { secretKey: 'xnd_development_payfix', callbackToken: XCB }, hook.c))!.id;
     ids.driver = (await one<{ id: string }>(`INSERT INTO app_driver (phone) VALUES ('+628990001001') RETURNING id`))!.id;
     ids.driver2 = (await one<{ id: string }>(`INSERT INTO app_driver (phone) VALUES ('+628990001002') RETURNING id`))!.id;
-    ids.plan = (await one<{ id: string }>(`INSERT INTO subscription_plan (org_id, name, monthly_fee_idr, offered_in_app) VALUES ($1, 'Payfix Pass', 100000, true) RETURNING id`, [ids.org_a]))!.id;
+    ids.plan = (await one<{ id: string }>(`INSERT INTO subscription_plan (org_id, name, monthly_fee_minor, offered_in_app) VALUES ($1, 'Payfix Pass', 100000, true) RETURNING id`, [ids.org_a]))!.id;
     ids.sub = (await one<{ id: string }>(
       `INSERT INTO subscription (org_id, plan_id, subscriber_kind, app_driver_id, billing, status) VALUES ($1, $2, 'app_driver', $3, 'qris', 'pending_payment') RETURNING id`,
       [ids.org_a, ids.plan, ids.driver]))!.id;
@@ -120,7 +120,7 @@ if (DB_OK) {
 }
 
 const passCharge = async (ref: string, state = 'pending', integrationId = ids.int_a) => (await one<{ id: string }>(
-  `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_idr, dpp_idr, ppn_idr, total_idr, via, state, provider_ref, provider, integration_id, channel)
+  `INSERT INTO subscription_charge (subscription_id, org_id, period_start, period_end, fee_minor, tax_base_minor, tax_minor, total_minor, via, state, provider_ref, provider, integration_id, channel)
    VALUES ($1, $2, now() + make_interval(days => $5::int), now() + make_interval(days => $5::int + 30), 100000, 91667, 11000, 111000, 'qris', $4, $3, 'midtrans', $6, 'QRIS') RETURNING id`,
   [ids.sub, ids.org_a, ref, state, Math.floor(Math.random() * 100000), integrationId]))!.id;
 
@@ -136,11 +136,39 @@ dbDescribe('A — app passes: the account that took the payment, the full price,
     assert.equal((await one<{ state: string }>(`SELECT state FROM subscription_charge WHERE id = $1`, [id]))?.state, 'paid');
   });
 
-  test('a settlement for less than the pass costs is not booked (amount_mismatch)', async () => {
+  test('a settlement for less than the pass costs: pass not activated, what was taken queued for refund, one critical alert', async () => {
     const id = await passCharge('ps-pass-under');
+    alerts.length = 0;
     await midtransNotify(hook.a, KEY_A, 'ps-pass-under', 'settlement', 1000);
     assert.equal(await lastOutcome(ids.int_a!), 'amount_mismatch');
-    assert.equal((await one<{ state: string }>(`SELECT state FROM subscription_charge WHERE id = $1`, [id]))?.state, 'pending');
+    assert.equal((await one<{ state: string }>(`SELECT state FROM subscription_charge WHERE id = $1`, [id]))?.state, 'void',
+      'the checkout cannot activate the pass any more');
+    // (The subscription is already active from the first test; what matters is that THIS charge bought nothing.)
+    assert.equal((await one<{ paid_at: Date | null }>(`SELECT paid_at FROM subscription_charge WHERE id = $1`, [id]))?.paid_at, null, 'no pass period from it');
+    const pi = await one<any>(`SELECT * FROM payment_intent WHERE idem_key = $1`, [`pass-underpaid:${id}`]);
+    assert.deepEqual({ mode: pi?.mode, state: pi?.state, captured: pi?.amount_captured_minor, refund: pi?.refund_state, due: pi?.refund_due_minor, ref: pi?.provider_ref, integ: pi?.integration_id },
+      { mode: 'pass', state: 'captured', captured: 1000, refund: 'due', due: 1000, ref: 'ps-pass-under', integ: ids.int_a },
+      'the Rp 1,000 taken is owed back in full, not stranded');
+    assert.deepEqual(alerts, [{ kind: 'payment.amount_mismatch', targetId: pi.id }], 'one critical alert, no separate refund_due alert');
+
+    // The acquirer repeats the notification: nothing more is recorded or raised.
+    await midtransNotify(hook.a, KEY_A, 'ps-pass-under', 'settlement', 1000);
+    assert.equal((await one<{ n: number }>(`SELECT count(*)::int AS n FROM payment_intent WHERE provider_ref = 'ps-pass-under' AND org_id = $1`, [ids.org_a]))?.n, 1);
+    assert.equal(alerts.length, 1, 'alerted once');
+  });
+
+  test('an automatic renewal paid for less is not retried automatically (auto-renew off, reason kept)', async () => {
+    await query(`UPDATE subscription SET auto_renew = true, renew_error = NULL WHERE id = $1`, [ids.sub]);
+    const id = await passCharge('ps-pass-under-renew');
+    await query(`UPDATE subscription_charge SET auto_renewal = true WHERE id = $1`, [id]);
+    alerts.length = 0;
+    await midtransNotify(hook.a, KEY_A, 'ps-pass-under-renew', 'settlement', 50000);
+    const sub = await one<any>(`SELECT auto_renew, renew_error FROM subscription WHERE id = $1`, [ids.sub]);
+    assert.equal(sub.auto_renew, false);
+    assert.match(sub.renew_error, /wrong amount/);
+    assert.equal(alerts.filter((a) => a.kind === 'payment.amount_mismatch').length, 1);
+    assert.equal((await one<any>(`SELECT refund_due_minor FROM payment_intent WHERE idem_key = $1`, [`pass-underpaid:${id}`]))?.refund_due_minor, 50000);
+    await query(`UPDATE subscription SET auto_renew = false, renew_error = NULL WHERE id = $1`, [ids.sub]);
   });
 
   test('a pass paid after its charge was voided is kept as a payment owed back in full (refund due, alert), once', async () => {
@@ -149,7 +177,7 @@ dbDescribe('A — app passes: the account that took the payment, the full price,
     await midtransNotify(hook.a, KEY_A, 'ps-pass-void', 'settlement', 111000);
     assert.equal(await lastOutcome(ids.int_a!), 'pass_paid_after_void_refund_due');
     const pi = await one<any>(`SELECT * FROM payment_intent WHERE idem_key = $1`, [`pass-after-void:${id}`]);
-    assert.deepEqual({ mode: pi?.mode, state: pi?.state, captured: pi?.amount_captured_idr, refund: pi?.refund_state, due: pi?.refund_due_idr, ref: pi?.provider_ref, integ: pi?.integration_id },
+    assert.deepEqual({ mode: pi?.mode, state: pi?.state, captured: pi?.amount_captured_minor, refund: pi?.refund_state, due: pi?.refund_due_minor, ref: pi?.provider_ref, integ: pi?.integration_id },
       { mode: 'pass', state: 'captured', captured: 111000, refund: 'due', due: 111000, ref: 'ps-pass-void', integ: ids.int_a });
     assert.ok(alerts.some((a) => a.kind === 'payment.refund_due' && a.targetId === pi.id));
     await midtransNotify(hook.a, KEY_A, 'ps-pass-void', 'settlement', 111000);
@@ -158,7 +186,7 @@ dbDescribe('A — app passes: the account that took the payment, the full price,
 });
 
 const postpayIntent = async (extra: Record<string, unknown> = {}) => (await one<{ id: string }>(
-  `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, hold_state, hold_capture_idr, integration_id, driver_card_id, channel, hold_next_attempt_at, provider_ref)
+  `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, hold_state, hold_capture_minor, integration_id, driver_card_id, channel, hold_next_attempt_at, provider_ref)
    VALUES ($1, 'midtrans', 'ewallet', 'postpay', 'authorised', 50000, 'capturing', 21340, $2, $3, 'GOPAY', now(), $4) RETURNING id`,
   [ids.org_a, ids.int_a, ids.gopay, extra.providerRef ?? `postpay-${randomUUID()}`]))!.id;
 
@@ -179,7 +207,7 @@ dbDescribe('B — post-pay e-wallet charges are recorded before the acquirer is 
     // GoPay settled after all: its notification is recorded against this session (it was 'unknown_payment' before).
     await midtransNotify(hook.a, KEY_A, expect, 'settlement', 21340);
     assert.equal(await lastOutcome(ids.int_a!), 'postpay_paid');
-    assert.deepEqual(await one(`SELECT hold_state, amount_captured_idr AS captured FROM payment_intent WHERE id = $1`, [id]), { hold_state: 'captured', captured: 21340 });
+    assert.deepEqual(await one(`SELECT hold_state, amount_captured_minor AS captured FROM payment_intent WHERE id = $1`, [id]), { hold_state: 'captured', captured: 21340 });
   });
 
   test('the next attempt after a lost answer asks Midtrans first: settled there → recorded as paid, not charged a second time', async () => {
@@ -219,7 +247,7 @@ dbDescribe('B — post-pay e-wallet charges are recorded before the acquirer is 
     const prov = new MidtransProvider({ environment: 'sandbox', serverKey: KEY_A, baseUrl: base });
     const resolved: Resolved = { kind: 'payments', provider: 'midtrans', settings: { methods: ['QRIS'] }, secrets: {}, integrationId: ids.int_a!, orgId: ids.org_a!, source: 'console', webhookKey: null };
     const prepared: PreparedPayment[] = [];
-    await assert.rejects(startPayment({ provider: prov, resolved }, { referenceId: 'charge:prep-1', amountIdr: 25000, returnUrl: 'x', prepare: async (p) => { prepared.push(p); } }), /cannot reach/);
+    await assert.rejects(startPayment({ provider: prov, resolved }, { referenceId: 'charge:prep-1', amountMinor: 25000, returnUrl: 'x', prepare: async (p) => { prepared.push(p); } }), /cannot reach/);
     assert.deepEqual(prepared.map((p) => [p.providerRef, p.mode, p.method]), [[prov.orderRef('charge:prep-1'), 'prepurchase', 'qris']]);
   });
 
@@ -233,14 +261,14 @@ dbDescribe('B — post-pay e-wallet charges are recorded before the acquirer is 
 
 dbDescribe('C — a Midtrans capture confirmation settles a hold PlugSure recorded as not captured', () => {
   const hold = async (ref: string) => (await one<{ id: string }>(
-    `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr, hold_state, hold_capture_idr, hold_attempts, hold_error, integration_id, provider_payment_id)
+    `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_minor, hold_state, hold_capture_minor, hold_attempts, hold_error, integration_id, provider_payment_id)
      VALUES ($1, 'midtrans', $2, 'card', 'preauth', 'authorised', 100000, 'capture_failed', 42300, 6, '412 Transaction status cannot be updated', $3, 'tx-h') RETURNING id`,
     [ids.org_a, ref, ids.int_a]))!.id;
   test('capture notification for a capture_failed hold → captured for what was asked (it only appended raw_events before)', async () => {
     const id = await hold('ps-hold-c1');
     await midtransNotify(hook.a, KEY_A, 'ps-hold-c1', 'capture', 42300);
     assert.equal(await lastOutcome(ids.int_a!), 'capture_reconciled');
-    assert.deepEqual(await one(`SELECT state, hold_state, amount_captured_idr AS captured, hold_error FROM payment_intent WHERE id = $1`, [id]),
+    assert.deepEqual(await one(`SELECT state, hold_state, amount_captured_minor AS captured, hold_error FROM payment_intent WHERE id = $1`, [id]),
       { state: 'captured', hold_state: 'captured', captured: 42300, hold_error: null });
   });
   test('a confirmation above the hold is not reconciled', async () => {
@@ -252,8 +280,8 @@ dbDescribe('C — a Midtrans capture confirmation settles a hold PlugSure record
 });
 
 const refundIntent = async (state: string, extra: { ref?: string | null; pid?: string; org?: string; provider?: string; integ?: string } = {}) => (await one<{ id: string }>(
-  `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr, amount_captured_idr, channel, provider_payment_id, integration_id,
-                               refund_state, refund_due_idr, refund_ref, refund_method, refund_requested_at, updated_at)
+  `INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_minor, amount_captured_minor, channel, provider_payment_id, integration_id,
+                               refund_state, refund_due_minor, refund_ref, refund_method, refund_requested_at, updated_at)
    VALUES ($1, $2, $3, 'ewallet', 'prepurchase', 'captured', 50000, 50000, 'OVO', $4, $5, $6, 20000, $7, CASE WHEN $7::text IS NOT NULL THEN 'provider' END, now(), now() - interval '1 hour') RETURNING id`,
   [extra.org ?? ids.org_c, extra.provider ?? 'xendit', `ps-${randomUUID()}`, extra.pid ?? 'pr-1', extra.integ ?? ids.int_c, state, extra.ref ?? null]))!.id;
 
@@ -275,7 +303,7 @@ dbDescribe('D — a refund is paid once', () => {
 
   test('the database refuses a refund larger than what was captured (migration 044)', async () => {
     const id = await refundIntent('due');
-    await assert.rejects(query(`UPDATE payment_intent SET refund_due_idr = 50001 WHERE id = $1`, [id]), /payment_intent_refund_within_captured/);
+    await assert.rejects(query(`UPDATE payment_intent SET refund_due_minor = 50001 WHERE id = $1`, [id]), /payment_intent_refund_within_captured/);
   });
 
   test('a provider refund with no answer stays processing (not failed), so it cannot be paid again by bank transfer', async () => {
@@ -294,7 +322,7 @@ dbDescribe('D — a refund is paid once', () => {
     const ok = await refundIntent('processing', { ref: 'rfd-ok' });
     const no = await refundIntent('processing', { ref: 'rfd-no' });
     await sweepProcessingRefunds();
-    assert.deepEqual(await one(`SELECT refund_state, refunded_idr FROM payment_intent WHERE id = $1`, [ok]), { refund_state: 'refunded', refunded_idr: 20000 });
+    assert.deepEqual(await one(`SELECT refund_state, refunded_minor FROM payment_intent WHERE id = $1`, [ok]), { refund_state: 'refunded', refunded_minor: 20000 });
     assert.equal((await one<{ refund_state: string }>(`SELECT refund_state FROM payment_intent WHERE id = $1`, [no]))?.refund_state, 'failed');
   });
 
@@ -311,12 +339,12 @@ dbDescribe('D — a refund is paid once', () => {
 dbDescribe('E — the post-pay limit and balance cover all the driver\'s sessions at once', () => {
   const resolved = (): Resolved => ({ kind: 'payments', provider: 'mock', settings: { linkWallets: true, walletPostpay: true, postpayLimitIdr: 200_000 }, secrets: {}, integrationId: null, orgId: ids.org_a!, source: 'console', webhookKey: null });
   // As checkout does: the payment is recorded (pending) as startPayment prepares it.
-  const record = (amountIdr: number) => async (p: PreparedPayment) => {
-    await query(`INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_idr, driver_card_id, channel) VALUES ($1, 'mock', $2, $3, $4, 'pending', $5, $6, $7)`,
-      [ids.org_a, p.providerRef, p.method, p.mode, amountIdr, p.savedCardId, p.channel]);
+  const record = (amountMinor: number) => async (p: PreparedPayment) => {
+    await query(`INSERT INTO payment_intent (org_id, provider, provider_ref, method, mode, state, amount_authorised_minor, driver_card_id, channel) VALUES ($1, 'mock', $2, $3, $4, 'pending', $5, $6, $7)`,
+      [ids.org_a, p.providerRef, p.method, p.mode, amountMinor, p.savedCardId, p.channel]);
   };
-  const start = (provider: MockPaymentProvider, amountIdr: number, r = resolved()) => startPayment({ provider, resolved: r }, {
-    referenceId: `charge:${randomUUID()}`, amountIdr, returnUrl: 'x', appDriverId: ids.driver2!, walletId: ids.mockWallet!, allowHold: true, prepare: record(amountIdr),
+  const start = (provider: MockPaymentProvider, amountMinor: number, r = resolved()) => startPayment({ provider, resolved: r }, {
+    referenceId: `charge:${randomUUID()}`, amountMinor, returnUrl: 'x', appDriverId: ids.driver2!, walletId: ids.mockWallet!, allowHold: true, prepare: record(amountMinor),
   });
 
   test('two post-pay checkouts at once under a Rp 200,000 limit, Rp 120,000 each: one post-pay, the other charged up front', async () => {
@@ -328,7 +356,7 @@ dbDescribe('E — the post-pay limit and balance cover all the driver\'s session
 
   test('a held post-pay session counts against the limit and the balance', async () => {
     await query(`DELETE FROM payment_intent WHERE driver_card_id = $1`, [ids.mockWallet]);
-    const heldId = (await one<{ id: string }>(`INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, hold_state, driver_card_id, channel)
+    const heldId = (await one<{ id: string }>(`INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, hold_state, driver_card_id, channel)
       VALUES ($1, 'mock', 'ewallet', 'postpay', 'authorised', 150000, 'held', $2, 'GOPAY') RETURNING id`, [ids.org_a, ids.mockWallet]))!.id;
     const prov = new MockPaymentProvider();
     assert.equal((await start(prov, 100_000)).mode, 'prepurchase', '150,000 held + 100,000 is over the limit');

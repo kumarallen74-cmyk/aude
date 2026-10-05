@@ -1,6 +1,12 @@
 import type { PoolClient } from 'pg';
+import { pkpFeeTax, effectivePpnRateBps } from './tax/id.js';
+import { resolveTaxContext, engineFor } from './tax/index.js';
+import { countryOfCurrency } from '../domain/country.js';
+import { LEGACY_CURRENCY, isCurrency, CURRENCY_CODES, type CurrencyCode } from '../domain/money.js';
 import { one, many, query } from '../db/pool.js';
 import { config } from '../config.js';
+import { billingZone } from './org-timezone.js';
+import { logger } from '../logger.js';
 import type { PriceAdjustment, CdrLine } from './tariff.js';
 import { adjustmentTotals } from './tariff.js';
 
@@ -33,8 +39,8 @@ const ids = (v: unknown): string[] | null => {
 
 // ─────────────────────────────────────────── plans
 
-export const PLAN_COLS = `p.id, p.name, p.description, p.monthly_fee_idr, p.energy_discount_bps, p.member_rate_idr::float8 AS member_rate_idr,
-  p.included_kwh::float8 AS included_kwh, p.waive_session_fees, p.current_type, p.site_ids, p.offered_in_app, p.active, p.created_at, p.updated_at`;
+export const PLAN_COLS = `p.id, p.name, p.description, p.monthly_fee_minor, p.energy_discount_bps, p.member_rate::float8 AS member_rate,
+  p.included_kwh::float8 AS included_kwh, p.waive_session_fees, p.current_type, p.site_ids, p.offered_in_app, p.active, p.created_at, p.updated_at, p.currency`;
 
 export async function listPlans(orgId: string) {
   return many(
@@ -45,28 +51,51 @@ export async function listPlans(orgId: string) {
   );
 }
 
+/**
+ * A plan's or promotion's currency, chosen when it is created and fixed after (its fees, rates
+ * and budget are amounts in it; it applies only to sessions in it). Absent: rupiah, as before.
+ */
+function currencyInput(b: any, creating: boolean, v: Record<string, unknown>): CurrencyCode {
+  if (b.currency === undefined || b.currency === null || b.currency === '') return LEGACY_CURRENCY;
+  const c = String(b.currency).toUpperCase();
+  if (!isCurrency(c)) throw new BenefitsError(422, `Currency is one of ${CURRENCY_CODES.join(', ')}.`);
+  if (creating) v.currency = c;
+  else v.__currency = c; // checked against the stored one (fixedCurrency)
+  return c;
+}
+
+const fixedCurrency = async (table: 'subscription_plan' | 'promotion', orgId: string, id: string, v: Record<string, unknown>, what: string) => {
+  if (v.__currency === undefined) return v;
+  const want = v.__currency;
+  delete v.__currency;
+  const r = await one<{ currency: string }>(`SELECT currency FROM ${table} WHERE id = $1 AND org_id = $2`, [id, orgId]);
+  if (r && r.currency !== want) throw new BenefitsError(422, `A ${what}'s currency cannot change; create a new ${what} in ${want}.`);
+  return v;
+};
+
 function planInput(b: any, creating: boolean) {
   const v: Record<string, unknown> = {};
+  const cur = currencyInput(b, creating, v);
   if (creating || b.name !== undefined) {
     const name = str(b.name, 120);
     if (!name) throw new BenefitsError(422, 'Give the plan a name.');
     v.name = name;
   }
   if (b.description !== undefined) v.description = str(b.description, 1000);
-  if (creating || b.monthlyFeeIdr !== undefined) {
-    const f = Number(b.monthlyFeeIdr ?? 0);
-    if (!Number.isInteger(f) || f < 0 || f > 100_000_000) throw new BenefitsError(422, 'The monthly fee is a whole rupiah amount, 0 or more.');
-    v.monthly_fee_idr = f;
+  if (creating || b.monthlyFeeMinor !== undefined) {
+    const f = Number(b.monthlyFeeMinor ?? 0);
+    if (!Number.isInteger(f) || f < 0 || f > 100_000_000) throw new BenefitsError(422, cur === LEGACY_CURRENCY ? 'The monthly fee is a whole rupiah amount, 0 or more.' : `The monthly fee is a whole number of ${cur} minor units (cents), 0 or more.`);
+    v.monthly_fee_minor = f;
   }
   if (b.energyDiscountPercent !== undefined) {
     const p = Number(b.energyDiscountPercent ?? 0);
     if (!(p >= 0 && p <= 100)) throw new BenefitsError(422, 'The energy discount is 0–100%.');
     v.energy_discount_bps = Math.round(p * 100);
   }
-  if (b.memberRateIdr !== undefined) {
-    const r = num(b.memberRateIdr);
-    if (r != null && !(r >= 0 && r <= 100_000)) throw new BenefitsError(422, 'The member price per kWh must be a rupiah amount.');
-    v.member_rate_idr = r;
+  if (b.memberRate !== undefined) {
+    const r = num(b.memberRate);
+    if (r != null && !(r >= 0 && r <= 100_000)) throw new BenefitsError(422, cur === LEGACY_CURRENCY ? 'The member price per kWh must be a rupiah amount.' : `The member price per kWh must be an amount in ${cur}.`);
+    v.member_rate = r;
   }
   if (b.includedKwh !== undefined) {
     const k = Number(b.includedKwh ?? 0);
@@ -112,7 +141,7 @@ export async function getPlan(orgId: string, id: string) {
   return p;
 }
 export async function createPlan(orgId: string, b: any) { return getPlan(orgId, await insertOrUpdate('subscription_plan', orgId, null, planInput(b, true))); }
-export async function updatePlan(orgId: string, id: string, b: any) { mustId(id, 'plan'); return getPlan(orgId, await insertOrUpdate('subscription_plan', orgId, id, planInput(b, false))); }
+export async function updatePlan(orgId: string, id: string, b: any) { mustId(id, 'plan'); return getPlan(orgId, await insertOrUpdate('subscription_plan', orgId, id, await fixedCurrency('subscription_plan', orgId, id, planInput(b, false), 'plan'))); }
 
 // ─────────────────────────────────────────── subscriptions
 
@@ -184,9 +213,9 @@ export async function cancelSubscription(orgId: string, id: string) {
 
 const PROMO_COLS = `pr.id, pr.name, pr.description, pr.kind, pr.value::float8 AS value, pr.audience, pr.code, pr.fleet_account_ids, pr.plan_ids,
   pr.site_ids, pr.current_type, pr.starts_at, pr.ends_at, pr.days_mask, to_char(pr.time_from, 'HH24:MI') AS time_from, to_char(pr.time_to, 'HH24:MI') AS time_to,
-  pr.min_kwh::float8 AS min_kwh, pr.max_redemptions, pr.max_per_customer, pr.budget_idr, pr.stacks_with_membership, pr.active, pr.created_at, pr.updated_at`;
+  pr.min_kwh::float8 AS min_kwh, pr.max_redemptions, pr.max_per_customer, pr.budget_minor, pr.stacks_with_membership, pr.active, pr.created_at, pr.updated_at, pr.currency`;
 const PROMO_STATS = `(SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id) AS redemptions,
-  (SELECT COALESCE(sum(r.discount_idr), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id) AS discount_idr,
+  (SELECT COALESCE(sum(r.discount_minor), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id) AS discount_minor,
   (SELECT count(DISTINCT r.customer_key)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id) AS customers`;
 
 export async function listPromotions(orgId: string) {
@@ -201,6 +230,7 @@ export async function getPromotion(orgId: string, id: string) {
 
 function promoInput(b: any, creating: boolean) {
   const v: Record<string, unknown> = {};
+  currencyInput(b, creating, v);
   if (creating || b.name !== undefined) {
     const n = str(b.name, 120);
     if (!n) throw new BenefitsError(422, 'Give the promotion a name.');
@@ -259,7 +289,7 @@ function promoInput(b: any, creating: boolean) {
   if (b.timeFrom !== undefined) v.time_from = time(b.timeFrom);
   if (b.timeTo !== undefined) v.time_to = time(b.timeTo);
   if (b.minKwh !== undefined) v.min_kwh = Math.max(0, Number(b.minKwh ?? 0) || 0);
-  for (const [k, c] of [['maxRedemptions', 'max_redemptions'], ['maxPerCustomer', 'max_per_customer'], ['budgetIdr', 'budget_idr']] as const) {
+  for (const [k, c] of [['maxRedemptions', 'max_redemptions'], ['maxPerCustomer', 'max_per_customer'], ['budgetMinor', 'budget_minor']] as const) {
     if (b[k] === undefined) continue;
     const n = num(b[k]);
     if (n != null && (!Number.isInteger(n) || n < 1)) throw new BenefitsError(422, `${k} is a whole number of at least 1, or empty for no limit.`);
@@ -270,7 +300,7 @@ function promoInput(b: any, creating: boolean) {
   return v;
 }
 export async function createPromotion(orgId: string, b: any) { return getPromotion(orgId, await insertOrUpdate('promotion', orgId, null, promoInput(b, true))); }
-export async function updatePromotion(orgId: string, id: string, b: any) { mustId(id, 'promotion'); return getPromotion(orgId, await insertOrUpdate('promotion', orgId, id, promoInput(b, false))); }
+export async function updatePromotion(orgId: string, id: string, b: any) { mustId(id, 'promotion'); return getPromotion(orgId, await insertOrUpdate('promotion', orgId, id, await fixedCurrency('promotion', orgId, id, promoInput(b, false), 'promotion'))); }
 
 // ─────────────────────────────────────────── who gets what
 
@@ -283,7 +313,12 @@ export interface Who {
   /** The session being rated (excluded from limits and "new driver" checks). */
   sessionId?: string | null;
 }
-export interface Where { siteId: string; currentType: 'AC' | 'DC' | string }
+export interface Where {
+  siteId: string;
+  currentType: 'AC' | 'DC' | string;
+  /** The session's currency: a plan or promotion in another currency does not apply (absent = IDR). */
+  currency?: string;
+}
 
 export interface Membership {
   subscriptionId: string;
@@ -303,9 +338,9 @@ const localParts = (at: Date, tz: string) => {
   return { dow, hhmm: `${p.hour}:${p.minute}`, month: `${p.year}-${p.month}` };
 };
 
-/** Start of the calendar month containing `at`, in the billing time zone. */
-async function monthStart(at: Date): Promise<Date> {
-  const r = await one<{ d: Date }>(`SELECT (date_trunc('month', $1::timestamptz AT TIME ZONE $2) AT TIME ZONE $2) AS d`, [at, config.billing.timeZone]);
+/** Start of the calendar month containing `at`, in the organisation's billing zone for the plan's currency (services/org-timezone.ts). */
+async function monthStart(at: Date, orgId: string | null = null, currency: CurrencyCode | null = null): Promise<Date> {
+  const r = await one<{ d: Date }>(`SELECT (date_trunc('month', $1::timestamptz AT TIME ZONE $2) AT TIME ZONE $2) AS d`, [at, await billingZone(orgId, currency)]);
   return r!.d;
 }
 
@@ -333,7 +368,8 @@ export function customerKeyOf(w: Who): string | null {
 export const isStableCustomer = (key: string | null | undefined): boolean =>
   !!key && (key.startsWith('driver:') || key.startsWith('card:'));
 
-export async function benefitsFor(orgId: string, who: Who, where: Where, at: Date, tz = 'Asia/Jakarta'): Promise<Benefits> {
+export async function benefitsFor(orgId: string, who: Who, where: Where, at: Date, tz: string): Promise<Benefits> {
+  const currency = where.currency ?? LEGACY_CURRENCY;
   const customerKey = customerKeyOf(who);
   const stable = isStableCustomer(customerKey);
   let fleetAccountId = who.fleetAccountId ?? null;
@@ -344,8 +380,8 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
   // --- membership: card, then fleet account, then app account
   const subs = await many<any>(
     `SELECT s.id, s.billing, s.status, s.started_at, s.cancelled_at, s.current_period_start, s.current_period_end, s.subscriber_kind,
-            p.id AS plan_id, p.name, p.energy_discount_bps, p.member_rate_idr::float8 AS member_rate, p.included_kwh::float8 AS included_kwh,
-            p.waive_session_fees, p.current_type, p.site_ids
+            p.id AS plan_id, p.name, p.energy_discount_bps, p.member_rate::float8 AS member_rate, p.included_kwh::float8 AS included_kwh,
+            p.waive_session_fees, p.current_type, p.site_ids, p.currency
        FROM subscription s JOIN subscription_plan p ON p.id = s.plan_id
       WHERE s.org_id = $1 AND s.status IN ('active', 'cancelled', 'expired')
         AND ((s.token_id IS NOT NULL AND s.token_id = $2) OR (s.fleet_account_id IS NOT NULL AND s.fleet_account_id = $3)
@@ -359,9 +395,11 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
       ? s.current_period_start && s.current_period_end && new Date(s.current_period_start) <= at && at < new Date(s.current_period_end)
       : new Date(s.started_at) <= at && (s.status === 'active' || (s.cancelled_at && at < new Date(s.cancelled_at)));
     if (!inForce) continue;
+    // No FX: a member price in rupiah means nothing at a ringgit site (ignored, not converted).
+    if ((s.currency ?? LEGACY_CURRENCY) !== currency) { logger.debug({ plan: s.plan_id, currency }, 'membership in another currency ignored'); continue; }
     if (s.current_type && s.current_type !== where.currentType) continue;
     if (s.site_ids?.length && !s.site_ids.includes(where.siteId)) continue;
-    const periodStart = s.billing === 'qris' ? new Date(s.current_period_start) : await monthStart(at);
+    const periodStart = s.billing === 'qris' ? new Date(s.current_period_start) : await monthStart(at, orgId, currency as CurrencyCode);
     let remainingKwh = 0;
     if (s.included_kwh > 0) {
       const used = await one<{ used: number }>(
@@ -375,7 +413,7 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
       subscriptionId: s.id, planId: s.plan_id, planName: s.name, periodStart, remainingKwh,
       adjustment: {
         source: 'subscription', id: s.id, name: s.name,
-        energyRateIdr: s.member_rate ?? null,
+        energyRate: s.member_rate ?? null,
         freeKwh: remainingKwh || null,
         energyPercentOffBps: s.energy_discount_bps || null,
         waiveSessionFees: s.waive_session_fees,
@@ -390,7 +428,7 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
     `SELECT pr.*, pr.value::float8 AS v, to_char(pr.time_from, 'HH24:MI') AS tf, to_char(pr.time_to, 'HH24:MI') AS tt,
             (SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id IS DISTINCT FROM $3) AS used,
             (SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.customer_key = $4 AND r.session_id IS DISTINCT FROM $3) AS used_by_me,
-            (SELECT COALESCE(sum(r.discount_idr), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id IS DISTINCT FROM $3) AS spent
+            (SELECT COALESCE(sum(r.discount_minor), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id IS DISTINCT FROM $3) AS spent
        FROM promotion pr
       WHERE pr.org_id = $1 AND pr.active AND pr.starts_at <= $2 AND (pr.ends_at IS NULL OR $2 < pr.ends_at)`,
     [orgId, at, who.sessionId ?? null, customerKey ?? ''],
@@ -413,6 +451,7 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
   let codeMatched = false;
   for (const p of promos) {
     if (p.code && code && p.code.toUpperCase() === code) codeMatched = true;
+    if ((p.currency ?? LEGACY_CURRENCY) !== currency) { logger.debug({ promotion: p.id, currency }, 'promotion in another currency ignored'); continue; }
     if (!((p.days_mask >> dow) & 1)) continue;
     if (p.tf && p.tt && !(p.tf <= p.tt ? hhmm >= p.tf && hhmm < p.tt : hhmm >= p.tf || hhmm < p.tt)) continue;
     if (p.current_type && p.current_type !== where.currentType) continue;
@@ -422,15 +461,15 @@ export async function benefitsFor(orgId: string, who: Who, where: Where, at: Dat
     if (p.max_redemptions != null && p.used >= p.max_redemptions) continue;
     // Per-customer limits need a customer to count against (isStableCustomer).
     if (p.max_per_customer != null && (!stable || p.used_by_me >= p.max_per_customer)) continue;
-    if (p.budget_idr != null && Number(p.spent) >= Number(p.budget_idr)) continue;
+    if (p.budget_minor != null && Number(p.spent) >= Number(p.budget_minor)) continue;
     if (p.audience === 'code' && !(code && p.code && p.code.toUpperCase() === code)) continue;
     if (p.audience === 'fleet_accounts' && !(fleetAccountId && p.fleet_account_ids?.includes(fleetAccountId))) continue;
     if (p.audience === 'plan_members' && !(membership && p.plan_ids?.includes(membership.planId))) continue;
     if (p.audience === 'new_drivers' && !(stable && (await newDriver()))) continue;
     const adj: PriceAdjustment = { source: 'promotion', id: p.id, name: p.name };
     if (p.kind === 'energy_percent') adj.energyPercentOffBps = Math.round(p.v * 100);
-    else if (p.kind === 'energy_rate') adj.energyRateIdr = p.v;
-    else if (p.kind === 'amount_off') adj.amountOffIdr = p.v;
+    else if (p.kind === 'energy_rate') adj.energyRate = p.v;
+    else if (p.kind === 'amount_off') adj.amountOffMinor = p.v;
     else if (p.kind === 'free_kwh') adj.freeKwh = p.v;
     else adj.waiveSessionFees = true;
     (adj as any).minKwh = Number(p.min_kwh) || 0;
@@ -473,7 +512,7 @@ export function pickCheapest<T>(options: PriceAdjustment[][], price: (o: PriceAd
 /**
  * Claim a promotion's use for a session, or say it is no longer available.
  *
- * `max_redemptions`, `max_per_customer` and `budget_idr` were checked when the
+ * `max_redemptions`, `max_per_customer` and `budget_minor` were checked when the
  * session was priced (benefitsFor) and the redemption written afterwards, with
  * no lock in between, so sessions rated together all saw the last free slot —
  * or the last of the budget — and all took it. The limits are now re-checked
@@ -491,14 +530,14 @@ export async function reservePromotion(
   sessionId: string,
   promotionId: string,
   customerKey: string | null,
-  discountIdr: number,
+  discountMinor: number,
 ): Promise<boolean> {
   await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('promotion:' || $1::text, 0))`, [promotionId]);
-  const r = await c.query<{ max_redemptions: number | null; max_per_customer: number | null; budget_idr: number | null; used: number; used_by_me: number; spent: number }>(
-    `SELECT pr.max_redemptions, pr.max_per_customer, pr.budget_idr,
+  const r = await c.query<{ max_redemptions: number | null; max_per_customer: number | null; budget_minor: number | null; used: number; used_by_me: number; spent: number }>(
+    `SELECT pr.max_redemptions, pr.max_per_customer, pr.budget_minor,
             (SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id <> $2) AS used,
             (SELECT count(*)::int FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.customer_key = $3 AND r.session_id <> $2) AS used_by_me,
-            (SELECT COALESCE(sum(r.discount_idr), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id <> $2) AS spent
+            (SELECT COALESCE(sum(r.discount_minor), 0)::bigint FROM promotion_redemption r WHERE r.promotion_id = pr.id AND r.session_id <> $2) AS spent
        FROM promotion pr WHERE pr.id = $1 AND pr.org_id = $4`,
     [promotionId, sessionId, customerKey ?? '', orgId],
   );
@@ -506,11 +545,11 @@ export async function reservePromotion(
   if (!p) return false;
   if (p.max_redemptions != null && p.used + 1 > p.max_redemptions) return false;
   if (p.max_per_customer != null && (!isStableCustomer(customerKey) || p.used_by_me + 1 > p.max_per_customer)) return false;
-  if (p.budget_idr != null && Number(p.spent) + discountIdr > Number(p.budget_idr)) return false;
+  if (p.budget_minor != null && Number(p.spent) + discountMinor > Number(p.budget_minor)) return false;
   await c.query(
-    `INSERT INTO promotion_redemption (session_id, promotion_id, org_id, customer_key, discount_idr) VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (session_id) DO UPDATE SET promotion_id = EXCLUDED.promotion_id, discount_idr = EXCLUDED.discount_idr`,
-    [sessionId, promotionId, orgId, customerKey ?? `session:${sessionId}`, discountIdr],
+    `INSERT INTO promotion_redemption (session_id, promotion_id, org_id, customer_key, discount_minor) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (session_id) DO UPDATE SET promotion_id = EXCLUDED.promotion_id, discount_minor = EXCLUDED.discount_minor`,
+    [sessionId, promotionId, orgId, customerKey ?? `session:${sessionId}`, discountMinor],
   );
   return true;
 }
@@ -528,9 +567,9 @@ export async function recordBenefits(orgId: string, sessionId: string, lines: Cd
       const includedUsed = m.adjustment.freeKwh ? Math.min(m.adjustment.freeKwh, energyKwh) : 0;
       const prev = (await c.query<{ k: number }>(`SELECT included_kwh::float8 AS k FROM subscription_session WHERE session_id = $1`, [sessionId])).rows[0];
       await c.query(
-        `INSERT INTO subscription_session (session_id, subscription_id, org_id, period_start, included_kwh, discount_idr) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (session_id) DO UPDATE SET included_kwh = EXCLUDED.included_kwh, discount_idr = EXCLUDED.discount_idr`,
-        [sessionId, id, orgId, m.periodStart, includedUsed, t.discountIdr],
+        `INSERT INTO subscription_session (session_id, subscription_id, org_id, period_start, included_kwh, discount_minor) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (session_id) DO UPDATE SET included_kwh = EXCLUDED.included_kwh, discount_minor = EXCLUDED.discount_minor`,
+        [sessionId, id, orgId, m.periodStart, includedUsed, t.discountMinor],
       );
       const delta = includedUsed - (prev?.k ?? 0);
       if (delta) {
@@ -546,27 +585,60 @@ export async function recordBenefits(orgId: string, sessionId: string, lines: Cd
 
 // ─────────────────────────────────────────── membership fees
 
-const PKP_TAX = (fee: number, pkp: boolean) => {
-  if (!pkp) return { dpp: 0, ppn: 0, total: fee };
-  const dpp = Math.round((fee * config.tax.ppnDppNumerator) / config.tax.ppnDppDenominator);
-  const ppn = Math.round((dpp * config.tax.ppnRateBps) / 10_000);
-  return { dpp, ppn, total: fee + ppn };
-};
+/**
+ * PPN on an Indonesian fee (the ID engine's computeFee; services/tax/id.ts). Callers
+ * outside Indonesia use engineFor(ctx).computeFee instead (WP2 moves the fee
+ * paths — passes, memberships, reservation fees — to the engine of their currency).
+ */
+const PKP_TAX = pkpFeeTax;
 export const feeTax = PKP_TAX;
+
+/** Tax on one fee: the v1.6 field names (dpp = tax base, ppn = tax), whatever the scheme. */
+export interface FeeTax { dpp: number; ppn: number; total: number }
+export interface FeeTaxer {
+  (feeMinor: number): FeeTax;
+  scheme: string;
+  /** The fee already includes the tax (Singapore GST: consumer prices are shown tax-inclusive). */
+  inclusive: boolean;
+  rateBps: number;
+  currency: CurrencyCode;
+}
+
+/**
+ * How fees (30-day passes, memberships, reservation fees) of an operator are taxed in a
+ * currency (docs/MULTI-COUNTRY-DESIGN.md §D3 "non-session supplies"): rupiah exactly as
+ * v1.6 (PPN on DPP 11/12 when the operator is PKP); ringgit and Singapore dollars by
+ * the engine of that country for the operator's registration there. Prices in SG/MY are
+ * consumer prices, so the fee includes the tax (IRAS display rule); Indonesian fees do not.
+ */
+export async function feeTaxerFor(orgId: string, currency: CurrencyCode, pkp: boolean, at: Date = new Date()): Promise<FeeTaxer> {
+  if (currency === LEGACY_CURRENCY) {
+    return Object.assign((fee: number) => PKP_TAX(fee, pkp), { scheme: pkp ? 'ID_PPN_PBJT' : 'NONE', inclusive: false, rateBps: pkp ? effectivePpnRateBps() : 0, currency });
+  }
+  const c = countryOfCurrency(currency)!;
+  const ctx = await resolveTaxContext({ orgId, country: c.code, at });
+  const engine = engineFor(ctx);
+  const inclusive = c.displayPricesInclTax;
+  const registered = ctx.scheme !== 'NONE';
+  return Object.assign((fee: number) => {
+    const r = engine.computeFee({ amountMinor: fee, inclusive, registered });
+    return { dpp: r.taxBaseMinor, ppn: r.taxMinor, total: r.totalMinor };
+  }, { scheme: ctx.scheme, inclusive, rateBps: registered ? ctx.rateBps : 0, currency });
+}
 
 /**
  * A monthly fee for the part of the month a membership was in force: the whole fee
  * for a whole month, else the fee × days in force / days in the month (rounded).
  * Days count in whole days, rounded up, so a membership started at noon pays that day.
  */
-export function proratedFee(monthlyFeeIdr: number, from: Date, to: Date, startedAt: Date, endedAt: Date | null): { feeIdr: number; days: number; daysInPeriod: number } {
+export function proratedFee(monthlyFeeMinor: number, from: Date, to: Date, startedAt: Date, endedAt: Date | null): { feeMinor: number; days: number; daysInPeriod: number } {
   const DAY = 86_400_000;
   const daysInPeriod = Math.round((to.getTime() - from.getTime()) / DAY);
   const a = Math.max(from.getTime(), startedAt.getTime());
   const b = Math.min(to.getTime(), endedAt ? endedAt.getTime() : to.getTime());
   const days = Math.max(0, Math.min(daysInPeriod, Math.ceil((b - a) / DAY)));
-  if (days >= daysInPeriod) return { feeIdr: monthlyFeeIdr, days: daysInPeriod, daysInPeriod };
-  return { feeIdr: Math.round((monthlyFeeIdr * days) / daysInPeriod), days, daysInPeriod };
+  if (days >= daysInPeriod) return { feeMinor: monthlyFeeMinor, days: daysInPeriod, daysInPeriod };
+  return { feeMinor: Math.round((monthlyFeeMinor * days) / daysInPeriod), days, daysInPeriod };
 }
 
 /**
@@ -574,28 +646,30 @@ export function proratedFee(monthlyFeeIdr: number, from: Date, to: Date, started
  * that were in force during the month and are not billed yet, each for the
  * days it was in force.
  */
-export async function membershipFeesFor(orgId: string, accountId: string, from: Date, to: Date) {
+export async function membershipFeesFor(orgId: string, accountId: string, from: Date, to: Date, currency: CurrencyCode = LEGACY_CURRENCY) {
   const pkp = (await one<{ pkp: boolean }>(`SELECT pkp FROM organisation WHERE id = $1`, [orgId]))?.pkp ?? false;
+  // Plans in the invoice's currency only (one invoice per currency), taxed by that currency's engine.
+  const taxer = await feeTaxerFor(orgId, currency, pkp, new Date(to.getTime() - 1));
   const rows = await many<any>(
-    `SELECT s.id, s.subscriber_kind, s.started_at, s.cancelled_at, p.name AS plan_name, p.monthly_fee_idr, t.uid AS card_uid
+    `SELECT s.id, s.subscriber_kind, s.started_at, s.cancelled_at, p.name AS plan_name, p.monthly_fee_minor, t.uid AS card_uid
        FROM subscription s JOIN subscription_plan p ON p.id = s.plan_id LEFT JOIN token t ON t.id = s.token_id
-      WHERE s.org_id = $1 AND s.billing = 'invoice'
+      WHERE s.org_id = $1 AND s.billing = 'invoice' AND p.currency = $5
         AND (s.fleet_account_id = $2 OR t.fleet_account_id = $2)
         AND s.started_at < $4 AND (s.cancelled_at IS NULL OR s.cancelled_at >= $3)
         AND NOT EXISTS (SELECT 1 FROM subscription_charge c WHERE c.subscription_id = s.id AND c.period_start = $3 AND c.state <> 'void')
       ORDER BY p.name, t.uid NULLS FIRST`,
-    [orgId, accountId, from, to],
+    [orgId, accountId, from, to, currency],
   );
-  return rows.filter((r) => r.monthly_fee_idr > 0).map((r) => {
-    const pr = proratedFee(r.monthly_fee_idr, from, to, new Date(r.started_at), r.cancelled_at ? new Date(r.cancelled_at) : null);
-    const tax = PKP_TAX(pr.feeIdr, pkp);
+  return rows.filter((r) => r.monthly_fee_minor > 0).map((r) => {
+    const pr = proratedFee(r.monthly_fee_minor, from, to, new Date(r.started_at), r.cancelled_at ? new Date(r.cancelled_at) : null);
+    const tax = taxer(pr.feeMinor);
     const part = pr.days < pr.daysInPeriod ? `, ${pr.days} of ${pr.daysInPeriod} days` : '';
     return {
       subscriptionId: r.id as string, planName: r.plan_name as string,
       subscriber: `${r.subscriber_kind === 'card' ? `card ${r.card_uid}` : 'fleet account'}${part}`,
-      feeIdr: pr.feeIdr, taxBaseIdr: pkp ? pr.feeIdr : 0, dppIdr: tax.dpp, ppnIdr: tax.ppn, totalIdr: tax.total,
-      monthlyFeeIdr: r.monthly_fee_idr as number, days: pr.days, daysInPeriod: pr.daysInPeriod,
+      feeMinor: pr.feeMinor, taxableMinor: currency === LEGACY_CURRENCY ? (pkp ? pr.feeMinor : 0) : tax.ppn > 0 ? tax.dpp : 0, taxBaseMinor: tax.dpp, taxMinor: tax.ppn, totalMinor: tax.total,
+      monthlyFeeMinor: r.monthly_fee_minor as number, days: pr.days, daysInPeriod: pr.daysInPeriod,
       periodStart: from.toISOString(), periodEnd: to.toISOString(),
     };
-  }).filter((f) => f.feeIdr > 0);
+  }).filter((f) => f.feeMinor > 0);
 }

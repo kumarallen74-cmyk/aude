@@ -104,7 +104,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     assertCan(req.principal, { permission: 'invoice:read' });
     const { id } = req.params as { id: string };
     const q = (req.query ?? {}) as Record<string, string>;
-    return run(reply, () => fb.statementFor(org(req), id, String(q.period ?? '')));
+    return run(reply, () => fb.statementFor(org(req), id, String(q.period ?? ''), q.currency));
   });
 
   app.get('/v1/fleet-accounts/:id/statement.html', async (req, reply) => {
@@ -112,7 +112,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const q = (req.query ?? {}) as Record<string, string>;
     return run(reply, async () => {
-      const st = await fb.statementFor(org(req), id, String(q.period ?? ''));
+      const st = await fb.statementFor(org(req), id, String(q.period ?? ''), q.currency);
       reply.header('Content-Type', 'text/html; charset=utf-8');
       return fb.invoiceHtml(st);
     });
@@ -131,7 +131,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     const { period } = req.params as { period: string };
     return run(reply, async () => {
       const r = await fb.issueAll(org(req), period, req.principal.userId);
-      for (const i of r.issued) await audit(req, 'fleet_invoice.issued', 'fleet_invoice', i.number, { period, accountId: i.accountId });
+      for (const i of r.issued) await audit(req, 'fleet_invoice.issued', 'fleet_invoice', i.number, { period, accountId: i.accountId, currency: i.currency });
       return r;
     });
   });
@@ -157,10 +157,10 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/v1/fleet-invoices', async (req, reply) => {
     assertCan(req.principal, { permission: 'invoice:write' });
-    const b = (req.body ?? {}) as { fleetAccountId?: string; period?: string };
+    const b = (req.body ?? {}) as { fleetAccountId?: string; period?: string; currency?: string };
     return run(reply, async () => {
-      const r = await fb.issueInvoice(org(req), String(b.fleetAccountId ?? ''), String(b.period ?? ''), req.principal.userId);
-      await audit(req, 'fleet_invoice.issued', 'fleet_invoice', r.id, { number: r.number, period: b.period, total: r.totalIdr });
+      const r = await fb.issueInvoice(org(req), String(b.fleetAccountId ?? ''), String(b.period ?? ''), req.principal.userId, b.currency);
+      await audit(req, 'fleet_invoice.issued', 'fleet_invoice', r.id, { number: r.number, period: b.period, total: r.totalMinor, currency: r.currency });
       return reply.status(201).send(await fb.getInvoice(org(req), r.id));
     });
   });
@@ -252,7 +252,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const q = (req.query ?? {}) as Record<string, string>;
     return run(reply, async () => {
-      const st = await fb.statementFor(org(req), id, String(q.period ?? ''));
+      const st = await fb.statementFor(org(req), id, String(q.period ?? ''), q.currency);
       return sendPdf(reply, `${st.number ?? `statement-${st.period}`}.pdf`, invoicePdf(st));
     });
   });
@@ -264,7 +264,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     return run(reply, async () => {
       const r = await credit.issueCreditNote(org(req), id, req.body ?? {}, req.principal.userId);
-      await audit(req, 'fleet_credit_note.issued', 'fleet_credit_note', r.id, { number: r.number, invoiceId: id, settlement: r.settlement, total: r.totalIdr, reason: (req.body as any)?.reason });
+      await audit(req, 'fleet_credit_note.issued', 'fleet_credit_note', r.id, { number: r.number, invoiceId: id, settlement: r.settlement, total: r.totalMinor, reason: (req.body as any)?.reason });
       return reply.status(201).send({ creditNote: await credit.getCreditNote(org(req), r.id), settledInvoice: r.settledInvoice, fakturWarning: r.fakturWarning });
     });
   });

@@ -1,5 +1,6 @@
 import { logger, installProcessGuards } from '../logger.js';
-import { pool } from '../db/pool.js';
+import { assertNodeEnvSet } from '../config.js';
+import { pool, endLockPool } from '../db/pool.js';
 import { startApi } from '../api/server.js';
 import { bus } from '../services/events.js';
 import { query } from '../db/pool.js';
@@ -21,6 +22,8 @@ import { persistAlert } from '../services/alerts.js';
  * events. This process reaches chargers through the bridge (ocpp/bridge.ts).
  */
 async function main() {
+  // First: an unset NODE_ENV used to mean development. Name the environment (config.ts).
+  assertNodeEnvSet();
   assertAuditKeyConfigured();
   assertSecretsKeyConfigured();
   assertAuthConfigured();
@@ -63,6 +66,7 @@ async function main() {
     await app.close().catch(() => {});
     await stopBridge().catch(() => {});
     await pool.end().catch(() => {});
+    await endLockPool();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

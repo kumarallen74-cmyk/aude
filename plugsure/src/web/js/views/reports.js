@@ -1,4 +1,4 @@
-import { $, esc, api, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, download, navigate } from '../core.js';
+import { $, esc, api, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, download, navigate, isRupiah, LEGACY_CURRENCY } from '../core.js';
 
 /**
  * Availability & utilisation report.
@@ -55,7 +55,7 @@ registerView('reports', {
         kpi('Below 95% uptime', fmt.num(below), 'chargers needing attention', below ? 'crit' : 'ok'),
         kpi('Offline now', fmt.num(rows.filter((r) => !r.online).length), 'not connected at this moment', rows.some((r) => !r.online) ? 'warn' : ''),
         kpi('Average utilisation', avgUtil == null ? '—' : `${avgUtil}%`, 'connector time spent in sessions'),
-        kpi('Energy delivered', fmt.num(rows.reduce((a, r) => a + r.energyKwh, 0), 1) + ' kWh', fmt.idr(rows.reduce((a, r) => a + r.revenueIdr, 0)) + ' revenue'),
+        kpi('Energy delivered', fmt.num(rows.reduce((a, r) => a + r.energyKwh, 0), 1) + ' kWh', [...new Set(rows.map((r) => r.currency ?? null))].map((c) => fmt.money(rows.filter((r) => (r.currency ?? null) === c).reduce((a, r) => a + r.revenueMinor, 0), c)).join(' + ') + ' revenue'),
       ].join('');
       table($('[data-list]', root), {
         columns: [
@@ -67,7 +67,7 @@ registerView('reports', {
           { label: 'Longest', num: true, render: (r) => (r.longestOutageMin ? `${fmt.num(r.longestOutageMin)} min` : '—') },
           { label: 'Sessions', num: true, render: (r) => fmt.num(r.sessions) },
           { label: 'Energy', num: true, render: (r) => `${fmt.num(r.energyKwh, 1)} kWh` },
-          { label: 'Revenue', num: true, render: (r) => fmt.idr(r.revenueIdr) },
+          { label: 'Revenue', num: true, render: (r) => fmt.money(r.revenueMinor, r.currency) },
           { label: 'Utilisation', num: true, render: (r) => (r.utilisationPct == null ? '—' : `${r.utilisationPct}%`) },
         ],
         rows,
@@ -80,8 +80,11 @@ registerView('reports', {
     $('[data-refresh]', root).addEventListener('click', load);
     $('[data-csv]', root).addEventListener('click', () => {
       if (!data.rows.length) return;
-      const header = ['Charger', 'Identity', 'Site', 'Online now', 'Uptime %', 'Outages', 'Offline minutes', 'Longest outage (min)', 'Sessions', 'Energy kWh', 'Revenue IDR', 'Utilisation %'];
-      const lines = data.rows.map((r) => [r.displayName ?? '', r.ocppIdentity, r.siteName, r.online ? 'yes' : 'no', r.uptimePct ?? '', r.outages, r.offlineMinutes, r.longestOutageMin, r.sessions, r.energyKwh, r.revenueIdr, r.utilisationPct ?? '']);
+      // Revenue is in each charger's site currency. An Indonesia-only operator gets the v1.6 file unchanged; with
+      // Malaysian or Singapore chargers the column was still headed "Revenue IDR" over sen and cents.
+      const multi = data.rows.some((r) => !isRupiah(r.currency));
+      const header = ['Charger', 'Identity', 'Site', 'Online now', 'Uptime %', 'Outages', 'Offline minutes', 'Longest outage (min)', 'Sessions', 'Energy kWh', ...(multi ? ['Revenue (minor units)', 'Currency'] : [`Revenue ${LEGACY_CURRENCY}`]), 'Utilisation %'];
+      const lines = data.rows.map((r) => [r.displayName ?? '', r.ocppIdentity, r.siteName, r.online ? 'yes' : 'no', r.uptimePct ?? '', r.outages, r.offlineMinutes, r.longestOutageMin, r.sessions, r.energyKwh, r.revenueMinor, ...(multi ? [r.currency ?? LEGACY_CURRENCY] : []), r.utilisationPct ?? '']);
       download(`plugsure-availability-${new Date().toISOString().slice(0, 10)}.csv`, [header, ...lines].map((l) => l.map(csvCell).join(',')).join('\r\n'), 'text/csv;charset=utf-8');
     });
     await load();

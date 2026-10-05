@@ -34,6 +34,7 @@ registerView('developers', {
   group: 'govern',
   order: 62,
   perm: 'org:read',
+  hubOnly: true,
   async render(root) {
     const canWrite = state.can('org:write');
     root.innerHTML = pageHead(
@@ -64,6 +65,13 @@ registerView('developers', {
       </div>`;
 
     let max = 3;
+    // A hub-only organisation (an external PlugSure Hub member) has no CSMS: no sandboxes (the API refuses them).
+    if (state.me?.org?.hubOnly === true) {
+      $('[data-list]', root).innerHTML = `<div class="body">${callout('info', 'Sandboxes simulate a charging network, which a PlugSure Hub member does not run here. Use an API key (Users &amp; roles → API keys) for the member clearing API under /v1/roaming/hub/clearing.')}</div>`;
+      const add = $('[data-add]', root);
+      if (add) add.remove();
+      return;
+    }
     const load = async () => {
       let rows = [];
       try {

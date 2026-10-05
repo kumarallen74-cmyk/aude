@@ -87,6 +87,7 @@ if (DB_OK) {
       await c.query(`DELETE FROM audit_log WHERE org_id = ANY($1::uuid[])`, [[ORG_A, ORG_B]]);
       await c.query(`DELETE FROM audit_head WHERE org_id = ANY($1::uuid[])`, [[ORG_A, ORG_B]]);
       await c.query(`DELETE FROM site WHERE org_id = ANY($1::uuid[])`, [[ORG_A, ORG_B]]);
+      await c.query(`DELETE FROM org_tax_registration WHERE org_id = ANY($1::uuid[])`, [[ORG_A, ORG_B]]);
       await c.query(`DELETE FROM organisation WHERE id = ANY($1::uuid[])`, [[ORG_A, ORG_B]]);
       await c.query('COMMIT');
     } finally {
@@ -118,7 +119,7 @@ dbDescribe('RLS fails closed (as plugsure_app)', () => {
     try {
       await c.query('BEGIN');
       await c.query(`SELECT set_config('app.current_org_id', '', true), set_config('app.rls_bypass', 'off', true)`);
-      for (const t of ['site', 'charge_point', 'charging_session', 'audit_log', 'audit_head', 'driver_charge', 'token', 'integration']) {
+      for (const t of ['site', 'charge_point', 'charging_session', 'audit_log', 'audit_head', 'driver_charge', 'token', 'integration', 'org_tax_registration']) {
         const n = (await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${t} WHERE ${t === 'integration' ? 'org_id IS NOT NULL' : 'true'}`)).rows[0]!.n;
         assert.equal(n, 0, `${t} must read empty with no org`);
       }
@@ -187,6 +188,21 @@ dbDescribe('RLS fails closed (as plugsure_app)', () => {
 
   test('withOrg (platform billing acting as a tenant) is scoped the same way', async () => {
     assert.deepEqual(await withOrg(ORG_B, siteIdsVisible), [SITE_B]);
+  });
+
+  test('org_tax_registration (migration 059) is tenant-scoped: own rows only, no foreign writes', async () => {
+    for (const [o, scheme] of [[ORG_A, 'SG_GST'], [ORG_B, 'MY_SST']] as const) {
+      await su!.query(
+        `INSERT INTO org_tax_registration (org_id, country_code, scheme, registration_no, effective_from)
+         VALUES ($1, $2, $3, 'T-1', DATE '2024-01-01')`, [o, scheme === 'SG_GST' ? 'SG' : 'MY', scheme]);
+    }
+    const seen = await withOrg(ORG_A, async () =>
+      (await query<{ org_id: string; scheme: string }>(`SELECT org_id, scheme FROM org_tax_registration WHERE org_id = ANY($1::uuid[])`, [[ORG_A, ORG_B]])).rows);
+    assert.deepEqual(seen.map((r) => [r.org_id, r.scheme]), [[ORG_A, 'SG_GST']]);
+    await assert.rejects(
+      withOrg(ORG_A, () => query(`INSERT INTO org_tax_registration (org_id, country_code, scheme, effective_from) VALUES ($1, 'MY', 'MY_SST', CURRENT_DATE)`, [ORG_B])),
+      /row-level security/,
+    );
   });
 });
 

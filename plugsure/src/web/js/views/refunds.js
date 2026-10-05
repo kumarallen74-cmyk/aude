@@ -1,6 +1,11 @@
 import {
-  $, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, modal, confirmDialog, toast,
+  $, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, modal, confirmDialog, toast, isRupiah,
 } from '../core.js';
+
+/** A summary amount: rupiah as before, or one figure per currency (never added up). */
+const perCur = (s, k) => ((s.by_currency ?? []).some((x) => !isRupiah(x.currency))
+  ? s.by_currency.filter((x) => x[k]).map((x) => fmt.money(x[k], x.currency)).join(' + ') || fmt.idr(0)
+  : fmt.idr(s[k] ?? 0));
 
 /**
  * Refunds — money owed back to prepaid (QRIS) drivers.
@@ -44,7 +49,7 @@ registerView('refunds', {
       table($('[data-list]', root), {
         columns: [
           { label: 'Owed since', render: (r) => `${esc(fmt.time(r.refund_requested_at))}<div class="cell-sub">paid ${esc(fmt.ago(r.paid_at))}</div>` },
-          { label: 'Amount', num: true, render: (r) => `<b>${esc(fmt.idr(r.refunded_idr ?? r.refund_due_idr))}</b><div class="cell-sub">of ${esc(fmt.idr(r.amount_captured_idr))} paid</div>` },
+          { label: 'Amount', num: true, render: (r) => `<b>${esc(fmt.money(r.refunded_minor ?? r.refund_due_minor, r.currency))}</b><div class="cell-sub">of ${esc(fmt.money(r.amount_captured_minor, r.currency))} paid</div>` },
           { label: 'Reason', render: (r) => `${esc(r.refund_reason ?? '—')}${r.session_id ? `<div class="cell-sub mono">session ${esc(String(r.session_id).slice(0, 8))}</div>` : '<div class="cell-sub">no session started</div>'}` },
           { label: 'Where', render: (r) => `${esc(r.site_name ?? '—')}<div class="cell-sub mono">${esc(r.ocpp_identity ?? '')}${r.connector_no ? ` #${esc(r.connector_no)}` : ''}</div>` },
           { label: 'Payer', render: (r) => `${esc(String(r.method ?? '').toUpperCase())}<div class="cell-sub">${r.driver_phone ? esc(r.driver_phone) : 'guest'} · <span class="mono">${esc(r.provider_ref ?? '')}</span></div>` },
@@ -72,9 +77,9 @@ registerView('refunds', {
       rows = data.rows ?? [];
       const s = data.summary ?? {};
       $('[data-kpis]', root).innerHTML = [
-        kpi('Refunds outstanding', fmt.num(s.due_count ?? 0), fmt.idr(s.due_idr ?? 0) + ' owed', Number(s.due_count) ? 'warn' : ''),
+        kpi('Refunds outstanding', fmt.num(s.due_count ?? 0), perCur(s, 'due_minor') + ' owed', Number(s.due_count) ? 'warn' : ''),
         kpi('Failed', fmt.num(s.failed_count ?? 0), 'need a retry or a bank transfer', Number(s.failed_count) ? 'crit' : ''),
-        kpi('Refunded, last 30 days', fmt.idr(s.refunded_30d_idr ?? 0), 'paid back to drivers', 'ok'),
+        kpi('Refunded, last 30 days', perCur(s, 'refunded_30d_minor'), 'paid back to drivers', 'ok'),
       ].join('');
       $('[data-note]', root).innerHTML = Number(s.due_count)
         ? callout('warn', 'Drivers see "refund in progress" in the app until the refund is recorded here.')
@@ -89,7 +94,7 @@ registerView('refunds', {
         const r = rows.find((x) => x.id === pay.dataset.pay);
         const ok = await confirmDialog({
           title: 'Refund via the payment provider',
-          message: `Send ${fmt.idr(r?.refund_due_idr)} back to the payer's original payment method?`,
+          message: `Send ${fmt.money(r?.refund_due_minor, r?.currency)} back to the payer's original payment method?`,
           confirmLabel: 'Refund',
         });
         if (!ok) return;
@@ -105,7 +110,7 @@ registerView('refunds', {
         const r = rows.find((x) => x.id === manual.dataset.manual);
         modal({
           title: 'Record a bank-transfer refund',
-          subtitle: `${fmt.idr(r?.refund_due_idr)} to ${r?.driver_phone ?? 'the payer'}`,
+          subtitle: `${fmt.money(r?.refund_due_minor, r?.currency)} to ${r?.driver_phone ?? 'the payer'}`,
           body: `${callout('info', 'Use this after paying the driver outside the payment provider. The reference is stored and audited.')}
             <div class="form one" style="margin-top:12px">${field('Transfer reference', '<input name="reference" autocomplete="off" placeholder="e.g. BCA 20260926-123456">')}</div>`,
           actions: [
@@ -143,13 +148,13 @@ registerView('refunds', {
       const s = d.summary ?? {};
       box.innerHTML = `<div class="section-head"><h2>Holds and post-pay</h2><div class="muted">Card holds: authorised for the amount the driver chose; the session's total is captured when it ends and the rest released at once. Post-pay: nothing taken at the start; the session's total is charged to the driver's linked e-wallet when it ends. Unused ones are released automatically.</div></div>
         ${Number(s.failed) - Number(s.expired ?? 0) > 0 ? callout('crit', `${fmt.num(Number(s.failed) - Number(s.expired ?? 0))} capture${Number(s.failed) - Number(s.expired ?? 0) > 1 ? 's or releases' : ' or release'} failed. They are retried automatically; retry now, or collect otherwise before the authorisation expires at the acquirer.`) : ''}
-        ${Number(s.expired) ? callout('crit', `${fmt.num(s.expired)} card hold${Number(s.expired) > 1 ? 's' : ''} expired at the acquirer before capture: nothing was taken and ${Number(s.expired) > 1 ? 'they' : 'it'} cannot be captured any more. Drivers can pay ${fmt.idr(s.expiredIdr ?? 0)} from their receipts in the app; otherwise collect it another way, or write it off.`) : ''}
+        ${Number(s.expired) ? callout('crit', `${fmt.num(s.expired)} card hold${Number(s.expired) > 1 ? 's' : ''} expired at the acquirer before capture: nothing was taken and ${Number(s.expired) > 1 ? 'they' : 'it'} cannot be captured any more. Drivers can pay ${Object.keys(s.expiredByCurrency ?? {}).some((c) => !isRupiah(c)) ? Object.entries(s.expiredByCurrency).map(([c, v]) => fmt.money(v, c)).join(' + ') : fmt.idr(s.expiredMinor ?? 0)} from their receipts in the app; otherwise collect it another way, or write it off.`) : ''}
         <div class="card" data-holdlist></div>`;
       table($('[data-holdlist]', box), {
         columns: [
           { label: 'Kind', render: (h) => (h.kind === 'postpay' ? `Post-pay<div class="cell-sub">${esc(h.channel ?? 'e-wallet')}</div>` : 'Card hold') },
           { label: 'Held', render: (h) => `${esc(fmt.time(h.authorisedAt ?? h.createdAt))}<div class="cell-sub">${esc(h.site ?? '—')} <span class="mono">${esc(h.charger ?? '')}</span></div>` },
-          { label: 'Amount', num: true, render: (h) => `<b>${esc(fmt.idr(h.capturedIdr ?? h.captureIdr ?? h.heldIdr))}</b><div class="cell-sub">${h.captureIdr != null || h.capturedIdr != null ? `of ${esc(fmt.idr(h.heldIdr))} held` : 'held'}</div>` },
+          { label: 'Amount', num: true, render: (h) => `<b>${esc(fmt.money(h.capturedMinor ?? h.captureMinor ?? h.heldMinor, h.currency))}</b><div class="cell-sub">${h.captureMinor != null || h.capturedMinor != null ? `of ${esc(fmt.money(h.heldMinor, h.currency))} held` : 'held'}</div>` },
           { label: 'Status', render: (h) => `${h.paidInApp ? tag('t-ok', h.kind === 'postpay' ? (/^link ended:/.test(h.error ?? '') ? 'link ended, paid in app' : 'paid in app') : 'expired, paid in app') : h.expired ? tag('t-crit', 'expired, not charged') : tag(...(HOLD_TAG[h.state] ?? ['t-mute', h.state]))}${h.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(h.error)}</div>` : ''}${h.kind === 'postpay' && !h.paidInApp && /^link ended:/.test(h.error ?? '') ? `<div class="cell-sub">The driver's e-wallet link ended, so it cannot be charged. The driver can pay it from the receipt in the app with another method, or link the e-wallet again.</div>` : h.kind === 'postpay' && h.state === 'capture_failed' ? `<div class="cell-sub">The driver can top up and pay now, or pay from the receipt in the app with another method (the automatic retries stop when they do).</div>` : ''}${h.expired && !h.paidInApp ? `<div class="cell-sub">Nothing was taken from the card and it cannot be captured any more. The driver can pay it from the receipt in the app; otherwise collect it another way, or write it off.</div>` : ''}${h.nextAttemptAt && /failed/.test(h.state) ? `<div class="cell-sub">next try ${esc(fmt.time(h.nextAttemptAt))} · ${esc(fmt.num(h.attempts))} attempts</div>` : ''}` },
           { label: 'Acquirer', render: (h) => `${esc(h.provider)}<div class="cell-sub mono">${esc(h.providerRef ?? '')}</div>` },
           { label: '', render: (h) => (canPay && /failed/.test(h.state) && !h.expired ? `<button class="btn sm" type="button" data-retryhold="${esc(h.id)}">Retry now</button>` : '') },

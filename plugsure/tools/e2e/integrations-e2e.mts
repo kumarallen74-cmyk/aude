@@ -133,7 +133,7 @@ try {
   check('test: the server key is checked against Midtrans (status call) and the result kept', t1.data.ok === true && /accepted/.test(t1.data.message) && callsTo(/^\/v2\/plugsure-connection-test/).length === 1, t1.data);
 
   // A site with a tariff and a connected charger.
-  const site = await ops('POST', '/v1/sites', { name: 'Integrations E2E Hub', address: 'Jl. Kuningan', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Integrations E2E Hub', address: 'Jl. Kuningan', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Integrations E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${site.data.id}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
   const ID = `INTG-${Date.now().toString().slice(-6)}`;
@@ -149,12 +149,12 @@ try {
 
   // Console checkout through Midtrans.
   const t2 = Date.now();
-  const co = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountIdr: 50_000 });
+  const co = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 50_000 });
   const charge = callsTo(/^\/v2\/charge$/, t2)[0];
   const orderId = co.data.qr?.providerRef as string;
   check('console checkout: a QRIS charge created at Midtrans (the QR string is Midtrans\'), recorded with the provider',
     co.status === 200 && co.data.provider === 'midtrans' && !!charge && JSON.parse(charge.body).transaction_details.gross_amount === 50_000 && co.data.qr.qrString.includes(orderId), { co: co.data, charge: charge?.body });
-  const intentState = async (ref: string) => (await pg.query(`SELECT state, amount_captured_idr, integration_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
+  const intentState = async (ref: string) => (await pg.query(`SELECT state, amount_captured_minor, integration_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
   const sig = (o: string, s: string, g: string) => createHash('sha512').update(`${o}${s}${g}${SERVER_KEY}`).digest('hex');
   const note = (o: string, g = '50000.00', st = 'settlement') => JSON.stringify({ order_id: o, status_code: '200', gross_amount: g, transaction_status: st, transaction_id: 'mt-tx-1', signature_key: sig(o, '200', g) });
   const forged = await raw(hookPath, JSON.stringify({ order_id: orderId, status_code: '200', gross_amount: '50000.00', transaction_status: 'settlement', signature_key: 'f'.repeat(128) }));
@@ -164,16 +164,16 @@ try {
   const captured = await intentState(orderId);
   const again = await raw(hookPath, note(orderId));
   check('notification: a forged signature (401) and an unknown URL (404) change nothing; the signed one captures the payment once',
-    forged.status === 401 && unknownUrl.status === 404 && stillPending.state === 'pending' && good.status === 200 && captured.state === 'captured' && captured.amount_captured_idr === 50_000 && again.status === 200,
+    forged.status === 401 && unknownUrl.status === 404 && stillPending.state === 'pending' && good.status === 200 && captured.state === 'captured' && captured.amount_captured_minor === 50_000 && again.status === 200,
     { forged: forged.status, unknownUrl: unknownUrl.status, stillPending, captured });
-  const co2 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountIdr: 40_000 });
+  const co2 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 40_000 });
   const short = await raw(hookPath, note(co2.data.qr.providerRef, '4000.00'));
   const shortState = await intentState(co2.data.qr.providerRef);
   check('notification for less than the payment: acknowledged but not captured', short.status === 200 && shortState.state === 'pending', shortState);
 
   // Refund through the acquirer.
   const pi = (await pg.query(`SELECT id FROM payment_intent WHERE provider_ref = $1`, [orderId])).rows[0].id;
-  await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_idr = 12000, refund_reason = 'e2e unused balance' WHERE id = $1`, [pi]);
+  await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_minor = 12000, refund_reason = 'e2e unused balance' WHERE id = $1`, [pi]);
   const t3 = Date.now();
   const rf = await ops('POST', `/v1/refunds/${pi}/process`);
   const rfCall = callsTo(/\/refund$/, t3)[0];
@@ -184,7 +184,7 @@ try {
   const d = async (method: string, path: string, body?: unknown) => { const r = await fetch(`${API}/d${path}`, { method, headers: { authorization: `Bearer ${dev}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); const t = await r.text(); let j: any = t; try { j = JSON.parse(t); } catch {} return { status: r.status, data: j }; };
   const stations = await until(() => d('GET', '/v1/stations'), (r) => !!r.data.stations?.find((s: any) => s.siteId === site.data.id)?.connectors?.[0], 20_000, 800);
   const conn = stations.data.stations.find((s: any) => s.siteId === site.data.id).connectors[0].connectorId;
-  const pre = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000 });
+  const pre = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000 });
   const demoConfirm = pre.data.chargeId ? await d('POST', `/v1/charge/${pre.data.chargeId}/confirm-payment`) : null;
   const paidByHook = pre.data.qr ? await raw(hookPath, note(pre.data.qr.providerRef, '30000.00')) : null;
   const preState = pre.data.qr ? await intentState(pre.data.qr.providerRef) : null;
@@ -194,7 +194,7 @@ try {
 
   // ================================================================ QRIS: Xendit
   const xe = await ops('PUT', '/v1/integrations/payments', { provider: 'xendit', settings: { baseUrl: FAKE }, secrets: { secretKey: 'xnd_development_E2E', callbackToken: 'xendit-callback-token-e2e' } });
-  const coX = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountIdr: 20_000 });
+  const coX = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 20_000 });
   const refX = coX.data.qr?.providerRef as string;
   const cb = (token: string) => raw(xe.data.webhookPath, JSON.stringify({ event: 'qr.payment', data: { id: 'qrpy_e2e', reference_id: refX, amount: 20000, status: 'SUCCEEDED' } }), { 'x-callback-token': token });
   // Fail closed: a correctly authenticated "paid" callback that states no amount is not recorded as paid.

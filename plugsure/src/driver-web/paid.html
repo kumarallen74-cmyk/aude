@@ -7,8 +7,9 @@
 <title>PlugSure · Pembayaran</title>
 <!--
   Where the acquirer sends the driver back after an e-wallet or card payment
-  (Midtrans finish / callback URL, Xendit success / failure redirect, the sandbox
-  checkout page). It only brings the driver back into the app: the payment
+  (Midtrans finish / callback URL, Xendit success / failure redirect, Stripe's
+  return_url after the card / FPX page or GrabPay, the sandbox checkout page).
+  It only brings the driver back into the app: the payment
   itself is confirmed by the acquirer's signed notification, never by this page.
 -->
 <style>
@@ -33,17 +34,23 @@ a{display:block;margin-top:18px;padding:13px;border-radius:13px;background:var(-
 <script>
 (function(){
   try{ var t=localStorage.getItem('ps_theme'); if(t) document.documentElement.setAttribute('data-theme',t); }catch(e){}
+  // The app's language (Indonesian unless the app was in English: Malaysia, Singapore, or the driver's choice).
+  var en=false; try{ en=localStorage.getItem('ps_lang_now')==='en'; }catch(e){}
+  var T=en?{back:'Back to PlugSure…',wait:'We are waiting for the payment provider to confirm the payment.',open:'Open PlugSure',
+      cancelled:'Payment cancelled',none:'No money was taken. You can choose another method and try again.',ret:'Back to PlugSure',title:'PlugSure · Payment'}:null;
+  if(T){ document.documentElement.lang='en'; document.title=T.title; document.getElementById('h').textContent=T.back; document.getElementById('p').textContent=T.wait; document.getElementById('go').textContent=T.open; }
   var q=new URLSearchParams(location.search);
-  // Midtrans: transaction_status; Xendit / sandbox: status. Anything that is not a failure resumes the payment screen.
-  var st=String(q.get('status')||q.get('transaction_status')||'').toLowerCase();
+  // Midtrans: transaction_status; Xendit / sandbox: status; Stripe: redirect_status (succeeded | processing | failed).
+  // Anything that is not a failure resumes the payment screen.
+  var st=String(q.get('status')||q.get('transaction_status')||q.get('redirect_status')||'').toLowerCase();
   // Linking an e-wallet: the app itself checks the outcome with the acquirer.
   var failed=q.get('for')!=='link'&&/cancel|deny|fail|expire/.test(st);
   if(failed){
     try{ localStorage.removeItem('ps_pending'); }catch(e){}
     document.getElementById('spin').style.display='none';
-    document.getElementById('h').textContent='Pembayaran dibatalkan';
-    document.getElementById('p').textContent='Tidak ada dana yang ditarik. Anda bisa memilih metode lain dan mencoba lagi.';
-    var a=document.getElementById('go'); a.textContent='Kembali ke PlugSure'; a.href='/app/';
+    document.getElementById('h').textContent=T?T.cancelled:'Pembayaran dibatalkan';
+    document.getElementById('p').textContent=T?T.none:'Tidak ada dana yang ditarik. Anda bisa memilih metode lain dan mencoba lagi.';
+    var a=document.getElementById('go'); a.textContent=T?T.ret:'Kembali ke PlugSure'; a.href='/app/';
     return;
   }
   setTimeout(function(){ location.replace('/app/#paid'); },700);

@@ -67,7 +67,7 @@ const orgA = (await one<{id:string}>(`SELECT id FROM organisation WHERE slug=$1`
 const orgB = (await one<{id:string}>(`SELECT id FROM organisation WHERE slug=$1`,[slugB]))!.id;
 
 // Org A resources
-const siteA  = (await one<{id:string}>(`INSERT INTO site (org_id,name,pbjt_rate_bps) VALUES($1,'Site A',1000) RETURNING id`,[orgA]))!.id;
+const siteA  = (await one<{id:string}>(`INSERT INTO site (org_id,name,local_tax_rate_bps) VALUES($1,'Site A',1000) RETURNING id`,[orgA]))!.id;
 const cpA    = (await one<{id:string}>(`INSERT INTO charge_point (site_id,ocpp_identity,ocpp_version,status) VALUES($1,$2,'ocpp1.6','online') RETURNING id`,[siteA,`ISO-CP-A-${tagA}`]))!.id;
 const evA    = (await one<{id:string}>(`INSERT INTO evse (charge_point_id,evse_id,max_power_w) VALUES($1,1,22000) RETURNING id`,[cpA]))!.id;
 const conA   = (await one<{id:string}>(`INSERT INTO connector (evse_uuid,connector_id,connector_type,current_type,max_power_w,tera_status,tera_cert_status) VALUES($1,1,'Type2','AC',22000,'verified','verified') RETURNING id`,[evA]))!.id;
@@ -82,7 +82,7 @@ const promoA = (await one<{id:string}>(`INSERT INTO promotion (org_id,name,kind)
 const userA  = (await one<{id:string}>(`SELECT id FROM app_user WHERE org_id=$1 AND email=$2`,[orgA,emailA]))!.id;
 
 // Org B has its own site so B appears to be a real operator
-const siteB = (await one<{id:string}>(`INSERT INTO site (org_id,name,pbjt_rate_bps) VALUES($1,'Site B',1000) RETURNING id`,[orgB]))!.id;
+const siteB = (await one<{id:string}>(`INSERT INTO site (org_id,name,local_tax_rate_bps) VALUES($1,'Site B',1000) RETURNING id`,[orgB]))!.id;
 
 // ── Sign in ────────────────────────────────────────────────────────────────
 const a = session(), b = session();

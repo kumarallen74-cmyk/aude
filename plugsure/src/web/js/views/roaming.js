@@ -1,6 +1,12 @@
 import {
   $, $$, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, field, options, callout, modal, confirmDialog, toast, copy, drawer, formValues, download,
+  COUNTRIES, toMinor, toMajor, multiCountryUi, isRupiah, countryCurrency,
 } from '../core.js';
+import { drawClearingMember } from './hub-clearing.js';
+
+/** A partner's amount in major units (OCPI) in its currency; a currency PlugSure does not know is shown as sent. */
+const knownCurrency = (cur) => Object.values(COUNTRIES).some((c) => c.currency === cur);
+const majorMoney = (x, cur) => (x == null ? '—' : knownCurrency(cur) ? fmt.money(toMinor(x, cur), cur) : `${esc(cur)} ${fmt.num(x, 2)}`);
 
 /**
  * Roaming (OCPI 2.2.1): other networks' drivers charge on this operator's
@@ -43,6 +49,45 @@ function showRegistration(r) {
     onMount(ctx) {
       $('[data-copy-url]', ctx.body).addEventListener('click', () => copy(r.versionsUrl));
       $('[data-copy-token]', ctx.body).addEventListener('click', () => copy(r.token));
+    },
+  });
+}
+
+/**
+ * A roaming identity for one more country (v1.7.0): one OCPI party per (organisation, country). A site is
+ * shared only under its own country's party, so without one a Malaysian or Singapore site stays unshared
+ * ("no OCPI party for MY"). The console showed only the home party, so these could be set only by API.
+ */
+function editCountryParty(cc, party, done) {
+  const name = COUNTRIES[cc]?.name ?? cc;
+  modal({
+    title: `Roaming identity — ${name}`,
+    subtitle: `Your sites in ${name} are shared with partners under this party. Partners cannot follow a change of party ID, so choose it once.`,
+    body: `<div class="form">
+      ${field('Country', `<input value="${esc(`${name} (${cc})`)}" disabled>`)}
+      ${field('Party ID', `<input name="partyId" maxlength="3" placeholder="PLS" autocomplete="off">`, { help: `Three letters or digits. Shown in every EVSE id of your ${esc(name)} sites (${esc(cc)}*PLS*E…).` })}
+      ${field('Business name', '<input name="businessName" placeholder="Your company in this country">', { full: true })}
+      ${field('Website', '<input name="website" placeholder="https://…">', { full: true, opt: true })}
+    </div>`,
+    actions: [
+      ...(party ? [{ label: 'Remove', kind: 'danger', async onClick() {
+        const ok = await confirmDialog({ title: `Remove the ${name} identity?`, message: `Your ${name} sites stop being shared with partners.`, confirmLabel: 'Remove', danger: true });
+        if (!ok) return false;
+        if (await attempt(() => api(`/v1/roaming/parties/${cc}`, { method: 'DELETE' }), { success: 'Roaming identity removed' })) done();
+        else return false;
+      } }] : []),
+      { label: 'Cancel' },
+      { label: 'Save', kind: 'primary', async onClick(ctx) {
+        const v = formValues(ctx.body);
+        if (await attempt(() => api(`/v1/roaming/parties/${cc}`, { method: 'PUT', body: v }), { success: `Roaming identity for ${name} saved` })) done();
+        else return false;
+      } },
+    ],
+    onMount(ctx) {
+      // Values are set as properties, never interpolated into markup.
+      $('[name="partyId"]', ctx.body).value = party?.party_id ?? '';
+      $('[name="businessName"]', ctx.body).value = party?.business_name ?? '';
+      $('[name="website"]', ctx.body).value = party?.website ?? '';
     },
   });
 }
@@ -262,37 +307,56 @@ registerView('roaming', {
   group: 'commercial',
   order: 28,
   perm: 'roaming:read',
+  // Shown to external hub members too (a hub-only organisation sees its PlugSure Hub tab only).
+  hubOnly: true,
   async render(root, [initial]) {
     const canWrite = state.can('roaming:write');
-    const tabs = [
+    // A hub-only organisation (an external hub member's console) has no CSMS: only its PlugSure Hub tab.
+    const hubOnly = state.me?.org?.hubOnly === true;
+    const hubTab = { id: 'hub', label: 'PlugSure Hub' };
+    const tabs = hubOnly ? [hubTab] : [
       { id: 'partners', label: 'Partners' },
       { id: 'sites', label: 'Shared sites' },
       { id: 'sessions', label: 'Roaming sessions' },
       { id: 'abroad', label: 'Cards abroad' },
       { id: 'network', label: 'Partner network' },
+      ...(state.me?.features?.hub ? [hubTab] : []),
     ];
     root.innerHTML = pageHead(
-      'Roaming',
-      'Let drivers of other networks charge on your chargers, and your fleet cards charge on theirs (OCPI 2.2.1). Every session produces a charge record: you bill their provider for sessions here, and pay the other operator (and bill your card holder) for sessions there.',
+      hubOnly ? 'PlugSure Hub' : 'Roaming',
+      hubOnly
+        ? 'Your membership of PlugSure Hub: the CDRs routed through it, disputes, settlement statements, PlugSure\'s fee invoices and payments between members.'
+        : 'Let drivers of other networks charge on your chargers, and your fleet cards charge on theirs (OCPI 2.2.1). Every session produces a charge record: you bill their provider for sessions here, and pay the other operator (and bill your card holder) for sessions there.',
       `<button class="btn" type="button" data-refresh>${icon('refresh')} Refresh</button>`,
     ) + `<div data-identity></div><div class="tabs" role="tablist">${tabs.map((t) => `<button role="tab" type="button" aria-selected="false" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}</div><div data-body></div>`;
 
     const body = $('[data-body]', root);
-    let current = tabs.find((t) => t.id === initial)?.id ?? 'partners';
+    let current = tabs.find((t) => t.id === initial)?.id ?? tabs[0].id;
     let data = null;
 
     const drawIdentity = () => {
       const p = data.party;
+      // The other countries the organisation operates in, each with its own party (or none yet).
+      const others = (state.me?.org?.countries ?? []).map((c) => c.country_code).filter((cc) => p && cc !== p.country_code);
+      const partyOfCc = (cc) => (data.parties ?? []).find((x) => x.country_code === cc && !x.is_home) ?? null;
+      const otherRows = others.map((cc) => {
+        const q = partyOfCc(cc);
+        return `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><span class="cell-sub" style="min-width:90px">${esc(COUNTRIES[cc]?.name ?? cc)}</span>
+          ${q ? `<b>${esc(q.business_name)}</b> <span class="mono cell-sub">${esc(`${cc}*${q.party_id}`)}</span>` : `${tag('t-warn', 'no identity')} <span class="cell-sub">sites here are not shared</span>`}
+          ${canWrite ? `<button class="btn sm" type="button" data-edit-party="${esc(cc)}">${q ? 'Edit' : 'Set identity'}</button>` : ''}</div>`;
+      }).join('');
       $('[data-identity]', root).innerHTML = p
         ? `<div class="card section"><header><h3>${esc(p.business_name)} <span class="mono cell-sub">${esc(`${p.country_code}*${p.party_id}`)}</span></h3>${canWrite ? '<button class="btn sm right" type="button" data-edit-identity>Edit</button>' : ''}</header>
-            <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap"><span class="cell-sub">Versions URL for partners:</span> <code class="mono" style="word-break:break-all">${esc(data.versionsUrl)}</code> <button class="btn sm" type="button" data-copy-versions>${icon('copy')} Copy</button></div></div>`
+            <div class="body"><div class="row" style="gap:8px;align-items:center;flex-wrap:wrap"><span class="cell-sub">Versions URL for partners:</span> <code class="mono" style="word-break:break-all">${esc(data.versionsUrl)}</code> <button class="btn sm" type="button" data-copy-versions>${icon('copy')} Copy</button></div>
+            ${others.length ? `<div style="margin-top:10px;padding-top:6px;border-top:1px solid var(--line)"><div class="lbl small" style="font-weight:600">Identity in other countries</div>${otherRows}</div>` : ''}</div></div>`
         : callout('info', `Set your roaming identity first: the country code and three-character party ID partners will know you by.${canWrite ? ' <button class="btn sm primary" type="button" data-edit-identity>Set roaming identity</button>' : ''}`);
       $('[data-edit-identity]', root)?.addEventListener('click', () => editIdentity(p, refresh));
+      $$('[data-edit-party]', root).forEach((b) => b.addEventListener('click', () => editCountryParty(b.dataset.editParty, partyOfCc(b.dataset.editParty), refresh)));
       $('[data-copy-versions]', root)?.addEventListener('click', () => copy(data.versionsUrl));
     };
 
     const drawPartners = () => {
-      body.innerHTML = `<div class="card section"><header><h3>Partners</h3>${canWrite && data.party ? `<button class="btn sm primary right" type="button" data-add>${icon('plus')} Add partner</button>` : ''}</header><div data-t></div></div>`;
+      body.innerHTML = `<div class="card section" data-hub hidden></div><div class="card section"><header><h3>Partners</h3>${canWrite && data.party ? `<button class="btn sm primary right" type="button" data-add>${icon('plus')} Add partner</button>` : ''}</header><div data-t></div></div>`;
       table($('[data-t]', body), {
         columns: [
           { label: 'Partner', render: (p) => `<div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(KIND_LABEL[p.kind] ?? p.kind)} · <span class="mono">${esc(partyOf(p))}</span></div>` },
@@ -310,6 +374,79 @@ registerView('roaming', {
         onRow: (p) => openPartner(p, canWrite, refresh),
       });
       $('[data-add]', body)?.addEventListener('click', () => addPartner(refresh));
+      void drawHubCard($('[data-hub]', body));
+    };
+
+    // ── the PlugSure Hub tab: membership card, then clearing and settlement once a member (hub-clearing.js)
+    const drawHubTab = async () => {
+      body.innerHTML = '<div class="card section" data-hub hidden></div><div class="section" data-clearing></div>';
+      await drawHubCard($('[data-hub]', body));
+      let h = null;
+      if (state.me?.features?.hub === true) { try { h = await api('/v1/roaming/hub'); } catch { /* the hub is off */ } }
+      const box = $('[data-clearing]', body);
+      if (!box?.isConnected) return;
+      if (!h) { box.innerHTML = callout('info', 'PlugSure Hub is not enabled on this platform.'); return; }
+      if (!h.member) { box.innerHTML = ''; return; }
+      box.innerHTML = '<h2 style="font-size:15px;margin:0 0 10px">Clearing and settlement</h2><div data-cl></div>';
+      await drawClearingMember($('[data-cl]', box), { canWrite });
+    };
+
+    // ── PlugSure Hub (v1.8): membership, the parties announced, agreements. Only when the platform runs the hub.
+    const drawHubCard = async (box) => {
+      // HUB_ENABLED off (the default): no card and no request (v1.7's Partners tab made no such call; a 404 per
+      // visit is a failed request in the browser console).
+      if (state.me?.features?.hub !== true) return;
+      let h;
+      try { h = await api('/v1/roaming/hub'); } catch { return; } // 404: the hub is off on this platform
+      if (!box.isConnected) return;
+      box.hidden = false;
+      const m = h.member;
+      const intro = 'Connect once to PlugSure Hub and roam with every operator and service provider on it that you have a roaming agreement with, in Indonesia, Malaysia and Singapore. Your roaming identities become hub parties: nothing to set up, no tokens to exchange.';
+      if (!m) {
+        const canJoin = canWrite && h.selfJoin && data.party;
+        box.innerHTML = `<header><h3>${icon('link')} PlugSure Hub</h3>${tag('t-mute', 'not a member')}</header>
+          <div class="body"><p class="cell-sub" style="margin:0 0 10px">${esc(intro)}</p>
+            ${!data.party ? callout('info', 'Set your roaming identity first: the hub announces it to its members.')
+              : canJoin ? '<button class="btn primary" type="button" data-hub-join>Join PlugSure Hub</button>'
+              : `<p class="small" style="margin:0">${h.selfJoin ? 'Ask an administrator with roaming rights to join.' : 'Joining is arranged by PlugSure: contact your PlugSure account manager.'}</p>`}
+          </div>`;
+        $('[data-hub-join]', box)?.addEventListener('click', async () => {
+          const ok = await confirmDialog({
+            title: 'Join PlugSure Hub?',
+            message: 'Your roaming identities are announced to the hub as a CPO (and, for your home identity, a service provider). A "PlugSure Hub" partner appears in your partner list. Nothing is exchanged with other members until PlugSure activates your membership and you have roaming agreements.',
+            confirmLabel: 'Join',
+          });
+          if (ok && await attempt(() => api('/v1/roaming/hub/join', { method: 'POST' }), { success: 'Joined PlugSure Hub' })) refresh();
+        });
+        return;
+      }
+      const STATUS = { onboarding: ['t-info', 'onboarding'], active: ['t-ok', 'active'], suspended: ['t-warn', 'suspended'], terminated: ['t-mute', 'terminated'] };
+      const note = {
+        onboarding: 'Waiting for activation by PlugSure (signed hub agreement). Until then your parties are not visible to other members.',
+        active: 'Your parties are visible to the members you have an active agreement with.',
+        suspended: 'Suspended by PlugSure: nothing is routed to or from your parties.',
+        terminated: 'Your hub membership has ended.',
+      }[m.status] ?? '';
+      const ROLE = { CPO: 'CPO', EMSP: 'eMSP', NSP: 'NSP', SCSP: 'SCSP', OTHER: 'Other' };
+      box.innerHTML = `<header><h3>${icon('link')} PlugSure Hub</h3>${tag(...(STATUS[m.status] ?? ['t-mute', m.status]))}${m.open_roaming ? ` ${tag('t-info', 'open roaming', '', true)}` : ''}</header>
+        <div class="body">
+          <p class="cell-sub" style="margin:0 0 10px">${esc(note)}</p>
+          <div class="row" style="gap:6px;flex-wrap:wrap"><span class="cell-sub">Your parties on the hub:</span>${(h.parties ?? []).map((p) => tag(HUB_CLIENT_TAG[p.status] ?? 't-mute', `${p.country_code}*${p.party_id} ${ROLE[p.role] ?? p.role}`, p.status.toLowerCase())).join(' ') || '<span class="cell-sub">none</span>'}</div>
+          <h4 style="margin:14px 0 6px;font-size:13px">Roaming agreements</h4>
+          <div data-hub-ag></div>
+        </div>`;
+      const flag = (on, label) => tag(on ? 't-ok' : 't-mute', label, '', true);
+      table($('[data-hub-ag]', box), {
+        columns: [
+          { label: 'With', render: (a) => `<div class="cell-title" style="min-width:9rem">${esc(a.counterparty)}</div><div class="cell-sub mono">${esc(a.we_are_cpo ? a.emsp : a.cpo)}</div>` },
+          { label: 'Your party', render: (a) => `<span class="mono">${esc(a.we_are_cpo ? a.cpo : a.emsp)}</span><div class="cell-sub">${a.we_are_cpo ? 'their drivers at your chargers' : 'your drivers at their chargers'}</div>` },
+          { label: 'Status', render: (a) => tag(a.status === 'active' ? 't-ok' : a.status === 'proposed' ? 't-info' : 't-warn', a.status) },
+          { label: 'Allows', render: (a) => `<div class="chips">${flag(a.allow_realtime_auth, 'real-time auth')}${flag(a.allow_commands, 'commands')}${flag(a.allow_charging_profiles, 'charging profiles')}</div>` },
+          { label: 'Since', render: (a) => `<span class="nowrap">${esc(fmt.date(a.valid_from ?? a.created_at))}</span>` },
+        ],
+        rows: h.agreements ?? [],
+        empty: 'No agreements yet. PlugSure sets them up with the operators and providers you want to roam with.',
+      });
     };
 
     const drawSites = () => {
@@ -345,7 +482,7 @@ registerView('roaming', {
       if (limits.length) {
         const box = $('[data-limits]', body);
         box.className = 'card section';
-        box.innerHTML = `<header><h3>Charging limits from partners</h3></header><p class="cell-sub" style="margin:0 0 10px">A partner can slow its driver's session down (OCPI smart charging). Load management applies the limit on top of the site's power budget: a partner can never make a session draw more than the site allows.</p><div data-lt></div>`;
+        box.innerHTML = `<header><h3>Charging limits from partners</h3></header><p class="cell-sub" style="margin:0;padding:10px 16px">A partner can slow its driver's session down (OCPI smart charging). Load management applies the limit on top of the site's power budget: a partner can never make a session draw more than the site allows.</p><div data-lt></div>`;
         table($('[data-lt]', box), {
           columns: [
             { label: 'Session', render: (l) => `<div class="cell-title">${esc(l.partner_name)}</div><div class="cell-sub mono">${esc(l.contract_id ?? l.session_id)}</div>` },
@@ -366,32 +503,65 @@ registerView('roaming', {
           { label: 'Where', render: (s) => `${esc(s.site_name)}<div class="cell-sub mono">${esc(s.ocpp_identity)}</div>` },
           { label: 'Started by', render: (s) => esc(AUTH_LABEL[s.ocpi_auth_method] ?? '—') },
           { label: 'Energy', num: true, render: (s) => fmt.kwh(s.energy_wh) },
-          { label: 'Total', num: true, render: (s) => fmt.idr(s.total_idr) },
+          { label: 'Total', num: true, render: (s) => fmt.money(s.total_minor, s.currency) },
           { label: 'Charge record', render: (s) => (s.state === 'active' ? tag('t-info', 'charging')
             : s.cdr_push_state === 'delivered' ? tag('t-ok', 'sent')
             : s.cdr_push_state === 'failed' ? tag('t-crit', 'not accepted')
             : s.cdr_push_state === 'pending' ? tag('t-info', 'queued')
-            : s.total_idr == null ? tag('t-warn', 'not billed yet') : tag('t-mute', '—')) },
+            : s.total_minor == null ? tag('t-warn', 'not billed yet') : tag('t-mute', '—')) },
         ],
         rows,
         empty: 'No roaming sessions yet.',
       });
     };
 
+    // ── eMSP role: driver-app drivers on partner networks, guaranteed by a card hold in the partner's currency
+    const drawAppRoaming = async (box) => {
+      let st;
+      try { st = await api('/v1/roaming/settings'); } catch { box.hidden = true; return; }
+      const ro = canWrite ? '' : ' disabled';
+      // Holds in the currencies that apply: an Indonesia-only operator sets its rupiah hold (MYR / SGD only with
+      // multi-country, or one already customised). The server keeps the others' defaults either way.
+      const orgCurs = new Set([countryCurrency(state.me?.org?.homeCountry ?? 'ID'), ...(state.me?.org?.countries ?? []).map((c) => c.currency)]);
+      const holds = st.holds.filter((h) => multiCountryUi() || orgCurs.has(h.currency) || h.custom);
+      box.innerHTML = `<header><h3>Driver app on partner networks</h3></header>
+        <form class="pad" novalidate style="padding:10px 16px">
+          <p class="cell-sub" style="margin:0 0 10px">Signed-in app drivers can start charges at partner operators' chargers. Before the start, a hold is placed on the driver's card in the partner's currency; the partner's charge record is then taken from it (up to the hold) and the rest released.</p>
+          <label class="check"><input type="checkbox" name="appDrivers"${st.appDrivers ? ' checked' : ''}${ro}> <span>Let app drivers charge on partner networks</span></label>
+          <div class="form" style="margin-top:10px">${holds.map((h) => field(`Hold in ${h.currency}`, `<div class="inputgroup"><input name="hold_${esc(h.currency)}" inputmode="${isRupiah(h.currency) ? 'numeric' : 'decimal'}" value="${h.custom ? esc(toMajor(h.holdMinor, h.currency)) : ''}" placeholder="${esc(toMajor(h.defaultMinor, h.currency))}"${ro}><span class="suffix">${esc(fmt.sym(h.currency))}</span></div>`, { opt: true, help: `Empty: ${fmt.money(h.defaultMinor, h.currency)}. A charge costing more than the hold is a shortfall you collect from the driver.` })).join('')}</div>
+          ${canWrite ? '<div class="row" style="margin-top:10px"><button class="btn primary" type="submit">Save</button></div>' : ''}
+        </form>`;
+      $('form', box).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const v = formValues(e.currentTarget);
+        const holdMinor = {};
+        for (const h of holds) {
+          const raw = String(v[`hold_${h.currency}`] ?? '').trim();
+          if (!raw) continue;
+          const m = toMinor(raw, h.currency);
+          if (!Number.isFinite(m) || m <= 0) { toast(`The ${h.currency} hold is not an amount`, 'warn'); return; }
+          holdMinor[h.currency] = m;
+        }
+        if (await attempt(() => api('/v1/roaming/settings', { method: 'PUT', body: { appDrivers: $('[name=appDrivers]', box).checked, holdMinor } }), { success: 'Saved' })) drawAppRoaming(box);
+      });
+    };
+
     // ── eMSP role: your cards on other networks
     const drawAbroad = async () => {
       body.innerHTML = `<div class="card section"><header><h3>Cards that can roam</h3>${canWrite && data.party ? `<button class="btn sm right" type="button" data-share-all>Share all active cards</button>` : ''}</header>
-          <p class="cell-sub" style="margin:0 0 10px">Shared cards are sent to every connected operator (CPO) and work at its chargers; a blocked or unshared card stops working there within a minute. Cards with an energy or spending limit are checked with PlugSure before every session, and roaming charges count towards the limit.</p>
+          <p class="cell-sub" style="margin:0;padding:10px 16px">Shared cards are sent to every connected operator (CPO) and work at its chargers; a blocked or unshared card stops working there within a minute. Cards with an energy or spending limit are checked with PlugSure before every session, and roaming charges count towards the limit.</p>
           <div data-cards></div></div>
-        <div class="card section"><header><h3>Charges from other networks</h3><button class="btn sm right" type="button" data-csv>${icon('download')} Export CSV</button></header><div data-active></div><div data-cdrs></div></div>`;
+        <div class="card section"><header><h3>Charges from other networks</h3><button class="btn sm right" type="button" data-csv>${icon('download')} Export CSV</button></header><div data-active></div><div data-cdrs></div></div>
+        <div class="card section" data-app-roam></div>`; // v1.7's driver-app card after v1.5's two, which keep their place
       const [cards, abroad] = await Promise.all([api('/v1/roaming/cards'), api('/v1/roaming/abroad')]);
+      drawAppRoaming($('[data-app-roam]', body));
       table($('[data-cards]', body), {
         columns: [
           { label: 'Card', render: (c) => `<div class="cell-title mono">${esc(c.uid)}</div><div class="cell-sub">${esc(c.holder_name ?? '—')}${c.fleet_name ? ` · ${esc(c.fleet_name)}` : ''}</div>` },
           { label: 'Contract id', render: (c) => (c.contract_id ? `<span class="mono">${esc(c.contract_id)}</span>` : '—') },
           { label: 'Status', render: (c) => (c.status !== 'Accepted' ? tag('t-crit', c.status.toLowerCase()) : c.roaming_shared ? tag('t-ok', 'roaming') : tag('t-mute', 'home only')) },
-          { label: 'Limit', render: (c) => esc(c.spend_limit_idr != null ? fmt.idr(c.spend_limit_idr) : c.energy_limit_wh != null ? fmt.kwh(c.energy_limit_wh, 0) : '—') },
-          { label: 'Roaming charges', num: true, render: (c) => (c.roaming_cdrs ? `${fmt.idr(c.roaming_idr)}<div class="cell-sub">${fmt.num(c.roaming_cdrs)} ${c.roaming_cdrs === 1 ? 'session' : 'sessions'}</div>` : '—') },
+          { label: 'Limit', render: (c) => esc(c.spend_limit_minor != null ? fmt.money(c.spend_limit_minor, c.spend_limit_currency) : c.energy_limit_wh != null ? fmt.kwh(c.energy_limit_wh, 0) : '—') },
+          { label: 'Roaming charges', num: true, render: (c) => (c.roaming_cdrs ? `${Object.entries(c.roaming_by_currency ?? {}).map(([cur, m]) => fmt.money(m, cur)).join('<br>') || fmt.money(c.roaming_minor, c.roaming_currency)}<div class="cell-sub">${fmt.num(c.roaming_cdrs)} ${c.roaming_cdrs === 1 ? 'session' : 'sessions'}</div>` : '—') },
           { label: '', render: (c) => (!canWrite || !data.party ? '' : c.roaming_shared
             ? `<button class="btn sm" type="button" data-unshare-card="${esc(c.id)}">Stop roaming</button>`
             : c.status === 'Accepted' ? `<button class="btn sm primary" type="button" data-share-card="${esc(c.id)}">Allow roaming</button>` : '') },
@@ -434,8 +604,8 @@ registerView('roaming', {
           { label: 'Where', render: (c) => `${esc(c.location_name ?? '—')}<div class="cell-sub">${esc(c.city ?? '')} · ${esc(c.partner_name)} <span class="mono">${esc(`${c.country_code}*${c.party_id}`)}</span></div>` },
           { label: 'Card', render: (c) => `<span class="mono">${esc(c.uid ?? '—')}</span><div class="cell-sub">${esc(c.holder_name ?? '')}${c.fleet_name ? ` · ${esc(c.fleet_name)}` : ''}</div>` },
           { label: 'Energy', num: true, render: (c) => `${fmt.num(c.total_energy, 2)} kWh` },
-          { label: 'Excl. VAT', num: true, render: (c) => (c.currency === 'IDR' ? fmt.idr(c.total_excl_vat) : `${esc(c.currency)} ${fmt.num(c.total_excl_vat, 2)}`) },
-          { label: 'Total', num: true, render: (c) => (c.total_incl_vat == null ? '—' : c.currency === 'IDR' ? fmt.idr(c.total_incl_vat) : `${esc(c.currency)} ${fmt.num(c.total_incl_vat, 2)}`) },
+          { label: 'Excl. VAT', num: true, render: (c) => majorMoney(c.total_excl_vat, c.currency) },
+          { label: 'Total', num: true, render: (c) => `${majorMoney(c.total_incl_vat, c.currency)}${c.status === 'held' ? `<div class="cell-sub">${tag('t-warn', 'held for review')}</div>` : ''}` },
         ],
         rows: abroad.cdrs,
         empty: 'No charges from other networks yet.',
@@ -517,9 +687,12 @@ registerView('roaming', {
           body.innerHTML = callout('crit', esc(e.status === 403 ? 'You do not have permission to view roaming.' : e.message));
           return;
         }
-        drawIdentity();
+        // The page was left while loading (a partner drawer's close refreshes it): nothing to draw into.
+        if (!body.isConnected) return;
+        if (!hubOnly) drawIdentity();
       }
       if (id === 'partners') drawPartners();
+      else if (id === 'hub') await drawHubTab();
       else if (id === 'sites') drawSites();
       else if (id === 'sessions') await drawSessions();
       else if (id === 'abroad') await drawAbroad();

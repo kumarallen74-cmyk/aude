@@ -32,7 +32,8 @@ const brand = (over: Partial<Brand> = {}): Brand => ({
   hostname: 'app.nusacharge.id', androidPackage: 'id.nusacharge.app', androidCertSha256: [normaliseFingerprint('AB'.repeat(32))!],
   iosBundleId: 'id.nusacharge.app', iosTeamId: 'ABCDE12345', versionName: '1.2.0', versionCode: 7,
   updatedAt: new Date().toISOString(), publishedAt: null,
-  apnsKeyId: null, apnsConfigured: false, apnsCheckedAt: null, apnsCheckOk: null, apnsCheckDetail: null, ...over,
+  apnsKeyId: null, apnsConfigured: false, apnsCheckedAt: null, apnsCheckOk: null, apnsCheckDetail: null,
+  scope: 'operator', fcmProjectId: null, fcmClientEmail: null, fcmConfigured: false, fcmCheckedAt: null, fcmCheckOk: null, fcmCheckDetail: null, appConfig: {}, ...over,
 });
 
 test('PNG: an encoded image decodes to the same pixels; shrinking averages, enlarging interpolates; the App Store icon is opaque', () => {
@@ -117,6 +118,15 @@ test('the page for a brand: renamed, recoloured, its icon, told its brand; still
   assert.ok(renderIndex(html, b, { preview: true }).includes('manifest.webmanifest?brand=nusacharge'));
   // Every inline script still parses.
   for (const m of out.matchAll(/<script>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Function(m[1]!), 'script parses');
+});
+
+test('the page for a brand: the operator\'s default language (English in Malaysia and Singapore) is what the app starts in', () => {
+  const html = readFileSync(join(WEB, 'index.html'), 'utf8');
+  const b = brand();
+  assert.match(renderIndex(html, b, { preview: false, defaultLang: 'en' }), /<html lang="en" data-default-lang="en">/);
+  assert.match(renderIndex(html, b, { preview: false, defaultLang: 'id' }), /<html lang="id" data-default-lang="id">/);
+  assert.match(renderIndex(html, b, { preview: false }), /<html lang="id">/, 'none set: as before');
+  assert.match(renderIndex(html, b, { preview: false, defaultLang: 'fr"><script>' }), /<html lang="id">/, 'only id or en');
 });
 
 test('manifest, push worker and store association files for a brand', () => {

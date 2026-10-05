@@ -31,6 +31,15 @@ const union = (ts: string[]) => {
   return u.includes('unknown') ? 'unknown' : u.join(' | ');
 };
 
+const TYPING_KEYS = ['$ref', 'type', 'properties', 'items', 'enum', 'const', 'additionalProperties'];
+/** A subschema that only constrains (required, nested constraint-only combinators), never types. */
+function constraintOnly(x: unknown): boolean {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
+  if (TYPING_KEYS.some((k) => k in o)) return false;
+  return ['anyOf', 'oneOf', 'allOf'].every((c) => !(c in o) || (Array.isArray(o[c]) && (o[c] as unknown[]).every(constraintOnly)));
+}
+
 /** A JSON Schema (2020-12, as the document uses it) as a TypeScript type. */
 export function tsType(s: Schema | undefined | boolean, indent = ''): string {
   if (s === undefined || s === true || s === null) return 'unknown';
@@ -38,6 +47,14 @@ export function tsType(s: Schema | undefined | boolean, indent = ''): string {
   if (s.$ref) return refName(s.$ref);
   if ('const' in s) return JSON.stringify(s.const);
   if (Array.isArray(s.enum)) return union(s.enum.map((v: unknown) => JSON.stringify(v)));
+  // Combinators that only constrain which properties are present (anyOf: [{ required: [a] }, { required: [b] }])
+  // say nothing about the type: the object's own properties type it.
+  for (const c of ['anyOf', 'oneOf', 'allOf'] as const) {
+    if (Array.isArray(s[c]) && s[c].length && s[c].every(constraintOnly)) {
+      const { [c]: _drop, ...rest } = s;
+      return tsType(rest as Schema, indent);
+    }
+  }
   if (Array.isArray(s.anyOf) || Array.isArray(s.oneOf)) return union((s.anyOf ?? s.oneOf).map((x: Schema) => paren(tsType(x, indent))));
   if (Array.isArray(s.allOf)) {
     const parts = s.allOf.map((x: Schema) => paren(tsType(x, indent))).filter((t: string) => t !== 'unknown');

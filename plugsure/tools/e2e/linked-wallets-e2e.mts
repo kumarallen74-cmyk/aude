@@ -117,7 +117,7 @@ try {
   await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   await ops('DELETE', '/v1/integrations/payments?scope=org');
   cleanup.push(() => ops('DELETE', '/v1/integrations/payments?scope=org'));
-  const site = await ops('POST', '/v1/sites', { name: 'Linked Wallets E2E Hub', address: 'Jl. Gatot Subroto', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Linked Wallets E2E Hub', address: 'Jl. Gatot Subroto', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Wallets E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${site.data.id}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
   const ID = `WLT-${Date.now().toString().slice(-6)}`;
@@ -141,15 +141,15 @@ try {
   const stations = await until(() => d('GET', '/v1/stations'), (r) => !!r.data.stations?.find((s: any) => s.siteId === site.data.id)?.connectors?.[0], 20_000, 800);
   const conn = stations.data.stations.find((s: any) => s.siteId === site.data.id).connectors[0].connectorId;
   const intentOf = async (ref: string) => (await pg.query(
-    `SELECT id, state, method, channel, driver_card_id, amount_captured_idr, refund_state, refund_due_idr, refunded_idr, refund_method, session_id, provider_payment_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
+    `SELECT id, state, method, channel, driver_card_id, amount_captured_minor, refund_state, refund_due_minor, refunded_minor, refund_method, session_id, provider_payment_id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
   const refOf = (r: any) => r.data?.payment?.providerRef as string;
-  const cdrTotal = async (sessionId: string) => Number((await pg.query(`SELECT total_idr FROM cdr WHERE session_id = $1`, [sessionId])).rows[0]?.total_idr ?? -1);
+  const cdrTotal = async (sessionId: string) => Number((await pg.query(`SELECT total_minor FROM cdr WHERE session_id = $1`, [sessionId])).rows[0]?.total_minor ?? -1);
 
   // ================================================================ sandbox
-  const off = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 });
+  const off = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 });
   const sb = await ops('PUT', '/v1/integrations/payments', { provider: 'mock', settings: { methods: ['QRIS', 'GOPAY', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA'], linkWallets: true } });
   cc('/v1/integrations/{kind}', 'put', '200', sb.data);
-  const q = await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 }), (r) => (r.data.linkableWallets ?? []).length === 5, 20_000, 1000);
+  const q = await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 }), (r) => (r.data.linkableWallets ?? []).length === 5, 20_000, 1000);
   check('linking is off by default; switched on, a signed-in driver may link GoPay, OVO, DANA, ShopeePay and LinkAja (none linked yet)',
     (off.data.linkableWallets ?? []).length === 0 && sb.status === 200 && JSON.stringify(q.data.linkableWallets) === '["GOPAY","OVO","DANA","SHOPEEPAY","LINKAJA"]' && q.data.linkedWallets.length === 0, { off: off.data.linkableWallets, q: q.data });
 
@@ -167,22 +167,22 @@ try {
       && s1b.data.status === 'active' && l1.data.accountLabel === `••••${d.phone.slice(-4)}`
       && cards.data.cards.some((k: any) => k.kind === 'ewallet' && k.channel === 'GOPAY' && k.status === 'active') && !JSON.stringify(cards.data).includes('mock_wallet_'),
     { gLink: gLink.data, l1: l1.data, s1: s1.data, approve, s1b: s1b.data, cards: cards.data });
-  const q2 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 });
+  const q2 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 });
   const w = q2.data.linkedWallets?.[0];
   check('the quote offers the linked GoPay, and no longer offers to link it', w?.channel === 'GOPAY' && JSON.stringify(q2.data.linkableWallets) === '["OVO","DANA","SHOPEEPAY","LINKAJA"]', q2.data);
 
-  const p1 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 50_000, walletId: w.id });
+  const p1 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 50_000, walletId: w.id });
   const i1 = await intentOf(refOf(p1));
   check('one tap: paid at once with no redirect, recorded as GoPay (e-wallet) on the linked wallet',
-    p1.status === 200 && p1.data.payment.action === 'done' && p1.data.payment.checkoutUrl === null && i1.state === 'captured' && i1.amount_captured_idr === 50_000 && i1.method === 'ewallet' && i1.channel === 'GOPAY' && i1.driver_card_id === w.id, { p1: p1.data.payment, i1 });
+    p1.status === 200 && p1.data.payment.action === 'done' && p1.data.payment.checkoutUrl === null && i1.state === 'captured' && i1.amount_captured_minor === 50_000 && i1.method === 'ewallet' && i1.channel === 'GOPAY' && i1.driver_card_id === w.id, { p1: p1.data.payment, i1 });
   const go1 = await d('POST', `/v1/charge/${p1.data.chargeId}/start`);
   await runSession(p1.data.startToken, 5_000);
   const i1b = await until(() => intentOf(refOf(p1)), (i) => i.refund_state === 'refunded', 20_000, 500);
   const total1 = await cdrTotal(i1b.session_id);
   check('the unused balance goes back to the e-wallet automatically, through the acquirer, with no operator action',
-    go1.status === 200 && i1b.refund_state === 'refunded' && i1b.refund_method === 'provider' && i1b.refunded_idr === 50_000 - total1 && total1 > 0, { i1b, total1 });
+    go1.status === 200 && i1b.refund_state === 'refunded' && i1b.refund_method === 'provider' && i1b.refunded_minor === 50_000 - total1 && total1 > 0, { i1b, total1 });
 
-  const plan = await ops('POST', '/v1/subscription-plans', { name: `Wallets E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 15000, offeredInApp: true });
+  const plan = await ops('POST', '/v1/subscription-plans', { name: `Wallets E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 15000, offeredInApp: true });
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${plan.data.id}`, { active: false, offeredInApp: false }));
   const mem = await d('GET', '/v1/memberships');
   const pass = await d('POST', '/v1/memberships', { planId: plan.data.id, walletId: w.id });
@@ -200,15 +200,15 @@ try {
     l2.data.accountLabel === '••••7890' && s2.data.status === 'failed' && !cards2.data.cards.some((k: any) => k.id === l2.data.id) && bad.status === 422 && notOffered.status === 422, { s2: s2.data, bad: bad.data, notOffered: notOffered.data });
 
   const other = await device(true);
-  const steal = await other('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 20_000, walletId: w.id });
+  const steal = await other('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 20_000, walletId: w.id });
   const peek = await other('GET', `/v1/wallets/${w.id}`);
   const rm = await d('DELETE', `/v1/cards/${w.id}`);
-  const after = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 20_000, walletId: w.id });
+  const after = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 20_000, walletId: w.id });
   check('another driver cannot pay with or even see the wallet; unlinked, it cannot pay', steal.status === 422 && peek.status === 404 && rm.status === 200 && after.status === 422, { steal: steal.data, peek: peek.status, after: after.data });
 
   // ================================================================ Midtrans: GoPay Tokenization
   await ops('PUT', '/v1/integrations/payments', { provider: 'midtrans', settings: { environment: 'sandbox', baseUrl: FAKE, methods: ['QRIS', 'GOPAY'], linkWallets: true }, secrets: { serverKey: 'SB-Mid-server-E2E-WALLET-77aa' } });
-  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 }), (r) => JSON.stringify(r.data.linkableWallets) === '["GOPAY"]', 20_000, 1000);
+  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 }), (r) => JSON.stringify(r.data.linkableWallets) === '["GOPAY"]', 20_000, 1000);
   const t1 = Date.now();
   const ml = await d('POST', '/v1/wallets', { connectorId: conn, channel: 'GOPAY' });
   const acct = JSON.parse(callsTo(/^\/v2\/pay\/account$/, t1)[0]?.body ?? '{}');
@@ -216,10 +216,10 @@ try {
   check('Midtrans: a GoPay pay account for the driver\'s number (local format) returning to the app; the activation link; ENABLED → linked',
     ml.status === 200 && ml.data.activationUrl === 'https://gopay.test/link/acc-e2e' && acct.gopay_partner?.phone_number === d.phone.slice(1) && acct.gopay_partner?.country_code === '62'
       && /\/app\/paid\.html\?for=link$/.test(acct.gopay_partner?.redirect_url ?? '') && ms.data.status === 'active', { ml: ml.data, acct, ms: ms.data });
-  const q3 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 60_000 });
+  const q3 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 60_000 });
   const mw = q3.data.linkedWallets?.[0];
   const t2 = Date.now();
-  const mp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 60_000, walletId: mw?.id });
+  const mp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 60_000, walletId: mw?.id });
   const charge = JSON.parse(callsTo(/^\/v2\/charge$/, t2)[0]?.body ?? '{}');
   const im = await intentOf(refOf(mp));
   check('Midtrans: charged in one tap on the account id and payment option token, settled at once',
@@ -232,8 +232,8 @@ try {
   const total2 = await cdrTotal(imb.session_id);
   const rf = callsTo(/\/refund$/, t3)[0];
   check('Midtrans: the unused balance refunded automatically through Midtrans\' refund API for the right amount',
-    imb.refunded_idr === 60_000 - total2 && rf?.path === `/v2/${refOf(mp)}/refund` && JSON.parse(rf.body).amount === 60_000 - total2, { imb, total2, rf });
-  const broke = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 150_000, walletId: mw?.id });
+    imb.refunded_minor === 60_000 - total2 && rf?.path === `/v2/${refOf(mp)}/refund` && JSON.parse(rf.body).amount === 60_000 - total2, { imb, total2, rf });
+  const broke = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 150_000, walletId: mw?.id });
   check('insufficient GoPay balance: refused with a clear message, nothing recorded as paid', broke.status === 422 && /GoPay ditolak/.test(broke.data.error) && /saldo/.test(broke.data.error), broke.data);
   const t4 = Date.now();
   await d('DELETE', `/v1/cards/${mw?.id}`);
@@ -241,15 +241,15 @@ try {
 
   // ================================================================ Xendit: OVO as a reusable payment method
   await ops('PUT', '/v1/integrations/payments', { provider: 'xendit', settings: { baseUrl: FAKE, methods: ['QRIS', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA'], linkWallets: true }, secrets: { secretKey: 'xnd_development_WALLETS', callbackToken: 'xendit-callback-token-wallets-e2e' } });
-  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 }), (r) => JSON.stringify(r.data.linkableWallets) === '["OVO","DANA","SHOPEEPAY","LINKAJA"]', 20_000, 1000);
+  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 }), (r) => JSON.stringify(r.data.linkableWallets) === '["OVO","DANA","SHOPEEPAY","LINKAJA"]', 20_000, 1000);
   const t5 = Date.now();
   const xl = await d('POST', '/v1/wallets', { connectorId: conn, channel: 'OVO' });
   const pmBody = JSON.parse(callsTo(/^\/v2\/payment_methods$/, t5)[0]?.body ?? '{}');
   const xs = await d('GET', `/v1/wallets/${xl.data.id}`);
-  const q4 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 45_000 });
+  const q4 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 45_000 });
   const xw = q4.data.linkedWallets?.[0];
   const t6 = Date.now();
-  const xp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 45_000, walletId: xw?.id });
+  const xp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 45_000, walletId: xw?.id });
   const prBody = JSON.parse(callsTo(/^\/payment_requests$/, t6)[0]?.body ?? '{}');
   const ix = await intentOf(refOf(xp));
   check('Xendit: OVO linked as a reusable e-wallet payment method (the number, the return page), activated; charged in one tap by payment request',
@@ -263,7 +263,7 @@ try {
   const total3 = await cdrTotal(ixb.session_id);
   const xr = JSON.parse(callsTo(/^\/refunds$/, t7)[0]?.body ?? '{}');
   check('Xendit: the unused balance refunded automatically through the Refunds API on the payment request',
-    ixb.refunded_idr === 45_000 - total3 && xr.payment_request_id === ix.provider_payment_id && xr.amount === 45_000 - total3, { ixb, total3, xr });
+    ixb.refunded_minor === 45_000 - total3 && xr.payment_request_id === ix.provider_payment_id && xr.amount === 45_000 - total3, { ixb, total3, xr });
 
   // ShopeePay and LinkAja: linked and charged the same way at Xendit.
   for (const ch of ['SHOPEEPAY', 'LINKAJA']) {
@@ -271,10 +271,10 @@ try {
     const lk = await d('POST', '/v1/wallets', { connectorId: conn, channel: ch });
     const body = JSON.parse(callsTo(/^\/v2\/payment_methods$/, tA)[0]?.body ?? '{}');
     const st = await d('GET', `/v1/wallets/${lk.data.id}`);
-    const qq = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 25_000 });
+    const qq = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 25_000 });
     const lw = (qq.data.linkedWallets ?? []).find((x: any) => x.channel === ch);
     const tB = Date.now();
-    const pay = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 25_000, walletId: lw?.id });
+    const pay = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 25_000, walletId: lw?.id });
     const pr = JSON.parse(callsTo(/^\/payment_requests$/, tB)[0]?.body ?? '{}');
     const ip = await intentOf(refOf(pay));
     check(`Xendit ${ch}: linked as a reusable e-wallet payment method (no number in its channel properties), activated, and paid in one tap`,

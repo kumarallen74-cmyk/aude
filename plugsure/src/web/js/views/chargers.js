@@ -1,7 +1,7 @@
 import {
   $, $$, esc, el, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, modal, drawer, confirmDialog, html,
   field, options, formValues, fieldErrors, toast, callout, kpi, navigate, onLive, debounce, connectorTag, teraTag,
-  onlineTag, inPortal, sites as loadSites,
+  onlineTag, inPortal, sites as loadSites, countryCurrency, toMinor, LEGACY_CURRENCY,
 } from '../core.js';
 
 /** The raw OCPP log: operators (org-wide) and field technicians only — the server refuses anyone else. */
@@ -54,6 +54,9 @@ async function sendCommand(identity, path, body, label) {
 export function remoteStartDialog(cp, connectorNo) {
   const conns = cp.connectors ?? [];
   const canSell = state.can('session:write');
+  // The amount preset is in the charger's site currency (the server reads minor units of it). It was labelled
+  // "IDR" and sent as typed, so "20" at a Singapore charger meant S$0.20 and was refused.
+  let cur = LEGACY_CURRENCY;
   modal({
     title: `Remote start — ${cp.display_name || cp.ocpp_identity}`,
     subtitle: 'Sends RemoteStartTransaction. The driver must plug in within the charger\'s connection timeout.',
@@ -64,7 +67,7 @@ export function remoteStartDialog(cp, connectorNo) {
       <datalist id="start-tags"></datalist>
       <div class="field full"><div class="lbl">Preset limit</div><div class="seg" data-lt>
         <button type="button" data-v="none" aria-pressed="true">Full charge</button><button type="button" data-v="energy">Energy (kWh)</button>
-        <button type="button" data-v="duration">Duration (min)</button><button type="button" data-v="amount">Amount (IDR)</button></div>
+        <button type="button" data-v="duration">Duration (min)</button><button type="button" data-v="amount">Amount (<span data-cur>${esc(LEGACY_CURRENCY)}</span>)</button></div>
         <div class="help">The platform stops the session with RemoteStopTransaction when the limit is reached.</div></div>
       <div class="field hidden" data-lv><label data-lv-label>Limit</label><input name="limitValue" inputmode="decimal"></div>
     </form>`,
@@ -79,7 +82,7 @@ export function remoteStartDialog(cp, connectorNo) {
           if (!v.idTag.trim()) { fieldErrors(ctx.body, { idTag: 'Choose a card' }); return false; }
           const r = await attempt(() => api(`/v1/charge-points/${enc(cp.ocpp_identity)}/remote-start`, {
             method: 'POST',
-            body: { connectorId: Number(v.connectorId), idTag: v.idTag.trim(), limitType: lt, limitValue: lt === 'none' ? null : v.limitValue },
+            body: { connectorId: Number(v.connectorId), idTag: v.idTag.trim(), limitType: lt, limitValue: lt === 'none' ? null : lt === 'amount' ? toMinor(v.limitValue, cur) : v.limitValue },
           }));
           if (!r) return false;
           toast(r.status === 'Accepted' ? 'Charger accepted the remote start' : `Charger answered ${r.status}`, r.status === 'Accepted' ? 'ok' : 'warn');
@@ -91,8 +94,13 @@ export function remoteStartDialog(cp, connectorNo) {
       $$('button', lt).forEach((b) => b.addEventListener('click', () => {
         $$('button', lt).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
         $('[data-lv]', ctx.body).classList.toggle('hidden', b.dataset.v === 'none');
-        $('[data-lv-label]', ctx.body).textContent = { energy: 'Energy limit (kWh)', duration: 'Duration (minutes)', amount: 'Amount (IDR, incl. taxes)' }[b.dataset.v] ?? '';
+        $('[data-lv-label]', ctx.body).textContent = { energy: 'Energy limit (kWh)', duration: 'Duration (minutes)', amount: `Amount (${fmt.sym(cur)}, incl. taxes)` }[b.dataset.v] ?? '';
       }));
+      loadSites().then((all) => {
+        const site = (all ?? []).find((x) => x.id === cp.site_id);
+        cur = countryCurrency(site?.country_code ?? 'ID');
+        $('[data-cur]', ctx.body).textContent = cur;
+      }).catch(() => {});
       const input = $('[name=idTag]', ctx.body);
       const list = $('#start-tags', ctx.body);
       const load = debounce(async () => {
@@ -353,7 +361,7 @@ function controlTab(identity) {
         <button class="btn" data-all-in>Set whole station Operative</button>
       </div><p class="small muted" style="margin:10px 0 0">Every command is recorded in the audit log with your name.</p></div></div>`;
     $('[data-guns]', body).innerHTML = cp.connectors.map((k, i) => `<div class="card pad" data-i="${i}">
-      <div class="row"><b>Gun ${esc(k.evse_id)}</b>${connectorTag(k.status)}<span class="small muted">${esc(k.connector_type ?? '')} · ${esc(fmt.num(k.max_power_w / 1000))} kW</span></div>
+      <div class="row"><b>Gun ${esc(k.evse_id)}</b>${connectorTag(k.status)}<span class="small muted">${esc([k.connector_type, k.max_power_w != null ? `${fmt.num(k.max_power_w / 1000)} kW` : null].filter(Boolean).join(' · '))}</span></div>
       ${k.session_id ? `<div class="small" style="margin:6px 0;color:var(--info)">Transaction <span class="mono">${esc(k.ocpp_transaction_id)}</span> · ${esc(fmt.kwh(k.session_energy_wh))} · started ${esc(fmt.ago(k.session_started_at))}</div>` : '<div class="small muted" style="margin:6px 0">No session.</div>'}
       ${k.maintenance_reason ? `<div class="small" style="color:var(--warn);margin-bottom:6px">Out of service: ${esc(k.maintenance_reason)}</div>` : ''}
       <div class="row">
@@ -777,7 +785,7 @@ function sessionsTab(identity) {
         { label: 'Energy', num: true, render: (s) => esc(fmt.kwh(s.energy_wh)) },
         { label: 'Duration', num: true, render: (s) => esc(fmt.dur(s.duration_s)) },
         { label: 'Stop reason', render: (s) => esc(s.stop_reason ?? '—') },
-        { label: 'Total', num: true, render: (s) => `<b>${esc(fmt.idr(s.total_idr))}</b>` },
+        { label: 'Total', num: true, render: (s) => `<b>${esc(fmt.money(s.total_minor, s.currency))}</b>` },
       ],
       rows: r.rows,
       empty: 'No sessions on this charger yet.',

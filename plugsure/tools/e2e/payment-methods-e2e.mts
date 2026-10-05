@@ -108,7 +108,7 @@ try {
   await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   await ops('DELETE', '/v1/integrations/payments?scope=org');
   cleanup.push(() => ops('DELETE', '/v1/integrations/payments?scope=org'));
-  const site = await ops('POST', '/v1/sites', { name: 'Payment Methods E2E Hub', address: 'Jl. Sudirman', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'Payment Methods E2E Hub', address: 'Jl. Sudirman', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'Methods E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${site.data.id}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
   const ID = `PMET-${Date.now().toString().slice(-6)}`;
@@ -129,18 +129,18 @@ try {
   const phone = `0815${Math.floor(10_000_000 + Math.random() * 89_999_999)}`;
   const otp = await d('POST', '/v1/otp/send', { phone });
   await d('POST', '/v1/otp/verify', { phone, code: otp.data.devCode });
-  const plan = await ops('POST', '/v1/subscription-plans', { name: `Methods E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 25000, energyDiscountPercent: 10, offeredInApp: true });
+  const plan = await ops('POST', '/v1/subscription-plans', { name: `Methods E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 25000, energyDiscountPercent: 10, offeredInApp: true });
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${plan.data.id}`, { active: false, offeredInApp: false }));
-  const intent = async (ref: string) => (await pg.query(`SELECT state, method, channel, checkout_url, provider_payment_id, amount_captured_idr FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
+  const intent = async (ref: string) => (await pg.query(`SELECT state, method, channel, checkout_url, provider_payment_id, amount_captured_minor FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0];
   const refOf = (r: any) => r.data?.payment?.providerRef as string;
 
   // ================================================================ sandbox (development default): every method
-  const q0 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 });
+  const q0 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 });
   const chans = (q: any) => (q.data.paymentMethods ?? []).map((m: any) => m.channel).join(',');
   check('sandbox: the quote lists every method (QRIS, GoPay, ShopeePay, OVO, DANA, LinkAja, card)', chans(q0) === 'QRIS,GOPAY,SHOPEEPAY,OVO,DANA,LINKAJA,CARD', q0.data);
-  const qr0 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 20_000 });
+  const qr0 = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 20_000 });
   check('QRIS unchanged: a QR, action qr, recorded as qris', qr0.status === 200 && !!qr0.data.qr?.qrString && qr0.data.payment?.action === 'qr' && (await intent(refOf(qr0)))?.method === 'qris', qr0.data.payment);
-  const gp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 30_000, method: 'GOPAY' });
+  const gp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 30_000, method: 'GOPAY' });
   const gpI = await intent(refOf(gp));
   check('GoPay (sandbox): no QR; the driver is sent to the sandbox checkout page; recorded as ewallet / GOPAY with the URL',
     gp.status === 200 && !gp.data.qr && gp.data.payment?.action === 'redirect' && /^\/pay\/sandbox\/mock_gopay_/.test(gp.data.payment.checkoutUrl) && gp.data.payment.label === 'GoPay'
@@ -153,17 +153,17 @@ try {
   const statusAfter = await d('GET', `/v1/charge/${gp.data.chargeId}/status`);
   check('sandbox checkout page: shows GoPay and the amount; "Bayar" captures the payment and returns to the app\'s paid page; the app sees it paid',
     page.status === 200 && page.text.includes('GoPay') && page.text.includes('Rp 30.000') && page.text.includes('Sandbox') && statusBefore.data.state === 'awaiting_payment'
-      && payIt.status === 303 && /^\/app\/paid\.html\?for=charge&status=paid$/.test(payIt.location ?? '') && gpAfter.state === 'captured' && gpAfter.amount_captured_idr === 30_000 && statusAfter.data.state !== 'awaiting_payment',
+      && payIt.status === 303 && /^\/app\/paid\.html\?for=charge&status=paid$/.test(payIt.location ?? '') && gpAfter.state === 'captured' && gpAfter.amount_captured_minor === 30_000 && statusAfter.data.state !== 'awaiting_payment',
     { page: page.status, before: statusBefore.data.state, payIt, gpAfter, after: statusAfter.data.state });
-  const cd = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 15_000, method: 'CARD' });
+  const cd = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 15_000, method: 'CARD' });
   const cancel = await raw(`/pay/sandbox/${refOf(cd)}/cancel`, '', { accept: 'application/json' });
   const cdI = await intent(refOf(cd));
   const evil = await raw(`/pay/sandbox/${refOf(gp)}/pay?return=${encodeURIComponent('https://evil.example/steal')}`, '');
   check('card (sandbox): recorded as card; "Batal" fails the payment; the return address cannot leave the app',
     cd.data.payment?.method === 'card' && cancel.data.outcome === 'failed' && cdI.state === 'failed' && evil.location?.startsWith('/app/paid.html') === true, { cd: cd.data.payment, cancel: cancel.data, cdI, evil: evil.location });
-  const ovoNo = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 15_000, method: 'OVO', phone: '12' });
-  const ovo = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 15_000, method: 'OVO' });
-  const bogus = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 15_000, method: 'BITCOIN' });
+  const ovoNo = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 15_000, method: 'OVO', phone: '12' });
+  const ovo = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 15_000, method: 'OVO' });
+  const bogus = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 15_000, method: 'BITCOIN' });
   check('OVO: a bad number refused; the signed-in driver\'s number is used by default (push); an unknown method refused',
     ovoNo.status === 422 && /OVO/.test(ovoNo.data.error) && ovo.status === 200 && ovo.data.payment.action === 'push' && bogus.status === 422, { ovoNo: ovoNo.data, ovo: ovo.data.payment, bogus: bogus.data });
   const mem = await d('GET', '/v1/memberships');
@@ -184,11 +184,11 @@ try {
   check('Midtrans: a method it does not offer (OVO) and an empty choice are refused; the choice is stored in catalogue order',
     badM.status === 422 && /OVO/.test(badM.data.error) && noneM.status === 422 && mt.status === 200 && JSON.stringify(mt.data.settings.methods) === '["QRIS","GOPAY","CARD"]', { badM: badM.data, noneM: noneM.data, mt: mt.data.settings });
   const hookM = mt.data.webhookPath as string;
-  const q1 = await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 }), (q) => chans(q) === 'QRIS,GOPAY,CARD', 20_000, 1000);
-  const sp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 25_000, method: 'SHOPEEPAY' });
+  const q1 = await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 }), (q) => chans(q) === 'QRIS,GOPAY,CARD', 20_000, 1000);
+  const sp = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 25_000, method: 'SHOPEEPAY' });
   check('the driver sees only the enabled methods; ShopeePay (offered by Midtrans, not enabled) is refused', chans(q1) === 'QRIS,GOPAY,CARD' && sp.status === 422 && /ShopeePay/.test(sp.data.error), { q1: q1.data.paymentMethods, sp: sp.data });
   const t1 = Date.now();
-  const gm = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 45_000, method: 'GOPAY' });
+  const gm = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 45_000, method: 'GOPAY' });
   const gmCall = callsTo(/^\/v2\/charge$/, t1)[0];
   const gmI = await intent(refOf(gm));
   check('GoPay at Midtrans: payment type gopay with the app\'s return page; the deeplink is handed to the app; the Midtrans transaction id is kept',
@@ -199,7 +199,7 @@ try {
   const gmHook = await raw(hookM, note(refOf(gm), '45000.00', { transaction_status: 'settlement', payment_type: 'gopay' }));
   check('GoPay: the signed settlement notification captures it', gmHook.status === 200 && (await intent(refOf(gm))).state === 'captured');
   const t2 = Date.now();
-  const cm = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 60_000, method: 'CARD' });
+  const cm = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 60_000, method: 'CARD' });
   const snap = callsTo(/^\/snap\/v1\/transactions$/, t2)[0];
   const challenge = await raw(hookM, note(refOf(cm), '60000.00', { transaction_status: 'capture', fraud_status: 'challenge', payment_type: 'credit_card' }));
   const stillPending = (await intent(refOf(cm))).state;
@@ -208,7 +208,7 @@ try {
     cm.status === 200 && /snap\/v4\/redirection/.test(cm.data.payment.checkoutUrl) && JSON.parse(snap?.body ?? '{}').credit_card?.secure === true && JSON.stringify(JSON.parse(snap.body).enabled_payments) === '["credit_card"]'
       && challenge.status === 200 && stillPending === 'pending' && accept.status === 200 && (await intent(refOf(cm))).state === 'captured', { cm: cm.data.payment, stillPending });
   const piG = (await pg.query(`SELECT id FROM payment_intent WHERE provider_ref = $1`, [refOf(gm)])).rows[0].id;
-  await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_idr = 11000, refund_reason = 'e2e unused balance' WHERE id = $1`, [piG]);
+  await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_minor = 11000, refund_reason = 'e2e unused balance' WHERE id = $1`, [piG]);
   const t3 = Date.now();
   const rfG = await ops('POST', `/v1/refunds/${piG}/process`);
   check('GoPay refund: back through Midtrans\' refund API for the unused amount', rfG.data.state === 'refunded' && callsTo(new RegExp(`^/v2/${refOf(gm)}/refund$`), t3).length === 1, rfG.data);
@@ -216,9 +216,9 @@ try {
   // ================================================================ Xendit: QRIS, OVO, DANA and cards enabled
   const xe = await ops('PUT', '/v1/integrations/payments', { provider: 'xendit', settings: { baseUrl: FAKE, methods: ['QRIS', 'OVO', 'DANA', 'CARD'] }, secrets: { secretKey: 'xnd_development_METHODS', callbackToken: XTOKEN } });
   const hookX = xe.data.webhookPath as string;
-  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 50_000 }), (q) => chans(q) === 'QRIS,OVO,DANA,CARD', 20_000, 1000);
+  await until(() => d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 50_000 }), (q) => chans(q) === 'QRIS,OVO,DANA,CARD', 20_000, 1000);
   const t4 = Date.now();
-  const ox = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 35_000, method: 'OVO', phone: '0812 3456 7890' });
+  const ox = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 35_000, method: 'OVO', phone: '0812 3456 7890' });
   const oxCall = callsTo(/^\/ewallets\/charges$/, t4)[0];
   const oxBody = JSON.parse(oxCall?.body ?? '{}');
   check('OVO at Xendit: an e-wallet charge ID_OVO pushed to the number given (E.164); nothing to open',
@@ -228,10 +228,10 @@ try {
   const wrong = await cbX({ event: 'ewallet.capture', data: { id: oxId, reference_id: refOf(ox), status: 'SUCCEEDED', capture_amount: 35000 } }, 'wrong-token-wrong-token-wrong-tok');
   const capX = await cbX({ event: 'ewallet.capture', data: { id: oxId, reference_id: refOf(ox), status: 'SUCCEEDED', charge_amount: 35000, capture_amount: 35000 } });
   check('OVO: the ewallet.capture callback with the wrong token is refused; with the token it captures', wrong.status === 401 && capX.status === 200 && (await intent(refOf(ox))).state === 'captured' && /^ewc_/.test(oxId ?? ''), { oxId });
-  const dx = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 22_000, method: 'DANA' });
+  const dx = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 22_000, method: 'DANA' });
   check('DANA at Xendit: redirected to DANA\'s checkout', dx.status === 200 && dx.data.payment.checkoutUrl?.startsWith('https://ewallet.test/ID_DANA/'), dx.data.payment);
   const t5 = Date.now();
-  const kx = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountIdr: 55_000, method: 'CARD' });
+  const kx = await d('POST', '/v1/charge/prepaid', { connectorId: conn, amountMinor: 55_000, method: 'CARD' });
   const inv = JSON.parse(callsTo(/^\/v2\/invoices$/, t5)[0]?.body ?? '{}');
   const expired = await cbX({ id: 'inv_x', external_id: refOf(kx), status: 'EXPIRED', amount: 55000 });
   const expState = (await intent(refOf(kx))).state;
@@ -242,7 +242,7 @@ try {
       && expired.status === 200 && expState === 'expired' && paidInv.status === 200 && (await intent(refOf(kx))).state === 'captured', { inv, expState });
   const refundOf = async (ref: string, due: number) => {
     const id = (await pg.query(`SELECT id FROM payment_intent WHERE provider_ref = $1`, [ref])).rows[0].id;
-    await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_idr = $2, refund_reason = 'e2e unused balance' WHERE id = $1`, [id, due]);
+    await pg.query(`UPDATE payment_intent SET refund_state = 'due', refund_due_minor = $2, refund_reason = 'e2e unused balance' WHERE id = $1`, [id, due]);
     return ops('POST', `/v1/refunds/${id}/process`);
   };
   const t6 = Date.now();

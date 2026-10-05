@@ -59,9 +59,67 @@ export function el(html) {
 
 // ------------------------------------------------------------------ formatting
 
-const nfID = new Intl.NumberFormat('id-ID');
+import { CURRENCIES, isCurrency, moneyText, rateText, tzLabel, LEGACY_CURRENCY, COUNTRIES } from './money.js';
+
+/** The organisation's reporting zone (from /v1/auth/me; setOrgZone), the default for times without a site's zone. */
+let orgZone = null;
+export const setOrgZone = (tz) => { orgZone = tz || null; };
+export const orgTimezone = () => orgZone;
+const zoneOf = (tz) => tz || orgZone || 'UTC';
+/** YYYY-MM-DD of a moment in a zone (the organisation's by default). */
+export const zonedYmd = (d, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: zoneOf(tz), year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+/** The instant a local calendar day starts in a zone (00:00 there), as ISO. */
+export function zonedDayStartIso(ymd, tz) {
+  const guess = new Date(`${ymd}T00:00:00Z`);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: zoneOf(tz), hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(guess).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute));
+  return new Date(guess.getTime() - (asUtc - guess.getTime())).toISOString();
+}
+
+/**
+ * Tax names for a charge record's scheme (services/tax: engine.labels): Indonesia's PBJT-TL / DPP /
+ * PPN; Singapore GST; Malaysian service tax; or none.
+ */
+export function taxNames(scheme, rateBps) {
+  const pct = rateBps != null ? `${Number(rateBps) / 100}%` : '';
+  if (!scheme || scheme === 'ID_PPN_PBJT') return { id: true, tax: 'PPN', local: 'PBJT-TL', base: 'DPP nilai lain' };
+  if (scheme === 'SG_GST') return { id: false, tax: `GST ${pct}`.trim(), local: null, base: 'Price before GST' };
+  if (scheme === 'MY_SST') return { id: false, tax: `Service tax ${pct}`.trim(), local: null, base: null };
+  return { id: false, tax: 'Tax', local: null, base: null, none: true };
+}
+
+export { LEGACY_CURRENCY, COUNTRIES, countryCurrency, toMinor, toMajor } from './money.js';
+/** A rupiah amount (or one with no currency: every pre-1.7 row). */
+export const isRupiah = (cur) => !cur || cur === LEGACY_CURRENCY;
+/** The site-zone label after a time, only where it is not the operator's usual Indonesian zone. */
+export const tzSuffix = (tz, cur) => (isRupiah(cur) ? '' : ` ${tzLabel(zoneOf(tz))}`);
+
+/** A mobile number as written in the organisation's home country (form placeholders). */
+export const phoneExample = () => (COUNTRIES[state.me?.org?.homeCountry] ?? COUNTRIES.ID).phoneExample;
+
+/** Whether every site of the organisation is in Indonesia (the console then reads exactly as before). */
+export const onlyIndonesia = () => (state.me?.org?.countries ?? []).every((c) => c.country_code === 'ID');
+
+/**
+ * Whether the console shows countries and currencies at all (v1.7 multi-country): the platform offers
+ * Malaysia and Singapore (MULTI_COUNTRY), or the organisation already has a site, a home country or a
+ * card limit outside Indonesia. An Indonesia-only operator on a default installation sees no country
+ * pickers, currency fields or MY/SG options: the console reads as v1.5 did.
+ */
+export const multiCountryUi = () => state.me?.features?.multiCountry === true
+  || !onlyIndonesia()
+  || ((state.me?.org?.homeCountry ?? 'ID') !== 'ID');
+
 export const fmt = {
-  idr: (n) => (n == null || n === '' ? '—' : 'Rp ' + nfID.format(Math.round(Number(n)))),
+  /** Kept for screens that only ever show rupiah; everything else uses fmt.money(minor, currency). */
+  idr: (n) => moneyText(n, LEGACY_CURRENCY),
+  /** An amount in minor units of `cur`: rupiah exactly as before (Rp 12.345), else RM 12.34 / S$ 12.34. */
+  money: (n, cur) => moneyText(n, cur || LEGACY_CURRENCY),
+  /** A rate per kWh / minute in major units (Rp 2.466,5; RM 0.4550). */
+  rate: (major, cur) => rateText(major, cur || LEGACY_CURRENCY),
+  /** The currency's symbol (Rp, RM, S$), for form labels. */
+  sym: (cur) => CURRENCIES[isCurrency(cur) ? cur : LEGACY_CURRENCY].symbol,
   num: (n, d = 0) => (n == null || n === '' ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }).format(Number(n))),
   kwh: (wh, d = 2) => (wh == null ? '—' : `${(Number(wh) / 1000).toFixed(d)} kWh`),
   kw: (w, d = 1) => (w == null || !Number.isFinite(Number(w)) ? '—' : `${(Number(w) / 1000).toFixed(d)} kW`),
@@ -72,9 +130,12 @@ export const fmt = {
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
   },
-  time: (t) => (t ? new Date(t).toLocaleString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'),
-  timeS: (t) => (t ? new Date(t).toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false }) : '—'),
-  date: (t) => (t ? new Date(t).toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric' }) : '—'),
+  /** Times in the given zone (a site's), else the organisation's reporting zone. */
+  time: (t, tz) => (t ? new Date(t).toLocaleString('en-GB', { timeZone: zoneOf(tz), hour12: false, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'),
+  timeS: (t, tz) => (t ? new Date(t).toLocaleTimeString('en-GB', { timeZone: zoneOf(tz), hour12: false }) : '—'),
+  date: (t, tz) => (t ? new Date(t).toLocaleDateString('en-GB', { timeZone: zoneOf(tz), day: '2-digit', month: 'short', year: 'numeric' }) : '—'),
+  /** WIB, WITA, WIT, MYT, SGT (domain/timezone.ts tzLabel). */
+  tz: (tz) => tzLabel(zoneOf(tz)),
   isoDate: (t) => (t ? new Date(t).toISOString().slice(0, 10) : ''),
   ago(t) {
     if (!t) return 'never';
@@ -130,6 +191,13 @@ export function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
 /** Called when the server says the user must replace a one-time password first (e.g. reset while signed in). */
 let onPasswordChangeRequired = () => {};
 export function setPasswordChangeHandler(fn) { onPasswordChangeRequired = fn; }
+/**
+ * Called with the server's code when it holds the session for two-step verification:
+ * 'mfa_required' (the sign-in still needs its code) or 'mfa_enrolment_required' (an
+ * administrator must set it up first).
+ */
+let onMfaHold = () => {};
+export function setMfaHoldHandler(fn) { onMfaHold = fn; }
 
 /**
  * JSON API call. Sends the session cookie and the CSRF header the API requires
@@ -153,7 +221,9 @@ export async function api(path, { method = 'GET', body, headers = {}, raw = fals
     if (e.name === 'AbortError') throw e;
     throw new ApiError(0, 'Network error — is the server reachable?');
   }
-  if (res.status === 401 && !path.startsWith('/v1/auth/login')) {
+  // The sign-in steps answer 401 for themselves (a wrong password; a code lock-out), which
+  // their own forms show: that is not "your session has ended".
+  if (res.status === 401 && !path.startsWith('/v1/auth/login') && !path.startsWith('/v1/auth/mfa/verify')) {
     onUnauthorized();
     throw new ApiError(401, 'Your session has ended. Please sign in again.');
   }
@@ -165,6 +235,7 @@ export async function api(path, { method = 'GET', body, headers = {}, raw = fals
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
   if (res.status === 403 && data?.code === 'password_change_required') onPasswordChangeRequired();
+  if (res.status === 403 && (data?.code === 'mfa_required' || data?.code === 'mfa_enrolment_required')) onMfaHold(data.code);
   if (!res.ok) throw new ApiError(res.status, data?.error ?? data?.message ?? `HTTP ${res.status}`, data);
   return data;
 }
@@ -196,7 +267,7 @@ export const state = {
 // ------------------------------------------------------------------ white-label console (v1.5.0)
 
 /** PlugSure's own mark: the console's logo when the operator has no brand. */
-export const PLUGSURE_LOGO = `<svg viewBox="0 0 120 120" aria-hidden="true"><rect width="120" height="120" rx="28" fill="#1b4d8c"/><rect x="40" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><rect x="70" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><path d="M32 68 56 92 92 46" stroke="#2fd6a7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
+export const PLUGSURE_LOGO = `<svg viewBox="0 0 120 120" width="28" height="28" aria-hidden="true"><rect width="120" height="120" rx="28" fill="#1b4d8c"/><rect x="40" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><rect x="70" y="22" width="10" height="28" rx="5" fill="#2fd6a7"/><path d="M32 68 56 92 92 46" stroke="#2fd6a7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
 
 /** The brand the console is painted with: the operator's (from the server), or null for PlugSure's. */
 export const brand = { view: null };
@@ -332,8 +403,13 @@ const P = {
   chademo: '<circle cx="12" cy="12" r="9"/><circle cx="8" cy="10" r="2"/><circle cx="16" cy="10" r="2"/><circle cx="12" cy="16" r="1.2"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
   gbt: '<rect x="4" y="5" width="16" height="14" rx="4"/><circle cx="9" cy="10" r="1.6"/><circle cx="15" cy="10" r="1.6"/><circle cx="12" cy="15" r="1"/>',
 };
+// Every icon carries .ic, which gives it a default size (1.15em, so ~16px in body text and
+// in proportion inside headings). Without it an SVG has no intrinsic size and fills whatever
+// it lands in: a 900px shield beside a section heading, a card-wide arrow in a link card.
+// Containers that want a specific size (.btn svg, .nav a svg, .plug svg…) still win: the
+// default is declared with zero specificity (:where).
 export const icon = (name, cls = '') =>
-  `<svg class="${esc(cls)}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] ?? ''}</svg>`;
+  `<svg class="ic${cls ? ` ${esc(cls)}` : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] ?? ''}</svg>`;
 
 // ------------------------------------------------------------------ overlays
 
@@ -533,8 +609,12 @@ export function fieldErrors(root, errors = {}) {
   first?.focus();
 }
 
-export const field = (label, inner, { help = '', full = false, opt = false } = {}) =>
-  `<div class="field${full ? ' full' : ''}"><label>${esc(label)}${opt ? ' <span class="opt">(optional)</span>' : ''}</label>${inner}${help ? `<div class="help">${help}</div>` : ''}</div>`;
+/**
+ * A form field. The label is text (escaped); labelHtml: true takes it as markup the caller has escaped,
+ * e.g. a currency symbol in <span data-sym> that a currency picker rewrites.
+ */
+export const field = (label, inner, { help = '', full = false, opt = false, attrs = '', labelHtml = false } = {}) =>
+  `<div class="field${full ? ' full' : ''}"${attrs ? ` ${attrs}` : ''}><label>${labelHtml ? label : esc(label)}${opt ? ' <span class="opt">(optional)</span>' : ''}</label>${inner}${help ? `<div class="help">${help}</div>` : ''}</div>`;
 
 export const options = (list, selected, { blank } = {}) =>
   (blank !== undefined ? `<option value="">${esc(blank)}</option>` : '') +

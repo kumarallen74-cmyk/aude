@@ -1,3 +1,4 @@
+import { moneyText, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { limitParam } from './paging.js';
 import { assertCan, assertCanAny, can } from '../services/authz.js';
@@ -13,6 +14,8 @@ import { CHANNEL_LABEL, type Channel } from '../services/payments/provider.js';
 import { normalisePhone } from '../driver/identity.js';
 import { providerFetch } from '../services/payments/provider.js';
 import { enforcing, guardedFetch, isInternalHost } from '../services/net-guard.js';
+import { isCountry } from '../domain/country.js';
+import { stripeCheckoutPage, STRIPE_PAGE_JS } from '../services/payments/stripe-page.js';
 
 /**
  * Govern → Integrations: the third parties PlugSure talks to.
@@ -55,11 +58,20 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     return { kind: def.kind, orgId: scope === 'platform' ? null : org(req) };
   };
 
+  /** Payments: the country of the acquirer account addressed (absent = Indonesia, as in v1.6). */
+  const countryOf = (kind: string, raw: unknown): string => {
+    const cc = String(raw ?? '').trim().toUpperCase();
+    if (!cc || kind !== 'payments') return 'ID';
+    if (!isCountry(cc)) throw new store.IntegrationError(422, 'countryCode must be ID, MY or SG');
+    return cc;
+  };
+
   app.get('/v1/integrations', async (req) => {
     assertCanAny(req.principal, 'org:read');
     const o = await store.overview(org(req), isPlatform(req));
     const base = publicBase(req);
     for (const k of o.kinds as any[]) for (const v of [k.own, k.platform]) if (v?.webhookPath) v.webhookUrl = base + v.webhookPath;
+    for (const c of o.paymentsByCountry as any[]) for (const v of [c.own, c.platform]) if (v?.webhookPath) v.webhookUrl = base + v.webhookPath;
     return { ...o, publicBaseUrl: base };
   });
 
@@ -70,10 +82,19 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
       const t = target(req, kind, b.scope);
       const urlErr = internalUrlProblem(t.kind, b.provider, b.settings);
       if (urlErr) return reply.status(422).send({ error: urlErr });
-      const saved = await store.save(t.kind, t.orgId, { provider: b.provider, settings: b.settings ?? {}, secrets: b.secrets ?? {}, enabled: b.enabled }, req.principal.userId ?? null);
+      const cc = countryOf(t.kind, b.countryCode);
+      if (cc !== 'ID' && !config.features.multiCountry) return reply.status(409).send({ error: 'Payments for Malaysia and Singapore need MULTI_COUNTRY=true on this deployment.' });
+      const saved = await store.save(t.kind, t.orgId, { provider: b.provider, settings: b.settings ?? {}, secrets: b.secrets ?? {}, enabled: b.enabled, countryCode: cc, platformAdmin: isPlatform(req) }, req.principal.userId ?? null);
+      // Review fix 1: allowing Stripe test mode (platform administrators only) is audited on its own.
+      if (saved?.settings?.allowTestMode === true) {
+        await writeAudit({
+          orgId: org(req), actorType: 'user', actorId: req.principal.userId, action: 'integration.test_mode_allowed', targetType: 'integration',
+          targetId: `${t.kind}:${t.orgId ? 'org' : 'platform'}${cc !== 'ID' ? `:${cc}` : ''}`, ip: req.ip, after: { provider: saved.provider, country_code: cc, testMode: saved.testMode },
+        });
+      }
       await writeAudit({
-        orgId: org(req), actorType: 'user', actorId: req.principal.userId, action: 'integration.updated', targetType: 'integration', targetId: `${t.kind}:${t.orgId ? 'org' : 'platform'}`, ip: req.ip,
-        after: { provider: saved!.provider, scope: t.orgId ? 'org' : 'platform', enabled: saved!.enabled, secretsChanged: Object.keys(b.secrets ?? {}).filter((k) => String(b.secrets[k] ?? '').trim()) },
+        orgId: org(req), actorType: 'user', actorId: req.principal.userId, action: 'integration.updated', targetType: 'integration', targetId: `${t.kind}:${t.orgId ? 'org' : 'platform'}${cc !== 'ID' ? `:${cc}` : ''}`, ip: req.ip,
+        after: { provider: saved!.provider, scope: t.orgId ? 'org' : 'platform', enabled: saved!.enabled, testMode: saved!.testMode, ...(cc !== 'ID' ? { country_code: cc } : {}), secretsChanged: Object.keys(b.secrets ?? {}).filter((k) => String(b.secrets[k] ?? '').trim()) },
       });
       return { ...saved, webhookUrl: saved!.webhookPath ? publicBase(req) + saved!.webhookPath : null };
     } catch (e) { return fail(reply, e); }
@@ -83,8 +104,9 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     const { kind } = req.params as { kind: string };
     try {
       const t = target(req, kind, (req.query as any)?.scope);
-      const removed = await store.remove(t.kind, t.orgId);
-      if (removed) await writeAudit({ orgId: org(req), actorType: 'user', actorId: req.principal.userId, action: 'integration.removed', targetType: 'integration', targetId: `${t.kind}:${t.orgId ? 'org' : 'platform'}`, ip: req.ip });
+      const cc = countryOf(t.kind, (req.query as any)?.countryCode);
+      const removed = await store.remove(t.kind, t.orgId, cc);
+      if (removed) await writeAudit({ orgId: org(req), actorType: 'user', actorId: req.principal.userId, action: 'integration.removed', targetType: 'integration', targetId: `${t.kind}:${t.orgId ? 'org' : 'platform'}${cc !== 'ID' ? `:${cc}` : ''}`, ip: req.ip });
       return { removed };
     } catch (e) { return fail(reply, e); }
   });
@@ -95,8 +117,10 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     try {
       const t = target(req, kind, b.scope);
       // The stored row for that scope, or what is in force when there is none.
-      const row = await outsideRequestScope(() => one<{ id: string }>(`SELECT id FROM integration WHERE kind = $1 AND org_id IS NOT DISTINCT FROM $2::uuid AND archived_at IS NULL`, [t.kind, t.orgId]));
-      const r = row ? await store.byId(row.id) : await store.resolve(t.kind, t.orgId);
+      const cc = countryOf(t.kind, b.countryCode);
+      const row = await outsideRequestScope(() => one<{ id: string }>(
+        `SELECT id FROM integration WHERE kind = $1 AND org_id IS NOT DISTINCT FROM $2::uuid AND archived_at IS NULL AND COALESCE(country_code, 'ID') = $3`, [t.kind, t.orgId, cc]));
+      const r = row ? await store.byId(row.id) : await store.resolve(t.kind, t.orgId, cc);
       if (!r) return { ok: false, message: 'Nothing is configured to test.' };
       let result: { ok: boolean; message: string };
       try {
@@ -129,6 +153,15 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
       const path = req.url.split('?')[0]!;
       const r = await handleNotification(key, raw, req.headers as Record<string, string | string[] | undefined>, path);
       return reply.status(r.status).send(r.body);
+    });
+
+    // Stripe (Malaysia, Singapore): PlugSure's Payment Element page for card payments and FPX (services/payments/stripe-page.ts).
+    pub.get('/pay/stripe.js', async (_req, reply) =>
+      reply.header('cache-control', 'public, max-age=300').type('text/javascript; charset=utf-8').send(STRIPE_PAGE_JS));
+    pub.get('/pay/stripe/:ref/:pi', async (req, reply) => {
+      const { ref, pi } = req.params as { ref: string; pi: string };
+      const p = await stripeCheckoutPage(ref, pi);
+      return reply.status(p.status).header('cache-control', 'no-store').type('text/html; charset=utf-8').send(p.html);
     });
 
     // WhatsApp delivery status (Meta webhook) for alert messages: GET is Meta's subscription check, POST the statuses.
@@ -201,7 +234,7 @@ ${l.status !== 'pending' ? `<p>This link is already <b>${esc(l.status)}</b>.</p>
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
 
-function sandboxPage(ref: string, c: { amountIdr: number; channel: string; state: string; purpose: string; hold?: boolean; save?: boolean }, ret: string): string {
+function sandboxPage(ref: string, c: { amountMinor: number; currency?: CurrencyCode; channel: string; state: string; purpose: string; hold?: boolean; save?: boolean }, ret: string): string {
   const label = CHANNEL_LABEL[c.channel as Channel] ?? c.channel;
   const q = `?return=${encodeURIComponent(ret)}`;
   const done = c.state !== 'pending';
@@ -223,7 +256,7 @@ button.go{background:var(--go);border-color:var(--go);color:#fff}.fake{border:1p
 <div class="tag">Sandbox — no real money</div>
 <h1>${esc(label)}</h1>
 <p>${esc(c.purpose)} · ref <code>${esc(ref)}</code></p>
-<div class="amt">Rp ${c.amountIdr.toLocaleString('id-ID')}</div>
+<div class="amt">${esc(moneyText(c.amountMinor, c.currency ?? LEGACY_CURRENCY))}</div>
 ${card ? '<div class="fake">4811 1111 1111 1114 · 12/30 · 3-D Secure OK</div>' : `<p>Stands in for the ${esc(label)} app: approve or decline the payment.</p>`}
 ${extras.map((x) => `<p>${esc(x)}</p>`).join('')}
 ${done ? `<p>This payment is already <b>${esc(c.state)}</b>.</p><a href="${esc(ret)}">Back to PlugSure</a>` : `<div class="row">
@@ -241,7 +274,7 @@ async function runTest(r: store.Resolved, b: any): Promise<{ ok: boolean; messag
     case 'otp':
     case 'otp_fallback': {
       const phone = b.phone ? normalisePhone(String(b.phone)) : null;
-      if (b.phone && !phone) return { ok: false, message: 'That is not an Indonesian mobile number.' };
+      if (b.phone && !phone) return { ok: false, message: 'That is not a mobile number we can send to (+62, +60 or +65).' };
       return testOtp(r, phone);
     }
     case 'pnc_pki': {

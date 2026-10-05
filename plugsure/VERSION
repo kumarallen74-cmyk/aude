@@ -1,10 +1,83 @@
 PlugSure CSMS
-Version:   1.5.0
-Package:   plugsure-v1.5.0
-Prepared:  2026-10-02  (white-label operator console — see RELEASE-NOTES-v1.5.0.md)
-Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP)
-API:       OpenAPI 3.1 at /openapi.json (276 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
-Status:    v1.5.0 = v1.4.4 + white-label operator console: each operator's own product
+Version:   1.9.0-dev
+Package:   plugsure-v1.9.0-dev (branch mobile)
+Prepared:  2026-10-04  (driver API for the PlugSure Hub mobile app — docs/MOBILE-APP-SPEC.md §15)
+Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
+API:       OpenAPI 3.1 at /openapi.json (323 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+Status:    1.9.0-dev = v1.8.0 + the P0 backend for the native PlugSure app (MOBILE-APP-SPEC §14 G1–G8, as built §15):
+           the PlugSure Mobility eMSP organisation and its network-scope brand (npm run mobility:setup), Android push
+           over FCM HTTP v1, live sessions for Android and partner-network charges, account deletion (app and web
+           form), partner stations of hosted operators shown once, app links / QR resolver, /d/v1/map and paged
+           /d/v1/stations with batched prices, and the version gate / remote configuration. Migration 075 (additive,
+           < 0.1 s on a populated copy; rollback db/rollback/075_down.sql). Operator brands and the web app unchanged.
+
+v1.8.0 (2026-10-03):
+           v1.8.0 = v1.7.1 + PlugSure Hub, off by default (HUB_ENABLED=false: nothing changes).
+           A neutral OCPI 2.2.1 hub for Indonesia, Malaysia and Singapore on its own host:
+           external members (credentials handshake, token A shown once) and PlugSure tenants
+           (zero-configuration, in-process) connect once; addressed, broadcast, GET All and open
+           routing, callbacks relayed, agreements with module flags, HubClientInfo, alive checks,
+           a redacted routing log with traces. Clearing and settlement: a ledger of every CDR
+           routed, held / soft flags, disputes (accept, reject, escalate, platform decision),
+           commission per fee plan (placeholders 0), settlement runs per currency and period
+           (statements, bilateral net positions, fee invoices with ID / MY / SG tax, payments,
+           overdue reminders). Console: Governance → Hub for platform administrators, Roaming →
+           PlugSure Hub for members (hub-only consoles for external members). Migrations 072 and
+           073 (additive, < 0.2 s on pilot data; rollbacks in db/rollback). Upgrade notes:
+           RELEASE-NOTES-v1.8.0.md; runbook deploy/HUB-OPERATIONS.md; members' guide
+           deploy/HUB-ONBOARDING.md.
+
+v1.7.1 (2026-10-03):
+           v1.7.0 + a security fix for roaming through a HUB (OCPI 2.2.1): every
+           request from a hub connection must name the party behind the hub that sends it
+           (OCPI-from-country-code / -party-id, one the hub announced through HubClientInfo
+           in the module's role), and is scoped to that party's own sessions, charge
+           records, tokens, reservations, charging profiles and command results. Before,
+           one eMSP (or CPO) behind a hub could read or act on another's through the same
+           connection. Results to a hub are addressed to the party that asked. Peer
+           (non-hub) connections are unchanged. No migrations, no new settings: a drop-in
+           upgrade from v1.7.0. Who is affected: RELEASE-NOTES-v1.7.1.md.
+
+v1.7.0 (2026-10-03):
+           v1.6.0 + one operator in Indonesia, Malaysia and Singapore: country and
+           currency per site (IDR, MYR, SGD; no FX), amounts stored in minor units of each
+           row's currency (*_idr -> *_minor; v1.6 names kept as deprecated aliases for IDR),
+           tax engines per country (Indonesian PPN/PBJT unchanged byte for byte, Singapore
+           GST 9 % inclusive, Malaysian service tax off unless registered), regulatory
+           profiles, time zones per site and organisation, OCPI parties per country, Stripe
+           for MY/SG (card holds, PayNow, FPX, GrabPay), partner-network roaming for every
+           signed-in app driver behind a card hold, and the console, driver app, receipts,
+           fleet invoices and commission statements per currency (driver app in English
+           for MY/SG). Off for MY/SG unless MULTI_COUNTRY=true.
+           Migrations 059-063, 070 and 071; 060 renames columns and needs a short maintenance
+           window (both processes stopped). Upgrade notes: RELEASE-NOTES-v1.7.0.md.
+
+v1.6.0 (2026-10-02):
+           v1.5.1 + "Sign in with Microsoft" (Microsoft Entra ID, OpenID Connect)
+           for the operator console: each operator organisation connects its own Entra
+           tenant; only existing console users can sign in (no auto-provisioning);
+           password sign-in stays. Microsoft MFA counts as the console's two-step
+           verification. Off unless MS_CLIENT_ID is set (deploy/MICROSOFT-SIGN-IN.md).
+           Migration 058 (additive). Upgrade notes: RELEASE-NOTES-v1.6.0.md.
+
+v1.5.1 (2026-10-02):
+           v1.5.0 + review fixes. Operations: background worker failures raise
+           operator alerts (resolved on recovery) with an optional external heartbeat
+           (HEARTBEAT_URL); API /healthz answers 503 when the database is down;
+           continuous WAL archiving and point-in-time recovery (deploy/pitr/RESTORE.md);
+           one gateway only (docs corrected); payment and pricing e2e suites in CI;
+           dependency security updates (fastify, @fastify/static 10, nodemailer 10).
+           Billing: unsettled payments of rated sessions recovered (settlement-recovery
+           worker); underpaid payments, holds and 30-day passes refunded or released
+           with a critical alert. Security: NODE_ENV required (fails closed); console
+           two-step verification (TOTP) required for administrators; stream and Bearer
+           session revocation; driver sign-in hardening; fixed compose network.
+           OCPP 2.x: per-version RPC error codes, dual-gun EVSE status, Ended for
+           unknown transactions recorded for review (replays idempotent), seqNo gaps.
+           Migrations 055 and 057 (additive). Upgrade notes: RELEASE-NOTES-v1.5.1.md.
+
+v1.5.0 (2026-10-02):
+           v1.4.4 + white-label operator console: each operator's own product
            name, tagline, colours (kept readable in both themes) and logo in the console,
            and optionally its own console web address, where the sign-in page shows the
            brand and only its accounts sign in. Fixes the driver-app check for addresses

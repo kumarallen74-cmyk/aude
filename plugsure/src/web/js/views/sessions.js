@@ -1,13 +1,13 @@
 import {
   $, esc, api, attempt, state, registerView, pageHead, table, tag, icon, fmt, drawer, confirmDialog, html, field, options,
-  formValues, toast, callout, kpi, download, copy, debounce, onLive, sites as loadSites,
+  formValues, toast, callout, kpi, download, copy, debounce, onLive, sites as loadSites, zonedYmd, zonedDayStartIso, taxNames, onlyIndonesia, isRupiah,
 } from '../core.js';
 
 /** Rounding to ROUNDING_UNIT_IDR, shown as its own line so the receipt adds up (subtotal + PBJT + PPN + rounding = total). */
 function roundingRow(s) {
-  const r = Number(s.total_idr) - Number(s.subtotal_idr) - Number(s.pbjt_idr ?? 0) - Number(s.ppn_idr ?? 0);
+  const r = Number(s.total_minor) - Number(s.subtotal_minor) - Number(s.local_tax_minor ?? 0) - Number(s.tax_minor ?? 0);
   return Number.isFinite(r) && r !== 0
-    ? `<tr><td>${r > 0 ? '+' : '−'} Rounding<div class="cell-sub">Total rounded to the operator's rounding unit</div></td><td class="num">${fmt.idr(Math.abs(r))}</td></tr>`
+    ? `<tr><td>${r > 0 ? '+' : '−'} Rounding<div class="cell-sub">Total rounded to the operator's rounding unit</div></td><td class="num">${fmt.money(Math.abs(r), s.currency)}</td></tr>`
     : '';
 }
 
@@ -21,13 +21,20 @@ function roundingRow(s) {
  */
 
 const LIMIT = 100;
+
+/** A footer total: rupiah as before; with other currencies, one figure per currency (never added up). */
+const totalsCell = (t, k) => {
+  const per = t.byCurrency ?? [];
+  if (!per.length || per.every((x) => isRupiah(x.currency))) return fmt.idr(t[k] ?? 0);
+  return per.map((x) => `<div class="nowrap">${fmt.money(x[k], x.currency)}</div>`).join('');
+};
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 
-/** YYYY-MM-DD of a Date in WIB (UTC+7, no DST). */
-const wibDay = (d) => new Date(d.getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
-const dayStartIso = (ymd) => new Date(`${ymd}T00:00:00+07:00`).toISOString();
-const dayEndIso = (ymd) => new Date(new Date(`${ymd}T00:00:00+07:00`).getTime() + DAY_MS).toISOString();
+/** Filter days are calendar days in the organisation's reporting zone (WIB for an Indonesian operator, as before). */
+const wibDay = (d) => zonedYmd(d);
+const dayStartIso = (ymd) => zonedDayStartIso(ymd);
+const dayEndIso = (ymd) => new Date(new Date(zonedDayStartIso(ymd)).getTime() + DAY_MS).toISOString();
 
 const shortId = (id) => String(id ?? '').slice(0, 8);
 const kwh3 = (wh) => (wh == null || wh === '' ? '—' : (Number(wh) / 1000).toFixed(3));
@@ -172,26 +179,37 @@ export function openSessionDrawer(initialRow, onChanged) {
           await ensureRow();
           const s = await getDetail();
           ctx.setSubtitle(`<span class="mono">${esc(row.ocpp_identity ?? '')}</span>${row.evse_no != null ? ` · connector #${esc(row.evse_no)}` : ''}${row.site_name ? ` · ${esc(row.site_name)}` : ''}`);
-          ctx.setHeader(`<div class="chips" style="margin-top:6px">${stateTag(s.state)} ${row.payment_status ? payTag(row.payment_status) : ''}</div>`);
+          ctx.setHeader(`<div class="chips" style="margin-top:6px">${stateTag(s.state)} ${row.payment_status ? payTag(row.payment_status) : ''}${row.test_mode || s.test_mode ? ` ${tag('t-warn', 'TEST', 'Paid through a payment account on test keys: no money moved')}` : ''}</div>`);
 
           const lines = Array.isArray(s.lines) ? s.lines : [];
           const flags = Array.isArray(s.regulatory_flags) ? s.regulatory_flags : [];
-          const rated = s.total_idr != null;
+          const rated = s.total_minor != null;
           const canRerate = state.can('session:write') && !rated && s.state !== 'active';
           const b = row.breakdown ?? {};
-          const pbjtPct = s.pbjt_rate_bps != null ? (Number(s.pbjt_rate_bps) / 100).toFixed(2) : null;
-          const ppnPct = row.ppn_rate_bps != null ? (Number(row.ppn_rate_bps) / 100).toFixed(0) : null;
+          const pbjtPct = s.local_tax_rate_bps != null ? (Number(s.local_tax_rate_bps) / 100).toFixed(2) : null;
+          const ppnPct = row.tax_rate_bps != null ? (Number(row.tax_rate_bps) / 100).toFixed(0) : null;
           const dur = s.duration_s ?? (s.state === 'active' && s.started_at ? (Date.now() - new Date(s.started_at).getTime()) / 1000 : null);
 
-          const taxStack = rated
+          // Money in the session's currency, times in its site's zone; the tax stack of the scheme it was rated with.
+          const cur = s.currency ?? row.currency;
+          const tz = s.site_timezone ?? row.site_timezone;
+          const tn = taxNames(s.tax_scheme ?? row.tax_scheme, s.tax_rate_bps ?? row.tax_rate_bps);
+          const taxStack = rated && !tn.id
             ? `<table class="t"><tbody>
-                <tr><td>Subtotal<div class="cell-sub">Energy + fast-charging service fee + idle/time fees</div></td><td class="num">${fmt.idr(s.subtotal_idr)}</td></tr>
-                <tr><td>+ PBJT-TL ${pbjtPct != null ? esc(pbjtPct) + '%' : ''}<div class="cell-sub">Regional tax on electricity, set by the regency/city</div></td><td class="num">${fmt.idr(s.pbjt_idr)}</td></tr>
-                <tr><td class="muted">DPP nilai lain<div class="cell-sub">PPN tax base — shown on the invoice, not added to the total</div></td><td class="num muted">${fmt.idr(s.ppn_dpp_idr)}</td></tr>
-                <tr><td>+ PPN ${ppnPct != null ? esc(ppnPct) + '% × DPP' : ''}<div class="cell-sub">VAT, effective 11% of the price (UU HPP)</div></td><td class="num">${fmt.idr(s.ppn_idr)}</td></tr>
-                ${roundingRow(s)}
-              </tbody><tfoot><tr><td>Total charged to driver</td><td class="num">${fmt.idr(s.total_idr)}</td></tr></tfoot></table>
-              <div class="small muted" style="margin-top:8px">Payment gateway MDR (estimate): <b>${fmt.idr(b.mdrIdr)}</b> — the CPO's cost, deducted at settlement. It is not charged to the driver.</div>`
+                <tr><td>Subtotal<div class="cell-sub">${tn.base ? esc(tn.base) : 'Energy and fees, before tax'}</div></td><td class="num">${fmt.money(s.subtotal_minor, cur)}</td></tr>
+                <tr><td>${tn.none ? 'No tax charged<div class="cell-sub">The operator is not registered for tax here, or the site is exempt</div>' : `+ ${esc(tn.tax)}${s.prices_include_tax ? '<div class="cell-sub">Included in the prices (tax-inclusive tariff)</div>' : ''}`}</td><td class="num">${fmt.money(s.tax_minor, cur)}</td></tr>
+                ${roundingRow({ ...s, currency: cur })}
+              </tbody><tfoot><tr><td>Total charged to driver</td><td class="num">${fmt.money(s.total_minor, cur)}</td></tr></tfoot></table>
+              <div class="small muted" style="margin-top:8px">All amounts in ${esc(cur)}.</div>`
+            : rated
+            ? `<table class="t"><tbody>
+                <tr><td>Subtotal<div class="cell-sub">Energy + fast-charging service fee + idle/time fees</div></td><td class="num">${fmt.money(s.subtotal_minor, cur)}</td></tr>
+                <tr><td>+ PBJT-TL ${pbjtPct != null ? esc(pbjtPct) + '%' : ''}<div class="cell-sub">Regional tax on electricity, set by the regency/city</div></td><td class="num">${fmt.money(s.local_tax_minor, cur)}</td></tr>
+                <tr><td class="muted">DPP nilai lain<div class="cell-sub">PPN tax base — shown on the invoice, not added to the total</div></td><td class="num muted">${fmt.money(s.tax_base_minor, cur)}</td></tr>
+                <tr><td>+ PPN ${ppnPct != null ? esc(ppnPct) + '% × DPP' : ''}<div class="cell-sub">VAT, effective 11% of the price (UU HPP)</div></td><td class="num">${fmt.money(s.tax_minor, cur)}</td></tr>
+                ${roundingRow({ ...s, currency: cur })}
+              </tbody><tfoot><tr><td>Total charged to driver</td><td class="num">${fmt.money(s.total_minor, cur)}</td></tr></tfoot></table>
+              <div class="small muted" style="margin-top:8px">Payment gateway MDR (estimate): <b>${fmt.money(b.mdrMinor, cur)}</b> — the CPO's cost, deducted at settlement. It is not charged to the driver.</div>`
             : `<div class="small muted">No CDR has been issued for this session, so there is no tax breakdown yet.</div>`;
 
           const flagsHtml = flags.length
@@ -219,8 +237,8 @@ export function openSessionDrawer(initialRow, onChanged) {
                 <dt>Site</dt><dd>${esc(row.site_name ?? '—')}</dd>
                 <dt>Card / idTag</dt><dd><span class="mono">${esc(row.id_tag ?? '—')}</span>${row.holder_name ? ` · ${esc(row.holder_name)}` : ''}</dd>
                 <dt>Payment</dt><dd>${esc(s.payment_mode ?? row.payment_mode ?? '—')}${row.payment_method ? ` · ${esc(row.payment_method)}` : ''}${row.payment_status ? ` · ${esc(payLabel(row.payment_status))}` : ''}</dd>
-                <dt>Started</dt><dd>${fmt.time(s.started_at)}</dd>
-                <dt>Ended</dt><dd>${s.ended_at ? fmt.time(s.ended_at) : tag('t-info', 'still charging')}</dd>
+                <dt>Started</dt><dd>${fmt.time(s.started_at, tz)}${tn.id ? '' : ` ${esc(fmt.tz(tz))}`}</dd>
+                <dt>Ended</dt><dd>${s.ended_at ? `${fmt.time(s.ended_at, tz)}${tn.id ? '' : ` ${esc(fmt.tz(tz))}`}` : tag('t-info', 'still charging')}</dd>
                 <dt>Duration</dt><dd>${fmt.dur(dur)}${s.idle_minutes ? ` · ${esc(s.idle_minutes)} min idle` : ''}</dd>
                 <dt>Meter</dt><dd class="mono">${kwh3(s.meter_start_wh)} → ${kwh3(s.meter_stop_wh)} kWh</dd>
                 <dt>Delivered</dt><dd><b>${fmt.kwh(s.energy_wh, 3)}</b></dd>
@@ -235,12 +253,12 @@ export function openSessionDrawer(initialRow, onChanged) {
             columns: [
               { label: 'Description', render: (l) => `<div class="wrap">${esc(l.description ?? l.kind ?? '')}</div>${l.kind ? `<div class="cell-sub">${esc(l.kind)}</div>` : ''}` },
               { label: 'Qty', num: true, render: (l) => `${esc(l.quantity ?? '')} ${esc(l.unit ?? '')}` },
-              { label: 'Unit rate', num: true, render: (l) => fmt.idr(l.unitRate) },
-              { label: 'Amount', num: true, render: (l) => fmt.idr(l.amountIdr) },
+              { label: 'Unit rate', num: true, render: (l) => (isRupiah(cur) ? fmt.idr(l.unitRate) : fmt.rate(l.unitRate, cur)) },
+              { label: 'Amount', num: true, render: (l) => fmt.money(l.amountMinor, cur) },
             ],
             rows: lines,
             empty: rated ? 'The CDR has no lines.' : 'No CDR yet — lines appear once the session is rated.',
-            foot: rated && lines.length ? `<tr><td colspan="3">Subtotal before tax</td><td class="num">${fmt.idr(s.subtotal_idr)}</td></tr>` : '',
+            foot: rated && lines.length ? `<tr><td colspan="3">Subtotal before tax</td><td class="num">${fmt.money(s.subtotal_minor, cur)}</td></tr>` : '',
           });
 
           $('[data-receipt]', body).addEventListener('click', () => openReceipt(row.id));
@@ -374,7 +392,7 @@ export function openSessionDrawer(initialRow, onChanged) {
           body.innerHTML = `
             <div class="grid k3">
               ${kpi('Battery', v.socPercent == null ? '—' : `${fmt.num(v.socPercent)}%`, v.socAt ? `reported ${esc(fmt.ago(v.socAt))}` : 'not reported')}
-              ${kpi('Given back', fmt.kwh(v.exportWh, 3), v.creditIdr ? `credit ${fmt.idr(v.creditIdr)}` : v.consent ? 'no credit rate' : 'bidirectional off')}
+              ${kpi('Given back', fmt.kwh(v.exportWh, 3), v.creditMinor ? `credit ${fmt.money(v.creditMinor, row.currency)}` : v.consent ? 'no credit rate' : 'bidirectional off')}
               ${kpi('Now', v.discharging ? `giving back ${kw(v.dischargeW)}` : 'charging', v.discharging ? 'discharge setpoint sent (OCPP 2.1)' : esc(v.notDischargingBecause ?? (v.consent ? '' : 'no consent')))}
             </div>
             <div class="grid two section">
@@ -391,7 +409,7 @@ export function openSessionDrawer(initialRow, onChanged) {
               <div class="card pad"><h3 style="font-size:13px;margin-bottom:10px">Giving energy back</h3><dl class="kv">
                 <dt>Consent</dt><dd>${v.consent ? `${tag('t-ok', 'yes')} <span class="cell-sub">${esc(v.consentSource === 'fleet' ? 'the fleet’s standing consent' : 'the driver, in the app')}</span>` : tag('t-mute', 'no')}</dd>
                 <dt>Battery floor</dt><dd>${v.minSocPercent != null ? `${fmt.num(v.minSocPercent)}%` : '—'}</dd>
-                <dt>Credit</dt><dd>${v.creditIdrPerKwh != null ? `${fmt.idr(v.creditIdrPerKwh)} / kWh` : '—'}</dd>
+                <dt>Credit</dt><dd>${v.creditMinorPerKwh != null ? `${fmt.money(v.creditMinorPerKwh, row.currency)} / kWh` : '—'}</dd>
                 <dt>Site programme</dt><dd>${v.siteProgramme?.enabled ? `${tag('t-info', 'on')} ${esc((v.siteProgramme.windows ?? []).map((w) => `${w.from}–${w.to}`).join(', '))}` : tag('t-mute', 'off')}</dd>
                 <dt>Operation mode</dt><dd class="mono">${esc(v.operationMode ?? '—')}</dd>
               </dl></div>
@@ -485,13 +503,19 @@ registerView('sessions', {
 
     const drawKpis = (t = {}) => {
       const n = Number(t.sessions ?? 0);
-      const rev = Number(t.revenue_idr ?? 0);
+      const rev = Number(t.revenue_minor ?? 0);
       kpiEl.innerHTML = [
         kpi('Sessions', fmt.num(n), 'matching the filters'),
         kpi('Energy delivered', `${fmt.num(Number(t.energy_wh ?? 0) / 1000, 1)} kWh`, n ? `${fmt.num(Number(t.energy_wh ?? 0) / 1000 / n, 1)} kWh per session` : ''),
-        kpi('Gross revenue', fmt.idr(rev), n ? `${fmt.idr(rev / n)} per session · incl. tax` : 'incl. PBJT and PPN'),
-        kpi('PBJT-TL collected', fmt.idr(t.pbjt_idr ?? 0), 'regional electricity tax, remitted to the Pemda'),
-        kpi('PPN collected', fmt.idr(t.ppn_idr ?? 0), 'VAT, effective 11%'),
+        ...(onlyIndonesia() && (t.byCurrency ?? []).every((x) => isRupiah(x.currency)) ? [
+          kpi('Gross revenue', fmt.idr(rev), n ? `${fmt.idr(rev / n)} per session · incl. tax` : 'incl. PBJT and PPN'),
+          kpi('PBJT-TL collected', fmt.idr(t.local_tax_minor ?? 0), 'regional electricity tax, remitted to the Pemda'),
+          kpi('PPN collected', fmt.idr(t.tax_minor ?? 0), 'VAT, effective 11%'),
+        ] : [
+          // One figure per currency: amounts in different currencies are never added (no FX).
+          kpi('Gross revenue', (t.byCurrency ?? []).map((x) => fmt.money(x.revenue_minor, x.currency)).join(' · ') || '—', 'incl. tax, per currency'),
+          kpi('Tax collected', (t.byCurrency ?? []).map((x) => fmt.money(Number(x.tax_minor) + Number(x.local_tax_minor), x.currency)).join(' · ') || '—', 'PPN + PBJT-TL · GST · service tax'),
+        ]),
       ].join('');
     };
 
@@ -514,8 +538,8 @@ registerView('sessions', {
           ? `<div class="mono">${esc(r.id_tag)}</div><div class="cell-sub">${esc(r.holder_name ?? (String(r.id_tag).startsWith('••••') ? r.payment_mode ?? '' : 'unregistered holder'))}</div>`
           : `<span class="muted">—</span><div class="cell-sub">${esc(r.payment_mode ?? '')}</div>`),
       },
-      { label: 'Start', render: (r) => `<span class="nowrap">${fmt.time(r.started_at)}</span>` },
-      { label: 'End', render: (r) => (r.ended_at ? `<span class="nowrap">${fmt.time(r.ended_at)}</span>` : stateTag(r.state)) },
+      { label: 'Start', render: (r) => `<span class="nowrap">${fmt.time(r.started_at, r.site_timezone)}</span>${!isRupiah(r.currency) ? `<div class="cell-sub">${esc(fmt.tz(r.site_timezone))}</div>` : ''}` },
+      { label: 'End', render: (r) => (r.ended_at ? `<span class="nowrap">${fmt.time(r.ended_at, r.site_timezone)}</span>` : stateTag(r.state)) },
       {
         label: 'Duration',
         num: true,
@@ -527,39 +551,42 @@ registerView('sessions', {
         render: (r) => `<div class="cell-title">${fmt.kwh(r.energy_wh, 3)}</div><div class="cell-sub mono">${kwh3(r.meter_start_wh)} → ${kwh3(r.meter_stop_wh)}</div>`,
         foot: (t) => `${fmt.num(Number(t.energy_wh ?? 0) / 1000, 1)} kWh`,
       },
-      { label: 'Base energy', num: true, render: (r) => fmt.idr(r.breakdown?.energySubtotalIdr) },
+      { label: 'Base energy', num: true, render: (r) => fmt.money(r.breakdown?.energySubtotalMinor, r.currency) },
       {
         label: 'Service fee',
         num: true,
-        render: (r) => `${fmt.idr(r.breakdown?.serviceFeeIdr)}${Number(r.breakdown?.idleFeeIdr) > 0 ? `<div class="cell-sub">+ idle ${fmt.idr(r.breakdown.idleFeeIdr)}</div>` : ''}`,
+        render: (r) => `${fmt.money(r.breakdown?.serviceFeeMinor, r.currency)}${Number(r.breakdown?.idleFeeMinor) > 0 ? `<div class="cell-sub">+ idle ${fmt.money(r.breakdown.idleFeeMinor, r.currency)}</div>` : ''}`,
       },
       {
-        label: 'PBJT-TL',
+        label: onlyIndonesia() ? 'PBJT-TL' : 'Local tax',
         num: true,
-        render: (r) => `${fmt.idr(r.breakdown?.pbjtIdr)}${r.pbjt_rate_bps != null ? `<div class="cell-sub">${esc((Number(r.pbjt_rate_bps) / 100).toFixed(1))}%</div>` : ''}`,
-        foot: (t) => fmt.idr(t.pbjt_idr ?? 0),
+        render: (r) => `${fmt.money(r.breakdown?.localTaxMinor, r.currency)}${r.local_tax_rate_bps != null && taxNames(r.tax_scheme).id ? `<div class="cell-sub">${esc((Number(r.local_tax_rate_bps) / 100).toFixed(1))}%</div>` : ''}`,
+        foot: (t) => totalsCell(t, 'local_tax_minor'),
       },
       {
-        label: 'PPN 11%',
+        label: onlyIndonesia() ? 'PPN 11%' : 'Tax',
         num: true,
-        render: (r) => `${fmt.idr(r.breakdown?.ppnIdr)}${r.breakdown?.dppIdr != null ? `<div class="cell-sub">DPP ${fmt.idr(r.breakdown.dppIdr)}</div>` : ''}`,
-        foot: (t) => fmt.idr(t.ppn_idr ?? 0),
+        render: (r) => {
+          const tn = taxNames(r.tax_scheme, r.tax_rate_bps);
+          return `${fmt.money(r.breakdown?.taxMinor, r.currency)}${tn.id ? (r.breakdown?.taxBaseMinor != null ? `<div class="cell-sub">DPP ${fmt.money(r.breakdown.taxBaseMinor, r.currency)}</div>` : '') : r.tax_scheme ? `<div class="cell-sub">${esc(tn.none ? 'no tax' : tn.tax)}</div>` : ''}`;
+        },
+        foot: (t) => totalsCell(t, 'tax_minor'),
       },
       {
         label: 'MDR (est.)',
         num: true,
-        render: (r) => `<span class="muted" title="Payment gateway fee — the CPO's cost, not charged to the driver">${r.breakdown?.grossTotalIdr == null ? '—' : fmt.idr(r.breakdown.mdrIdr)}</span>`,
+        render: (r) => `<span class="muted" title="Payment gateway fee — the CPO's cost, not charged to the driver">${r.breakdown?.grossTotalMinor == null ? '—' : fmt.money(r.breakdown.mdrMinor, r.currency)}</span>`,
       },
       {
         label: 'Gross total',
         num: true,
-        render: (r) => `<b>${fmt.idr(r.breakdown?.grossTotalIdr)}</b>`,
-        foot: (t) => fmt.idr(t.revenue_idr ?? 0),
+        render: (r) => `<b>${fmt.money(r.breakdown?.grossTotalMinor, r.currency)}</b>`,
+        foot: (t) => totalsCell(t, 'revenue_minor'),
       },
       { label: 'Stop reason', render: (r) => stopTag(r) },
       {
         label: 'Payment',
-        render: (r) => `${payTag(r.payment_status, r.needs_review ? r.review_reason ?? '' : '')}${r.needs_review && r.review_reason ? `<div class="cell-sub wrap" style="max-width:180px">${esc(r.review_reason)}</div>` : ''}`,
+        render: (r) => `${payTag(r.payment_status, r.needs_review ? r.review_reason ?? '' : '')}${r.test_mode ? ` ${tag('t-warn', 'TEST', 'Paid through a payment account on test keys: no money moved; left out of revenue and commission')}` : ''}${r.needs_review && r.review_reason ? `<div class="cell-sub wrap" style="max-width:180px">${esc(r.review_reason)}</div>` : ''}`,
       },
       {
         label: '',

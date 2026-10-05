@@ -125,8 +125,8 @@ async function renderCertificates(box) {
 async function renderCa(box) {
   const ca = await api('/v1/charger-ca');
   box.innerHTML = `
-    <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start">
-      <div class="card section"><h3 style="margin-top:0">Charging-station CA</h3>
+    <div class="grid split even">
+      <div class="card pad"><h3 style="margin:0 0 10px">Charging-station CA</h3>
         <dl class="kv">
           <dt>Subject</dt><dd data-f="subject"></dd>
           <dt>SHA-256</dt><dd class="mono small" data-f="fingerprint" style="word-break:break-all"></dd>
@@ -137,7 +137,7 @@ async function renderCa(box) {
         </dl>
         <div class="row" style="margin-top:12px;gap:8px"><button class="btn" type="button" data-dl>${icon('download')} plugsure-charger-ca.pem</button><button class="btn" type="button" data-copy>Copy PEM</button></div>
       </div>
-      <div class="card section"><h3 style="margin-top:0">How chargers get certificates</h3>
+      <div class="card pad"><h3 style="margin:0 0 10px">How chargers get certificates</h3>
         <ol style="margin:0;padding-left:18px;display:grid;gap:8px">
           <li><b>Generated at onboarding</b> — PlugSure makes the key and certificate; download the bundle once and load it onto the charger.</li>
           <li><b>Charger's own request (CSR)</b> — paste the CSR from the charger's web page; the key never leaves the charger.</li>
@@ -146,7 +146,7 @@ async function renderCa(box) {
         <p class="cell-sub" style="margin:10px 0 0">Every certificate is bound to one charger by its fingerprint, and its CN is the charger's OCPP identity.</p>
       </div>
     </div>
-    <div class="card section" style="margin-top:16px"><h3 style="margin-top:0">TLS terminator</h3>
+    <div class="card pad" style="margin-top:16px"><h3 style="margin:0 0 10px">TLS terminator</h3>
       ${callout('info', 'Chargers on Profile 3 present their certificate in the TLS handshake, so whatever terminates TLS for the OCPP host must trust this CA and pass the certificate\'s fingerprint on.')}
       <p style="margin:12px 0 6px"><b>Caddy</b> — save the CA as <span class="mono">/etc/caddy/plugsure-charger-ca.pem</span> and add to the OCPP site (see deploy/Caddyfile):</p>
       <pre class="code" data-caddy style="white-space:pre-wrap"></pre>

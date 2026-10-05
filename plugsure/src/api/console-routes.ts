@@ -4,6 +4,8 @@ import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import QRCode from 'qrcode';
 import { config } from '../config.js';
+import { alertZone } from '../services/org-timezone.js';
+import { assertLegacyRupiah, LegacyKeyCurrency } from './legacy-money.js';
 import { logger } from '../logger.js';
 import { replanSite } from '../services/sessions.js';
 import { one, many, query, afterResponse, outsideRequestScope, withOrg } from '../db/pool.js';
@@ -17,7 +19,9 @@ import {
   validateConfigValue,
 } from '../ocpp/config-catalog.js';
 import { type Permission, CONSOLE_ROLES, SYSTEM_ROLES, assertCan, assertCanAny, assertGrantable, can, heldPermissions, visibleSiteIds } from '../services/authz.js';
-import { revokeSession, SESSION_COOKIE, sessionFromCookie, sessionTokenOf } from '../services/auth.js';
+import { revokeSession, SESSION_COOKIE, sessionTokenOf, adminHostAllowed, needsSecondFactor } from '../services/auth.js';
+import * as mfa from '../services/mfa.js';
+import { endPendingOneTimePassword, microsoftEnabled, unbindUser } from '../services/microsoft-signin.js';
 import { writeAudit } from '../services/audit.js';
 import * as users from '../services/users.js';
 import * as sites from '../services/sites.js';
@@ -46,9 +50,13 @@ import * as onCall from '../services/on-call.js';
 import * as dm from '../services/device-model.js';
 import * as driverQueue from '../driver/queue.js';
 import * as commission from '../services/commission.js';
+import * as orgSettings from '../services/org-settings.js';
+import { COUNTRIES, COUNTRY_CODES } from '../domain/country.js';
+import { LEGACY_CURRENCY } from '../domain/money.js';
 import * as owners from '../services/owners.js';
 import { ALERT_KINDS } from '../services/alert-format.js';
 import { consoleBrandForHost, consoleBrandForOrg, brandView } from '../services/console-brand.js';
+import { watchLiveStream } from './stream-guard.js';
 
 /**
  * API surface of the enterprise operator console (SPEC-UI-CSMS-2026-FINAL).
@@ -104,7 +112,8 @@ export async function commissioningBundle(req: FastifyRequest, identity: string,
   return { config: cfg, json, qrDataUrl };
 }
 
-function setSessionCookie(reply: FastifyReply, token: string | null) {
+/** The console session cookie (HttpOnly, SameSite=Strict), or the header that clears it. */
+export function sessionCookie(token: string | null): string {
   const parts = [
     `${SESSION_COOKIE}=${token ? encodeURIComponent(token) : ''}`,
     'Path=/',
@@ -113,7 +122,11 @@ function setSessionCookie(reply: FastifyReply, token: string | null) {
     token ? 'Max-Age=43200' : 'Max-Age=0',
   ];
   if (config.console.cookieSecure) parts.push('Secure');
-  reply.header('Set-Cookie', parts.join('; '));
+  return parts.join('; ');
+}
+
+function setSessionCookie(reply: FastifyReply, token: string | null) {
+  reply.header('Set-Cookie', sessionCookie(token));
 }
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -144,7 +157,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     // On an operator's own (approved) console address only that operator's accounts sign in
     // (v1.5.0). Decided inside login(), so any other account fails exactly as a wrong password.
     const hostBrand = await consoleBrandForHost(req.headers.host).catch(() => null);
-    const r = await users.login(b.email, b.password, req.ip, hostBrand?.orgId ?? null);
+    // CONSOLE_ADMIN_HOSTS: on any other host an administrator fails like a wrong password.
+    const r = await users.login(b.email, b.password, req.ip, hostBrand?.orgId ?? null, {
+      refuseAdministrators: !adminHostAllowed(req.headers.host),
+    });
     if (!r.ok || !r.token) {
       await writeAudit({
         orgId: null,
@@ -158,6 +174,19 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
       return clientError(reply, 401, r.error ?? 'invalid email or password');
     }
     setSessionCookie(reply, r.token);
+    if (r.mfaRequired) {
+      // Right password; the session is PENDING until the code (POST /v1/auth/mfa/verify).
+      await writeAudit({
+        orgId: r.user!.orgId,
+        actorType: 'user',
+        actorId: r.user!.id,
+        action: 'auth.login_mfa_challenge',
+        targetType: 'user',
+        targetId: r.user!.id,
+        ip: req.ip,
+      });
+      return { ok: true, mfaRequired: true, user: { id: r.user!.id, name: r.user!.name, email: r.user!.email }, mustChangePassword: r.mustChangePassword === true };
+    }
     await writeAudit({
       orgId: r.user!.orgId,
       actorType: 'user',
@@ -170,32 +199,167 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     return { ok: true, user: { id: r.user!.id, name: r.user!.name, email: r.user!.email }, mustChangePassword: r.mustChangePassword };
   });
 
+  /**
+   * The second step of a sign-in: the code from the authenticator app, or a recovery code.
+   * Reachable only with the PENDING session the password step issued (session-holds.ts).
+   *
+   * The work runs outside the request transaction: a wrong code answers 401, which rolls
+   * that transaction back — and the failed attempt must stay counted towards the lockout.
+   */
+  app.post('/v1/auth/mfa/verify', async (req, reply) => {
+    const token = sessionTokenOf(req.headers as Record<string, unknown>);
+    if (!token || !UUID_RE.test(req.principal.userId)) return clientError(reply, 400, 'sign in with your password first');
+    const userId = req.principal.userId;
+    const orgId = req.principal.orgId;
+    const b = (req.body ?? {}) as any;
+    const r = await outsideRequestScope(() => mfa.completeSignIn(userId, token, b.code));
+    const entry = (action: string, after: Record<string, unknown> | null = null) =>
+      outsideRequestScope(() =>
+        writeAudit({ orgId, actorType: 'user', actorId: userId, action, targetType: 'user', targetId: userId, after, ip: req.ip }),
+      );
+    if (!r.ok) {
+      await entry('auth.mfa_failed', { locked: r.locked === true, replay: r.replay === true }).catch(() => {});
+      // 400 for a wrong code (the pending session still stands: try again); 401 once the
+      // lock has ended it, which sends the console back to the password step.
+      if (r.locked) setSessionCookie(reply, null);
+      return clientError(reply, r.locked ? 401 : 400, r.error, r.locked ? { code: 'mfa_locked' } : {});
+    }
+    setSessionCookie(reply, r.token);
+    await entry('auth.login', { secondFactor: r.method, ...(r.recoveryCodesLeft !== undefined ? { recoveryCodesLeft: r.recoveryCodesLeft } : {}), ...(r.authMethod === 'microsoft' ? { method: 'microsoft' } : {}) });
+    // A Microsoft sign-in, now complete, ends a one-time password still waiting (microsoft-signin.ts).
+    if (r.authMethod === 'microsoft' && (await outsideRequestScope(() => endPendingOneTimePassword(userId)))) {
+      await entry('user.one_time_password_ended', { reason: 'signed in with Microsoft' });
+    }
+    const u = await one<{ must_change_password: boolean }>(`SELECT must_change_password FROM app_user WHERE id = $1`, [userId]);
+    return {
+      ok: true,
+      // A Microsoft sign-in is not held to the one-time password's change (services/auth.ts).
+      mustChangePassword: u?.must_change_password === true && r.authMethod === 'password',
+      ...(r.recoveryCodesLeft !== undefined ? { recoveryCodesLeft: r.recoveryCodesLeft } : {}),
+    };
+  });
+
+  /** Two-step verification status of the signed-in user. */
+  app.get('/v1/auth/mfa', async (req, reply) => {
+    if (!UUID_RE.test(req.principal.userId)) return clientError(reply, 400, 'only a signed-in operator has two-step verification');
+    return { ...(await mfa.mfaStatus(req.principal.userId)), required: needsSecondFactor(req.principal) };
+  });
+
+  /** Start enrolment: a new secret as an otpauth:// URI and its QR code, shown once. */
+  app.post('/v1/auth/mfa/enrol', async (req, reply) => {
+    if (!UUID_RE.test(req.principal.userId)) return clientError(reply, 400, 'only a signed-in operator can set up two-step verification');
+    const u = await one<{ email: string }>(`SELECT email FROM app_user WHERE id = $1`, [req.principal.userId]);
+    if (!u) throw new NotFoundError('user not found');
+    try {
+      return await mfa.beginEnrolment(req.principal.userId, u.email);
+    } catch (e) {
+      if (e instanceof mfa.MfaError) return clientError(reply, 400, e.message);
+      throw e;
+    }
+  });
+
+  /** Finish enrolment with a code; answers the recovery codes, once. Other sessions end. */
+  app.post('/v1/auth/mfa/enrol/confirm', async (req, reply) => {
+    if (!UUID_RE.test(req.principal.userId)) return clientError(reply, 400, 'only a signed-in operator can set up two-step verification');
+    const b = (req.body ?? {}) as any;
+    try {
+      const r = await mfa.confirmEnrolment(req.principal.userId, b.code, sessionTokenOf(req.headers as Record<string, unknown>));
+      await audit(req, 'auth.mfa_enabled', 'user', req.principal.userId, { method: 'totp', otherSessionsRevoked: true });
+      return { ok: true, recoveryCodes: r.recoveryCodes };
+    } catch (e) {
+      if (e instanceof mfa.MfaError) return clientError(reply, 400, e.message);
+      throw e;
+    }
+  });
+
+  /**
+   * Sign out. Revokes the session the request was made with, whether it came as the
+   * console's cookie or as `Authorization: Bearer pss_…`. Only the cookie used to be
+   * revoked: a Bearer caller got `ok: true` and a session that still worked for 12 hours.
+   */
   app.post('/v1/auth/logout', async (req, reply) => {
-    const token = sessionFromCookie(req.headers.cookie);
+    const token = sessionTokenOf(req.headers as Record<string, unknown>);
     if (token) await revokeSession(token);
     setSessionCookie(reply, null);
     return { ok: true };
+  });
+
+  // ---- organisation: home country, reporting time zone, language, tax registrations (§D1, §D10)
+  app.get('/v1/countries', async () => ({
+    countries: COUNTRY_CODES.map((c) => ({ code: c, name: COUNTRIES[c].name, currency: COUNTRIES[c].currency, timezones: COUNTRIES[c].timezones,
+      displayPricesInclTax: COUNTRIES[c].displayPricesInclTax, defaultLocale: COUNTRIES[c].defaultLocale })),
+  }));
+  app.get('/v1/org/settings', async (req) => {
+    assertCan(req.principal, { permission: 'org:read' });
+    return orgSettings.getOrgSettings(req.principal.orgId);
+  });
+  app.put('/v1/org/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:write' });
+    try {
+      const r = await orgSettings.saveOrgSettings(req.principal.orgId, req.body ?? {});
+      await audit(req, 'organisation.settings_changed', 'organisation', req.principal.orgId, { before: r.before, after: { homeCountry: r.after.homeCountry, timezone: r.after.timezone, defaultLocale: r.after.defaultLocale } });
+      return r.after;
+    } catch (e) {
+      if (e instanceof orgSettings.OrgSettingsError) return reply.status(e.status).send({ error: e.message, errors: e.errors });
+      throw e;
+    }
+  });
+  app.post('/v1/org/tax-registrations', async (req, reply) => {
+    assertCan(req.principal, { permission: 'org:write' });
+    try {
+      const r = await orgSettings.setTaxRegistration(req.principal.orgId, req.body ?? {}, req.principal.userId);
+      await audit(req, 'organisation.tax_registration_set', 'org_tax_registration', r.id, { ...(req.body as Record<string, unknown>), country_code: r.country, scheme: r.scheme, closed: r.closed });
+      return reply.status(201).send(await orgSettings.getOrgSettings(req.principal.orgId));
+    } catch (e) {
+      if (e instanceof orgSettings.OrgSettingsError) return reply.status(e.status).send({ error: e.message, errors: e.errors });
+      throw e;
+    }
   });
 
   app.get('/v1/auth/me', async (req) => {
     const p = req.principal;
     const user = UUID_RE.test(p.userId)
       ? await one<any>(
-          `SELECT u.id, u.name, u.email, u.must_change_password, o.name AS org_name, o.pkp, o.npwp
+          `SELECT u.id, u.name, u.email, u.must_change_password, o.name AS org_name, o.pkp, o.npwp,
+                  o.home_country_code, o.timezone, o.default_locale
              FROM app_user u JOIN organisation o ON o.id = u.org_id WHERE u.id = $1`,
           [p.userId],
         )
       : null;
-    const org = user ? null : await one<any>(`SELECT name AS org_name, pkp, npwp FROM organisation WHERE id = $1`, [p.orgId]);
+    const org = user ? null : await one<any>(`SELECT name AS org_name, pkp, npwp, home_country_code, timezone, default_locale FROM organisation WHERE id = $1`, [p.orgId]);
     const roles = UUID_RE.test(p.userId)
       ? await many<{ name: string; scope_type: string; scope_id: string | null }>(
           `SELECT r.name, ur.scope_type, ur.scope_id FROM user_role ur JOIN role r ON r.id = ur.role_id WHERE ur.user_id = $1`,
           [p.userId],
         )
       : [];
+    const mfaState = user ? { ...(await mfa.mfaStatus(user.id)), required: needsSecondFactor(p) } : null;
     return {
-      user: user ? { id: user.id, name: user.name, email: user.email, mustChangePassword: user.must_change_password } : { id: p.userId, name: p.userId.startsWith('apikey:') ? 'API key' : 'Developer', email: null },
-      org: { id: p.orgId, name: user?.org_name ?? org?.org_name, pkp: user?.pkp ?? org?.pkp, npwp: user?.npwp ?? org?.npwp },
+      user: user
+        ? {
+            id: user.id, name: user.name, email: user.email,
+            // Not for a Microsoft session: it did not use the one-time password (services/auth.ts).
+            mustChangePassword: user.must_change_password === true && req.authMethod !== 'microsoft',
+            signedInWith: req.authMethod ?? null,
+            // Two-step verification; `enrolmentRequired`: the console opens only once it is set up.
+            mfa: mfaState,
+            // Not when Microsoft did MFA for this session's sign-in (auth_session.idp_mfa).
+            mfaEnrolmentRequired: !!mfaState && mfaState.required && !mfaState.enabled && req.idpMfa !== true,
+            mfaViaMicrosoft: req.idpMfa === true,
+          }
+        : { id: p.userId, name: p.userId.startsWith('apikey:') ? 'API key' : 'Developer', email: null },
+      org: {
+        id: p.orgId, name: user?.org_name ?? org?.org_name, pkp: user?.pkp ?? org?.pkp, npwp: user?.npwp ?? org?.npwp,
+        // Multi-country (migration 059): the home country, the reporting time zone and the console's default language.
+        homeCountry: user?.home_country_code ?? org?.home_country_code ?? 'ID',
+        timezone: user?.timezone ?? org?.timezone ?? config.billing.timeZone,
+        defaultLocale: user?.default_locale ?? org?.default_locale ?? 'id',
+        // An external PlugSure Hub member's organisation (migration 072): no CSMS, its console shows the hub views only.
+        hubOnly: (await one<{ hub_only: boolean }>(`SELECT hub_only FROM organisation WHERE id = $1`, [p.orgId]).catch(() => null))?.hub_only === true,
+        // The countries / currencies of its sites (the console shows one figure per currency, never a sum across them).
+        countries: (await many<{ country_code: string; currency: string }>(
+          `SELECT DISTINCT s.country_code, co.currency FROM site s JOIN country co ON co.code = s.country_code WHERE s.org_id = $1 AND s.archived_at IS NULL ORDER BY 1`, [p.orgId])),
+      },
       roles: roles.map((r) => ({ ...r, label: CONSOLE_ROLES.find((c) => c.name === r.name)?.label ?? r.name })),
       permissions: [...heldPermissions(p)],
       visibleSites: visibleSiteIds(p, 'site:read'),
@@ -208,6 +372,8 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
         ? await many(`SELECT id, name, legal_name FROM fleet_account WHERE id = ANY($1::uuid[]) AND org_id = $2 ORDER BY name`, [p.fleetAccountIds, p.orgId])
         : [],
       features: {
+        // MULTI_COUNTRY: Malaysian and Singapore sites may be created.
+        multiCountry: config.features.multiCountry,
         vault: vaultConfigured(),
         bridge: bridgeEnabledOnApi(),
         publicBaseUrl: config.console.publicBaseUrl || null,
@@ -218,6 +384,9 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
         wbp: { start: config.tou.wbpStart, end: config.tou.wbpEnd },
         env: config.env,
         version: config.version,
+        microsoftSignIn: microsoftEnabled(),
+        // PlugSure Hub (v1.8): the platform's Hub screens and the tenant's "PlugSure Hub" card exist only with HUB_ENABLED.
+        hub: config.hub.enabled,
       },
       // The operator's own console brand (v1.5.0), or null for PlugSure's.
       consoleBrand: await consoleBrandForOrg(p.orgId).then((cb) => (cb ? brandView(cb) : null)).catch(() => null),
@@ -248,12 +417,12 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     paymentStatuses: PAYMENT_STATUSES,
     trTmCliffKva: sites.TR_TM_CLIFF_KVA,
     regulatory: {
-      serviceFeeCeilingIdr: config.regulatory.serviceFeeCeilingIdr,
-      energyCeilingIdrPerKwh: config.regulatory.layananKhususBase * config.regulatory.layananKhususNMax,
-      layananKhususBase: config.regulatory.layananKhususBase,
-      layananKhususNMax: config.regulatory.layananKhususNMax,
-      idleFeeCapIdr: config.regulatory.idleFeeCapIdr,
-      pbjtMaxBps: config.regulatory.pbjtMaxBps,
+      serviceFeeCeilingIdr: config.regulatory.id.serviceFeeCeilingIdr,
+      energyCeilingIdrPerKwh: config.regulatory.id.layananKhususBase * config.regulatory.id.layananKhususNMax,
+      layananKhususBase: config.regulatory.id.layananKhususBase,
+      layananKhususNMax: config.regulatory.id.layananKhususNMax,
+      idleFeeCapIdr: config.regulatory.id.idleFeeCapIdr,
+      pbjtMaxBps: config.regulatory.id.pbjtMaxBps,
     },
   }));
 
@@ -281,23 +450,37 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     const sessVisible = visibleSiteIds(req.principal, 'session:read');
     const today = canMoney
       ? await one<any>(
+          // Revenue is per currency (never added across currencies): revenue_minor in the home country's currency, all in revenue_by_currency.
           `SELECT count(*)::int AS sessions, COALESCE(sum(cs.energy_wh),0)::bigint AS energy_wh,
-                  COALESCE(sum(d.total_idr),0)::bigint AS revenue_idr,
+                  -- TEST payments (a Stripe account on test keys) are not revenue.
+                  COALESCE(sum(d.total_minor) FILTER (WHERE NOT COALESCE(d.test_mode, false) AND cs.currency = (SELECT co.currency FROM organisation o JOIN country co ON co.code = o.home_country_code WHERE o.id = $1)),0)::bigint AS revenue_minor,
+                  (SELECT co.currency FROM organisation o JOIN country co ON co.code = o.home_country_code WHERE o.id = $1) AS currency,
+                  (SELECT COALESCE(jsonb_agg(jsonb_build_object('currency', y.currency, 'revenue_minor', y.r) ORDER BY y.currency), '[]'::jsonb) FROM (
+                     SELECT cs2.currency, sum(d2.total_minor)::bigint AS r FROM charging_session cs2 JOIN cdr d2 ON d2.session_id = cs2.id
+                      WHERE NOT d2.test_mode AND cs2.org_id = $1 AND ($2::uuid[] IS NULL OR cs2.site_id = ANY($2))
+                        AND cs2.started_at >= date_trunc('day', now() AT TIME ZONE (SELECT timezone FROM organisation WHERE id = $1))
+                                              AT TIME ZONE (SELECT timezone FROM organisation WHERE id = $1)
+                      GROUP BY cs2.currency) y) AS revenue_by_currency,
                   count(*) FILTER (WHERE cs.state = 'active')::int AS active
              FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id
             WHERE cs.org_id = $1 AND ($2::uuid[] IS NULL OR cs.site_id = ANY($2))
-              AND cs.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Jakarta') AT TIME ZONE 'Asia/Jakarta'`,
+              AND cs.started_at >= date_trunc('day', now() AT TIME ZONE (SELECT timezone FROM organisation WHERE id = $1))
+                                   AT TIME ZONE (SELECT timezone FROM organisation WHERE id = $1)`,
           [orgId, sessVisible],
         )
       : null;
     const series = canMoney
       ? await many<any>(
           `SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
-                  COALESCE(sum(x.energy_wh),0)::bigint AS energy_wh, COALESCE(sum(x.total_idr),0)::bigint AS revenue_idr,
+                  COALESCE(sum(x.energy_wh),0)::bigint AS energy_wh, COALESCE(sum(x.total_minor),0)::bigint AS revenue_minor,
                   count(x.id)::int AS sessions
-             FROM generate_series((now() AT TIME ZONE 'Asia/Jakarta')::date - 13, (now() AT TIME ZONE 'Asia/Jakarta')::date, '1 day') AS d(day)
+             FROM (SELECT timezone AS tz FROM organisation WHERE id = $1) o,
+                  generate_series((now() AT TIME ZONE o.tz)::date - 13, (now() AT TIME ZONE o.tz)::date, '1 day') AS d(day)
              LEFT JOIN (
-               SELECT cs.id, cs.energy_wh, cdr.total_idr, (cs.started_at AT TIME ZONE 'Asia/Jakarta')::date AS day
+               -- Revenue in the home country's currency only (the chart is one currency); energy and sessions everywhere.
+               SELECT cs.id, cs.energy_wh,
+                      CASE WHEN NOT COALESCE(cdr.test_mode, false) AND cs.currency = (SELECT co.currency FROM organisation o JOIN country co ON co.code = o.home_country_code WHERE o.id = $1) THEN cdr.total_minor END AS total_minor,
+                      (cs.started_at AT TIME ZONE (SELECT timezone FROM organisation WHERE id = $1))::date AS day
                  FROM charging_session cs LEFT JOIN cdr ON cdr.session_id = cs.id
                 WHERE cs.org_id = $1 AND ($2::uuid[] IS NULL OR cs.site_id = ANY($2))
                   AND cs.started_at >= now() - interval '15 days'
@@ -476,11 +659,11 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
   app.get('/v1/alert-routing', async (req) => {
     assertCan(req.principal, { permission: 'alert:read' });
     const orgId = req.principal.orgId;
-    const [channels, contacts, rules, rotas] = await Promise.all([routing.getChannels(orgId), routing.listContacts(orgId), routing.listRules(orgId), onCall.listRotas(orgId, config.alerts.timeZone)]);
+    const [channels, contacts, rules, rotas] = await Promise.all([routing.getChannels(orgId), routing.listContacts(orgId), routing.listRules(orgId), onCall.listRotas(orgId, await alertZone(orgId))]);
     // Meta must reach the status webhook from the internet: the public address (PUBLIC_BASE_URL), as for payment notifications.
     const wh = (channels.whatsapp as { webhook?: { path: string; url?: string } | null }).webhook;
     if (wh) wh.url = (config.console.publicBaseUrl || `${req.protocol}://${req.headers.host ?? 'localhost'}`) + wh.path;
-    return { channels, contacts, rules, rotas, kinds: ALERT_KINDS, timeZone: config.alerts.timeZone, consoleUrl: config.alerts.consoleUrl || null };
+    return { channels, contacts, rules, rotas, kinds: ALERT_KINDS, timeZone: await alertZone(orgId), consoleUrl: config.alerts.consoleUrl || null };
   });
 
   app.put('/v1/alert-routing/channels/:kind', async (req, reply) => {
@@ -617,10 +800,18 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (!commission.PERIOD_RE.test(m)) throw new BadRequestError('month must be YYYY-MM');
     return m;
   };
+  /** One statement per currency (§D9): ?currency= (body.currency for writes), default IDR. */
+  const currencyOf = (v: unknown) => {
+    const c = commission.currencyParam(v);
+    if (typeof c === 'object') throw new BadRequestError(c.error);
+    return c;
+  };
+  const curParam = (req: FastifyRequest) => currencyOf(((req.query ?? {}) as Record<string, string>).currency);
+  const curBody = (req: FastifyRequest) => currencyOf((req.body as any)?.currency);
   const sendHtml = (reply: FastifyReply, html: string) => { reply.header('Content-Type', 'text/html; charset=utf-8'); return html; };
   const sendCsv = (reply: FastifyReply, st: any) => {
     reply.header('Content-Type', 'text/csv; charset=utf-8');
-    reply.header('Content-Disposition', `attachment; filename="plugsure-statement-${st.org?.slug ?? 'org'}-${st.period}.csv"`);
+    reply.header('Content-Disposition', `attachment; filename="plugsure-statement-${st.org?.slug ?? 'org'}-${st.period}${st.currency && st.currency !== LEGACY_CURRENCY ? `-${st.currency}` : ''}.csv"`);
     return '﻿' + commission.statementCsv(st);
   };
   /** Run as another organisation (platform operator), outside the caller's own org scope. */
@@ -647,23 +838,23 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
 
   app.get('/v1/billing/statement', async (req) => {
     const ownerId = await statementScope(req);
-    const st = await commission.statementFor(req.principal.orgId, monthParam(req), ownerId);
+    const st = await commission.statementFor(req.principal.orgId, monthParam(req), ownerId, curParam(req));
     return { ...st, history: await commission.listFinalised(req.principal.orgId, ownerId) };
   });
   app.get('/v1/billing/statement.csv', async (req, reply) => {
     const ownerId = await statementScope(req);
-    return sendCsv(reply, await commission.statementFor(req.principal.orgId, monthParam(req), ownerId));
+    return sendCsv(reply, await commission.statementFor(req.principal.orgId, monthParam(req), ownerId, curParam(req)));
   });
   app.get('/v1/billing/statement.html', async (req, reply) => {
     const ownerId = await statementScope(req);
-    return sendHtml(reply, commission.statementHtml(await commission.statementFor(req.principal.orgId, monthParam(req), ownerId)));
+    return sendHtml(reply, commission.statementHtml(await commission.statementFor(req.principal.orgId, monthParam(req), ownerId, curParam(req))));
   });
 
   // ---- operator billing across owners (org-wide invoice access: PlugSure's own finance staff)
   app.get('/v1/billing/owners', async (req) => {
     assertCan(req.principal, { permission: 'invoice:read' });
     const month = monthParam(req);
-    return { ...(await commission.ownersOverview(req.principal.orgId, month)), current: commission.currentPeriod() };
+    return { ...(await commission.ownersOverview(req.principal.orgId, month, curParam(req))), current: commission.currentPeriod() };
   });
 
   const ownerParam = async (req: FastifyRequest) => {
@@ -676,16 +867,17 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     assertCan(req.principal, { permission: 'invoice:read' });
     const id = await ownerParam(req);
     const month = monthParam(req);
-    return { plan: await commission.planFor(req.principal.orgId, month, id), history: await commission.planHistory(req.principal.orgId, id) };
+    const cur = curParam(req);
+    return { plan: await commission.planFor(req.principal.orgId, month, id, cur), history: await commission.planHistory(req.principal.orgId, id, cur) };
   });
   app.put('/v1/billing/owners/:id/plan', async (req, reply) => {
     assertCan(req.principal, { permission: 'invoice:write' });
     const id = await ownerParam(req);
     const raw = (req.body as any)?.plan;
     const from = (req.body as any)?.effectiveFrom ? String((req.body as any).effectiveFrom) : undefined;
-    const r = await commission.savePlan(req.principal.orgId, raw === null ? null : raw ?? {}, actorUuid(req), from, id);
+    const r = await commission.savePlan(req.principal.orgId, raw === null ? null : raw ?? {}, actorUuid(req), from, id, curBody(req));
     if ('error' in r) return clientError(reply, 400, r.error!);
-    await audit(req, raw === null ? 'billing.owner_plan_reset' : 'billing.owner_plan_set', 'site_owner', id, { effectiveFrom: r.effectiveFrom, plan: r.plan as unknown as Record<string, unknown> });
+    await audit(req, raw === null ? 'billing.owner_plan_reset' : 'billing.owner_plan_set', 'site_owner', id, { effectiveFrom: r.effectiveFrom, currency: r.currency, plan: r.plan as unknown as Record<string, unknown> });
     return r;
   });
   app.post('/v1/billing/owners/:id/finalise', async (req, reply) => {
@@ -693,9 +885,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     const id = await ownerParam(req);
     const month = String((req.body as any)?.month ?? '');
     if (!commission.PERIOD_RE.test(month)) return clientError(reply, 400, 'month must be YYYY-MM');
-    const r = await commission.finalise(req.principal.orgId, month, actorUuid(req), id);
+    const cur = curBody(req);
+    const r = await commission.finalise(req.principal.orgId, month, actorUuid(req), id, cur);
     if ('error' in r) return clientError(reply, r.error === 'already finalised' ? 409 : 400, r.error!);
-    await audit(req, 'billing.owner_statement_finalised', 'site_owner', id, { month, number: r.number });
+    await audit(req, 'billing.owner_statement_finalised', 'site_owner', id, { month, number: r.number, currency: cur });
     return r;
   });
 
@@ -747,10 +940,11 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     assertCan(req.principal, { permission: 'platform:admin' });
     const orgId = await orgParam(req);
     const month = monthParam(req);
+    const cur = curParam(req);
     return asOrg(orgId, async () => ({
-      statement: await commission.statementFor(orgId, month),
-      plan: await commission.planFor(orgId, month),
-      planHistory: await commission.planHistory(orgId),
+      statement: await commission.statementFor(orgId, month, null, cur),
+      plan: await commission.planFor(orgId, month, null, cur),
+      planHistory: await commission.planHistory(orgId, null, cur),
       sites: await many(`SELECT id, name, billing_model FROM site WHERE org_id = $1 AND archived_at IS NULL ORDER BY name`, [orgId]),
     }));
   });
@@ -758,22 +952,25 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     assertCan(req.principal, { permission: 'platform:admin' });
     const orgId = await orgParam(req);
     const month = monthParam(req);
-    return sendHtml(reply, commission.statementHtml(await asOrg(orgId, () => commission.statementFor(orgId, month))));
+    const cur = curParam(req);
+    return sendHtml(reply, commission.statementHtml(await asOrg(orgId, () => commission.statementFor(orgId, month, null, cur))));
   });
   app.get('/v1/platform/billing/orgs/:orgId/statement.csv', async (req, reply) => {
     assertCan(req.principal, { permission: 'platform:admin' });
     const orgId = await orgParam(req);
     const month = monthParam(req);
-    return sendCsv(reply, await asOrg(orgId, () => commission.statementFor(orgId, month)));
+    const cur = curParam(req);
+    return sendCsv(reply, await asOrg(orgId, () => commission.statementFor(orgId, month, null, cur)));
   });
   app.put('/v1/platform/billing/orgs/:orgId/plan', async (req, reply) => {
     assertCan(req.principal, { permission: 'platform:admin' });
     const orgId = await orgParam(req);
     const raw = (req.body as any)?.plan;
     const from = (req.body as any)?.effectiveFrom ? String((req.body as any).effectiveFrom) : undefined;
-    const r = await asOrg(orgId, () => commission.savePlan(orgId, raw === null ? null : raw ?? {}, actorUuid(req), from));
+    const cur = curBody(req);
+    const r = await asOrg(orgId, () => commission.savePlan(orgId, raw === null ? null : raw ?? {}, actorUuid(req), from, null, cur));
     if ('error' in r) return clientError(reply, 400, r.error!);
-    await audit(req, raw === null ? 'billing.plan_reset' : 'billing.plan_set', 'organisation', orgId, { effectiveFrom: r.effectiveFrom, plan: r.plan as unknown as Record<string, unknown> });
+    await audit(req, raw === null ? 'billing.plan_reset' : 'billing.plan_set', 'organisation', orgId, { effectiveFrom: r.effectiveFrom, currency: r.currency, plan: r.plan as unknown as Record<string, unknown> });
     return r;
   });
   app.put('/v1/platform/billing/sites/:siteId/model', async (req, reply) => {
@@ -791,9 +988,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     const orgId = await orgParam(req);
     const month = String((req.body as any)?.month ?? '');
     if (!commission.PERIOD_RE.test(month)) return clientError(reply, 400, 'month must be YYYY-MM');
-    const r = await asOrg(orgId, () => commission.finalise(orgId, month, actorUuid(req)));
+    const cur = curBody(req);
+    const r = await asOrg(orgId, () => commission.finalise(orgId, month, actorUuid(req), null, cur));
     if ('error' in r) return clientError(reply, r.error === 'already finalised' ? 409 : 400, r.error!);
-    await audit(req, 'billing.statement_finalised', 'organisation', orgId, { month, number: r.number });
+    await audit(req, 'billing.statement_finalised', 'organisation', orgId, { month, number: r.number, currency: cur });
     return r;
   });
 
@@ -999,6 +1197,45 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     return { ok: true, temporaryPassword, expiresInHours: users.tempPasswordTtlHours() };
   });
 
+  /**
+   * Reset a user's two-step verification (lost phone and recovery codes). The user is
+   * signed out everywhere and, where it is required, enrols again at next sign-in. Not on
+   * oneself: a stolen session must not be able to remove the second factor it lacks.
+   */
+  app.post('/v1/users/:id/reset-mfa', async (req, reply) => {
+    assertCan(req.principal, { permission: 'user:write' });
+    const { id } = req.params as { id: string };
+    if (!UUID_RE.test(id)) throw new NotFoundError('user not found');
+    const u = await one<{ org_id: string }>(`SELECT org_id FROM app_user WHERE id = $1`, [id]);
+    if (!u || u.org_id !== req.principal.orgId) throw new NotFoundError('user not found');
+    if (id === req.principal.userId) return clientError(reply, 400, 'you cannot reset your own two-step verification — ask another administrator');
+    await assertMayManageUser(req, id);
+    const before = await mfa.mfaStatus(id);
+    await mfa.resetMfa(id);
+    await audit(req, 'user.mfa_reset', 'user', id, { enabled: false, sessionsRevoked: true }, { enabled: before.enabled });
+    return { ok: true };
+  });
+
+  /**
+   * Unbind a user from their Microsoft account (services/microsoft-signin.ts): their next
+   * Microsoft sign-in is matched by e-mail address again and binds afresh. Their sessions
+   * signed in with Microsoft end; password sessions are not touched. Allowed on oneself (it
+   * only removes a way in), but like every user-management action only over a user whose
+   * authority the caller holds.
+   */
+  app.delete('/v1/users/:id/microsoft', async (req, reply) => {
+    assertCan(req.principal, { permission: 'user:write' });
+    const { id } = req.params as { id: string };
+    if (!UUID_RE.test(id)) throw new NotFoundError('user not found');
+    const u = await one<{ org_id: string }>(`SELECT org_id FROM app_user WHERE id = $1`, [id]);
+    if (!u || u.org_id !== req.principal.orgId) throw new NotFoundError('user not found');
+    await assertMayManageUser(req, id);
+    const r = await unbindUser(id, req.principal.orgId);
+    if (!r) return clientError(reply, 404, 'this user is not bound to a Microsoft account');
+    await audit(req, 'user.microsoft_unbound', 'user', id, { microsoftSessionsEnded: true }, { tenantId: r.tenantId, oid: r.objectId });
+    return { ok: true };
+  });
+
   // =================================================================== sites (Module 3)
 
   app.get('/v1/sites', async (req) => {
@@ -1018,8 +1255,13 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
   app.post('/v1/sites', async (req, reply) => {
     assertCan(req.principal, { permission: 'site:write' });
     const input = sites.siteInputFrom(req.body ?? {});
+    // Country first (default: the organisation's home country), so the site is validated for it.
     const v = sites.validateSite(input, true);
     if (Object.keys(v.errors).length) return clientError(reply, 422, Object.values(v.errors)[0]!, v as any);
+    const cp = await sites.siteCountryProblem(req.principal.orgId, input, null);
+    if (cp) return clientError(reply, cp.status, cp.error);
+    const v2 = sites.validateSite(input, true);
+    if (Object.keys(v2.errors).length) return clientError(reply, 422, Object.values(v2.errors)[0]!, v2 as any);
     const id = await sites.createSite(req.principal.orgId, input);
     await audit(req, 'site.created', 'site', id, input as Record<string, unknown>);
     return { ok: true, id, warnings: v.warnings };
@@ -1032,7 +1274,10 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     const before = await sites.getSite(siteId);
     const input = sites.siteInputFrom(req.body ?? {});
     // Validate against the merged record, so a partial update is checked in context.
+    const cp = await sites.siteCountryProblem(req.principal.orgId, input, siteId);
+    if (cp) return clientError(reply, cp.status, cp.error);
     const merged: sites.SiteInput = {
+      countryCode: before?.country_code,
       kabupatenKotaCode: before?.kabupaten_kota_code,
       spkluScheme: before?.spklu_scheme,
       sloIssuedAt: before?.slo_issued_at ? new Date(before.slo_issued_at).toISOString().slice(0, 10) : null,
@@ -1662,7 +1907,8 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (b.status !== undefined) t.status = String(b.status);
     if (b.validTo !== undefined) t.validTo = b.validTo || null;
     if (b.energyLimitKwh !== undefined) t.energyLimitKwh = num(b.energyLimitKwh);
-    if (b.spendLimitIdr !== undefined) t.spendLimitIdr = num(b.spendLimitIdr);
+    if (b.spendLimitMinor !== undefined) t.spendLimitMinor = num(b.spendLimitMinor);
+    if (b.spendLimitCurrency !== undefined && b.spendLimitCurrency !== null) t.spendLimitCurrency = String(b.spendLimitCurrency).toUpperCase();
     if (b.offlineAllowed !== undefined) t.offlineAllowed = Boolean(b.offlineAllowed);
     if (b.pin !== undefined) t.pin = b.pin == null ? null : String(b.pin);
     return t;
@@ -1692,6 +1938,12 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     if (!owner || owner.org_id !== req.principal.orgId) throw new NotFoundError('card not found');
     const t = tokenInputFrom(req.body ?? {});
     delete t.uid; // the UID is the card; changing it is issuing a new card
+    // A v1.6 client's spendLimitIdr for a card whose limit is in MYR/SGD would be read as sen: refused (400).
+    if (t.spendLimitCurrency === undefined) {
+      const cur = await one<{ c: string }>(`SELECT spend_limit_currency AS c FROM token WHERE id = $1`, [id]);
+      try { assertLegacyRupiah((req as any).legacyMoneyKeys, ['spendLimitIdr', 'spend_limit_idr'], cur?.c); }
+      catch (e) { if (e instanceof LegacyKeyCurrency) return clientError(reply, 400, e.message); throw e; }
+    }
     const errors = tokens.validateToken(t, false);
     if (Object.keys(errors).length) return clientError(reply, 422, Object.values(errors)[0]!, { errors });
     const pinHash = t.pin === undefined ? undefined : t.pin ? await users.hashPassword(t.pin) : null;
@@ -2130,10 +2382,27 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     };
     const t = setInterval(() => void poll(), 1500);
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
+    // Signed out, disabled, reset or revoked since the stream opened: end it (stream-guard.ts).
+    // The fresh grants must still pass the checks above, over the SAME sites the poll
+    // reads (`visible` is fixed at opening); any change ends the stream and the reconnect
+    // is decided afresh.
+    const sameSites = (a: string[] | null, b: string[] | null) =>
+      a === null || b === null ? a === b : [...a].sort().join() === [...b].sort().join();
+    const unwatch = watchLiveStream(req, {
+      stillAllowed: (p) => {
+        const held = heldPermissions(p);
+        if (p.orgId !== orgId || !held.has('charge_point:read')) return false;
+        const now = visibleSiteIds(p, 'charge_point:read');
+        if (!sameSites(now, visible)) return false;
+        return now === null || held.has('charge_point:config') || held.has('charge_point:command');
+      },
+      close: () => reply.raw.end(),
+    });
     req.raw.on('close', () => {
       closed = true;
       clearInterval(t);
       clearInterval(ping);
+      unwatch();
     });
   });
 

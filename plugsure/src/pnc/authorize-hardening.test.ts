@@ -42,7 +42,7 @@ if (DB_OK) {
     orgId = (await one<{ id: string }>(
       `INSERT INTO organisation (name, slug, pnc_settings) VALUES ('PnC Hardening Test', $1, '{"enabled":true,"acceptWhenOcspUnavailable":true}')
        ON CONFLICT (slug) DO UPDATE SET pnc_settings = EXCLUDED.pnc_settings RETURNING id`, [SLUG]))!.id;
-    siteId = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'PnC Hardening Hub', 1000) RETURNING id`, [orgId]))!.id;
+    siteId = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'PnC Hardening Hub', 1000) RETURNING id`, [orgId]))!.id;
     await query(`DELETE FROM pnc_event WHERE charge_point_id IN (SELECT id FROM charge_point WHERE ocpp_identity = $1)`, [ID]);
     await query(`DELETE FROM charge_point WHERE ocpp_identity = $1`, [ID]);
     cpId = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity, status) VALUES ($1, $2, 'online') RETURNING id`, [siteId, ID]))!.id;

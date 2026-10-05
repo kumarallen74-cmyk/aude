@@ -79,7 +79,7 @@ try {
   if (existing.data.brand) await ops('DELETE', `/v1/driver-app?confirm=${existing.data.brand.slug}`);
 
   // Two stations: one of ours, one that we then hand to another operator.
-  const mkSite = async (name: string) => (await ops('POST', '/v1/sites', { name, address: 'Jl. Sudirman 1', city: 'Jakarta Pusat', postalCode: '10220', lat: '-6.2000', lon: '106.8200', kabupatenKotaCode: '3171', gridTariffGroup: 'B-2/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' })).data.id as string;
+  const mkSite = async (name: string) => (await ops('POST', '/v1/sites', { name, address: 'Jl. Sudirman 1', city: 'Jakarta Pusat', postalCode: '10220', lat: '-6.2000', lon: '106.8200', kabupatenKotaCode: '3171', gridTariffGroup: 'B-2/TR', connectedKva: '53', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' })).data.id as string;
   const mkCharger = async (siteId: string, id: string) => {
     await ops('POST', '/v1/charge-points', { ocppIdentity: id, siteId, ocppVersion: 'ocpp1.6', evses: [{ evseId: 1, connectors: [{ connectorId: 1, connectorType: 'sType2', currentKind: 'AC3', maxPowerW: 22000, teraCertStatus: 'verified', teraDueAt: '2027-12-31' }] }] });
     await ops('POST', `/v1/charge-points/${id}/activate`);
@@ -163,7 +163,7 @@ try {
   check('scope: another operator’s connector page is refused; ours opens', cOther.status === 404 && cOther.data.code === 'other_operator' && cOwn.status === 200 && cOwn.data.station?.siteId === ownSite, { o: cOther.data, own: cOwn.status });
   const device = (await drv('/d/v1/device', { method: 'POST', brand: SLUG })).data?.deviceToken;
   const quote = (connectorId: string) => fetch(`${API}/d/v1/charge/quote`, {
-    method: 'POST', headers: { 'x-driver-brand': SLUG, authorization: `Bearer ${device}`, 'content-type': 'application/json' }, body: JSON.stringify({ connectorId, amountIdr: 50000 }),
+    method: 'POST', headers: { 'x-driver-brand': SLUG, authorization: `Bearer ${device}`, 'content-type': 'application/json' }, body: JSON.stringify({ connectorId, amountMinor: 50000 }),
   }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => null) }));
   const qOther = await quote(otherConn);
   const qOwn = await quote(ownConn);

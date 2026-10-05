@@ -5,7 +5,7 @@ import { contractIdFor, cardToken, type CardRow } from './emsp.js';
 const party = { country_code: 'ID', party_id: 'PLS', business_name: 'Nusantara Charge' };
 const card = (over: Partial<CardRow> = {}): CardRow => ({
   id: '5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d', org_id: 'o', uid: '04A1B2C3D4', status: 'Accepted', valid_to: null,
-  holder_name: 'Budi', fleet_name: 'Grab Fleet', energy_limit_wh: null, spend_limit_idr: null,
+  holder_name: 'Budi', fleet_name: 'Grab Fleet', energy_limit_wh: null, spend_limit_minor: null,
   roaming_shared: true, contract_id: 'ID-PLS-C0A1B2C3D', updated_at: new Date('2026-09-27T01:02:03Z'), ...over,
 });
 
@@ -26,7 +26,7 @@ describe('ocpi eMSP: our cards as tokens', () => {
     assert.equal(t.last_updated, '2026-09-27T01:02:03Z');
   });
   test('a card with a limit must be checked with us before every session', () => {
-    assert.equal(cardToken(party, card({ spend_limit_idr: 500_000 })).whitelist, 'NEVER');
+    assert.equal(cardToken(party, card({ spend_limit_minor: 500_000 })).whitelist, 'NEVER');
     assert.equal(cardToken(party, card({ energy_limit_wh: 100_000 })).whitelist, 'NEVER');
   });
   test('blocked, expired or unshared cards go out as invalid', () => {

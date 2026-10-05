@@ -86,6 +86,11 @@ export interface LoginResult {
   token?: string;
   error?: string;
   mustChangePassword?: boolean;
+  /**
+   * The password was right and the account has two-step verification: `token` is a
+   * five-minute session that opens only POST /v1/auth/mfa/verify (services/mfa.ts).
+   */
+  mfaRequired?: boolean;
   user?: { id: string; name: string; email: string; orgId: string };
 }
 
@@ -113,11 +118,66 @@ export const loginFailureMessage = () =>
   `invalid email or password (after ${config.console.loginMaxFailures} failed attempts, sign-in pauses for ${config.console.loginLockMinutes} minutes)`;
 
 /**
+ * Take one sign-in attempt slot for an account, or null when it is locked.
+ *
+ * The attempt is COUNTED before the password (or code) is checked, in one statement.
+ * The counter used to be read, incremented in JavaScript after the (slow, deliberately)
+ * password check, and written back as an absolute value: a burst of parallel guesses all
+ * read the same count and together recorded one failure, so the lockout never engaged.
+ * Now each attempt atomically takes a slot; the attempt that reaches the limit sets the
+ * lock, and every later one finds the account locked and is refused whatever it sent.
+ * Shared by the password step and the two-step verification code (services/mfa.ts), so
+ * a stolen password buys LOGIN_MAX_FAILURES code guesses per lock window, not more.
+ */
+export async function claimSignInAttempt(userId: string): Promise<{ locked_now: boolean } | null> {
+  return one<{ locked_now: boolean }>(
+    `UPDATE app_user
+        SET failed_logins = CASE WHEN failed_logins + 1 >= $2 THEN 0 ELSE failed_logins + 1 END,
+            locked_until = CASE WHEN failed_logins + 1 >= $2 THEN now() + ($3 || ' minutes')::interval ELSE locked_until END
+      WHERE id = $1 AND (locked_until IS NULL OR locked_until <= now())
+      RETURNING (locked_until IS NOT NULL AND locked_until > now()) AS locked_now`,
+    [userId, config.console.loginMaxFailures, config.console.loginLockMinutes],
+  );
+}
+
+/** A completed sign-in: the counter and any lock are cleared. */
+export async function clearSignInFailures(userId: string): Promise<void> {
+  await query(`UPDATE app_user SET failed_logins = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [userId]);
+}
+
+/**
+ * Is this account an administrator (services/auth.ts isAdministrator), from its stored
+ * grants? For decisions taken before a session exists: CONSOLE_ADMIN_HOSTS at sign-in.
+ */
+export async function isAdministratorAccount(userId: string): Promise<boolean> {
+  const r = await one<{ admin: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM user_role ur JOIN role r ON r.id = ur.role_id, unnest(r.permissions) AS p
+        WHERE ur.user_id = $1 AND (p LIKE 'platform:%' OR p = 'user:write')) AS admin`,
+    [userId],
+  );
+  return r?.admin === true;
+}
+
+/**
  * `onlyOrgId` (v1.5.0): the sign-in came to an operator's own console web address, where
  * only that operator's accounts may sign in. Any other account is refused exactly like a
  * wrong password: counted as a failed attempt, no session, nothing reset, the same answer.
+ *
+ * `refuseAdministrators`: the sign-in came to a host not in CONSOLE_ADMIN_HOSTS, so an
+ * administrator account is refused the same way (an ordinary account signs in).
+ *
+ * An account with two-step verification gets `mfaRequired` and a pending session instead
+ * of a session; the failure counter is NOT cleared until the code is right, or a caller
+ * holding the password could reset it between code guesses.
  */
-export async function login(emailRaw: unknown, password: unknown, ip?: string, onlyOrgId?: string | null): Promise<LoginResult> {
+export async function login(
+  emailRaw: unknown,
+  password: unknown,
+  ip?: string,
+  onlyOrgId?: string | null,
+  opts: { refuseAdministrators?: boolean } = {},
+): Promise<LoginResult> {
   const email = String(emailRaw ?? '').trim().toLowerCase();
   const pw = String(password ?? '');
   const generic = { ok: false, error: loginFailureMessage() };
@@ -134,9 +194,11 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string, o
     locked_until: Date | null;
     must_change_password: boolean;
     temp_expired: boolean;
+    mfa_enabled: boolean;
   }>(
     `SELECT id, org_id, name, email, status, password_hash, failed_logins, locked_until, must_change_password,
-            (must_change_password AND temp_password_expires_at IS NOT NULL AND temp_password_expires_at <= now()) AS temp_expired
+            (must_change_password AND temp_password_expires_at IS NOT NULL AND temp_password_expires_at <= now()) AS temp_expired,
+            (totp_secret IS NOT NULL AND totp_enabled_at IS NOT NULL) AS mfa_enabled
        FROM app_user WHERE lower(email) = $1`,
     [email],
   );
@@ -145,24 +207,8 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string, o
     await checkPassword(pw, null);
     return generic;
   }
-  /**
-   * The attempt is COUNTED before the password is checked, in one statement.
-   *
-   * The counter used to be read, incremented in JavaScript after the (slow,
-   * deliberately) password check, and written back as an absolute value: a
-   * burst of parallel guesses all read the same count and together recorded
-   * one failure, so the lockout never engaged. Now each attempt atomically
-   * takes a slot; the attempt that reaches the limit sets the lock, and every
-   * later one finds the account locked and is refused whatever the password.
-   */
-  const claimed = await one<{ locked_now: boolean }>(
-    `UPDATE app_user
-        SET failed_logins = CASE WHEN failed_logins + 1 >= $2 THEN 0 ELSE failed_logins + 1 END,
-            locked_until = CASE WHEN failed_logins + 1 >= $2 THEN now() + ($3 || ' minutes')::interval ELSE locked_until END
-      WHERE id = $1 AND (locked_until IS NULL OR locked_until <= now())
-      RETURNING (locked_until IS NOT NULL AND locked_until > now()) AS locked_now`,
-    [u.id, config.console.loginMaxFailures, config.console.loginLockMinutes],
-  );
+  // Counted before the password is checked (claimSignInAttempt).
+  const claimed = await claimSignInAttempt(u.id);
   if (!claimed) {
     // The same password work as any other attempt: an instant answer would reveal the lock
     // (and so the account) by timing alone. The password is not accepted, even if right.
@@ -177,7 +223,24 @@ export async function login(emailRaw: unknown, password: unknown, ip?: string, o
     return generic;
   }
 
-  await query(`UPDATE app_user SET failed_logins = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [u.id]);
+  // CONSOLE_ADMIN_HOSTS: an administrator on another host is refused like a wrong password.
+  if (opts.refuseAdministrators && (await isAdministratorAccount(u.id))) {
+    logger.warn({ userId: u.id, ip }, 'administrator sign-in refused: host is not in CONSOLE_ADMIN_HOSTS');
+    return generic;
+  }
+
+  if (u.mfa_enabled) {
+    // The attempt stays counted until the second factor is right (see above).
+    return {
+      ok: true,
+      token: await createSession(u.id, { mfaPending: true }),
+      mfaRequired: true,
+      mustChangePassword: u.must_change_password,
+      user: { id: u.id, name: u.name, email: u.email, orgId: u.org_id },
+    };
+  }
+
+  await clearSignInFailures(u.id);
   const token = await createSession(u.id);
   return {
     ok: true,
@@ -228,6 +291,9 @@ export async function listUsers(orgId: string) {
             (u.password_hash IS NOT NULL) AS has_password, u.must_change_password, u.temp_password_expires_at,
             -- An unused one-time password past TEMP_PASSWORD_TTL_HOURS no longer signs in: reset it.
             (u.must_change_password AND u.temp_password_expires_at IS NOT NULL AND u.temp_password_expires_at <= now()) AS temp_password_expired,
+            (u.totp_secret IS NOT NULL AND u.totp_enabled_at IS NOT NULL) AS mfa_enabled,
+            -- Bound to a Microsoft account (058): signs in with "Sign in with Microsoft" by its oid.
+            (u.ms_object_id IS NOT NULL) AS microsoft_bound, u.ms_bound_at AS microsoft_bound_at,
             COALESCE(json_agg(json_build_object(
               'role', r.name, 'scopeType', ur.scope_type, 'scopeId', ur.scope_id, 'siteName', s.name, 'ownerName', so.name, 'fleetName', fa.name
             )) FILTER (WHERE r.id IS NOT NULL), '[]') AS roles

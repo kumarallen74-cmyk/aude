@@ -1,6 +1,10 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, icon, field, callout, table, fmt, tag, drawer, modal, confirmDialog, html, toast, kpi, download, formValues,
-} from '../core.js';
+  $, $$, esc, api, state, registerView, pageHead, icon, field, callout, table, fmt as F, tag, drawer, modal, confirmDialog, html, toast, kpi, download, formValues,
+ isRupiah, toMinor } from '../core.js';
+
+/** Formatting for one invoice / statement: its amounts are in its currency (one invoice per account, month and currency). */
+const fmtOf = (cur) => ({ ...F, idr: (n) => F.money(n, cur) });
+const fmt = F;
 import { recentMonths, monthLabel } from './statement-render.js';
 
 /**
@@ -76,24 +80,27 @@ async function renderInvoices(box, canWrite) {
     $('[data-kpis]', box).innerHTML = [
       kpi('Fleet accounts billed', fmt.num(rows.length), `${drafts} draft · ${rows.length - drafts} invoiced`),
       kpi('Charging', `${fmt.num(sum('sessions'))} sessions`, `${kwh(sum('energyWh'))} kWh at your stations`),
-      kpi('To invoice', fmt.idr(sum('totalIdr')), `PPN ${fmt.idr(sum('ppnIdr'))}${sum('roamingIdr') ? ` · partner networks ${fmt.idr(sum('roamingIdr'))}` : ''}`),
+      rows.every((r) => isRupiah(r.currency))
+        ? kpi('To invoice', fmt.idr(sum('totalMinor')), `PPN ${fmt.idr(sum('taxMinor'))}${sum('roamingMinor') ? ` · partner networks ${fmt.idr(sum('roamingMinor'))}` : ''}`)
+        // One figure per currency: invoices in different currencies are never added up.
+        : kpi('To invoice', [...new Set(rows.map((r) => r.currency))].map((c) => fmt.money(rows.filter((r) => r.currency === c).reduce((a, r) => a + Number(r.totalMinor || 0), 0), c)).join('<br>'), 'per currency, incl. tax'),
       kpi('Overdue', fmt.num(rows.filter((r) => r.overdue).length), 'invoices past their due date', rows.some((r) => r.overdue) ? 'crit' : ''),
     ].join('');
     const notes = [];
     if (!data.ended) notes.push(callout('info', `${esc(data.periodLabel)} has not ended: these are drafts. Invoices can be issued from the 1st of next month.`));
-    if (data.unassigned.sessions) notes.push(callout('warn', `${fmt.num(data.unassigned.sessions)} session(s) (${fmt.idr(data.unassigned.totalIdr)}) were charged with fleet cards that are on no fleet account, so they are on no invoice. Give those cards a fleet name in the RFID centre, or add them to an account.`));
+    if (data.unassigned.sessions) notes.push(callout('warn', `${fmt.num(data.unassigned.sessions)} session(s) (${(data.unassigned.byCurrency ?? [{ currency: null, totalMinor: data.unassigned.totalMinor }]).map((x) => fmt.money(x.totalMinor, x.currency)).join(' + ')}) were charged with fleet cards that are on no fleet account, so they are on no invoice. Give those cards a fleet name in the RFID centre, or add them to an account.`));
     $('[data-notes]', box).innerHTML = notes.join('');
     const iss = $('[data-issue-all]', box);
     if (iss) iss.disabled = !data.ended || !drafts;
     table($('[data-list]', box), {
       columns: [
-        { label: 'Fleet account', render: (r) => `<div class="cell-title">${esc(r.name)}</div>${r.legalName && r.legalName !== r.name ? `<div class="cell-sub">${esc(r.legalName)}</div>` : ''}` },
+        { label: 'Fleet account', render: (r) => `<div class="cell-title">${esc(r.name)}${isRupiah(r.currency) ? '' : ` ${tag('t-info', r.currency)}`}</div>${r.legalName && r.legalName !== r.name ? `<div class="cell-sub">${esc(r.legalName)}</div>` : ''}` },
         { label: 'Status', render: (r) => `${statusTag(r)}${r.number ? `<div class="cell-sub mono">${esc(r.number)}</div>` : ''}${r.warnings ? ` ${tag('t-warn', `${r.warnings} note${r.warnings === 1 ? '' : 's'}`)}` : ''}` },
         { label: 'Sessions', num: true, render: (r) => fmt.num(r.sessions) },
         { label: 'kWh', num: true, render: (r) => kwh(r.energyWh) },
-        { label: 'PPN', num: true, render: (r) => fmt.idr(r.ppnIdr) },
-        { label: 'Partner networks', num: true, render: (r) => (r.roamingIdr ? fmt.idr(r.roamingIdr) : '—') },
-        { label: 'Total', num: true, render: (r) => `<b>${fmt.idr(r.totalIdr)}</b>${r.status === 'issued' && r.balanceIdr !== r.totalIdr ? `<div class="cell-sub">owed ${fmt.idr(r.balanceIdr)}</div>` : ''}` },
+        { label: rows.every((r) => isRupiah(r.currency)) ? 'PPN' : 'Tax', num: true, render: (r) => fmt.money(r.taxMinor, r.currency) },
+        { label: 'Partner networks', num: true, render: (r) => (r.roamingMinor ? fmt.money(r.roamingMinor, r.currency) : '—') },
+        { label: 'Total', num: true, render: (r) => `<b>${fmt.money(r.totalMinor, r.currency)}</b>${r.status === 'issued' && r.balanceMinor !== r.totalMinor ? `<div class="cell-sub">owed ${fmt.money(r.balanceMinor, r.currency)}</div>` : ''}` },
         { label: 'Due', render: (r) => (r.dueDate ? esc(fmt.date(r.dueDate)) : '—') },
         { label: 'e-Faktur', render: (r) => (r.efakturNumber ? `<span class="mono">${esc(r.efakturNumber)}</span>` : r.efakturExported ? tag('t-info', 'exported') : '—') },
       ],
@@ -106,6 +113,7 @@ async function renderInvoices(box, canWrite) {
   const openRow = (r) => {
     const period = data.period;
     const inv = r.invoiceId;
+    const cq = isRupiah(r.currency) ? '' : `&currency=${r.currency}`;
     const d = drawer({
       title: r.name,
       subtitle: `${esc(data.periodLabel)}${r.number ? ` · <span class="mono">${esc(r.number)}</span>` : ' · draft'}`,
@@ -122,21 +130,21 @@ async function renderInvoices(box, canWrite) {
       tabs: [{
         id: 'statement', label: inv ? 'Invoice' : 'Draft',
         async render(b) {
-          const st = inv ? await api(`/v1/fleet-invoices/${inv}`) : await api(`/v1/fleet-accounts/${r.accountId}/statement?period=${period}`);
+          const st = inv ? await api(`/v1/fleet-invoices/${inv}`) : await api(`/v1/fleet-accounts/${r.accountId}/statement?period=${period}${cq}`);
           renderStatement(b, st, canWrite, () => d.refresh());
         },
       }],
       onClose: () => load(period),
     });
     const on = (sel, fn) => $(sel, d.el)?.addEventListener('click', fn);
-    on('[data-pdf]', () => open(inv ? `/v1/fleet-invoices/${inv}/invoice.pdf` : `/v1/fleet-accounts/${r.accountId}/statement.pdf?period=${period}`));
+    on('[data-pdf]', () => open(inv ? `/v1/fleet-invoices/${inv}/invoice.pdf` : `/v1/fleet-accounts/${r.accountId}/statement.pdf?period=${period}${cq}`));
     on('[data-credit]', async () => creditNoteDialog(await api(`/v1/fleet-invoices/${inv}`), () => d.refresh()));
-    on('[data-print]', () => open(inv ? `/v1/fleet-invoices/${inv}/invoice.html` : `/v1/fleet-accounts/${r.accountId}/statement.html?period=${period}`));
+    on('[data-print]', () => open(inv ? `/v1/fleet-invoices/${inv}/invoice.html` : `/v1/fleet-accounts/${r.accountId}/statement.html?period=${period}${cq}`));
     on('[data-csv]', () => open(`/v1/fleet-invoices/${inv}/invoice.csv`));
     on('[data-issue]', async () => {
-      const ok = await confirmDialog({ title: `Issue the ${monthLabel(period)} invoice?`, message: html`An invoice for <b>${r.name}</b> of <b>${fmt.idr(r.totalIdr)}</b> is numbered and frozen. Charges added later go on next month's invoice.`, confirmLabel: 'Issue invoice' });
+      const ok = await confirmDialog({ title: `Issue the ${monthLabel(period)} invoice?`, message: html`An invoice for <b>${r.name}</b> of <b>${fmt.money(r.totalMinor, r.currency)}</b> is numbered and frozen. Charges added later go on next month's invoice.`, confirmLabel: 'Issue invoice' });
       if (!ok) return;
-      try { const x = await api('/v1/fleet-invoices', { method: 'POST', body: { fleetAccountId: r.accountId, period } }); toast(`Invoice ${x.number} issued`, 'ok'); d.close(); }
+      try { const x = await api('/v1/fleet-invoices', { method: 'POST', body: { fleetAccountId: r.accountId, period, ...(isRupiah(r.currency) ? {} : { currency: r.currency }) } }); toast(`Invoice ${x.number} issued`, 'ok'); d.close(); }
       catch (e) { toast(e.message, 'crit'); }
     });
     on('[data-send]', () => modal({
@@ -182,7 +190,7 @@ async function renderInvoices(box, canWrite) {
   $('[data-refresh]', box).addEventListener('click', () => load());
   $('[data-issue-all]', box)?.addEventListener('click', async () => {
     const drafts = data.rows.filter((r) => r.status === 'draft');
-    const ok = await confirmDialog({ title: `Issue ${drafts.length} invoice(s) for ${monthLabel(data.period)}?`, message: `Totalling ${fmt.idr(drafts.reduce((a, r) => a + r.totalIdr, 0))}. Each is numbered and frozen.`, confirmLabel: 'Issue all' });
+    const ok = await confirmDialog({ title: `Issue ${drafts.length} invoice(s) for ${monthLabel(data.period)}?`, message: `Totalling ${[...new Set(drafts.map((r) => r.currency))].map((c) => fmt.money(drafts.filter((r) => r.currency === c).reduce((a, r) => a + r.totalMinor, 0), c)).join(' + ')}. Each is numbered and frozen.`, confirmLabel: 'Issue all' });
     if (!ok) return;
     try {
       const r = await api(`/v1/fleet-billing/periods/${data.period}/issue`, { method: 'POST' });
@@ -213,17 +221,18 @@ const SETTLE = { invoice: 'reduces this invoice', refund: 'to refund', next_invo
 
 /** Credit notes against an invoice (and earlier ones deducted from it), with what can be done to each. */
 function creditSection(st, canWrite, refresh) {
+  const fmt = fmtOf(st.currency);
   const prior = st.priorCredits ?? [];
   const notes = st.creditNotes ?? [];
   if (!prior.length && !notes.length) return '';
   const rows = [
-    ...prior.map((c) => `<tr><td>Credit note <span class="mono">${esc(c.number)}</span> <span class="cell-sub">from invoice ${esc(c.invoiceNumber)}, deducted here</span></td><td class="num">− ${fmt.idr(c.totalIdr)}</td><td></td></tr>`),
+    ...prior.map((c) => `<tr><td>Credit note <span class="mono">${esc(c.number)}</span> <span class="cell-sub">from invoice ${esc(c.invoiceNumber)}, deducted here</span></td><td class="num">− ${fmt.idr(c.totalMinor)}</td><td></td></tr>`),
     ...notes.map((c) => `<tr><td>${c.status === 'void' ? tag('t-mute', 'void') : ''} Credit note <span class="mono">${esc(c.number)}</span> <span class="cell-sub">${esc(c.reason)} · ${esc(SETTLE[c.settlement])}${c.settlement === 'refund' ? (c.refundedAt ? `, refunded ${esc(fmt.date(c.refundedAt))}` : ', not refunded yet') : ''}${c.settlement === 'next_invoice' && c.applied ? ', deducted' : ''}</span></td>
-      <td class="num">${c.status === 'void' ? `<s>${fmt.idr(c.totalIdr)}</s>` : `− ${fmt.idr(c.totalIdr)}`}</td>
+      <td class="num">${c.status === 'void' ? `<s>${fmt.idr(c.totalMinor)}</s>` : `− ${fmt.idr(c.totalMinor)}`}</td>
       <td class="num nowrap"><button class="btn sm ghost" type="button" data-cn-pdf="${esc(c.id)}">PDF</button>${canWrite && c.status === 'issued' ? `<button class="btn sm ghost" type="button" data-cn-send="${esc(c.id)}">E-mail</button>${c.settlement === 'refund' && !c.refundedAt ? `<button class="btn sm ghost" type="button" data-cn-refunded="${esc(c.id)}">Refunded</button>` : ''}${!c.refundedAt && !c.applied ? `<button class="btn sm ghost" type="button" data-cn-void="${esc(c.id)}">Void</button>` : ''}` : ''}</td></tr>`),
   ].join('');
   return `<div class="cell-sub" style="margin-top:12px">Credits</div><table class="t"><tbody>${rows}
-    ${st.status === 'issued' ? `<tr><td><b>Still owed</b></td><td class="num"><b>${fmt.idr(st.balanceIdr)}</b></td><td></td></tr>` : ''}</tbody></table>`;
+    ${st.status === 'issued' ? `<tr><td><b>Still owed</b></td><td class="num"><b>${fmt.idr(st.balanceMinor)}</b></td><td></td></tr>` : ''}</tbody></table>`;
 }
 
 function wireCreditActions(scope, refresh) {
@@ -251,22 +260,28 @@ function wireCreditActions(scope, refresh) {
 
 /** Issue a credit note against an invoice: the whole of what is left, or lines of an amount each. */
 function creditNoteDialog(st, done) {
+  const fmt = fmtOf(st.currency);
+  const id = isRupiah(st.currency);
   const paid = st.status === 'paid';
-  const taxed = st.totals.ppnIdr > 0;
+  const taxed = st.totals.taxMinor > 0;
+  // Outside Indonesia the amount is typed in ringgit / dollars (RM 12.50), like every other money field, and the
+  // tax is GST / SST, not PPN. (It asked for "SGD minor units", so "13" credited 13 cents.)
+  const taxName = id ? 'PPN' : st.taxScheme === 'SG_GST' ? 'GST' : st.taxScheme === 'MY_SST' ? 'SST' : 'tax';
   const lineRow = () => `<div class="row" data-line style="gap:6px;margin-bottom:6px"><input name="description" placeholder="What is credited, e.g. session 12 Aug billed twice" style="flex:3" autocomplete="off">
-    <input name="amountIdr" inputmode="numeric" placeholder="Rp, incl. PPN" style="flex:1;min-width:110px">
-    ${taxed ? '<label class="check" title="The amount includes PPN (split into DPP and PPN like an invoice line)"><input type="checkbox" name="taxed" checked> <span>PPN</span></label>' : ''}</div>`;
+    <input name="amountMinor" inputmode="${id ? 'numeric' : 'decimal'}" placeholder="${id ? `${fmt.sym()}, incl. PPN` : `${esc(F.sym(st.currency))} 0.00, incl. ${esc(taxName)}`}" style="flex:1;min-width:110px">
+    ${taxed ? `<label class="check" title="The amount includes ${esc(taxName)} (split like an invoice line)"><input type="checkbox" name="taxed" checked> <span>${esc(taxName)}</span></label>` : ''}</div>`;
   modal({
     title: `Credit note on ${st.number}`,
     size: 'lg',
-    body: `${callout('info', `The invoice stays as it is (its figures match the faktur pajak). ${paid ? 'It has been paid, so the credit is refunded or deducted from the next invoice.' : `It is not paid yet: the credit reduces what is owed (now ${fmt.idr(st.balanceIdr)}).`}`)}
+    body: `${callout('info', `The invoice stays as it is (its figures match the faktur pajak). ${paid ? 'It has been paid, so the credit is refunded or deducted from the next invoice.' : `It is not paid yet: the credit reduces what is owed (now ${fmt.idr(st.balanceMinor)}).`}`)}
       <div class="form one" style="margin-top:10px">
         ${field('Reason', '<input name="reason" maxlength="500" placeholder="Printed on the credit note" autocomplete="off">')}
         <div class="field"><label>What to credit</label>
           <label class="check"><input type="radio" name="kind" value="full"> <span>Everything still creditable on the invoice</span></label>
           <label class="check"><input type="radio" name="kind" value="lines" checked> <span>Lines of an amount each</span></label></div>
         <div data-lines>${lineRow()}<button class="btn sm ghost" type="button" data-add-line>${icon('plus')} Add line</button>
-          <div class="help">Amounts are what the customer gets back, PPN included${taxed ? '; with "PPN" ticked the amount is split into DPP (11/12) and PPN (12% of DPP), reversing the tax like an invoice line. Untick for partner-network charges, which carry no PPN of ours' : ''}.</div></div>
+          <div class="help">${id ? `Amounts are what the customer gets back, PPN included${taxed ? '; with "PPN" ticked the amount is split into DPP (11/12) and PPN (12% of DPP), reversing the tax like an invoice line. Untick for partner-network charges, which carry no PPN of ours' : ''}.`
+            : `Amounts are what the customer gets back, in ${esc(st.currency)}, ${esc(taxName)} included${taxed ? `; with "${esc(taxName)}" ticked the ${esc(taxName)} it contains is reversed like an invoice line. Untick for partner-network charges, which carry none of ours` : ''}.`}</div></div>
         ${paid ? `<div class="field"><label>Settle by</label>${`<select name="settlement"><option value="refund">Refund to the customer</option><option value="next_invoice">Deduct from their next invoice</option></select>`}</div>` : ''}
       </div>`,
     onMount(ctx) {
@@ -277,11 +292,11 @@ function creditNoteDialog(st, done) {
     actions: [{ label: 'Cancel' }, { label: 'Issue credit note', kind: 'primary', async onClick(ctx) {
       const full = $('[name="kind"]:checked', ctx.body).value === 'full';
       const lines = full ? undefined : $$('[data-line]', ctx.body)
-        .map((l) => ({ description: $('[name="description"]', l).value.trim(), amountIdr: Number(String($('[name="amountIdr"]', l).value).replace(/\D/g, '')), taxed: taxed ? $('[name="taxed"]', l).checked : false }))
-        .filter((l) => l.description || l.amountIdr);
+        .map((l) => ({ description: $('[name="description"]', l).value.trim(), amountMinor: id ? Number(String($('[name="amountMinor"]', l).value).replace(/\D/g, '')) : (toMinor($('[name="amountMinor"]', l).value, st.currency) || 0), taxed: taxed ? $('[name="taxed"]', l).checked : false }))
+        .filter((l) => l.description || l.amountMinor);
       try {
         const r = await api(`/v1/fleet-invoices/${st.id}/credit-notes`, { method: 'POST', body: { reason: $('[name="reason"]', ctx.body).value.trim(), full: full || undefined, lines, settlement: $('[name="settlement"]', ctx.body)?.value } });
-        toast(`Credit note ${r.creditNote.number} issued: ${fmt.idr(r.creditNote.totalIdr)}${r.settledInvoice ? ' — the invoice is settled' : ''}`, 'ok');
+        toast(`Credit note ${r.creditNote.number} issued: ${fmt.idr(r.creditNote.totalMinor)}${r.settledInvoice ? ' — the invoice is settled' : ''}`, 'ok');
         if (r.fakturWarning) setTimeout(() => modal({ title: 'Faktur pajak', body: callout('warn', esc(r.fakturWarning)) }), 50);
         done?.();
       } catch (e) { toast(e.message, 'crit'); return false; }
@@ -290,36 +305,38 @@ function creditNoteDialog(st, done) {
 }
 
 function renderStatement(b, st, canWrite = false, refresh = null) {
+  const fmt = fmtOf(st.currency);
+  const id = isRupiah(st.currency);
   const t = st.totals;
   b.innerHTML = `${st.status === 'void' ? callout('crit', `Void: ${esc(st.voidReason ?? '')}`) : ''}
     ${st.status === 'paid' ? callout('ok', `Paid ${esc(fmt.date(st.paidAt))}${st.paidReference ? ` · ${esc(st.paidReference)}` : ''}`) : ''}
     ${(st.warnings ?? []).map((w) => callout('warn', esc(w))).join('')}
     <div class="grid two" style="margin:10px 0">
       <div><div class="cell-sub">Bill to</div><div class="cell-title">${esc(st.buyer.name)}</div>
-        <div class="cell-sub">${st.buyer.taxId ? `${st.buyer.taxIdKind === 'TIN' ? 'NPWP' : esc(st.buyer.taxIdKind)} <span class="mono">${esc(st.buyer.taxId)}</span>` : 'no NPWP / NIK'}${st.buyer.email ? ` · ${esc(st.buyer.email)}` : ''}</div></div>
+        <div class="cell-sub">${st.buyer.taxId ? `${st.buyer.taxIdKind === 'TIN' ? (id ? 'NPWP' : 'Tax ID') : esc(st.buyer.taxIdKind)} <span class="mono">${esc(st.buyer.taxId)}</span>` : id ? 'no NPWP / NIK' : 'no tax ID'}${st.buyer.email ? ` · ${esc(st.buyer.email)}` : ''}</div></div>
       <div><div class="cell-sub">${st.number ? `Invoice <span class="mono">${esc(st.number)}</span>` : 'Draft'}</div>
         <div class="cell-sub">${st.dueDate ? `Due ${esc(fmt.date(st.dueDate))}` : `Terms ${esc(st.buyer.termsDays)} days`}${st.efakturNumber ? ` · faktur <span class="mono">${esc(st.efakturNumber)}</span>` : ''}${st.sentAt ? ` · e-mailed ${esc(fmt.ago(st.sentAt))}` : ''}</div></div>
     </div>
     <div data-sites></div>
     <table class="t" style="margin-top:12px"><tbody>
-      <tr><td>Energy, service and admin fees</td><td class="num">${fmt.idr(t.subtotalIdr)}</td></tr>
-      <tr><td>PBJT-TL</td><td class="num">${fmt.idr(t.pbjtIdr)}</td></tr>
-      <tr><td class="cell-sub">DPP nilai lain (11/12 of ${fmt.idr(t.taxBaseIdr)})</td><td class="num cell-sub">${fmt.idr(t.dppIdr)}</td></tr>
-      <tr><td>PPN 12% × DPP</td><td class="num">${fmt.idr(t.ppnIdr)}</td></tr>
-      ${t.roamingSessions ? `<tr><td>Partner networks (${t.roamingSessions}), re-billed at cost</td><td class="num">${fmt.idr(t.roamingIdr)}</td></tr>` : ''}
-      ${(st.fees ?? []).map((f) => `<tr><td>${f.kind === 'reservation' ? 'Reservation' : 'Membership'}: ${esc(f.planName)} <span class="cell-sub">(${esc(f.subscriber)}${f.kind === 'reservation' ? `, ${esc(fmt.time(f.periodStart))}` : ''}, incl. PPN)</span></td><td class="num">${fmt.idr(f.totalIdr)}</td></tr>`).join('')}
-      <tr><td><b>Total</b></td><td class="num"><b>${fmt.idr(t.totalIdr)}</b></td></tr>
+      <tr><td>Energy, service and admin fees</td><td class="num">${fmt.idr(t.subtotalMinor)}</td></tr>
+      ${id ? `<tr><td>PBJT-TL</td><td class="num">${fmt.idr(t.localTaxMinor)}</td></tr>
+      <tr><td class="cell-sub">DPP nilai lain (11/12 of ${fmt.idr(t.taxableMinor)})</td><td class="num cell-sub">${fmt.idr(t.taxBaseMinor)}</td></tr>
+      <tr><td>PPN 12% × DPP</td><td class="num">${fmt.idr(t.taxMinor)}</td></tr>` : `<tr><td>${esc(st.taxScheme === 'SG_GST' ? `GST ${(st.taxRateBps ?? 0) / 100}%` : st.taxScheme === 'MY_SST' ? `Service tax ${(st.taxRateBps ?? 0) / 100}%` : 'No tax charged (not registered)')}${st.taxScheme && st.taxScheme !== 'NONE' ? `<span class="cell-sub"> on ${fmt.idr(t.taxableMinor)}</span>` : ''}</td><td class="num">${fmt.idr(t.taxMinor)}</td></tr>`}
+      ${t.roamingSessions ? `<tr><td>Partner networks (${t.roamingSessions}), re-billed at cost</td><td class="num">${fmt.idr(t.roamingMinor)}</td></tr>` : ''}
+      ${(st.fees ?? []).map((f) => `<tr><td>${f.kind === 'reservation' ? 'Reservation' : 'Membership'}: ${esc(f.planName)} <span class="cell-sub">(${esc(f.subscriber)}${f.kind === 'reservation' ? `, ${esc(fmt.time(f.periodStart))}` : ''}, incl. ${id ? 'PPN' : 'tax'})</span></td><td class="num">${fmt.idr(f.totalMinor)}</td></tr>`).join('')}
+      <tr><td><b>Total</b></td><td class="num"><b>${fmt.idr(t.totalMinor)}</b></td></tr>
     </tbody></table>
     ${st.id ? creditSection(st, canWrite, refresh) : ''}
-    <p class="cell-sub">${fmt.num(t.sessions)} sessions · ${kwh(t.energyWh)} kWh${t.roundingIdr ? ` · session receipts add up to ${fmt.idr(t.receiptsTotalIdr)} (PPN here is per invoice line)` : ''}</p>
+    <p class="cell-sub">${fmt.num(t.sessions)} sessions · ${kwh(t.energyWh)} kWh${t.roundingMinor ? ` · session receipts add up to ${fmt.idr(t.receiptsTotalMinor)} (${id ? 'PPN' : 'tax'} here is per invoice line)` : ''}${id ? '' : ` · all amounts in ${esc(st.currency)}`}</p>
     <div class="cell-sub" style="margin-top:12px">Cards</div><div data-cards></div>`;
   table($('[data-sites]', b), {
     columns: [
       { label: 'Site', render: (l) => `<div class="cell-title">${esc(l.siteName)}</div>` },
       { label: 'Sessions', num: true, render: (l) => fmt.num(l.sessions) },
       { label: 'kWh', num: true, render: (l) => kwh(l.energyWh) },
-      { label: 'PPN', num: true, render: (l) => fmt.idr(l.ppnIdr) },
-      { label: 'Amount', num: true, render: (l) => `<b>${fmt.idr(l.totalIdr)}</b>` },
+      { label: id ? 'PPN' : 'Tax', num: true, render: (l) => fmt.idr(l.taxMinor) },
+      { label: 'Amount', num: true, render: (l) => `<b>${fmt.idr(l.totalMinor)}</b>` },
     ],
     rows: st.sites,
     empty: 'No sessions at your stations.',
@@ -329,7 +346,7 @@ function renderStatement(b, st, canWrite = false, refresh = null) {
       { label: 'Card', render: (c) => `<span class="mono">${esc(c.uid)}</span>${c.holder ? `<div class="cell-sub">${esc(c.holder)}</div>` : ''}` },
       { label: 'Sessions', num: true, render: (c) => fmt.num(c.sessions) },
       { label: 'kWh', num: true, render: (c) => kwh(c.energyWh) },
-      { label: 'Amount', num: true, render: (c) => fmt.idr(c.totalIdr + c.roamingIdr) },
+      { label: 'Amount', num: true, render: (c) => fmt.idr(c.totalMinor + c.roamingMinor) },
     ],
     rows: st.cards,
     empty: 'No cards used.',
@@ -355,7 +372,7 @@ async function renderCredits(box, canWrite) {
           : c.settlement === 'invoice' ? tag('t-ok', 'on the invoice')
           : c.settlement === 'refund' ? (c.refunded_at ? tag('t-ok', `refunded ${fmt.date(c.refunded_at)}`) : tag('t-warn', 'to refund'))
           : c.applied_invoice ? tag('t-ok', `on ${c.applied_invoice}`) : tag('t-info', 'next invoice')) },
-        { label: 'Amount', num: true, render: (c) => `<b>${fmt.idr(c.total_idr)}</b>${c.ppn_idr ? `<div class="cell-sub">PPN ${fmt.idr(c.ppn_idr)}</div>` : ''}` },
+        { label: 'Amount', num: true, render: (c) => `<b>${fmt.money(c.total_minor, c.currency)}</b>${c.tax_minor ? `<div class="cell-sub">${isRupiah(c.currency) ? 'PPN' : 'tax'} ${fmt.money(c.tax_minor, c.currency)}</div>` : ''}` },
         { label: '', render: (c) => `<button class="btn sm ghost" type="button" data-cn-pdf="${esc(c.id)}">PDF</button>${canWrite && c.status === 'issued' && c.settlement === 'refund' && !c.refunded_at ? `<button class="btn sm ghost" type="button" data-cn-refunded="${esc(c.id)}">Refunded</button>` : ''}` },
       ],
       rows: creditNotes,
@@ -404,7 +421,10 @@ async function renderAccounts(box, canWrite) {
         { label: 'Billing e-mail', render: (a) => esc(a.billing_email ?? '—') },
         { label: 'Terms', num: true, render: (a) => `${fmt.num(a.payment_terms_days)} d` },
         { label: 'Cards', num: true, render: (a) => fmt.num(a.cards) },
-        { label: 'Outstanding', num: true, render: (a) => (a.outstanding_idr ? `<b>${fmt.idr(a.outstanding_idr)}</b><div class="cell-sub">${a.open_invoices} invoice(s)</div>` : '—') },
+        { label: 'Outstanding', num: true, render: (a) => {
+          const owed = Object.entries(a.outstanding_by_currency ?? {}).filter(([, n]) => Number(n) > 0);
+          return owed.length ? `${owed.map(([c, n]) => `<b>${fmt.money(n, c)}</b>`).join('<br>')}<div class="cell-sub">${a.open_invoices} invoice(s)</div>` : '—';
+        } },
       ],
       rows: accounts,
       empty: 'No fleet accounts yet. Cards with a fleet name in the RFID centre create one automatically; add the legal and tax details here.',
@@ -465,7 +485,7 @@ async function renderAccounts(box, canWrite) {
               columns: [
                 { label: 'Invoice', render: (i) => `<span class="mono">${esc(i.number)}</span><div class="cell-sub">${esc(monthLabel(i.period))}</div>` },
                 { label: 'Status', render: (i) => statusTag(i) },
-                { label: 'Total', num: true, render: (i) => `${fmt.idr(i.total_idr)}${i.status === 'issued' && i.balance_idr !== Number(i.total_idr) ? `<div class="cell-sub">owed ${fmt.idr(i.balance_idr)}</div>` : ''}` },
+                { label: 'Total', num: true, render: (i) => `${fmt.money(i.total_minor, i.currency)}${i.status === 'issued' && i.balance_minor !== Number(i.total_minor) ? `<div class="cell-sub">owed ${fmt.money(i.balance_minor, i.currency)}</div>` : ''}` },
                 { label: 'Due', render: (i) => esc(fmt.date(i.due_date)) },
               ],
               rows: invoices,

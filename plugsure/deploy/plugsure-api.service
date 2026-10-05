@@ -29,6 +29,9 @@ WorkingDirectory=/opt/plugsure
 EnvironmentFile=/etc/plugsure/plugsure.env
 # v1.3: uploaded firmware images and retrieved diagnostic logs (inside ReadWritePaths).
 Environment=STORAGE_DIR=/var/lib/plugsure/storage
+# NODE_ENV is forced on the command line below as well: an EnvironmentFile= OVERRIDES
+# Environment=, so a NODE_ENV=development copied into the env file used to win and run
+# production with development behaviour. `env` sets it for the process whatever the file says.
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--enable-source-maps
 Environment=TZ=Asia/Jakarta
@@ -48,7 +51,7 @@ ExecStartPre=+/usr/bin/systemctl start plugsure-migrate.service
 # TimeoutStartSec=600): without this the default 90 s would report a long migration as a
 # failed deploy while it is still running.
 TimeoutStartSec=infinity
-ExecStart=/usr/bin/node /opt/plugsure/dist/apps/api.js
+ExecStart=/usr/bin/env NODE_ENV=production /usr/bin/node /opt/plugsure/dist/apps/api.js
 
 Restart=always
 RestartSec=5

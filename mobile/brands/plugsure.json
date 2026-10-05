@@ -1,0 +1,69 @@
+{
+  "$schema": "./brand.schema.json",
+  "variant": "plugsure",
+  "appName": "PlugSure",
+  "shortName": "PlugSure",
+  "tagline": {
+    "en": "Charge on every network",
+    "id": "Isi daya di semua jaringan"
+  },
+  "easSlug": "plugsure-hub",
+  "brandSlug": "plugsure",
+  "scope": "network",
+  "scheme": "plugsure",
+  "iosBundleId": "asia.plugsure.hub",
+  "androidPackage": "asia.plugsure.hub",
+  "linkHosts": [
+    "go.plugsure.asia"
+  ],
+  "apiBase": "https://api.plugsure.asia",
+  "accentColor": "#2fd6a7",
+  "badgeColor": "#0a1417",
+  "defaultLocale": "en",
+  "locales": [
+    "en",
+    "id"
+  ],
+  "countries": [
+    "ID",
+    "MY",
+    "SG"
+  ],
+  "defaultRegion": {
+    "latitude": -6.2,
+    "longitude": 106.82,
+    "latitudeDelta": 0.16,
+    "longitudeDelta": 0.16
+  },
+  "support": {
+    "phone": "+6221500000",
+    "whatsapp": "+6281100000000",
+    "email": "help@plugsure.asia"
+  },
+  "links": {
+    "terms": "https://plugsure.asia/legal/terms",
+    "privacy": "https://plugsure.asia/legal/privacy",
+    "deleteAccount": "https://go.plugsure.asia/account/delete",
+    "help": "https://plugsure.asia/help"
+  },
+  "store": {
+    "appStoreId": "",
+    "playStoreUrl": "https://play.google.com/store/apps/details?id=asia.plugsure.hub",
+    "appStoreUrl": "https://apps.apple.com/app/plugsure"
+  },
+  "easProjectId": "",
+  "appleTeamId": "",
+  "features": {
+    "guestCharge": true,
+    "roaming": true,
+    "fleetLogin": true,
+    "reservations": true,
+    "queue": true,
+    "memberships": true,
+    "liveActivities": true,
+    "ratings": true,
+    "problemReports": true,
+    "applePay": false,
+    "routePlanner": false
+  }
+}

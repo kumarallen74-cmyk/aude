@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
+import { phoneToE164 } from '../domain/phone.js';
+import { COUNTRIES, type CountryCode } from '../domain/country.js';
 import { many, one, query, outsideRequestScope } from '../db/pool.js';
 import { decodePng, encodePng, onBackground, pngSize, resize, transparentShare, PngError, type Rgba } from './png.js';
 import { buildZip, type ZipEntry } from './zip.js';
 import { seal, unseal } from './secrets.js';
 import { p8Problem, checkCredentials, forgetProviderToken, type ApnsCredentials } from './apns.js';
+import { parseServiceAccount, checkFcmCredentials, forgetFcmToken, type FcmCredentials } from './fcm.js';
 
 /**
  * White-label driver apps.
@@ -56,6 +59,21 @@ export interface Brand {
   apnsCheckedAt: string | null;
   apnsCheckOk: boolean | null;
   apnsCheckDetail: string | null;
+  /**
+   * 'operator': a white-label app limited to its operator's chargers (every brand before v1.9).
+   * 'network': the PlugSure app itself (the PlugSure Mobility eMSP organisation's brand): every operator's chargers,
+   * partner networks through its organisation (docs/MOBILE-APP-SPEC.md §2.2, G1). Set by tools/mobility/setup.mts only.
+   */
+  scope: 'operator' | 'network';
+  /** Android notifications (FCM HTTP v1): the Firebase project and service account (the key itself is never returned). */
+  fcmProjectId: string | null;
+  fcmClientEmail: string | null;
+  fcmConfigured: boolean;
+  fcmCheckedAt: string | null;
+  fcmCheckOk: boolean | null;
+  fcmCheckDetail: string | null;
+  /** The native apps' version gate and remote configuration (driver/app-config.ts). */
+  appConfig: Record<string, unknown>;
 }
 
 interface Row {
@@ -67,12 +85,15 @@ interface Row {
   ios_bundle_id: string | null; ios_team_id: string | null; version_name: string; version_code: number;
   updated_at: Date; published_at: Date | null;
   apns_key_id: string | null; apns_configured: boolean; apns_checked_at: Date | null; apns_check_ok: boolean | null; apns_check_detail: string | null;
+  scope: 'operator' | 'network'; fcm_project_id: string | null; fcm_client_email: string | null; fcm_configured: boolean;
+  fcm_checked_at: Date | null; fcm_check_ok: boolean | null; fcm_check_detail: string | null; app_config: Record<string, unknown> | null;
 }
 
 const COLS = `org_id, slug, status, app_name, short_name, tagline_id, tagline_en, description_id, description_en,
   accent_color, badge_color, icon_png IS NOT NULL AS has_icon, icon_sha256, support_email, support_phone, privacy_url, terms_url,
   hostname, android_package, android_cert_sha256, ios_bundle_id, ios_team_id, version_name, version_code, updated_at, published_at,
-  apns_key_id, apns_key_sealed IS NOT NULL AS apns_configured, apns_checked_at, apns_check_ok, apns_check_detail`;
+  apns_key_id, apns_key_sealed IS NOT NULL AS apns_configured, apns_checked_at, apns_check_ok, apns_check_detail,
+  scope, fcm_project_id, fcm_client_email, fcm_sa_sealed IS NOT NULL AS fcm_configured, fcm_checked_at, fcm_check_ok, fcm_check_detail, app_config`;
 
 const toBrand = (r: Row): Brand => ({
   orgId: r.org_id, slug: r.slug, status: r.status, appName: r.app_name, shortName: r.short_name,
@@ -84,6 +105,10 @@ const toBrand = (r: Row): Brand => ({
   updatedAt: new Date(r.updated_at).toISOString(), publishedAt: r.published_at ? new Date(r.published_at).toISOString() : null,
   apnsKeyId: r.apns_key_id, apnsConfigured: r.apns_configured, apnsCheckedAt: r.apns_checked_at ? new Date(r.apns_checked_at).toISOString() : null,
   apnsCheckOk: r.apns_check_ok, apnsCheckDetail: r.apns_check_detail,
+  scope: r.scope ?? 'operator',
+  fcmProjectId: r.fcm_project_id ?? null, fcmClientEmail: r.fcm_client_email ?? null, fcmConfigured: r.fcm_configured === true,
+  fcmCheckedAt: r.fcm_checked_at ? new Date(r.fcm_checked_at).toISOString() : null, fcmCheckOk: r.fcm_check_ok ?? null, fcmCheckDetail: r.fcm_check_detail ?? null,
+  appConfig: r.app_config ?? {},
 });
 
 // ─────────────────────────────────────────────── lookups (public, cached)
@@ -93,7 +118,7 @@ const bySlug = new Map<string, { at: number; brand: Brand | null }>();
 const byHost = new Map<string, { at: number; brand: Brand | null }>();
 const byOrg = new Map<string, { at: number; brand: Brand | null }>();
 
-export function forgetBrands(): void { bySlug.clear(); byHost.clear(); byOrg.clear(); iconCache.clear(); credCache.clear(); }
+export function forgetBrands(): void { bySlug.clear(); byHost.clear(); byOrg.clear(); iconCache.clear(); credCache.clear(); fcmCache.clear(); network = null; }
 
 async function cached(map: Map<string, { at: number; brand: Brand | null }>, key: string, load: () => Promise<Row | null>) {
   const hit = map.get(key);
@@ -116,6 +141,22 @@ export const brandForHost = (host: string | undefined) => {
 
 /** The operator's brand (any status). */
 export const brandForOrg = (orgId: string) => cached(byOrg, orgId, () => one<Row>(`SELECT ${COLS} FROM driver_app_brand WHERE org_id = $1`, [orgId]));
+
+let network: { at: number; brand: Brand | null } | null = null;
+
+/** The PlugSure app's own brand (scope 'network', owned by the PlugSure Mobility organisation), or null when not set up. */
+export async function networkBrand(): Promise<Brand | null> {
+  if (network && Date.now() - network.at < CACHE_MS) return network.brand;
+  const r = await one<Row>(`SELECT ${COLS} FROM driver_app_brand WHERE scope = 'network'`);
+  network = { at: Date.now(), brand: r ? toBrand(r) : null };
+  return network.brand;
+}
+
+/** Is this organisation the PlugSure app's (network brand's) organisation? */
+export async function isNetworkOrg(orgId: string | null | undefined): Promise<boolean> {
+  if (!orgId) return false;
+  return (await networkBrand().catch(() => null))?.orgId === orgId;
+}
 
 /** What an operator's customers see as the seller: its live app's name, else PlugSure. */
 export async function appNameFor(orgId: string | null | undefined): Promise<string> {
@@ -169,10 +210,11 @@ export interface BrandInput {
   versionName?: unknown; versionCode?: unknown; status?: unknown;
 }
 
-type Values = Omit<Brand, 'orgId' | 'hasIcon' | 'iconSha256' | 'updatedAt' | 'publishedAt' | 'apnsKeyId' | 'apnsConfigured' | 'apnsCheckedAt' | 'apnsCheckOk' | 'apnsCheckDetail'>;
+type Values = Omit<Brand, 'orgId' | 'hasIcon' | 'iconSha256' | 'updatedAt' | 'publishedAt' | 'apnsKeyId' | 'apnsConfigured' | 'apnsCheckedAt' | 'apnsCheckOk' | 'apnsCheckDetail'
+  | 'scope' | 'fcmProjectId' | 'fcmClientEmail' | 'fcmConfigured' | 'fcmCheckedAt' | 'fcmCheckOk' | 'fcmCheckDetail' | 'appConfig'>;
 
 /** Check an edit against the current brand (or none). Throws BrandError with a message per field. */
-export function validateBrand(input: BrandInput, current: Brand | null): Values {
+export function validateBrand(input: BrandInput, current: Brand | null, homeCountry: CountryCode = 'ID'): Values {
   const errors: Record<string, string> = {};
   const has = (k: keyof BrandInput) => Object.prototype.hasOwnProperty.call(input, k);
   const str = (k: keyof BrandInput, prev: string | null) => (has(k) ? (input[k] == null ? '' : String(input[k]).trim()) : prev ?? '');
@@ -187,7 +229,8 @@ export function validateBrand(input: BrandInput, current: Brand | null): Values 
   let slug = str('slug', current?.slug ?? null) || slugFrom(appName);
   slug = slug.toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(slug)) errors.slug = '3–32 lowercase letters, digits and hyphens.';
-  else if (RESERVED_SLUGS.has(slug)) errors.slug = 'This name is reserved; choose another.';
+  // The PlugSure app's own brand keeps its reserved slug (set by tools/mobility/setup.mts); nobody else may take one.
+  else if (RESERVED_SLUGS.has(slug) && !(current?.scope === 'network' && current.slug === slug)) errors.slug = 'This name is reserved; choose another.';
 
   const text = (k: keyof BrandInput, prev: string | null, max: number, label: string) => {
     const v = opt(k, prev);
@@ -211,9 +254,8 @@ export function validateBrand(input: BrandInput, current: Brand | null): Values 
   if (supportEmail && (supportEmail.length > 120 || !EMAIL_RE.test(supportEmail))) errors.supportEmail = 'Not an e-mail address.';
   let supportPhone = opt('supportPhone', current?.supportPhone ?? null);
   if (supportPhone) {
-    const digits = supportPhone.replace(/[\s()-]/g, '');
-    const e164 = digits.startsWith('+') ? digits : digits.startsWith('0') ? `+62${digits.slice(1)}` : digits.startsWith('62') ? `+${digits}` : digits;
-    if (!/^\+\d{8,15}$/.test(e164)) errors.supportPhone = 'A phone number, e.g. +62 21 555 0100 or 0812 3456 7890.';
+    const e164 = phoneToE164(supportPhone, homeCountry);
+    if (!e164) errors.supportPhone = `A phone number, e.g. ${COUNTRIES[homeCountry].phoneExample}.`;
     else supportPhone = e164;
   }
   const url = (k: keyof BrandInput, prev: string | null, label: string) => {
@@ -392,9 +434,12 @@ const DEFAULT_TAGLINE_ID = 'Isi daya, di mana saja';
  * call, so stations and history are scoped to the operator). `preview` keeps
  * the brand in the manifest link and start URL.
  */
-export function renderIndex(html: string, b: Brand, opts: { preview: boolean }): string {
+export function renderIndex(html: string, b: Brand, opts: { preview: boolean; defaultLang?: string | null }): string {
   const p = palette(b.accentColor, b.badgeColor);
   let out = html;
+  // The operator's default language (Malaysia and Singapore: English): the app's language until the driver
+  // chooses one (stored), after the device's language when that is English.
+  if (opts.defaultLang === 'en' || opts.defaultLang === 'id') out = out.replace('<html lang="id">', `<html lang="${opts.defaultLang}" data-default-lang="${opts.defaultLang}">`);
   // The tagline, and its English in the translation table.
   if (b.taglineId) {
     out = out.replace(`'${DEFAULT_TAGLINE_ID}':'Charge anywhere'`, `'${b.taglineId}':'${b.taglineEn || b.taglineId}'`);
@@ -464,11 +509,27 @@ export function assetLinks(b: Brand | null): unknown[] {
   }];
 }
 
+/**
+ * The paths a link domain hands to the native app (universal links / App Links), docs/MOBILE-APP-SPEC.md §13.1:
+ * charger QR stickers (/c/<code>), shared stations (/s/<siteId>), receipts (/r/<kind>/<id>), payment returns (/paid)
+ * and the web app's own links (/app/*). An operator's white-label app keeps /app/* only, as before.
+ */
+export const NETWORK_LINK_PATHS: ReadonlyArray<{ path: string; comment: string }> = Object.freeze([
+  { path: '/c/*', comment: 'A charger QR code' },
+  { path: '/s/*', comment: 'A shared station' },
+  { path: '/r/*', comment: 'A receipt' },
+  { path: '/paid*', comment: 'Back from a payment' },
+  { path: '/app/*', comment: 'The driver app' },
+]);
+
 /** Apple app-site association: links to this address open the iOS app. */
 export function appleAssociation(b: Brand | null): Record<string, unknown> {
   if (!b?.iosBundleId || !b.iosTeamId) return { applinks: { details: [] } };
   const appId = `${b.iosTeamId}.${b.iosBundleId}`;
-  return { applinks: { details: [{ appIDs: [appId], components: [{ '/': '/app/*', comment: 'The driver app' }] }] }, webcredentials: { apps: [appId] } };
+  const components = b.scope === 'network'
+    ? NETWORK_LINK_PATHS.map((x) => ({ '/': x.path, comment: x.comment }))
+    : [{ '/': '/app/*', comment: 'The driver app' }];
+  return { applinks: { details: [{ appIDs: [appId], components }] }, webcredentials: { apps: [appId] } };
 }
 
 // ─────────────────────────────────────────────── readiness
@@ -496,7 +557,8 @@ export function readiness(b: Brand): Check[] {
 export async function saveBrand(orgId: string, input: BrandInput): Promise<Brand> {
   const current = await one<Row>(`SELECT ${COLS} FROM driver_app_brand WHERE org_id = $1`, [orgId]);
   const cur = current ? toBrand(current) : null;
-  const v = validateBrand(input, cur);
+  const home = await one<{ c: CountryCode }>(`SELECT home_country_code AS c FROM organisation WHERE id = $1`, [orgId]);
+  const v = validateBrand(input, cur, home?.c ?? 'ID');
   if (v.status === 'live') {
     const missing = [!cur?.hasIcon && 'an icon', !v.hostname && 'a web address'].filter(Boolean);
     if (missing.length) throw new BrandError(409, `To go live the app needs ${missing.join(' and ')}.`, { status: 'missing' });
@@ -1255,4 +1317,75 @@ export async function apnsCredentialsFor(orgId: string): Promise<ApnsCredentials
     : null;
   credCache.set(orgId, { at: Date.now(), c });
   return c;
+}
+
+// ─────────────────────────────────────────────── native Android notifications (FCM)
+
+const fcmCache = new Map<string, { at: number; c: FcmCredentials | null }>();
+
+/**
+ * Store the brand's Firebase service account (sealed) and check it with Google at once. One per brand: the Android
+ * app's Firebase project (its google-services.json) must be the same project.
+ */
+export async function saveFcmServiceAccount(orgId: string, json: unknown): Promise<Brand> {
+  const b = await brandOf(orgId);
+  if (!b) throw new BrandError(404, 'Set up the driver app first.');
+  const parsed = parseServiceAccount(json);
+  if (!parsed.ok) throw new BrandError(422, parsed.error, { fcmServiceAccount: 'format' });
+  const check = await checkFcmCredentials(parsed.creds);
+  const text = typeof json === 'string' ? json : JSON.stringify(json);
+  await query(
+    `UPDATE driver_app_brand SET fcm_project_id = $2, fcm_client_email = $3, fcm_sa_sealed = $4, fcm_checked_at = now(), fcm_check_ok = $5,
+            fcm_check_detail = $6, updated_at = now() WHERE org_id = $1`,
+    [orgId, parsed.creds.projectId, parsed.creds.clientEmail, seal(text), check.ok, check.detail],
+  );
+  forgetBrands();
+  return (await brandOf(orgId))!;
+}
+
+export async function recheckFcm(orgId: string): Promise<Brand> {
+  const c = await fcmCredentialsFor(orgId);
+  if (!c) throw new BrandError(409, 'Upload the Firebase service account (Android notifications) first.');
+  forgetFcmToken(c);
+  const check = await checkFcmCredentials(c);
+  await query(`UPDATE driver_app_brand SET fcm_checked_at = now(), fcm_check_ok = $2, fcm_check_detail = $3 WHERE org_id = $1`, [orgId, check.ok, check.detail]);
+  forgetBrands();
+  return (await brandOf(orgId))!;
+}
+
+export async function removeFcm(orgId: string): Promise<void> {
+  await query(`UPDATE driver_app_brand SET fcm_project_id = NULL, fcm_client_email = NULL, fcm_sa_sealed = NULL, fcm_checked_at = NULL,
+                      fcm_check_ok = NULL, fcm_check_detail = NULL, updated_at = now() WHERE org_id = $1`, [orgId]);
+  forgetBrands();
+}
+
+/** Google refused the service account while sending (marked only if it is still the brand's account). */
+export async function markFcmRefused(orgId: string, detail: string, used?: Pick<FcmCredentials, 'clientEmail'>): Promise<void> {
+  await query(
+    `UPDATE driver_app_brand SET fcm_checked_at = now(), fcm_check_ok = false, fcm_check_detail = $2
+      WHERE org_id = $1 AND fcm_check_ok IS DISTINCT FROM false AND ($3::text IS NULL OR fcm_client_email = $3)`,
+    [orgId, detail, used?.clientEmail ?? null]);
+  forgetBrands();
+}
+
+/** The FCM credentials of a brand's Android app (the worker, outside any request). */
+export async function fcmCredentialsFor(orgId: string): Promise<FcmCredentials | null> {
+  const hit = fcmCache.get(orgId);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.c;
+  const r = await one<{ fcm_sa_sealed: string | null }>(`SELECT fcm_sa_sealed FROM driver_app_brand WHERE org_id = $1`, [orgId]);
+  let c: FcmCredentials | null = null;
+  if (r?.fcm_sa_sealed) {
+    const p = parseServiceAccount(unseal(r.fcm_sa_sealed));
+    c = p.ok ? p.creds : null;
+  }
+  fcmCache.set(orgId, { at: Date.now(), c });
+  return c;
+}
+
+/** The brand's native app configuration as stored (validated in driver/app-config.ts). */
+export async function saveAppConfig(orgId: string, cfg: Record<string, unknown>): Promise<Brand> {
+  const r = await one<Row>(`UPDATE driver_app_brand SET app_config = $2::jsonb, updated_at = now() WHERE org_id = $1 RETURNING ${COLS}`, [orgId, JSON.stringify(cfg)]);
+  if (!r) throw new BrandError(404, 'Set up the driver app first.');
+  forgetBrands();
+  return toBrand(r);
 }

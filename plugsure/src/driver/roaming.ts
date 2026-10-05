@@ -4,6 +4,9 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { sendCommand, EmspError } from '../ocpi/emsp.js';
 import { fleetTokenProblem } from './charge.js';
+import { locationCurrency, onPartnerDataChanged } from '../ocpi/emsp.js';
+import { isCurrency, toMinor, unitOf, type CurrencyCode } from '../domain/money.js';
+import { emspOrgForApp, roamingPaymentFor, placeRoamingHold, startAfterHold, releaseRoamingHold, holdOf, roamingSettingsOf, holdAmount } from './roaming-pay.js';
 import type { DriverPrincipal } from './identity.js';
 
 /**
@@ -19,27 +22,42 @@ import type { DriverPrincipal } from './identity.js';
  * sessions itself, so the app says "per the operator" where it shows numbers.
  */
 
-const LABEL: Record<string, string> = {
+export const LABEL: Record<string, string> = {
   IEC_62196_T2: 'Type 2', IEC_62196_T2_COMBO: 'CCS2', CHADEMO: 'CHAdeMO', GBT_AC: 'GB/T', GBT_DC: 'GB/T',
   IEC_62196_T1: 'Type 1', IEC_62196_T1_COMBO: 'CCS1', TESLA_S: 'Tesla', TESLA_R: 'Tesla',
 };
 
 /** OCPI EVSE status -> the app's own status words (same as PlugSure chargers). */
-const STATUS: Record<string, string> = {
+export const STATUS: Record<string, string> = {
   AVAILABLE: 'Available', CHARGING: 'Charging', RESERVED: 'Occupied', BLOCKED: 'Occupied',
   OUTOFORDER: 'Faulted', INOPERATIVE: 'Maintenance', UNKNOWN: 'Offline', PLANNED: 'Unavailable',
 };
 
-export interface Eligibility { enabled: boolean; reason?: string; tokenId?: string; orgId?: string }
+export interface Eligibility {
+  enabled: boolean; reason?: string; tokenId?: string; orgId?: string;
+  /** fleet: billed on the fleet's invoice; app: a signed-in driver, guaranteed by a card hold (roaming-pay.ts). */
+  mode?: 'fleet' | 'app';
+  /** fleet: the card's spending-limit currency when it has a limit (charges in another currency are refused). */
+  limitCurrency?: string | null;
+}
 
-/** May this driver roam? A fleet card that the fleet operator shared for roaming. */
-export async function roamingEligibility(p: DriverPrincipal): Promise<Eligibility> {
-  if (!p.fleet) return { enabled: false, reason: 'Jaringan mitra tersedia untuk pengemudi armada dengan kartu roaming.' };
-  const t = await one<{ roaming_shared: boolean; contract_id: string | null }>(
-    `SELECT roaming_shared, contract_id FROM token WHERE id = $1`, [p.fleet.tokenId],
+/**
+ * May this driver roam? A fleet card that the fleet operator shared for roaming; or a
+ * signed-in app driver, when the operator offers partner networks to app drivers
+ * (docs/MULTI-COUNTRY-DESIGN.md §D7) — each charge then needs a card hold.
+ */
+export async function roamingEligibility(p: DriverPrincipal, brandOrgId: string | null = null): Promise<Eligibility> {
+  if (!p.fleet) {
+    const org = p.appDriverId ? await emspOrgForApp(brandOrgId) : null;
+    if (org) return { enabled: true, orgId: org, mode: 'app' };
+    if (!p.appDriverId && (await emspOrgForApp(brandOrgId))) return { enabled: false, reason: 'Masuk untuk mengisi di jaringan mitra.' };
+    return { enabled: false, reason: 'Jaringan mitra tersedia untuk pengemudi armada dengan kartu roaming.' };
+  }
+  const t = await one<{ roaming_shared: boolean; contract_id: string | null; spend_limit_minor: number | null; spend_limit_currency: string }>(
+    `SELECT roaming_shared, contract_id, spend_limit_minor, spend_limit_currency FROM token WHERE id = $1`, [p.fleet.tokenId],
   );
   if (!t?.roaming_shared || !t.contract_id) return { enabled: false, reason: 'Kartu Anda belum diaktifkan untuk jaringan mitra. Hubungi admin armada Anda.' };
-  return { enabled: true, tokenId: p.fleet.tokenId, orgId: p.fleet.orgId };
+  return { enabled: true, tokenId: p.fleet.tokenId, orgId: p.fleet.orgId, mode: 'fleet', limitCurrency: t.spend_limit_minor != null ? t.spend_limit_currency : null };
 }
 
 function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
@@ -57,46 +75,150 @@ export interface RoamingStation {
   evses: Array<{ uid: string; evseId: string; status: string; available: boolean;
     connectors: Array<{ id: string; typeLabel: string; current: 'AC' | 'DC'; maxPowerKw: number | null }> }>;
   availableCount: number; totalCount: number; fastest: string | null;
-  /** The operator's energy price per kWh, before tax, when it publishes one. */
-  priceFromIdr: number | null;
+  /** The operator's energy price per kWh, before tax, when it publishes one: in `priceCurrency` (major units in priceFromMajor; minor, rounded, in priceFromMinor). */
+  priceFromMinor: number | null;
+  priceFromMajor: number | null;
+  priceCurrency: string | null;
   vatPercent: number | null;
+  /** The currency the charge is paid in (the location's country). null: one PlugSure does not support. */
+  currency: string | null;
+  /** Whether this driver can start here, and why not. */
+  startable: boolean;
+  reason: string | null;
+  reasonCode: RoamingReasonCode;
+  /** App drivers: the card hold placed before the charge starts, in `currency`. */
+  holdMinor: number | null;
+  savedCards: Array<{ id: string; brand: string | null; last4: string | null }>;
 }
 
-/** Partner operators' stations this driver's card can use, nearest first when a location is given. */
-export async function listRoamingStations(p: DriverPrincipal, loc?: { lat: number; lon: number }) {
-  const el = await roamingEligibility(p);
-  if (!el.enabled) return { enabled: false, reason: el.reason, stations: [] as RoamingStation[] };
-  const rows = await many<{ partner_id: string; partner_name: string; country_code: string; party_id: string; location_id: string; data: any }>(
+export interface RoamingListOptions {
+  /**
+   * Leave out partner locations of an operator hosted on this platform (it also joined the hub, so its chargers
+   * came back through it): the app shows those directly, where guests can charge too (G5). For lists that also
+   * show every hosted operator (the PlugSure app, the unbranded web app); never for an operator's own app.
+   */
+  dedupe?: boolean;
+  /** Only locations inside this viewport [w, s, e, n] (the map): the rest are not built at all. */
+  bbox?: readonly [number, number, number, number];
+  /** Nearest-first ordering of the answer (default true); the map orders its own merged list. */
+  sort?: boolean;
+}
+
+type RemoteRow = { partner_id: string; partner_name: string; country_code: string; party_id: string; location_id: string; data: any; lat: number; lon: number };
+type TariffRow = { partner_id: string; country_code: string; party_id: string; tariff_id: string; data: any };
+
+/**
+ * The partner locations and tariffs an eMSP organisation received, kept in memory per (organisation, dedupe) — the
+ * map asks for them on every pan. Each use checks a cheap version (row counts and the newest row version of the
+ * organisation's locations, tariffs and partners, `xmin`), so an OCPI push, a pull, a partner closed — in this
+ * process or another — is seen at once; receivers also drop the entry (`forgetPartnerLocations`). A TTL bounds the
+ * dedupe part (another operator's sites), which the version does not cover.
+ */
+const PARTNER_TTL_MS = 60_000;
+const partnerCache = new Map<string, { version: string; at: number; rows: RemoteRow[]; tariffs: Map<string, TariffRow> }>();
+export const partnerCacheStats = { hits: 0, loads: 0 };
+
+onPartnerDataChanged((orgId) => forgetPartnerLocations(orgId));
+
+export function forgetPartnerLocations(orgId?: string): void {
+  if (!orgId) { partnerCache.clear(); return; }
+  for (const k of partnerCache.keys()) if (k.startsWith(`${orgId}:`)) partnerCache.delete(k);
+}
+
+async function partnerData(orgId: string, dedupe: boolean): Promise<{ rows: RemoteRow[]; tariffs: Map<string, TariffRow> }> {
+  const v = (await one<{ v: string }>(
+    `SELECT concat_ws('|',
+       (SELECT count(*) || ':' || COALESCE(max(xmin::text::bigint), 0) FROM ocpi_remote_location WHERE org_id = $1),
+       (SELECT count(*) || ':' || COALESCE(max(xmin::text::bigint), 0) FROM ocpi_remote_tariff WHERE org_id = $1),
+       (SELECT count(*) || ':' || COALESCE(max(xmin::text::bigint), 0) FROM ocpi_partner WHERE org_id = $1)) AS v`, [orgId]))?.v ?? '';
+  const key = `${orgId}:${dedupe ? 1 : 0}`;
+  const hit = partnerCache.get(key);
+  if (hit && hit.version === v && Date.now() - hit.at < PARTNER_TTL_MS) { partnerCacheStats.hits++; return hit; }
+  partnerCacheStats.loads++;
+  const raw = await many<Omit<RemoteRow, 'lat' | 'lon'>>(
     `SELECT l.partner_id, p.name AS partner_name, l.country_code, l.party_id, l.location_id, l.data
        FROM ocpi_remote_location l JOIN ocpi_partner p ON p.id = l.partner_id
-      WHERE l.org_id = $1 AND p.state = 'connected' AND COALESCE((l.data->>'publish')::boolean, true)`,
-    [el.orgId],
+      WHERE l.org_id = $1 AND p.state = 'connected' AND COALESCE((l.data->>'publish')::boolean, true)
+        AND (NOT $2::boolean OR NOT EXISTS (
+              SELECT 1 FROM ocpi_party op JOIN organisation o ON o.id = op.org_id
+               WHERE op.country_code = l.country_code AND op.party_id = l.party_id
+                 AND o.hub_only IS NOT TRUE AND o.sandbox_of_org_id IS NULL AND o.archived_at IS NULL
+                 AND EXISTS (SELECT 1 FROM site s WHERE s.org_id = o.id AND s.archived_at IS NULL)))`,
+    [orgId, dedupe],
   );
-  const tariffs = await many<{ partner_id: string; country_code: string; party_id: string; tariff_id: string; data: any }>(
+  const rows = raw.map((r) => ({ ...r, lat: Number(r.data?.coordinates?.latitude), lon: Number(r.data?.coordinates?.longitude) }));
+  const tariffs = new Map<string, TariffRow>();
+  for (const t of await many<TariffRow>(
     `SELECT t.partner_id, t.country_code, t.party_id, t.tariff_id, t.data
        FROM ocpi_remote_tariff t JOIN ocpi_partner p ON p.id = t.partner_id
       WHERE t.org_id = $1 AND p.state = 'connected'`,
-    [el.orgId],
-  );
-  const tariffOf = (r: { partner_id: string; country_code: string; party_id: string }, id: string) =>
-    tariffs.find((t) => t.partner_id === r.partner_id && t.country_code === r.country_code && t.party_id === r.party_id && t.tariff_id === id);
+    [orgId],
+  )) tariffs.set(`${t.partner_id}|${t.country_code}|${t.party_id}|${t.tariff_id}`, t);
+  const entry = { version: v, at: Date.now(), rows, tariffs };
+  partnerCache.set(key, entry);
+  return entry;
+}
 
-  const out: RoamingStation[] = rows.map((r) => {
+const inBbox = (lat: number, lon: number, b: readonly [number, number, number, number]) =>
+  Number.isFinite(lat) && Number.isFinite(lon) && lat >= b[1] && lat <= b[3] && (b[0] <= b[2] ? lon >= b[0] && lon <= b[2] : lon >= b[0] || lon <= b[2]);
+
+/** Why a partner station cannot be started from the app, as a code the native app can switch on. */
+export type RoamingReasonCode = 'sign_in' | 'payment' | 'fleet_limit' | null;
+
+/** Partner operators' stations this driver's card can use, nearest first when a location is given. */
+export async function listRoamingStations(p: DriverPrincipal, loc?: { lat: number; lon: number }, brandOrgId: string | null = null, opts: RoamingListOptions = {}) {
+  const el = await roamingEligibility(p, brandOrgId);
+  if (!el.enabled) return { enabled: false, reason: el.reason, stations: [] as RoamingStation[] };
+  const stations = await roamingStationsOf(el.orgId!, { mode: el.mode!, limitCurrency: el.limitCurrency ?? null, appDriverId: p.appDriverId }, loc, opts);
+  // fleet: billed to the company; app: a hold on the driver's card in the partner's currency.
+  return { enabled: true, mode: el.mode, stations };
+}
+
+/**
+ * The partner stations an eMSP organisation receives (from the hub or bilateral OCPI), for one kind of driver:
+ * fleet card, signed-in app driver, or a guest (visible on the map, not startable: sign in first).
+ */
+export async function roamingStationsOf(
+  emspOrgId: string,
+  who: { mode: 'fleet' | 'app' | 'guest'; limitCurrency?: string | null; appDriverId?: string | null },
+  loc?: { lat: number; lon: number },
+  opts: RoamingListOptions = {},
+): Promise<RoamingStation[]> {
+  const el = { orgId: emspOrgId, mode: who.mode, limitCurrency: who.limitCurrency ?? null };
+  const p = { appDriverId: who.appDriverId ?? null };
+  const settings = who.mode === 'guest' ? await roamingSettingsOf(emspOrgId) : null;
+  // App drivers: what each currency's acquirer allows (looked up once per currency).
+  const payFor = new Map<string, Awaited<ReturnType<typeof roamingPaymentFor>>>();
+  const payment = async (cur: CurrencyCode | null) => {
+    const k = cur ?? '-';
+    if (!payFor.has(k)) payFor.set(k, await roamingPaymentFor(el.orgId!, cur, p.appDriverId));
+    return payFor.get(k)!;
+  };
+  const cached = await partnerData(el.orgId!, opts.dedupe === true);
+  const rows = opts.bbox ? cached.rows.filter((r) => inBbox(r.lat, r.lon, opts.bbox!)) : cached.rows;
+  const tariffOf = (r: { partner_id: string; country_code: string; party_id: string }, id: string) =>
+    cached.tariffs.get(`${r.partner_id}|${r.country_code}|${r.party_id}|${id}`);
+
+  const out: RoamingStation[] = [];
+  for (const r of rows) {
     const d = r.data ?? {};
-    const lat = Number(d.coordinates?.latitude);
-    const lon = Number(d.coordinates?.longitude);
+    const { lat, lon } = r;
+    const currency = locationCurrency(d, r.country_code);
     let price: number | null = null;
+    let priceCur: string | null = null;
     let vat: number | null = null;
     const evses = (d.evses ?? []).filter((e: any) => e.status !== 'REMOVED').map((e: any) => {
       const status = STATUS[e.status] ?? 'Unavailable';
       const connectors = (e.connectors ?? []).map((c: any) => {
         for (const tid of c.tariff_ids ?? []) {
           const t = tariffOf(r, tid);
-          if (!t || t.data?.currency !== 'IDR') continue;
+          // Prices in the charge's currency only (a tariff in another currency would be compared across currencies).
+          if (!t || !isCurrency(t.data?.currency) || (currency && t.data.currency !== currency)) continue;
           for (const el of t.data.elements ?? []) {
             for (const pc of el.price_components ?? []) {
               if (pc.type === 'ENERGY' && Number.isFinite(Number(pc.price)) && (price == null || Number(pc.price) < price)) {
                 price = Number(pc.price);
+                priceCur = t.data.currency;
                 vat = pc.vat != null ? Number(pc.vat) : null;
               }
             }
@@ -113,7 +235,29 @@ export async function listRoamingStations(p: DriverPrincipal, loc?: { lat: numbe
     });
     const all = evses.flatMap((e: any) => e.connectors) as Array<{ current: string; maxPowerKw: number | null }>;
     const fastest = all.reduce<{ current: string; maxPowerKw: number | null } | null>((a, c) => ((c.maxPowerKw ?? 0) > (a?.maxPowerKw ?? -1) ? c : a), null);
-    return {
+    let startable = true;
+    let reason: string | null = null;
+    let reasonCode: RoamingReasonCode = null;
+    let holdMinor: number | null = null;
+    let savedCards: Array<{ id: string; brand: string | null; last4: string | null }> = [];
+    if (el.mode === 'app') {
+      const pay = await payment(currency);
+      startable = pay.startable;
+      reason = pay.reason;
+      reasonCode = pay.startable ? null : 'payment';
+      holdMinor = pay.holdMinor;
+      savedCards = pay.savedCards;
+    } else if (el.mode === 'guest') {
+      startable = false;
+      reason = 'Masuk untuk mengisi di jaringan mitra.';
+      reasonCode = 'sign_in';
+      holdMinor = currency && isCurrency(currency) ? holdAmount(settings!, currency as CurrencyCode) : null;
+    } else if (el.limitCurrency && currency !== el.limitCurrency) {
+      startable = false;
+      reason = `Batas biaya kartu armada Anda dalam ${el.limitCurrency}; jaringan ini menagih dalam ${currency ?? 'mata uang lain'}.`;
+      reasonCode = 'fleet_limit';
+    }
+    out.push({
       partnerId: r.partner_id, countryCode: r.country_code, partyId: r.party_id, locationId: r.location_id,
       name: String(d.name ?? d.address ?? r.location_id), address: [d.address, d.city].filter(Boolean).join(', ') || null, city: d.city ?? null,
       operator: d.operator?.name ?? r.partner_name,
@@ -123,35 +267,78 @@ export async function listRoamingStations(p: DriverPrincipal, loc?: { lat: numbe
       availableCount: evses.filter((e: any) => e.available).length,
       totalCount: evses.length,
       fastest: fastest?.maxPowerKw != null ? `${fastest.maxPowerKw} kW ${fastest.current}` : null,
-      priceFromIdr: price,
+      // IDR (exponent 0): the rupiah rate itself, as before; other currencies rounded to the sen/cent (priceFromMajor is exact).
+      priceFromMinor: price != null && priceCur ? (unitOf(priceCur).exponent === 0 ? price : toMinor(price, priceCur as CurrencyCode)) : null,
+      priceFromMajor: price,
+      priceCurrency: priceCur,
       vatPercent: vat,
-    };
-  });
-  out.sort((a, b) =>
-    a.distanceKm != null && b.distanceKm != null ? a.distanceKm - b.distanceKm
-      : (b.availableCount > 0 ? 1 : 0) - (a.availableCount > 0 ? 1 : 0) || a.name.localeCompare(b.name));
-  return { enabled: true, stations: out };
+      currency,
+      startable,
+      reason,
+      reasonCode,
+      holdMinor,
+      // App drivers: the cards saved with this currency's acquirer (the hold can go on one without a checkout).
+      savedCards,
+    });
+  }
+  if (opts.sort !== false) {
+    out.sort((a, b) =>
+      a.distanceKm != null && b.distanceKm != null ? a.distanceKm - b.distanceKm
+        : (b.availableCount > 0 ? 1 : 0) - (a.availableCount > 0 ? 1 : 0) || a.name.localeCompare(b.name));
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────── charging
 
 export interface RoamingStart { partnerId: string; countryCode: string; partyId: string; locationId: string; evseUid: string; connectorId?: string }
+/** App drivers: how the hold is paid (a saved card, or a new card through the acquirer's checkout). */
+export interface RoamingPay { savedCardId?: string | null; saveCard?: boolean; returnUrl?: string }
 
-export async function startRoaming(p: DriverPrincipal, s: RoamingStart, base: string): Promise<{ ok: boolean; chargeId?: string; error?: string }> {
-  const el = await roamingEligibility(p);
+export async function startRoaming(
+  p: DriverPrincipal, s: RoamingStart, base: string, brandOrgId: string | null = null, pay: RoamingPay = {},
+): Promise<{ ok: boolean; chargeId?: string; error?: string; code?: string; payment?: Record<string, unknown> }> {
+  const el = await roamingEligibility(p, brandOrgId);
   if (!el.enabled) return { ok: false, error: el.reason };
-  const problem = await fleetTokenProblem(el.tokenId!);
-  if (problem) return { ok: false, error: problem };
-  const { stations } = await listRoamingStations(p);
+  const { stations } = await listRoamingStations(p, undefined, brandOrgId);
   const st = stations.find((x) => x.partnerId === s.partnerId && x.countryCode === s.countryCode && x.partyId === s.partyId && x.locationId === s.locationId);
   const evse = st?.evses.find((e) => e.uid === s.evseUid);
   if (!st || !evse) return { ok: false, error: 'Charger mitra tidak ditemukan.' };
+  if (el.mode === 'fleet') {
+    const problem = await fleetTokenProblem(el.tokenId!, el.limitCurrency ? st.currency : null);
+    if (problem) return { ok: false, error: problem };
+  }
+  if (!st.startable) return { ok: false, error: st.reason ?? 'Charger ini sedang tidak tersedia.', code: 'not_startable' };
   // The driver's own reservation shows as RESERVED at the operator: that one they may start.
   const mine = await one<{ id: string }>(
     `SELECT id FROM driver_roaming_reservation WHERE device_id = $1 AND partner_id = $2 AND location_id = $3 AND evse_uid = $4 AND state = 'active'`,
     [p.deviceId, s.partnerId, s.locationId, s.evseUid]);
   if (!evse.available && !mine) return { ok: false, error: 'Charger ini sedang tidak tersedia.' };
   const connectorId = s.connectorId ?? evse.connectors[0]?.id;
+  if (el.mode === 'app') {
+    // The guarantee first: a card hold in the location's currency; START_SESSION only once it is authorised.
+    const h = await placeRoamingHold({
+      orgId: el.orgId!, appDriverId: p.appDriverId!, deviceId: p.deviceId, currency: st.currency as CurrencyCode,
+      partnerId: s.partnerId, countryCode: s.countryCode, partyId: s.partyId, locationId: s.locationId, evseUid: s.evseUid, connectorId: connectorId ?? null,
+      savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, returnUrl: pay.returnUrl ?? '/app/paid.html',
+      description: `${st.operator} ${st.name}`.slice(0, 120),
+    });
+    if (!h.ok) return { ok: false, error: h.error, code: h.code };
+    const payment = {
+      hold: true, currency: st.currency, amountMinor: h.holdMinor, action: h.payment.action, checkoutUrl: h.payment.checkoutUrl,
+      providerRef: h.payment.providerRef, expiresAt: h.payment.expiresAt, savedCardId: h.payment.savedCardId,
+    };
+    if (h.payment.immediate === 'authorised') {
+      const started = await startAfterHold(h.chargeId, base);
+      if (started === 'refused') return { ok: false, chargeId: h.chargeId, error: 'Operator menolak permintaan. Dana yang ditahan sudah dilepas.' };
+    }
+    await query(
+      `UPDATE driver_roaming_reservation SET state = 'used', ended_at = now()
+        WHERE device_id = $1 AND partner_id = $2 AND location_id = $3 AND evse_uid = $4 AND state IN ('requested','active')`,
+      [p.deviceId, s.partnerId, s.locationId, s.evseUid],
+    );
+    return { ok: true, chargeId: h.chargeId, payment };
+  }
   try {
     const r = await sendCommand({
       orgId: el.orgId!, partnerId: s.partnerId, command: 'START_SESSION', base, tokenId: el.tokenId,
@@ -161,9 +348,9 @@ export async function startRoaming(p: DriverPrincipal, s: RoamingStart, base: st
       return { ok: false, error: `Operator menolak permintaan (${r.response.toLowerCase()}). Coba tempelkan kartu Anda di charger.` };
     }
     const row = await one<{ id: string }>(
-      `INSERT INTO driver_roaming_charge (org_id, device_id, token_id, partner_id, country_code, party_id, location_id, evse_uid, connector_id, start_command_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-      [el.orgId, p.deviceId, el.tokenId, s.partnerId, s.countryCode, s.partyId, s.locationId, s.evseUid, connectorId ?? null, r.id],
+      `INSERT INTO driver_roaming_charge (org_id, device_id, token_id, partner_id, country_code, party_id, location_id, evse_uid, connector_id, start_command_id, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [el.orgId, p.deviceId, el.tokenId, s.partnerId, s.countryCode, s.partyId, s.locationId, s.evseUid, connectorId ?? null, r.id, st.currency],
     );
     // Charging where the driver held a reservation uses it up.
     await query(
@@ -182,14 +369,16 @@ interface RoamRow {
   id: string; org_id: string; device_id: string; token_id: string; partner_id: string; country_code: string; party_id: string;
   location_id: string; evse_uid: string; connector_id: string | null; start_command_id: string | null; stop_command_id: string | null;
   remote_session_id: string | null; created_at: Date;
+  app_driver_id: string | null; payment_intent_id: string | null; currency: string | null; settled_at: Date | null; settle_outcome: string | null;
+  start_requested_at: Date | null;
 }
 
-/** A roaming charge belongs to the phone that started it, or to the fleet card it charged. */
+/** A roaming charge belongs to the phone that started it, to the fleet card it charged, or to the app driver who paid its hold. */
 async function ownedRoaming(p: DriverPrincipal, id: string): Promise<RoamRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   const r = await one<RoamRow>(`SELECT * FROM driver_roaming_charge WHERE id = $1`, [id]);
   if (!r) return null;
-  if (r.device_id === p.deviceId || (p.fleet && r.token_id === p.fleet.tokenId)) return r;
+  if (r.device_id === p.deviceId || (p.fleet && r.token_id === p.fleet.tokenId) || (p.appDriverId && r.app_driver_id === p.appDriverId)) return r;
   return null;
 }
 
@@ -206,9 +395,59 @@ async function sessionOf(r: RoamRow) {
   return s;
 }
 
-export async function roamingStatus(p: DriverPrincipal, id: string) {
-  const r = await ownedRoaming(p, id);
+/**
+ * A partner-network charge as the live session pass sees it (services/live-activity.ts, G3): what the operator has
+ * reported so far, outside any driver request. Null when the charge does not exist or has no session yet.
+ */
+export async function roamingLiveSnapshot(chargeId: string): Promise<{
+  active: boolean; kwh: number; startedAt: Date | null; endedAt: Date | null; currency: string | null;
+  sessionTotal: string | null; cdrTotal: string | null; site: string; connector: string;
+} | null> {
+  const r = await one<RoamRow>(`SELECT * FROM driver_roaming_charge WHERE id = $1`, [chargeId]);
   if (!r) return null;
+  const s = await sessionOf(r);
+  if (!s) return null;
+  const cdr = await one<{ total_incl_vat: string | null; total_excl_vat: string; currency: string }>(
+    `SELECT total_incl_vat, total_excl_vat, currency FROM ocpi_remote_cdr WHERE partner_id = $1 AND session_id = $2 AND status = 'accepted' ORDER BY received_at DESC LIMIT 1`,
+    [r.partner_id, s.session_id]);
+  const loc = await one<{ data: any }>(
+    `SELECT data FROM ocpi_remote_location WHERE partner_id = $1 AND country_code = $2 AND party_id = $3 AND location_id = $4`,
+    [r.partner_id, r.country_code, r.party_id, r.location_id]);
+  const evse = (loc?.data?.evses ?? []).find((e: any) => e.uid === r.evse_uid);
+  const conn = (evse?.connectors ?? []).find((c: any) => c.id === r.connector_id) ?? evse?.connectors?.[0];
+  const active = s.status === 'ACTIVE' || s.status === 'PENDING';
+  const tc = s.data?.total_cost;
+  return {
+    active,
+    kwh: s.kwh != null ? Number(s.kwh) : Number(s.data?.kwh ?? 0),
+    startedAt: s.data?.start_date_time ? new Date(s.data.start_date_time) : null,
+    endedAt: active ? null : s.data?.end_date_time ? new Date(s.data.end_date_time) : s.data?.last_updated ? new Date(s.data.last_updated) : null,
+    currency: (cdr?.currency ?? s.data?.currency ?? r.currency ?? null) as string | null,
+    sessionTotal: tc ? String(tc.incl_vat ?? tc.excl_vat) : null,
+    cdrTotal: cdr ? String(cdr.total_incl_vat ?? cdr.total_excl_vat) : null,
+    site: String(loc?.data?.name ?? r.location_id),
+    connector: conn ? `${LABEL[conn.standard] ?? conn.standard ?? ''}${conn.max_electric_power ? ` ${Math.round(conn.max_electric_power / 1000)} kW` : ''}`.trim() : r.evse_uid,
+  };
+}
+
+/** A roaming charge this device (or its account / fleet card) may follow. */
+export async function roamingChargeOf(deviceId: string, chargeId: string): Promise<{ id: string; org_id: string } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(chargeId)) return null;
+  return one<{ id: string; org_id: string }>(
+    `SELECT rc.id, rc.org_id FROM driver_roaming_charge rc JOIN driver_device d ON d.id = $2
+      WHERE rc.id::text = $1 AND (rc.device_id = d.id OR rc.token_id = d.fleet_token_id OR (rc.app_driver_id IS NOT NULL AND rc.app_driver_id = d.app_driver_id))`,
+    [chargeId.toLowerCase(), deviceId]);
+}
+
+export async function roamingStatus(p: DriverPrincipal, id: string, base: string | null = null) {
+  let r = await ownedRoaming(p, id);
+  if (!r) return null;
+  // An app driver's hold authorised after a card checkout: START_SESSION goes now (or by the worker).
+  if (r.payment_intent_id && !r.start_requested_at && !r.settled_at && base) {
+    await startAfterHold(r.id, base);
+    r = (await ownedRoaming(p, id)) ?? r;
+  }
+  const hold = r.payment_intent_id ? await holdOf(r.id) : null;
   const loc = await one<{ data: any; partner_name: string }>(
     `SELECT l.data, pa.name AS partner_name FROM ocpi_partner pa
        LEFT JOIN ocpi_remote_location l ON l.partner_id = pa.id AND l.country_code = $2 AND l.party_id = $3 AND l.location_id = $4
@@ -222,7 +461,7 @@ export async function roamingStatus(p: DriverPrincipal, id: string) {
     `SELECT id, total_incl_vat, total_excl_vat, total_energy, currency FROM ocpi_remote_cdr
       WHERE partner_id = $1 AND session_id = $2 AND status = 'accepted' ORDER BY received_at DESC LIMIT 1`, [r.partner_id, s.session_id]) : null;
 
-  let state: 'starting' | 'rejected' | 'charging' | 'finishing' | 'billed';
+  let state: 'paying' | 'starting' | 'rejected' | 'charging' | 'finishing' | 'billed';
   let problem: string | null = null;
   if (cdr) state = 'billed';
   else if (s) state = s.status === 'ACTIVE' || s.status === 'PENDING' ? 'charging' : 'finishing';
@@ -230,7 +469,13 @@ export async function roamingStatus(p: DriverPrincipal, id: string) {
     state = 'rejected';
     problem = { EVSE_OCCUPIED: 'Charger sedang dipakai.', EVSE_INOPERATIVE: 'Charger sedang tidak berfungsi.', TIMEOUT: 'Charger tidak merespons.' }[cmd.result]
       ?? 'Charger tidak dapat dimulai.';
-  } else state = 'starting';
+  } else if (r.payment_intent_id && r.settle_outcome === 'not_started') {
+    state = 'rejected';
+    problem = hold?.state === 'failed' || hold?.state === 'expired' ? 'Pembayaran tidak selesai. Tidak ada yang ditagih.' : 'Charger tidak dapat dimulai. Dana yang ditahan sudah dilepas.';
+  } else if (r.payment_intent_id && hold?.state === 'pending') state = 'paying';
+  else state = 'starting';
+  // A start refused by the charger: the hold is released at once.
+  if (state === 'rejected' && r.payment_intent_id && !r.settled_at) await releaseRoamingHold(r.id, 'not_started');
 
   const started = s?.data?.start_date_time ? new Date(s.data.start_date_time) : null;
   const ended = s?.data?.end_date_time ? new Date(s.data.end_date_time) : null;
@@ -244,7 +489,13 @@ export async function roamingStatus(p: DriverPrincipal, id: string) {
     energyKwh: cdr ? Number(cdr.total_energy) : s?.kwh != null ? Number(s.kwh) : 0,
     durationMin: started ? Math.max(0, Math.round(((ended ?? new Date()).getTime() - started.getTime()) / 60_000)) : 0,
     startedAt: started ? started.toISOString() : null,
-    totalIdr: total != null && (cdr?.currency ?? s?.data?.currency) === 'IDR' ? total : null,
+    totalMinor: total != null && isCurrency(cdr?.currency ?? s?.data?.currency) ? toMinor(String(total), (cdr?.currency ?? s?.data?.currency) as CurrencyCode) : null,
+    currency: (cdr?.currency ?? s?.data?.currency ?? r.currency ?? null) as string | null,
+    /** App drivers: the card hold that guarantees this charge, and what was captured from it. */
+    hold: hold ? {
+      amountMinor: Number(hold.amount_authorised_minor), currency: hold.currency, state: hold.state, holdState: hold.hold_state,
+      capturedMinor: hold.amount_captured_minor != null ? Number(hold.amount_captured_minor) : null, checkoutUrl: hold.state === 'pending' ? hold.checkout_url : null,
+    } : null,
     cdrId: cdr?.id ?? null,
     siteName: loc?.data?.name ?? r.location_id,
     operator: loc?.data?.operator?.name ?? loc?.partner_name ?? '',
@@ -270,17 +521,33 @@ export async function stopRoaming(p: DriverPrincipal, id: string, base: string):
 }
 
 /** The operator's charge record, for this driver's card only. */
+/** The driver's roaming tokens: the fleet card, and an app driver's virtual tokens (one per eMSP operator they roamed with). */
+async function myRoamingTokens(p: DriverPrincipal): Promise<string[]> {
+  const ids = p.fleet ? [p.fleet.tokenId] : [];
+  if (p.appDriverId) {
+    for (const r of await many<{ token_id: string }>(`SELECT DISTINCT token_id FROM driver_roaming_charge WHERE app_driver_id = $1`, [p.appDriverId])) ids.push(r.token_id);
+  }
+  return ids;
+}
+
 export async function roamingReceipt(p: DriverPrincipal, cdrId: string) {
-  if (!p.fleet || !/^[0-9a-f-]{36}$/i.test(cdrId)) return null;
+  if (!/^[0-9a-f-]{36}$/i.test(cdrId)) return null;
+  const tokens = await myRoamingTokens(p);
+  if (!tokens.length) return null;
   const c = await one<{ id: string; data: any; currency: string; total_excl_vat: string; total_incl_vat: string | null; total_energy: string;
     start_date_time: Date; end_date_time: Date; partner_name: string; country_code: string; party_id: string }>(
     `SELECT r.id, r.data, r.currency, r.total_excl_vat, r.total_incl_vat, r.total_energy, r.start_date_time, r.end_date_time,
             p.name AS partner_name, r.country_code, r.party_id
        FROM ocpi_remote_cdr r JOIN ocpi_partner p ON p.id = r.partner_id
-      WHERE r.id = $1 AND r.token_id = $2 AND r.status = 'accepted'`,
-    [cdrId, p.fleet.tokenId],
+      WHERE r.id = $1 AND r.token_id = ANY($2::uuid[]) AND r.status = 'accepted'`,
+    [cdrId, tokens],
   );
   if (!c) return null;
+  // An app driver's charge: what was held on the card and what was captured.
+  const held = await one<{ amount_authorised_minor: number; amount_captured_minor: number | null; hold_capture_minor: number | null; hold_state: string | null; currency: string; settle_outcome: string | null; shortfall_minor: number | null }>(
+    `SELECT pi.amount_authorised_minor, pi.amount_captured_minor, pi.hold_capture_minor, pi.hold_state, pi.currency, rc.settle_outcome, rc.shortfall_minor
+       FROM driver_roaming_charge rc JOIN payment_intent pi ON pi.id = rc.payment_intent_id WHERE rc.remote_cdr_id = $1`, [c.id]);
+  const minor = (x: unknown) => (isCurrency(c.currency) && x != null && Number.isFinite(Number(x)) ? toMinor(String(x), c.currency) : null);
   const d = c.data ?? {};
   const price = (x: any) => (x && Number.isFinite(Number(x.excl_vat)) ? Number(x.excl_vat) : null);
   const lines = [
@@ -303,9 +570,17 @@ export async function roamingReceipt(p: DriverPrincipal, cdrId: string) {
     energyKwh: Number(c.total_energy),
     durationMin: Math.max(0, Math.round((new Date(c.end_date_time).getTime() - new Date(c.start_date_time).getTime()) / 60_000)),
     currency: c.currency,
-    lines,
+    lines: lines.map((l) => ({ ...l, amountMinor: minor(l.amount) })),
     totalExclVat: Number(c.total_excl_vat),
     totalInclVat: c.total_incl_vat != null ? Number(c.total_incl_vat) : null,
+    /** The same totals in PlugSure minor units of `currency` (null: a currency PlugSure does not support). */
+    totalExclVatMinor: minor(c.total_excl_vat),
+    totalInclVatMinor: minor(c.total_incl_vat),
+    hold: held ? {
+      amountMinor: Number(held.amount_authorised_minor), currency: held.currency, state: held.hold_state, outcome: held.settle_outcome,
+      capturedMinor: held.hold_state === 'captured' ? Number(held.amount_captured_minor ?? held.hold_capture_minor ?? 0) : held.hold_capture_minor != null ? Number(held.hold_capture_minor) : null,
+      shortfallMinor: held.shortfall_minor != null ? Number(held.shortfall_minor) : null,
+    } : null,
   };
 }
 
@@ -314,11 +589,12 @@ export async function roamingReceipt(p: DriverPrincipal, cdrId: string) {
  * charge records for the driver's card from sessions started by tapping it.
  */
 export async function roamingHistory(p: DriverPrincipal, limit = 40) {
-  if (!p.fleet) return [];
-  const started = await many<{ id: string; created_at: Date; location_id: string; partner_id: string; country_code: string; party_id: string; remote_session_id: string | null }>(
-    `SELECT id, created_at, location_id, partner_id, country_code, party_id, remote_session_id FROM driver_roaming_charge
-      WHERE device_id = $1 OR token_id = $2 ORDER BY created_at DESC LIMIT $3`,
-    [p.deviceId, p.fleet.tokenId, limit],
+  if (!p.fleet && !p.appDriverId) return [];
+  const tokens = await myRoamingTokens(p);
+  const started = await many<{ id: string; created_at: Date; location_id: string; partner_id: string; country_code: string; party_id: string; remote_session_id: string | null; app_driver_id: string | null }>(
+    `SELECT id, created_at, location_id, partner_id, country_code, party_id, remote_session_id, app_driver_id FROM driver_roaming_charge
+      WHERE device_id = $1 OR token_id = ANY($2::uuid[]) OR ($3::uuid IS NOT NULL AND app_driver_id = $3) ORDER BY created_at DESC LIMIT $4`,
+    [p.deviceId, tokens, p.appDriverId, limit],
   );
   const out: any[] = [];
   const cdrsShown = new Set<string>();
@@ -327,23 +603,25 @@ export async function roamingHistory(p: DriverPrincipal, limit = 40) {
     if (!st) continue;
     if (st.cdrId) cdrsShown.add(st.cdrId);
     out.push({
-      kind: 'roaming', chargeId: r.id, cdrId: st.cdrId, mode: 'fleet', siteName: st.siteName, operator: st.operator,
+      kind: 'roaming', chargeId: r.id, cdrId: st.cdrId, mode: r.app_driver_id ? 'app' : 'fleet', siteName: st.siteName, operator: st.operator,
       createdAt: r.created_at, state: st.state === 'billed' ? 'rated' : st.state === 'charging' ? 'active' : st.state === 'finishing' ? 'ended' : st.state === 'rejected' ? 'no_session' : 'starting',
-      energyKwh: st.energyKwh || null, totalIdr: st.totalIdr,
+      energyKwh: st.energyKwh || null, totalMinor: st.totalMinor, currency: st.currency,
     });
   }
+  if (!tokens.length) return out;
   const cdrs = await many<{ id: string; data: any; end_date_time: Date; start_date_time: Date; total_energy: string; total_incl_vat: string | null; total_excl_vat: string; currency: string; partner_name: string }>(
     `SELECT r.id, r.data, r.start_date_time, r.end_date_time, r.total_energy, r.total_incl_vat, r.total_excl_vat, r.currency, p.name AS partner_name
        FROM ocpi_remote_cdr r JOIN ocpi_partner p ON p.id = r.partner_id
-      WHERE r.token_id = $1 AND r.status = 'accepted' ORDER BY r.end_date_time DESC LIMIT $2`,
-    [p.fleet.tokenId, limit],
+      WHERE r.token_id = ANY($1::uuid[]) AND r.status = 'accepted' ORDER BY r.end_date_time DESC LIMIT $2`,
+    [tokens, limit],
   );
   for (const c of cdrs) {
     if (cdrsShown.has(c.id)) continue;
     out.push({
-      kind: 'roaming', chargeId: null, cdrId: c.id, mode: 'fleet', siteName: c.data?.cdr_location?.name ?? 'Jaringan mitra',
+      kind: 'roaming', chargeId: null, cdrId: c.id, mode: p.fleet ? 'fleet' : 'app', siteName: c.data?.cdr_location?.name ?? 'Jaringan mitra',
       operator: c.data?.cdr_location?.operator?.name ?? c.partner_name, createdAt: c.start_date_time, state: 'rated',
-      energyKwh: Number(c.total_energy), totalIdr: c.currency === 'IDR' ? Number(c.total_incl_vat ?? c.total_excl_vat) : null,
+      energyKwh: Number(c.total_energy),
+      totalMinor: isCurrency(c.currency) ? toMinor(String(c.total_incl_vat ?? c.total_excl_vat), c.currency) : null, currency: c.currency,
     });
   }
   return out;
@@ -431,6 +709,8 @@ export async function reserveRoaming(p: DriverPrincipal, s: RoamingStart, base: 
   if (!config.driverApp.reservationsEnabled) return { ok: false, error: 'Reservasi tidak tersedia.' };
   const el = await roamingEligibility(p);
   if (!el.enabled) return { ok: false, error: el.reason };
+  // A reservation on a partner network is billed to a fleet card; an app driver's charge needs its hold first.
+  if (el.mode !== 'fleet') return { ok: false, error: 'Reservasi jaringan mitra tersedia untuk pengemudi armada.' };
   const problem = await fleetTokenProblem(el.tokenId!);
   if (problem) return { ok: false, error: problem };
   const [{ currentReservation }, queued] = await Promise.all([

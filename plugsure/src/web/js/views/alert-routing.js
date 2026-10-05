@@ -63,11 +63,13 @@ function channelCard(kind, ch, canWrite) {
       : `${tag('t-warn', 'no delivery status')} "Sent" only means WhatsApp accepted the message. Add the app secret and the webhook under <b>Edit settings</b> to see delivered, read and failed.`}</div>`
     : '';
   return `<div class="card" data-channel="${kind}"><header><h3>${icon(kind === 'email' ? 'list' : 'bell')} ${chLabel(kind)}</h3><div class="right">${status}</div></header>
+    <div class="body">
     <div class="cell-sub" style="margin-bottom:10px">${detail}</div>
     ${hook}
     ${ch.last_error ? `<div class="cell-sub" style="color:var(--crit);margin-bottom:10px">${esc(ch.last_error)}</div>` : ''}
     ${ch.last_test_at ? `<div class="cell-sub" style="margin-bottom:10px">Last test ${esc(fmt.ago(ch.last_test_at))}: ${ch.last_test_ok ? 'delivered' : 'failed'}</div>` : ''}
     ${canWrite ? `<div class="row" style="gap:6px;flex-wrap:wrap"><button class="btn sm${configured ? '' : ' primary'}" type="button" data-setup="${kind}">${configured ? 'Edit settings' : 'Set up'}</button>${configured ? `<button class="btn sm" type="button" data-test="${kind}">Send a test</button>` : ''}</div>` : ''}
+    </div>
   </div>`;
 }
 
@@ -434,7 +436,7 @@ registerView('alert-routing', {
       else box.innerHTML = data.rotas.map((x) => {
         const d = x.duty ?? {};
         const ovs = (x.overrides ?? []).filter((o) => new Date(o.ends_at) > Date.now());
-        return `<div class="section" data-rota="${esc(x.id)}" style="border-top:1px solid var(--line);padding-top:12px">
+        return `<div data-rota="${esc(x.id)}" style="border-top:1px solid var(--line);padding:12px 16px">
           <div class="row" style="gap:8px;flex-wrap:wrap;align-items:baseline">
             <div class="cell-title">${esc(x.name)}</div>
             <span class="cell-sub">${esc(x.shift === 'daily' ? 'daily' : 'weekly')} · handover ${esc(x.handover_time)} · ${esc(x.member_ids.map((id) => contactName(data, id)).join(' → '))}</span>

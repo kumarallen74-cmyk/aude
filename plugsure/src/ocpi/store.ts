@@ -1,4 +1,7 @@
 import { one, many, query } from '../db/pool.js';
+import { logger } from '../logger.js';
+import { resolveTaxContext, engineFor } from '../services/tax/index.js';
+import { upgradeLegacyKeys } from '../domain/money.js';
 import { signedDataFor, ocpiSignedData } from '../services/signed-metering.js';
 import * as registry from '../ocpp/registry.js';
 import { loadTariffForConnector, loadTariffById } from '../services/tariff-store.js';
@@ -16,20 +19,91 @@ import {
 
 // ─────────────────────────────────────────────── our identity
 
-export async function getParty(orgId: string): Promise<Party | null> {
-  return one<Party>(`SELECT country_code, party_id, business_name, website FROM ocpi_party WHERE org_id = $1`, [orgId]);
+/**
+ * OCPI identities: one party per (organisation, country) (docs/MULTI-COUNTRY-DESIGN.md §D8,
+ * migration 060). `is_home` marks the home party: the eMSP identity, the party the
+ * connections are made with, and the one v1.6 knew as "the" roaming identity.
+ */
+export type OwnParty = Party & { is_home: boolean };
+
+/** The home party (the v1.6 single identity). */
+export async function homeParty(orgId: string): Promise<Party | null> {
+  return one<Party>(`SELECT country_code, party_id, business_name, website FROM ocpi_party WHERE org_id = $1 AND is_home`, [orgId]);
+}
+/** The home party. Kept under its v1.6 name: every caller that means "our identity" means this one. */
+export const getParty = homeParty;
+
+/** Every party of the organisation, the home party first. */
+export async function getParties(orgId: string): Promise<OwnParty[]> {
+  return many<OwnParty>(
+    `SELECT country_code, party_id, business_name, website, is_home FROM ocpi_party WHERE org_id = $1
+      ORDER BY is_home DESC, country_code`, [orgId]);
 }
 
-export async function setParty(orgId: string, p: Party): Promise<Party> {
+/**
+ * The party a site in `countryCode` is published under: the organisation's party for that country, and
+ * only that one (review fix 9). A site in a country the organisation has no party for is NOT published
+ * under another country's (e.g. the Indonesian home) identity: its location carries a problem
+ * ("no OCPI party for MY") and stays unpublished until the operator adds that country's party
+ * (Roaming → parties). No country (legacy callers): the home party.
+ */
+export async function partyFor(orgId: string, countryCode: string | null | undefined): Promise<Party | null> {
+  return pickParty(await getParties(orgId), countryCode);
+}
+
+export function pickParty(parties: Party[] | Party | null | undefined, countryCode: string | null | undefined): Party | null {
+  if (!parties) return null;
+  const list = Array.isArray(parties) ? parties : [parties];
+  if (countryCode == null) return list[0] ?? null;
+  return list.find((p) => p.country_code === countryCode) ?? null;
+}
+
+/**
+ * Set a party. The home party (default) is replaced in place, as v1.6 did; another
+ * country's party is added or updated by (organisation, country).
+ */
+export async function setParty(orgId: string, p: Party, opts: { home?: boolean } = {}): Promise<Party> {
+  const home = opts.home ?? true;
+  if (home) {
+    // Moving the home identity to a country that already has a party: that row becomes the home.
+    const existing = await one<{ is_home: boolean }>(`SELECT is_home FROM ocpi_party WHERE org_id = $1 AND country_code = $2`, [orgId, p.country_code]);
+    if (existing && !existing.is_home) {
+      await query(`DELETE FROM ocpi_party WHERE org_id = $1 AND is_home`, [orgId]);
+      await query(`UPDATE ocpi_party SET is_home = true WHERE org_id = $1 AND country_code = $2`, [orgId, p.country_code]);
+    }
+    const row = await one<Party>(
+      `INSERT INTO ocpi_party (org_id, country_code, party_id, business_name, website, is_home)
+       VALUES ($1,$2,$3,$4,$5,true)
+       ON CONFLICT (org_id) WHERE is_home DO UPDATE SET country_code = EXCLUDED.country_code, party_id = EXCLUDED.party_id,
+         business_name = EXCLUDED.business_name, website = EXCLUDED.website, updated_at = now()
+       RETURNING country_code, party_id, business_name, website`,
+      [orgId, p.country_code, p.party_id, p.business_name, p.website ?? null],
+    );
+    return row!;
+  }
   const row = await one<Party>(
-    `INSERT INTO ocpi_party (org_id, country_code, party_id, business_name, website)
-     VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (org_id) DO UPDATE SET country_code = EXCLUDED.country_code, party_id = EXCLUDED.party_id,
+    `INSERT INTO ocpi_party (org_id, country_code, party_id, business_name, website, is_home)
+     VALUES ($1,$2,$3,$4,$5,false)
+     ON CONFLICT (org_id, country_code) DO UPDATE SET party_id = EXCLUDED.party_id,
        business_name = EXCLUDED.business_name, website = EXCLUDED.website, updated_at = now()
      RETURNING country_code, party_id, business_name, website`,
     [orgId, p.country_code, p.party_id, p.business_name, p.website ?? null],
   );
   return row!;
+}
+
+/** Remove a non-home party (the home party is replaced, never removed). */
+export async function removeParty(orgId: string, countryCode: string): Promise<boolean> {
+  const r = await query(`DELETE FROM ocpi_party WHERE org_id = $1 AND country_code = $2 AND NOT is_home`, [orgId, countryCode]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** The OCPI `vat` of a tariff: the engine of its country and the operator's registration there. */
+async function tariffVat(orgId: string, t: Tariff, at: Date): Promise<number | null | undefined> {
+  const country = t.countryCode ?? 'ID';
+  if (country === 'ID') return undefined; // buildTariff: effective PPN, exactly as v1.6
+  const ctx = await resolveTaxContext({ orgId, country, at });
+  return engineFor(ctx).ocpiVatPercent(t.ppnApplies);
 }
 
 // ─────────────────────────────────────────────── partners
@@ -41,7 +115,8 @@ export interface PartnerRow {
   id: string;
   org_id: string;
   name: string;
-  kind: 'emsp' | 'cpo' | 'hub';
+  /** authority: a regulator receiving Locations and Tariffs (Singapore LTA, SG-6) — nothing else. */
+  kind: 'emsp' | 'cpo' | 'hub' | 'authority';
   state: 'pending' | 'connected' | 'suspended' | 'closed';
   token_in: string | null;
   token_in_hash: string | null;
@@ -77,7 +152,8 @@ export function endpointUrl(p: Pick<PartnerRow, 'endpoints'>, identifier: string
  * chooses the kind when creating the partner; the partner cannot change it by
  * declaring other roles (registration refuses a mismatch).
  */
-export const ROLE_OF_KIND: Record<PartnerRow['kind'], string> = { emsp: 'EMSP', cpo: 'CPO', hub: 'HUB' };
+// An authority registers as a National Access Point (OCPI role NAP) [VERIFY V3: LTA's handshake].
+export const ROLE_OF_KIND: Record<PartnerRow['kind'], string> = { emsp: 'EMSP', cpo: 'CPO', hub: 'HUB', authority: 'NAP' };
 
 /**
  * May this partner act for (country_code, party_id), optionally in a given
@@ -102,6 +178,17 @@ export async function partnerActsFor(
     [p.id, cc, pid, role ?? null],
   );
   return !!r?.allowed;
+}
+
+/**
+ * The party behind a hub that a request acts for (its OCPI-from-* headers, checked with partnerActsFor).
+ * Every handler scopes a hub's request to it (v1.7.1, WP H0); a peer connection has none (null).
+ */
+export type ActingParty = { country_code: string; party_id: string };
+
+/** Is (cc, pid) the acting party? A peer (no acting party) is scoped by its connection alone. */
+export function isActing(acting: ActingParty | null | undefined, cc: string | null | undefined, pid: string | null | undefined): boolean {
+  return !acting || (acting.country_code === cc && acting.party_id === pid);
 }
 
 /** Does a hub have at least one CPO behind it that is connected (it may relay for CPOs)? */
@@ -137,7 +224,7 @@ interface EvseRow {
   reserved: boolean;
 }
 
-const SITE_COLS = `s.id, s.name, s.address, s.city, s.postal_code, s.lat, s.lon, s.timezone,
+const SITE_COLS = `s.id, s.name, s.address, s.city, s.postal_code, s.lat, s.lon, s.timezone, s.country_code,
                    s.roaming_publish, s.billing_model, s.archived_at`;
 
 async function evseRows(orgId: string, siteIds: string[]): Promise<EvseRow[]> {
@@ -192,7 +279,8 @@ export interface RenderedLocation {
  */
 export async function renderLocations(
   orgId: string,
-  party: Party,
+  /** The organisation's parties (each site is published under its country's), or one party for all. */
+  parties: Party | Party[],
   opts: { siteId?: string; onlyPublished?: boolean } = {},
 ): Promise<RenderedLocation[]> {
   const sites = await many<SiteIn & { roaming_publish: boolean; billing_model: string; archived_at: Date | null }>(
@@ -205,8 +293,10 @@ export async function renderLocations(
   const out: RenderedLocation[] = [];
 
   for (const s of sites) {
+    const party = pickParty(parties, s.country_code);
     const problem = s.archived_at ? 'the site is archived'
       : s.billing_model === 'private' ? 'private sites (billed as a platform fee) cannot be shared'
+      : !party ? `no OCPI party for ${s.country_code}: add this country's party under Roaming → parties (it is not published under another country's identity)`
       : locationProblem(s);
     const published = !!s.roaming_publish && !problem;
     if ((opts.onlyPublished ?? true) && !published) continue;
@@ -271,7 +361,7 @@ export async function renderLocations(
       siteId: s.id,
       published,
       problem,
-      location: buildLocation(party, { ...s, last_updated: siteLast }, evses, { publish: published }),
+      location: buildLocation((party ?? pickParty(parties, null))!, { ...s, last_updated: siteLast }, evses, { publish: published }),
       evses: refs,
       tariffIds: [...tariffIds],
     });
@@ -291,7 +381,7 @@ export async function locationRefOfChargePoint(orgId: string, chargePointId: str
 
 // ─────────────────────────────────────────────── tariffs
 
-export async function renderTariffs(orgId: string, party: Party, ids: string[]) {
+export async function renderTariffs(orgId: string, parties: Party | Party[], ids: string[]) {
   const states = await objectStates(orgId, 'tariff');
   const out: Array<{ id: string; tariff: ReturnType<typeof buildTariff> }> = [];
   for (const id of ids) {
@@ -301,6 +391,10 @@ export async function renderTariffs(orgId: string, party: Party, ids: string[]) 
       [id, orgId],
     );
     if (!t || !row) continue;
+    const party = pickParty(parties, t.countryCode ?? 'ID');
+    // No party for the tariff's country: not published (its sites are not either).
+    if (!party) { logger.warn({ orgId, tariff: id, country: t.countryCode }, 'OCPI: no party for the tariff\'s country; not published'); continue; }
+    const vat = await tariffVat(orgId, t, new Date());
     out.push({
       id,
       tariff: buildTariff(party, {
@@ -308,6 +402,7 @@ export async function renderTariffs(orgId: string, party: Party, ids: string[]) 
         active_from: row.active_from,
         active_to: row.active_to,
         last_updated: states.get(id)?.last_updated ?? row.created_at,
+        ...(vat !== undefined ? { vat } : {}),
       }),
     });
   }
@@ -315,8 +410,8 @@ export async function renderTariffs(orgId: string, party: Party, ids: string[]) 
 }
 
 /** Tariffs in use on published connectors right now. */
-export async function publishedTariffIds(orgId: string, party: Party): Promise<string[]> {
-  const locs = await renderLocations(orgId, party);
+export async function publishedTariffIds(orgId: string, parties: Party | Party[]): Promise<string[]> {
+  const locs = await renderLocations(orgId, parties);
   return [...new Set(locs.flatMap((l) => l.tariffIds))];
 }
 
@@ -327,7 +422,8 @@ const SESSION_SELECT = `
          cs.ocpi_auth_method, cs.ocpi_authorization_reference, cs.ocpi_partner_id, cs.site_id,
          cp.ocpp_identity, e.evse_id AS evse_no, c.connector_id, c.meter_serial,
          t.country_code AS t_cc, t.party_id AS t_pid, t.uid AS t_uid, t.type AS t_type, t.contract_id AS t_contract,
-         d.id AS cdr_id, d.subtotal_idr, d.pbjt_idr, d.total_idr,
+         d.id AS cdr_id, d.subtotal_minor, d.local_tax_minor, d.total_minor, cs.currency,
+         (SELECT si.country_code FROM site si WHERE si.id = cs.site_id) AS site_country,
          GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) AS last_updated
     FROM charging_session cs
     JOIN charge_point cp ON cp.id = cs.charge_point_id
@@ -341,7 +437,8 @@ interface SessionRowOut {
   ocpi_auth_method: string | null; ocpi_authorization_reference: string | null; ocpi_partner_id: string; site_id: string;
   ocpp_identity: string; evse_no: number; connector_id: number; meter_serial: string | null;
   t_cc: string; t_pid: string; t_uid: string; t_type: string; t_contract: string;
-  cdr_id: string | null; subtotal_idr: number | null; pbjt_idr: number | null; total_idr: number | null; last_updated: Date;
+  cdr_id: string | null; subtotal_minor: number | null; local_tax_minor: number | null; total_minor: number | null; last_updated: Date;
+  currency: string; site_country: string;
 }
 
 const tokenRefOf = (r: SessionRowOut): TokenRef => ({ country_code: r.t_cc, party_id: r.t_pid, uid: r.t_uid, type: r.t_type, contract_id: r.t_contract });
@@ -360,7 +457,8 @@ function sessionIn(r: SessionRowOut): SessionIn & { idle_minutes: number } {
     evse_uid: evseUid(r.ocpp_identity, r.evse_no),
     connector_id: String(r.connector_id),
     meter_id: r.meter_serial,
-    cost: r.total_idr != null ? { subtotal_idr: Number(r.subtotal_idr), pbjt_idr: Number(r.pbjt_idr), total_idr: Number(r.total_idr) } : null,
+    cost: r.total_minor != null ? { subtotal_minor: Number(r.subtotal_minor), local_tax_minor: Number(r.local_tax_minor), total_minor: Number(r.total_minor) } : null,
+    currency: r.currency,
     last_updated: r.last_updated,
   };
 }
@@ -368,31 +466,50 @@ function sessionIn(r: SessionRowOut): SessionIn & { idle_minutes: number } {
 export async function renderSession(sessionId: string) {
   const r = await one<SessionRowOut>(`${SESSION_SELECT} WHERE cs.id = $1`, [sessionId]);
   if (!r) return null;
-  const party = await getParty(r.org_id);
+  const party = await partyFor(r.org_id, r.site_country);
   if (!party) return null;
   return { orgId: r.org_id, partnerId: r.ocpi_partner_id, token: tokenRefOf(r), cdrId: r.cdr_id, session: buildSession(party, sessionIn(r), tokenRefOf(r)) };
 }
 
-export async function listSessions(orgId: string, partnerId: string, party: Party, p: { dateFrom: Date | null; dateTo: Date | null; offset: number; limit: number }) {
-  const where = `WHERE cs.org_id = $1 AND cs.ocpi_partner_id = $2
-     AND ($3::timestamptz IS NULL OR GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) >= $3)
-     AND ($4::timestamptz IS NULL OR GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) < $4)`;
-  const total = await one<{ n: number }>(
-    `SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`,
-    [orgId, partnerId, p.dateFrom, p.dateTo],
-  );
-  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY cs.started_at, cs.id OFFSET $5 LIMIT $6`, [orgId, partnerId, p.dateFrom, p.dateTo, p.offset, p.limit]);
-  return { total: total?.n ?? 0, items: rows.map((r) => buildSession(party, sessionIn(r), tokenRefOf(r))) };
+/** Only sessions at sites in these countries (a hub addressed one of several parties); null = all. */
+const countryFilter = (n: number) => `AND ($${n}::text[] IS NULL OR (SELECT si.country_code FROM site si WHERE si.id = cs.site_id) = ANY($${n}::text[]))`;
+/**
+ * Only sessions of drivers of this eMSP party (the token's party): behind a hub, one connection carries many
+ * eMSPs, and each sees only its own drivers (v1.7.1, WP H0). null = every party of the connection (a peer).
+ */
+const tokenPartyFilter = (n: number) =>
+  `AND ($${n}::text IS NULL OR EXISTS (SELECT 1 FROM ocpi_token tk WHERE tk.id = cs.ocpi_token_id AND tk.country_code = $${n} AND tk.party_id = $${n + 1}))`;
+
+/** Paging and scoping of a partner's pull of sessions or CDRs. */
+export interface PullScope {
+  dateFrom: Date | null; dateTo: Date | null; offset: number; limit: number;
+  countries?: string[] | null;
+  /** The eMSP party acting through a hub (OCPI-from): only its drivers' objects. */
+  tokenParty?: { country_code: string; party_id: string } | null;
 }
 
-async function cdrFromRow(r: SessionRowOut, party: Party) {
+export async function listSessions(orgId: string, partnerId: string, parties: Party | Party[], p: PullScope) {
+  // $1 org, $2 partner, $3/$4 dates, $5 countries, $6/$7 token party; the page adds $8/$9.
+  const where = `WHERE cs.org_id = $1 AND cs.ocpi_partner_id = $2
+     AND ($3::timestamptz IS NULL OR GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) >= $3)
+     AND ($4::timestamptz IS NULL OR GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) < $4)
+     ${countryFilter(5)} ${tokenPartyFilter(6)}`;
+  const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null];
+  const total = await one<{ n: number }>(`SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`, args);
+  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY cs.started_at, cs.id OFFSET $8 LIMIT $9`, [...args, p.offset, p.limit]);
+  return { total: total?.n ?? 0, items: rows.map((r) => buildSession(pickParty(parties, r.site_country)!, sessionIn(r), tokenRefOf(r))) };
+}
+
+async function cdrFromRow(r: SessionRowOut, parties: Party | Party[]) {
   if (!r.cdr_id) return null;
-  const d = await one<{ id: string; issued_at: Date; lines: CdrLine[]; subtotal_idr: number; pbjt_idr: number; total_idr: number; tariff_snapshot: Tariff | null }>(
-    `SELECT id, issued_at, lines, subtotal_idr, pbjt_idr, total_idr, tariff_snapshot FROM cdr WHERE id = $1`,
+  const party = pickParty(parties, r.site_country)!;
+  const d = await one<{ id: string; issued_at: Date; lines: CdrLine[]; subtotal_minor: number; local_tax_minor: number; total_minor: number; tariff_snapshot: Tariff | null; currency: string; prices_include_tax: boolean; tax_rate_bps: number; tax_scheme: string }>(
+    `SELECT id, issued_at, lines, subtotal_minor, local_tax_minor, total_minor, tariff_snapshot, currency, prices_include_tax, tax_rate_bps, tax_scheme
+       FROM cdr WHERE id = $1`,
     [r.cdr_id],
   );
   if (!d) return null;
-  const site = await one<SiteIn>(`SELECT s.id, s.name, s.address, s.city, s.postal_code, s.lat, s.lon, s.timezone, now() AS last_updated FROM site s WHERE s.id = $1`, [r.site_id]);
+  const site = await one<SiteIn>(`SELECT s.id, s.name, s.address, s.city, s.postal_code, s.lat, s.lon, s.timezone, s.country_code, now() AS last_updated FROM site s WHERE s.id = $1`, [r.site_id]);
   const conn = await one<ConnectorIn & { phases: number }>(
     `SELECT c.connector_id, c.connector_type, c.current_type, c.phases, c.max_power_w, c.rated_voltage_v, c.rated_current_a,
             c.status, c.maintenance_reason, NULL::text AS tariff_id, now() AS last_updated
@@ -401,13 +518,18 @@ async function cdrFromRow(r: SessionRowOut, party: Party) {
   );
   if (!site || !conn) return null;
   const tariff = d.tariff_snapshot && (d.tariff_snapshot as Tariff).id && (d.tariff_snapshot as Tariff).id !== 'default' ? (d.tariff_snapshot as Tariff) : null;
+  // Outside Indonesia the CDR's own tax decides the tariff's published VAT (no VAT when none was charged).
+  const nonId = (site.country_code ?? 'ID') !== 'ID';
   const built = buildCdr(party, {
     id: d.id,
     issued_at: d.issued_at,
-    lines: d.lines ?? [],
-    subtotal_idr: Number(d.subtotal_idr),
-    pbjt_idr: Number(d.pbjt_idr),
-    total_idr: Number(d.total_idr),
+    currency: d.currency,
+    prices_include_tax: d.prices_include_tax,
+    ...(nonId ? { vat: d.tax_scheme === 'NONE' ? null : Number(d.tax_rate_bps) / 100 } : {}),
+    lines: upgradeLegacyKeys(d.lines ?? []),
+    subtotal_minor: Number(d.subtotal_minor),
+    local_tax_minor: Number(d.local_tax_minor),
+    total_minor: Number(d.total_minor),
     tariff,
     session: sessionIn(r),
     site,
@@ -423,23 +545,22 @@ async function cdrFromRow(r: SessionRowOut, party: Party) {
 export async function renderCdrForSession(sessionId: string) {
   const r = await one<SessionRowOut>(`${SESSION_SELECT} WHERE cs.id = $1`, [sessionId]);
   if (!r) return null;
-  const party = await getParty(r.org_id);
-  if (!party) return null;
-  const cdr = await cdrFromRow(r, party);
+  const parties = await getParties(r.org_id);
+  if (!parties.length) return null;
+  const cdr = await cdrFromRow(r, parties);
   return cdr ? { orgId: r.org_id, partnerId: r.ocpi_partner_id, token: tokenRefOf(r), cdr } : null;
 }
 
-export async function listCdrs(orgId: string, partnerId: string, party: Party, p: { dateFrom: Date | null; dateTo: Date | null; offset: number; limit: number }) {
+export async function listCdrs(orgId: string, partnerId: string, parties: Party | Party[], p: PullScope) {
   const where = `WHERE cs.org_id = $1 AND cs.ocpi_partner_id = $2 AND d.id IS NOT NULL
-     AND ($3::timestamptz IS NULL OR d.issued_at >= $3) AND ($4::timestamptz IS NULL OR d.issued_at < $4)`;
-  const total = await one<{ n: number }>(
-    `SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`,
-    [orgId, partnerId, p.dateFrom, p.dateTo],
-  );
-  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY d.issued_at, d.id OFFSET $5 LIMIT $6`, [orgId, partnerId, p.dateFrom, p.dateTo, p.offset, p.limit]);
+     AND ($3::timestamptz IS NULL OR d.issued_at >= $3) AND ($4::timestamptz IS NULL OR d.issued_at < $4)
+     ${countryFilter(5)} ${tokenPartyFilter(6)}`;
+  const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null];
+  const total = await one<{ n: number }>(`SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`, args);
+  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY d.issued_at, d.id OFFSET $8 LIMIT $9`, [...args, p.offset, p.limit]);
   const items = [];
   for (const r of rows) {
-    const c = await cdrFromRow(r, party);
+    const c = await cdrFromRow(r, parties);
     if (c) items.push(c);
   }
   return { total: total?.n ?? 0, items };

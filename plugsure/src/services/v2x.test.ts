@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseChargingNeeds, parseWindows, inWindow, localMinutes, planDischarge, creditIdr, MIN_DISCHARGE_W, type Candidate, type SiteV2x } from './v2x.js';
+import { parseChargingNeeds, parseWindows, inWindow, localMinutes, planDischarge, creditMinor, MIN_DISCHARGE_W, type Candidate, type SiteV2x } from './v2x.js';
 import { energyWhFrom, socFrom, EXPORT_MEASURAND } from '../domain/canonical.js';
 import { validateCallDetailed, isKnownAction } from '../ocpp/validate.js';
 import { REQUEST_SCHEMAS_21, widen } from '../ocpp/schemas21.js';
@@ -98,10 +98,10 @@ test('discharge plan: never without consent, a bidirectional car, OCPP 2.1, the 
 });
 
 test('credit and meter readings: export register, SoC, whole-rupiah credit', () => {
-  assert.equal(creditIdr(2000, 2000), 4000);
-  assert.equal(creditIdr(1234, 1500), 1851);
-  assert.equal(creditIdr(-5, 2000), 0);
-  assert.equal(creditIdr(5000, null), 0);
+  assert.equal(creditMinor(2000, 2000), 4000);
+  assert.equal(creditMinor(1234, 1500), 1851);
+  assert.equal(creditMinor(-5, 2000), 0);
+  assert.equal(creditMinor(5000, null), 0);
   const mv = [
     { timestamp: '2026-09-28T10:00:00Z', sampledValue: [{ measurand: 'Energy.Active.Import.Register', value: 5000, unit: 'Wh' }, { measurand: EXPORT_MEASURAND, value: 1.2, unit: 'kWh' }, { measurand: 'SoC', value: 78, unit: 'Percent' }] },
     { timestamp: '2026-09-28T10:01:00Z', sampledValue: [{ measurand: EXPORT_MEASURAND, value: 1500, unit: 'Wh' }, { measurand: 'Display.PresentSOC', value: 77 }] },

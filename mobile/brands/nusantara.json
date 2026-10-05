@@ -1,0 +1,67 @@
+{
+  "$schema": "./brand.schema.json",
+  "variant": "nusantara",
+  "appName": "Nusantara Charge",
+  "shortName": "Nusantara",
+  "tagline": {
+    "en": "Fast charging across Java",
+    "id": "Pengisian cepat di seluruh Jawa"
+  },
+  "easSlug": "nusantara-charge",
+  "brandSlug": "nusantaracharge",
+  "scope": "operator",
+  "scheme": "nusantaracharge",
+  "iosBundleId": "id.nusantaracharge.app",
+  "androidPackage": "id.nusantaracharge.app",
+  "linkHosts": [
+    "app.nusantaracharge.id"
+  ],
+  "apiBase": "https://app.nusantaracharge.id",
+  "accentColor": "#f5a524",
+  "badgeColor": "#1b1406",
+  "defaultLocale": "id",
+  "locales": [
+    "id",
+    "en"
+  ],
+  "countries": [
+    "ID"
+  ],
+  "defaultRegion": {
+    "latitude": -7.25,
+    "longitude": 112.75,
+    "latitudeDelta": 0.16,
+    "longitudeDelta": 0.16
+  },
+  "support": {
+    "phone": "+62315000000",
+    "whatsapp": "+6281200000000",
+    "email": "cs@nusantaracharge.id"
+  },
+  "links": {
+    "terms": "https://nusantaracharge.id/syarat",
+    "privacy": "https://nusantaracharge.id/privasi",
+    "deleteAccount": "https://app.nusantaracharge.id/account/delete",
+    "help": "https://nusantaracharge.id/bantuan"
+  },
+  "store": {
+    "appStoreId": "",
+    "playStoreUrl": "https://play.google.com/store/apps/details?id=id.nusantaracharge.app",
+    "appStoreUrl": "https://apps.apple.com/app/nusantara-charge"
+  },
+  "easProjectId": "",
+  "appleTeamId": "",
+  "features": {
+    "guestCharge": true,
+    "roaming": false,
+    "fleetLogin": true,
+    "reservations": true,
+    "queue": true,
+    "memberships": true,
+    "liveActivities": true,
+    "ratings": true,
+    "problemReports": true,
+    "applePay": false,
+    "routePlanner": false
+  }
+}

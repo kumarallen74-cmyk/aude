@@ -1,5 +1,5 @@
 import {
-  $, $$, esc, api, state, registerView, pageHead, tag, icon, field, callout, toast, formValues, fieldErrors, confirmDialog, html, options, copy,
+  $, $$, esc, api, state, registerView, pageHead, tag, icon, field, callout, toast, formValues, fieldErrors, confirmDialog, html, options, copy, phoneExample
 } from '../core.js';
 
 /**
@@ -83,7 +83,7 @@ registerView('driver-app', {
 
           <fieldset style="margin-top:14px"><legend>Support and legal</legend><div class="form">
             ${field('Support e-mail', `<input name="supportEmail" type="email" value="${v('supportEmail')}"${ro}>`, { opt: true })}
-            ${field('Support WhatsApp / phone', `<input name="supportPhone" value="${v('supportPhone')}" placeholder="+62 812 3456 7890"${ro}>`, { opt: true })}
+            ${field('Support WhatsApp / phone', `<input name="supportPhone" value="${v('supportPhone')}" placeholder="${esc(phoneExample())}"${ro}>`, { opt: true })}
             ${field('Privacy policy', `<input name="privacyUrl" value="${v('privacyUrl')}" placeholder="https://…"${ro}>`, { help: 'Required by both stores.', opt: true })}
             ${field('Terms of use', `<input name="termsUrl" value="${v('termsUrl')}" placeholder="https://…"${ro}>`, { opt: true })}
           </div><p class="cell-sub">Shown to drivers under Account → Bantuan.</p></fieldset>

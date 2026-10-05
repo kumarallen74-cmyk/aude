@@ -1,4 +1,9 @@
 import { appNameFor } from '../services/brand.js';
+import { profileFor } from '../services/regulatory/index.js';
+import { taxContextForSite } from '../services/tax/index.js';
+import { currencyOr, moneyText, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
+import { countryOf, countryOfCurrency, currencyOfCountry } from '../domain/country.js';
+import { upgradeLegacyKeys } from '../domain/money.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { one, many, query } from '../db/pool.js';
@@ -50,11 +55,14 @@ interface ConnFull {
   org_id: string;
   site_name: string;
   max_power_w: number;
-  pbjt_rate_bps: number;
+  local_tax_rate_bps: number;
   timezone: string;
   tera_status: string;
   current_type: string;
   site_id: string;
+  country_code: string;
+  currency: string;
+  tax_overrides: Record<string, unknown> | null;
   in_maintenance: boolean;
   listed: boolean;
   /** Suspended by the operator (v1.4.1): stays on the map, but sells nothing. */
@@ -65,8 +73,9 @@ async function connFull(connectorUuid: string): Promise<ConnFull | null> {
   if (!UUID_RE.test(String(connectorUuid))) return null;
   return one<ConnFull>(
     `SELECT c.id AS connector_uuid, e.evse_id AS connector_no, cp.id AS charge_point_id,
-            cp.ocpp_identity, s.org_id, s.name AS site_name, c.max_power_w, s.pbjt_rate_bps,
-            s.timezone, c.tera_status, c.current_type, s.id AS site_id,
+            cp.ocpp_identity, s.org_id, s.name AS site_name, c.max_power_w, s.local_tax_rate_bps,
+            s.timezone, c.tera_status, c.current_type, s.id AS site_id, s.country_code, s.tax_overrides,
+            (SELECT co.currency FROM country co WHERE co.code = s.country_code) AS currency,
             (c.maintenance_reason IS NOT NULL) AS in_maintenance,
             (cp.status NOT IN ('pending_adoption', 'decommissioned') AND s.archived_at IS NULL) AS listed,
             (cp.status = 'suspended') AS suspended
@@ -90,7 +99,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function sellProblem(c: ConnFull): string | null {
   if (!c.listed) return 'Charger ini tidak lagi beroperasi.';
   if (c.suspended) return 'Charger ini sementara tidak beroperasi.';
-  if (!connectorMaySellEnergy(c.tera_status as any).allowed) return 'Konektor ini sedang tidak dapat menjual energi.';
+  // Tera (meter verification) gates Indonesian connectors only (the country's regulatory profile).
+  if (!profileFor(c.country_code).connectorMaySell(c.tera_status).allowed) return 'Konektor ini sedang tidak dapat menjual energi.';
   if (c.in_maintenance) return 'Konektor ini sedang dalam perawatan.';
   return null;
 }
@@ -101,20 +111,24 @@ function sellProblem(c: ConnFull): string | null {
  * Authorize would refuse it anyway — this gives the driver the reason up front
  * instead of a charger that silently will not start.
  */
-export async function fleetTokenProblem(tokenId: string): Promise<string | null> {
-  const t = await one<{ status: string; valid_to: Date | null; energy_limit_wh: number | null; spend_limit_idr: number | null }>(
-    `SELECT status, valid_to, energy_limit_wh, spend_limit_idr FROM token WHERE id = $1`,
+export async function fleetTokenProblem(tokenId: string, currency?: string | null): Promise<string | null> {
+  const t = await one<{ status: string; valid_to: Date | null; energy_limit_wh: number | null; spend_limit_minor: number | null; spend_limit_currency: string }>(
+    `SELECT status, valid_to, energy_limit_wh, spend_limit_minor, spend_limit_currency FROM token WHERE id = $1`,
     [tokenId],
   );
   if (!t || t.status !== 'Accepted') return 'Kartu armada Anda diblokir. Hubungi admin armada Anda.';
   if (t.valid_to && new Date(t.valid_to) < new Date()) return 'Kartu armada Anda sudah kedaluwarsa. Hubungi admin armada Anda.';
-  if (t.energy_limit_wh != null || t.spend_limit_idr != null) {
+  if (t.energy_limit_wh != null || t.spend_limit_minor != null) {
+    // A spending limit is in one currency: elsewhere the card is refused (fail closed).
+    if (t.spend_limit_minor != null && currency != null && currency !== t.spend_limit_currency) {
+      return `Batas biaya kartu armada Anda dalam ${t.spend_limit_currency}; charger ini menagih dalam ${currency}.`;
+    }
     // Includes charging on other networks with this card (roaming CDRs).
-    const used = await cardUsage(tokenId);
+    const used = await cardUsage(tokenId, t.spend_limit_currency);
     if (t.energy_limit_wh != null && Number(used?.wh ?? 0) >= Number(t.energy_limit_wh)) {
       return 'Batas energi kartu armada Anda sudah tercapai.';
     }
-    if (t.spend_limit_idr != null && Number(used?.idr ?? 0) >= Number(t.spend_limit_idr)) {
+    if (t.spend_limit_minor != null && Number(used?.minor ?? 0) >= Number(t.spend_limit_minor)) {
       return 'Batas biaya kartu armada Anda sudah tercapai.';
     }
   }
@@ -124,11 +138,11 @@ export async function fleetTokenProblem(tokenId: string): Promise<string | null>
 export interface QuoteResult {
   ok: boolean;
   error?: string;
-  minimumViableIdr?: number;
+  minimumViableMinor?: number;
   allowanceWh?: number;
   allowanceKwh?: number;
-  amountIdr?: number;
-  mdrIdr?: number;
+  amountMinor?: number;
+  mdrMinor?: number;
   /** The membership / promotion this price includes, and why an entered code does not apply. */
   membership?: string | null;
   promotion?: string | null;
@@ -150,21 +164,33 @@ export interface QuoteResult {
   postpayLimitIdr?: number | null;
   /** 'unpaid': an earlier post-pay session is still unpaid, so post-pay is refused until it is. */
   postpayBlocked?: string | null;
+  /** Every amount above is in this currency (the site's), in PlugSure minor units. */
+  currency?: CurrencyCode;
+  /** Amounts the app offers, and the largest pre-purchase, in `currency`. */
+  presetsMinor?: number[];
+  maxPrepaidMinor?: number;
+  /** Prices are shown tax-inclusive (Singapore GST, Malaysia). */
+  pricesIncludeTax?: boolean;
 }
 
 /** How much energy a given rupiah amount buys on this connector, worst-case reserved. */
 export async function quotePrepaid(
   connectorUuid: string,
-  amountIdr: number,
+  amountMinor: number,
   opts: { principal?: DriverPrincipal | null; promoCode?: string | null } = {},
 ): Promise<QuoteResult> {
-  // Whole rupiah only: a fraction (or a number past 2^53) is not an amount any acquirer charges as asked.
-  if (!Number.isSafeInteger(amountIdr) || amountIdr <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
-  if (amountIdr > QRIS_MAX_TRANSACTION_IDR) {
-    return { ok: false, error: `Batas QRIS per transaksi Rp ${QRIS_MAX_TRANSACTION_IDR.toLocaleString('id-ID')}.` };
+  // Whole minor units only (rupiah, sen, cents): a fraction (or a number past 2^53) is not an amount any acquirer charges as asked.
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
+  if (amountMinor > QRIS_MAX_TRANSACTION_IDR) {
+    return { ok: false, error: `Batas QRIS per transaksi ${moneyText(QRIS_MAX_TRANSACTION_IDR, LEGACY_CURRENCY)}.` };
   }
   const c = await connFull(connectorUuid);
   if (!c) return { ok: false, error: 'Konektor tidak ditemukan.' };
+  // The site's country decides the currency and the largest pre-purchase (ID: the QRIS cap above).
+  const country = countryOf(c.country_code);
+  if (amountMinor > country.maxPrepaidMinor) {
+    return { ok: false, error: `Batas per transaksi ${moneyText(country.maxPrepaidMinor, country.currency)}.` };
+  }
 
   const problem = sellProblem(c);
   if (problem) return { ok: false, error: problem };
@@ -175,8 +201,10 @@ export async function quotePrepaid(
     startedAt: now,
     endedAt: new Date(now.getTime() + 45 * 60_000),
     connectorMaxPowerW: c.max_power_w,
-    pbjtRateBps: c.pbjt_rate_bps,
+    localTaxRateBps: c.local_tax_rate_bps,
     timezone: c.timezone,
+    currency: currencyOr(c.currency),
+    tax: await taxContextForSite(c.org_id, c, now),
   };
   // The driver's membership and a promo code make the same rupiah buy more
   // energy — exactly as the session will later be rated. A promotion with a
@@ -185,7 +213,7 @@ export async function quotePrepaid(
   const b = await benefitsFor(
     c.org_id,
     { appDriverId: p?.appDriverId ?? null, deviceId: p?.deviceId ?? null, promoCode: opts.promoCode ?? null },
-    { siteId: c.site_id, currentType: c.current_type },
+    { siteId: c.site_id, currentType: c.current_type, currency: currencyOr(c.currency) },
     now,
     c.timezone,
   ).catch(() => null);
@@ -199,7 +227,7 @@ export async function quotePrepaid(
   }
   let best = { allowanceWh: -1, choice: choices[0]! };
   for (const ch of choices) {
-    const wh = driverAllowanceWh(tariff, amountIdr, { ...baseCtx, adjustments: ch.adjustments });
+    const wh = driverAllowanceWh(tariff, amountMinor, { ...baseCtx, adjustments: ch.adjustments });
     if (wh < ch.minKwh * 1000) continue;
     if (wh > best.allowanceWh) best = { allowanceWh: wh, choice: ch };
   }
@@ -218,7 +246,7 @@ export async function quotePrepaid(
     return {
       ok: false,
       error: 'Jumlah ini belum menutup biaya tetap, jadi belum ada energi yang bisa dibeli.',
-      minimumViableIdr: hi,
+      minimumViableMinor: hi,
     };
   }
 
@@ -226,18 +254,20 @@ export async function quotePrepaid(
     ok: true,
     allowanceWh,
     allowanceKwh: Math.round(allowanceWh / 10) / 100,
-    amountIdr,
-    mdrIdr: estimateQrisMdrIdr(amountIdr),
+    amountMinor,
+    // The QRIS MDR credit exists in Indonesia only (§D9).
+    mdrMinor: country.code === 'ID' ? estimateQrisMdrIdr(amountMinor) : 0,
     membership: best.choice.adjustments.some((a) => a.source === 'subscription') ? b!.membership!.planName : null,
     promotion: best.choice.promotion,
     codeProblem: b?.codeProblem ?? null,
-    ...(await paymentSetupFor(c.org_id, p)),
+    pricesIncludeTax: tariff.pricesIncludeTax === true || country.displayPricesInclTax,
+    ...(await paymentSetupFor(c.org_id, p, country.code)),
   };
 }
 
-/** The payment methods an operator offers drivers (empty: payments not set up). */
-export async function paymentMethodsFor(orgId: string) {
-  try { const acq = await paymentsFor(orgId); return methodChoices(availableMethods(acq.resolved, acq.provider)); } catch { return []; }
+/** The payment methods an operator offers drivers in a country (empty: payments not set up there). */
+export async function paymentMethodsFor(orgId: string, country: string = 'ID') {
+  try { const acq = await paymentsFor(orgId, country); return methodChoices(availableMethods(acq.resolved, acq.provider, currencyOfCountry(country))); } catch { return []; }
 }
 
 /**
@@ -245,15 +275,19 @@ export async function paymentMethodsFor(orgId: string) {
  * is held (charged for what is used) and may be saved, and the driver's saved cards that
  * this operator's acquirer account can charge.
  */
-export async function paymentSetupFor(orgId: string, principal: DriverPrincipal | null) {
+export async function paymentSetupFor(orgId: string, principal: DriverPrincipal | null, countryCode: string = 'ID') {
+  // The currency, the amounts the app offers and the cap come from the site's country (§D6): no FX, so an
+  // IDR-only method (QRIS, Indonesian e-wallets) is simply not offered at a ringgit or Singapore-dollar site.
+  const country = countryOf(countryCode);
+  const money = { currency: country.currency, presetsMinor: [...country.prepaidPresetsMinor], maxPrepaidMinor: country.maxPrepaidMinor };
   try {
-    const acq = await paymentsFor(orgId);
-    const opts = cardOptions(acq.resolved, acq.provider);
+    const acq = await paymentsFor(orgId, country.code);
+    const opts = cardOptions(acq.resolved, acq.provider, country.currency);
     const mine = principal?.appDriverId ? await listCards(principal.appDriverId, { provider: acq.resolved.provider, integrationId: acq.resolved.integrationId }) : [];
     const savedCards = opts.saveCards
       ? mine.filter((k) => k.kind === 'card' && !k.expired).map((k) => ({ id: k.id, brand: k.brand, last4: k.last4, expMonth: k.expMonth, expYear: k.expYear }))
       : [];
-    const wallets = walletOptions(acq.resolved, acq.provider);
+    const wallets = walletOptions(acq.resolved, acq.provider, country.currency);
     const post = postpayOptions(acq.resolved, acq.provider);
     const linkedWallets = (await Promise.all(mine.filter((k) => k.kind === 'ewallet' && k.status === 'active' && wallets.includes(k.channel as any)).map(async (k) => {
       // Where the operator requires a checked balance, a wallet whose balance cannot be read is charged up front.
@@ -270,7 +304,8 @@ export async function paymentSetupFor(orgId: string, principal: DriverPrincipal 
       return { id: k.id, channel: k.channel, accountLabel: k.accountLabel, postpay };
     }))).filter((w) => w !== null);
     return {
-      paymentMethods: methodChoices(availableMethods(acq.resolved, acq.provider)),
+      ...money,
+      paymentMethods: methodChoices(availableMethods(acq.resolved, acq.provider, country.currency)),
       cardHolds: opts.holds,
       canSaveCard: opts.saveCards && !!principal?.appDriverId,
       savedCards,
@@ -279,20 +314,22 @@ export async function paymentSetupFor(orgId: string, principal: DriverPrincipal 
       linkedWallets,
       /** Linked e-wallets pay after the session (post-pay), up to this limit; why not, when blocked. */
       walletPostpay: post.on && linkedWallets.length > 0,
-      postpayLimitIdr: post.on ? post.limitIdr : null,
+      postpayLimitIdr: post.on ? post.limitMinor : null,
       postpayBlocked: post.on && principal?.appDriverId && (await outstandingPostpay(principal.appDriverId)) ? 'unpaid' : null,
     };
   } catch {
-    return { paymentMethods: [], cardHolds: false, canSaveCard: false, savedCards: [], linkableWallets: [], linkedWallets: [], walletPostpay: false, postpayLimitIdr: null, postpayBlocked: null };
+    return { ...money, paymentMethods: [], cardHolds: false, canSaveCard: false, savedCards: [], linkableWallets: [], linkedWallets: [], walletPostpay: false, postpayLimitIdr: null, postpayBlocked: null };
   }
 }
 
 export interface CheckoutResult {
   ok: boolean;
   error?: string;
-  minimumViableIdr?: number;
+  minimumViableMinor?: number;
   chargeId?: string;
-  qr?: { qrString: string; qrImage: string; qrPng: string; providerRef: string; amountIdr: number; expiresAt: string };
+  code?: string;
+  currency?: CurrencyCode;
+  qr?: { qrString: string; qrImage: string; qrPng: string; providerRef: string; amountMinor: number; expiresAt: string };
   /** How to pay: QRIS shows qr; e-wallets and cards open checkoutUrl, or (OVO) wait for the driver to approve in their app. */
   payment?: PaymentView;
   startToken?: string;
@@ -306,10 +343,10 @@ export interface PaymentView {
   method: string; channel: string; label: string;
   /** done: a saved card went through at once, nothing for the driver to do. */
   action: 'qr' | 'redirect' | 'push' | 'done';
-  checkoutUrl: string | null; providerRef: string; amountIdr: number; expiresAt: string;
-  /** A card hold: amountIdr is reserved, only what is used is charged. */
+  checkoutUrl: string | null; providerRef: string; amountMinor: number; expiresAt: string;
+  /** A card hold: amountMinor is reserved, only what is used is charged. */
   hold: boolean;
-  /** Post-pay: nothing charged now; amountIdr is the limit, the used amount is charged to the linked e-wallet after the session. */
+  /** Post-pay: nothing charged now; amountMinor is the limit, the used amount is charged to the linked e-wallet after the session. */
   postpay: boolean;
   savedCardId: string | null;
   saveCard: boolean;
@@ -339,14 +376,19 @@ export async function qrPngDataUri(text: string): Promise<string> {
 export async function checkoutPrepaid(
   principal: DriverPrincipal,
   connectorUuid: string,
-  amountIdr: number,
+  amountMinor: number,
   promoCode: string | null = null,
   pay: PayOptions = { returnUrl: '/app/paid.html' },
 ): Promise<CheckoutResult> {
   // Checked here too, before anything reaches the acquirer (the quote checks it as well).
-  if (!Number.isSafeInteger(amountIdr) || amountIdr <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
-  const q = await quotePrepaid(connectorUuid, amountIdr, { principal, promoCode });
-  if (!q.ok) return { ok: false, error: q.error, minimumViableIdr: q.minimumViableIdr };
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) return { ok: false, error: 'Jumlah tidak valid.' };
+  const q = await quotePrepaid(connectorUuid, amountMinor, { principal, promoCode });
+  if (!q.ok) return { ok: false, error: q.error, minimumViableMinor: q.minimumViableMinor };
+  // A partner network charge the driver still owes is paid first (review fix 2; Home shows it).
+  if (principal.appDriverId) {
+    const { roamingOwed, ROAMING_UNPAID } = await import('./roaming-pay.js');
+    if ((await roamingOwed(principal.appDriverId)).length) return { ok: false, error: ROAMING_UNPAID, code: 'roaming_unpaid' };
+  }
 
   const c = (await connFull(connectorUuid))!;
   // A reserved connector is for the driver who reserved it. Their reservation's
@@ -359,7 +401,8 @@ export async function checkoutPrepaid(
   }
 
   let acq: Awaited<ReturnType<typeof paymentsFor>>;
-  try { acq = await paymentsFor(c.org_id); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false, error: 'Pembayaran belum tersedia di charger ini.' }; throw e; }
+  const currency = currencyOr(c.currency);
+  try { acq = await paymentsFor(c.org_id, c.country_code); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false, error: 'Pembayaran belum tersedia di charger ini.' }; throw e; }
 
   // A single-use claim token bound to this payment. The charger must present this
   // exact idTag to draw the energy; nothing else can take the payment. It is minted
@@ -379,11 +422,11 @@ export async function checkoutPrepaid(
   const intentId = randomUUID();
   await query(
     `INSERT INTO payment_intent
-        (id, org_id, provider, method, mode, state, amount_authorised_idr, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted,
-         expires_at, integration_id, channel)
-      VALUES ($1, $2, $3, $4, 'prepurchase', 'pending', $5, $6, $7, $8, true, now() + interval '30 minutes', $9, $10)`,
-    [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), amountIdr, q.allowanceWh, c.connector_uuid, claimTag,
-     acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20)],
+        (id, org_id, provider, method, mode, state, amount_authorised_minor, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted,
+         expires_at, integration_id, channel, currency)
+      VALUES ($1, $2, $3, $4, 'prepurchase', 'pending', $5, $6, $7, $8, true, now() + interval '30 minutes', $9, $10, $11)`,
+    [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), amountMinor, q.allowanceWh, c.connector_uuid, claimTag,
+     acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20), currency],
   );
   const prepare = (p: PreparedPayment) => query(
     `UPDATE payment_intent SET provider_ref = COALESCE($2, provider_ref), idem_key = COALESCE($2, idem_key), mode = $3, method = $4, channel = $5,
@@ -397,7 +440,8 @@ export async function checkoutPrepaid(
       channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
       appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: true, walletId: pay.walletId ?? null,
       referenceId: `charge:${intentId}`,
-      amountIdr,
+      amountMinor,
+      currency,
       description: `${await appNameFor(c.org_id)} ${c.site_name} • ${c.ocpp_identity}/${c.connector_no}`,
       prepare,
     });
@@ -421,7 +465,7 @@ export async function checkoutPrepaid(
             state = CASE WHEN state <> 'pending' THEN state WHEN $10::text = 'authorised' THEN 'authorised' WHEN $10::text = 'captured' THEN 'captured' ELSE 'pending' END,
             authorised_at = CASE WHEN $10::text = 'authorised' THEN COALESCE(authorised_at, now()) ELSE authorised_at END,
             hold_state = CASE WHEN $10::text = 'authorised' THEN COALESCE(hold_state, 'held') ELSE hold_state END,
-            amount_captured_idr = CASE WHEN $10::text = 'captured' THEN COALESCE(amount_captured_idr, amount_authorised_idr) ELSE amount_captured_idr END,
+            amount_captured_minor = CASE WHEN $10::text = 'captured' THEN COALESCE(amount_captured_minor, amount_authorised_minor) ELSE amount_captured_minor END,
             captured_at = CASE WHEN $10::text = 'captured' THEN COALESCE(captured_at, now()) ELSE captured_at END,
             updated_at = now()
       WHERE id = $1`,
@@ -443,26 +487,28 @@ export async function checkoutPrepaid(
 
   const dc = await one<{ id: string }>(
     `INSERT INTO driver_charge
-        (device_id, app_driver_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_idr, promo_code)
-      VALUES ($1,$2,$3,$4,$5,$6,'prepaid',$7,$8) RETURNING id`,
-    [principal.deviceId, principal.appDriverId, c.org_id, c.connector_uuid, tok!.id, intent.id, amountIdr,
+        (device_id, app_driver_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_minor, promo_code, currency)
+      VALUES ($1,$2,$3,$4,$5,$6,'prepaid',$7,$8,$9) RETURNING id`,
+    [principal.deviceId, principal.appDriverId, c.org_id, c.connector_uuid, tok!.id, intent.id, amountMinor,
      // Kept only when it applies, so the session is rated with it.
-     promoCode && q.promotion && !q.codeProblem ? String(promoCode).trim().toUpperCase().slice(0, 30) : null],
+     promoCode && q.promotion && !q.codeProblem ? String(promoCode).trim().toUpperCase().slice(0, 30) : null, currency],
   );
 
-  logger.info({ chargeId: dc!.id, connector: c.connector_uuid, amountIdr, provider: acq.provider.name }, 'driver prepaid checkout');
-  await logPaymentCreated(acq.resolved, c.org_id, charge.providerRef, amountIdr, 'driver app', charge.channel);
+  logger.info({ chargeId: dc!.id, connector: c.connector_uuid, amountMinor, provider: acq.provider.name }, 'driver prepaid checkout');
+  await logPaymentCreated(acq.resolved, c.org_id, charge.providerRef, amountMinor, 'driver app', charge.channel);
   return {
     ok: true,
     chargeId: dc!.id,
-    payment: paymentView(charge, amountIdr),
+    // The app keeps showing the site's currency when it comes back from the acquirer's page.
+    currency,
+    payment: paymentView(charge, amountMinor),
     ...(charge.qrString ? {
       qr: {
         qrString: charge.qrString,
         qrImage: await qrDataUri(charge.qrString),
         qrPng: await qrPngDataUri(charge.qrString),
         providerRef: charge.providerRef,
-        amountIdr,
+        amountMinor,
         expiresAt: charge.expiresAt,
       },
     } : {}),
@@ -474,9 +520,9 @@ export async function checkoutPrepaid(
   };
 }
 
-export function paymentView(s: Awaited<ReturnType<typeof startPayment>>, amountIdr: number): PaymentView {
+export function paymentView(s: Awaited<ReturnType<typeof startPayment>>, amountMinor: number): PaymentView {
   return {
-    method: s.method, channel: s.channel, label: CHANNEL_LABEL[s.channel], action: s.action, checkoutUrl: s.checkoutUrl, providerRef: s.providerRef, amountIdr, expiresAt: s.expiresAt,
+    method: s.method, channel: s.channel, label: CHANNEL_LABEL[s.channel], action: s.action, checkoutUrl: s.checkoutUrl, providerRef: s.providerRef, amountMinor, expiresAt: s.expiresAt,
     hold: s.mode === 'preauth', postpay: s.mode === 'postpay', savedCardId: s.savedCardId, saveCard: s.saveCard,
   };
 }
@@ -489,7 +535,7 @@ export async function checkoutFleet(principal: DriverPrincipal, connectorUuid: s
   if (c.org_id !== principal.fleet.orgId) {
     return { ok: false, error: 'Charger ini bukan milik armada Anda.' };
   }
-  const problem = sellProblem(c) ?? (await fleetTokenProblem(principal.fleet.tokenId));
+  const problem = sellProblem(c) ?? (await fleetTokenProblem(principal.fleet.tokenId, currencyOr(c.currency)));
   if (problem) return { ok: false, error: problem };
   const held = await reservationOn(c.connector_uuid, principal);
   if (held && !held.mine) return { ok: false, error: 'Konektor ini sedang dipesan pengemudi lain.' };
@@ -517,7 +563,7 @@ export async function confirmPayment(principal: DriverPrincipal, chargeId: strin
   if (pi?.provider !== 'mock') return { ok: false, error: 'Menunggu konfirmasi pembayaran dari penyedia QRIS.' };
   await query(
     `UPDATE payment_intent
-        SET state = 'captured', amount_captured_idr = amount_authorised_idr, captured_at = now(), updated_at = now()
+        SET state = 'captured', amount_captured_minor = amount_authorised_minor, captured_at = now(), updated_at = now()
       WHERE id = $1 AND state <> 'captured'`,
     [dc.payment_intent_id],
   );
@@ -536,12 +582,30 @@ export async function confirmPayment(principal: DriverPrincipal, chargeId: strin
  * (mode 'settlement') that never buys energy and is never refunded as unused. When it is paid, the
  * session is marked paid (settlementPaid) and the operator's alert resolves.
  */
+/**
+ * A partner network charge whose card hold did not cover it (a shortfall, or a charge record after the 4-day rule):
+ * owed by the driver and paid like any unpaid session (review fix 2). The "charge id" is the roaming charge's.
+ */
+async function roamingUnpaidOf(principal: DriverPrincipal, chargeId: string) {
+  if (!principal.appDriverId || !/^[0-9a-f-]{36}$/i.test(chargeId)) return null;
+  const rc = await one<{ id: string; payment_intent_id: string; shortfall_minor: number | null; shortfall_paid_at: Date | null; shortfall_settlement_id: string | null }>(
+    `SELECT id, payment_intent_id, shortfall_minor, shortfall_paid_at, shortfall_settlement_id FROM driver_roaming_charge
+      WHERE id = $1 AND app_driver_id = $2 AND shortfall_minor > 0`, [chargeId, principal.appDriverId]);
+  if (!rc) return null;
+  const pi = await one<any>(
+    `SELECT id, org_id, mode, hold_state, hold_error, hold_capture_minor, channel, provider, provider_ref, provider_payment_id, integration_id, currency FROM payment_intent WHERE id = $1`,
+    [rc.payment_intent_id]);
+  if (!pi) return null;
+  return { dc: null, pi, kind: 'roaming' as const, owedMinor: Number(rc.shortfall_minor ?? 0), paid: !!rc.shortfall_paid_at, awaitingPin: false };
+}
+
 async function unpaidOf(principal: DriverPrincipal, chargeId: string) {
   const dc = await ownedCharge(principal, chargeId);
+  if (!dc) return roamingUnpaidOf(principal, chargeId);
   if (!dc?.payment_intent_id) return null;
-  const pi = await one<{ id: string; org_id: string; mode: string; hold_state: string | null; hold_error: string | null; hold_capture_idr: number | null; channel: string | null;
-    provider: string; provider_ref: string | null; provider_payment_id: string | null; integration_id: string | null }>(
-    `SELECT id, org_id, mode, hold_state, hold_error, hold_capture_idr, channel, provider, provider_ref, provider_payment_id, integration_id FROM payment_intent WHERE id = $1`, [dc.payment_intent_id]);
+  const pi = await one<{ id: string; org_id: string; mode: string; hold_state: string | null; hold_error: string | null; hold_capture_minor: number | null; channel: string | null;
+    provider: string; provider_ref: string | null; provider_payment_id: string | null; integration_id: string | null; currency: string }>(
+    `SELECT id, org_id, mode, hold_state, hold_error, hold_capture_minor, channel, provider, provider_ref, provider_payment_id, integration_id, currency FROM payment_intent WHERE id = $1`, [dc.payment_intent_id]);
   if (!pi) return null;
   // A card hold only once it has expired; post-pay whenever its e-wallet charge failed (link ended, insufficient balance, …).
   if (pi.mode === 'preauth' ? !pi.hold_error?.startsWith(HOLD_EXPIRED) : pi.mode !== 'postpay') return null;
@@ -549,28 +613,30 @@ async function unpaidOf(principal: DriverPrincipal, chargeId: string) {
   // Post-pay waiting for the driver's e-wallet PIN can be paid another way too.
   const awaitingPin = pi.mode === 'postpay' && pi.hold_state === 'capturing' && !!pi.hold_error?.startsWith('waiting for the driver');
   if (!paid && pi.hold_state !== 'capture_failed' && !awaitingPin) return null;
-  return { dc, pi, kind: pi.mode as 'preauth' | 'postpay', owedIdr: Number(pi.hold_capture_idr ?? 0), paid, awaitingPin };
+  return { dc, pi, kind: pi.mode as 'preauth' | 'postpay', owedMinor: Number(pi.hold_capture_minor ?? 0), paid, awaitingPin };
 }
 
 export async function payUnpaid(principal: DriverPrincipal, chargeId: string, pay: PayOptions): Promise<
   | { ok: true; paid: true }
-  | { ok: true; paid: false; amountIdr: number; payment: PaymentView; qr?: { qrString: string; qrImage: string; qrPng: string; providerRef: string; amountIdr: number; expiresAt: string }; demo: boolean }
+  | { ok: true; paid: false; amountMinor: number; currency: CurrencyCode; payment: PaymentView; qr?: { qrString: string; qrImage: string; qrPng: string; providerRef: string; amountMinor: number; expiresAt: string }; demo: boolean }
   | { ok: false; status: number; error: string; code?: string }
 > {
   const h = await unpaidOf(principal, chargeId);
   if (!h) return { ok: false, status: 404, error: 'Tidak ada tagihan yang perlu dibayar untuk sesi ini.' };
   if (h.paid) return { ok: true, paid: true };
-  if (h.owedIdr <= 0) return { ok: false, status: 409, error: 'Tidak ada tagihan yang perlu dibayar untuk sesi ini.' };
+  if (h.owedMinor <= 0) return { ok: false, status: 409, error: 'Tidak ada tagihan yang perlu dibayar untuk sesi ini.' };
   let acq: Awaited<ReturnType<typeof paymentsFor>>;
-  try { acq = await paymentsFor(h.pi.org_id); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false, status: 409, error: 'Pembayaran belum tersedia di operator ini.' }; throw e; }
+  // Paid in the session's own currency, through the operator's acquirer for that country.
+  const cur = currencyOr(h.pi.currency);
+  try { acq = await paymentsFor(h.pi.org_id, countryOfCurrency(cur)?.code ?? 'ID'); } catch (e) { if (e instanceof PaymentsUnavailable) return { ok: false, status: 409, error: 'Pembayaran belum tersedia di operator ini.' }; throw e; }
   // As at checkout: the settlement payment is recorded (pending) before the acquirer is asked, its reference added just
   // before the request, so a saved card or linked e-wallet charged without an answer still settles the session.
   const settlementId = randomUUID();
   await query(
-    `INSERT INTO payment_intent (id, org_id, provider, method, mode, state, amount_authorised_idr, expires_at, integration_id, settles_intent_id)
-     VALUES ($1, $2, $3, $4, 'settlement', 'pending', $5, now() + interval '30 minutes', $6, $7)`,
+    `INSERT INTO payment_intent (id, org_id, provider, method, mode, state, amount_authorised_minor, expires_at, integration_id, settles_intent_id, currency)
+     VALUES ($1, $2, $3, $4, 'settlement', 'pending', $5, now() + interval '30 minutes', $6, $7, $8)`,
     [settlementId, h.pi.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel),
-     h.owedIdr, acq.resolved.integrationId, h.pi.id],
+     h.owedMinor, acq.resolved.integrationId, h.pi.id, cur],
   );
   let s: Awaited<ReturnType<typeof startPayment>>;
   try {
@@ -578,8 +644,11 @@ export async function payUnpaid(principal: DriverPrincipal, chargeId: string, pa
       channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
       // A sale for the amount owed: never a new hold, never post-pay.
       appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: false, allowHold: false, walletId: pay.walletId ?? null,
-      referenceId: `settle:${settlementId}`, amountIdr: h.owedIdr,
-      description: `${await appNameFor(h.pi.org_id)}: sesi pengisian (${h.kind === 'postpay' ? 'bayar setelah selesai' : 'penahanan kartu berakhir'})`,
+      referenceId: `settle:${settlementId}`, amountMinor: h.owedMinor, currency: cur,
+      // What the bank statement / acquirer receipt shows: Indonesian for rupiah (as v1.6), English elsewhere.
+      description: cur === LEGACY_CURRENCY
+        ? `${await appNameFor(h.pi.org_id)}: ${h.kind === 'roaming' ? 'sisa tagihan jaringan mitra' : `sesi pengisian (${h.kind === 'postpay' ? 'bayar setelah selesai' : 'penahanan kartu berakhir'})`}`
+        : `${await appNameFor(h.pi.org_id)}: ${h.kind === 'roaming' ? 'partner network charge (balance)' : `charging session (${h.kind === 'postpay' ? 'pay after charging' : 'card hold ended'})`}`,
       prepare: (p) => query(
         `UPDATE payment_intent SET provider_ref = COALESCE($2, provider_ref), idem_key = COALESCE($2, idem_key), method = $3, channel = $4, driver_card_id = $5, updated_at = now() WHERE id = $1`,
         [settlementId, p.providerRef, p.method, p.channel, p.savedCardId]).then(() => undefined),
@@ -617,30 +686,30 @@ export async function payUnpaid(principal: DriverPrincipal, chargeId: string, pa
         SET provider_ref = $2, idem_key = $2, method = $3, channel = $4, checkout_url = $5, provider_payment_id = COALESCE(provider_payment_id, $6),
             driver_card_id = COALESCE($7, driver_card_id),
             state = CASE WHEN state <> 'pending' THEN state WHEN $8::text = 'captured' THEN 'captured' ELSE 'pending' END,
-            amount_captured_idr = CASE WHEN $8::text = 'captured' THEN COALESCE(amount_captured_idr, amount_authorised_idr) ELSE amount_captured_idr END,
+            amount_captured_minor = CASE WHEN $8::text = 'captured' THEN COALESCE(amount_captured_minor, amount_authorised_minor) ELSE amount_captured_minor END,
             captured_at = CASE WHEN $8::text = 'captured' THEN COALESCE(captured_at, now()) ELSE captured_at END,
             updated_at = now()
       WHERE id = $1`,
     [settlementId, s.providerRef, s.method, s.channel, s.checkoutUrl, s.providerPaymentId, s.savedCardId, s.immediate ?? null],
   );
   const row = { id: settlementId };
-  await logPaymentCreated(acq.resolved, h.pi.org_id, s.providerRef, h.owedIdr, h.kind === 'postpay' ? 'unpaid post-pay session' : 'expired card hold', s.channel);
-  logger.info({ chargeId, intent: h.pi.id, kind: h.kind, settlement: row.id, amountIdr: h.owedIdr, channel: s.channel }, 'driver paying an unpaid session in the app');
+  await logPaymentCreated(acq.resolved, h.pi.org_id, s.providerRef, h.owedMinor, h.kind === 'postpay' ? 'unpaid post-pay session' : 'expired card hold', s.channel);
+  logger.info({ chargeId, intent: h.pi.id, kind: h.kind, settlement: row.id, amountMinor: h.owedMinor, channel: s.channel }, 'driver paying an unpaid session in the app');
   if (s.immediate === 'captured') {
     const { settlementPaid } = await import('../services/payments/holds.js');
     await settlementPaid(row.id);
     return { ok: true, paid: true };
   }
   return {
-    ok: true, paid: false, amountIdr: h.owedIdr, payment: paymentView(s, h.owedIdr), demo: acq.provider.demo === true,
-    ...(s.qrString ? { qr: { qrString: s.qrString, qrImage: await qrDataUri(s.qrString), qrPng: await qrPngDataUri(s.qrString), providerRef: s.providerRef, amountIdr: h.owedIdr, expiresAt: s.expiresAt } } : {}),
+    ok: true, paid: false, amountMinor: h.owedMinor, currency: cur, payment: paymentView(s, h.owedMinor), demo: acq.provider.demo === true,
+    ...(s.qrString ? { qr: { qrString: s.qrString, qrImage: await qrDataUri(s.qrString), qrPng: await qrPngDataUri(s.qrString), providerRef: s.providerRef, amountMinor: h.owedMinor, expiresAt: s.expiresAt } } : {}),
   };
 }
 
 /** This phone's (or its account's) unpaid sessions that can be paid in the app: the home screen shows them. */
 export async function unpaidSessions(principal: DriverPrincipal) {
-  const rows = await many<{ charge_id: string; mode: string; owed: number; site: string; ended_at: Date }>(
-    `SELECT dc.id AS charge_id, pi.mode, pi.hold_capture_idr AS owed, si.name AS site, cs.ended_at
+  const rows = await many<{ charge_id: string; mode: string; owed: number; site: string; ended_at: Date; currency: string }>(
+    `SELECT dc.id AS charge_id, pi.mode, pi.hold_capture_minor AS owed, si.name AS site, cs.ended_at, pi.currency
        FROM driver_charge dc
        JOIN payment_intent pi ON pi.id = dc.payment_intent_id
        JOIN charging_session cs ON cs.id = pi.session_id
@@ -650,13 +719,19 @@ export async function unpaidSessions(principal: DriverPrincipal) {
       ORDER BY cs.ended_at DESC LIMIT 10`,
     [principal.deviceId, principal.appDriverId ?? null],
   );
-  return rows.map((r) => ({ chargeId: r.charge_id, kind: r.mode === 'postpay' ? 'postpay' : 'expired_hold', owedIdr: Number(r.owed ?? 0), site: r.site, endedAt: r.ended_at }));
+  const own = rows.map((r) => ({ chargeId: r.charge_id, kind: r.mode === 'postpay' ? 'postpay' : 'expired_hold', owedMinor: Number(r.owed ?? 0), site: r.site, endedAt: r.ended_at, currency: currencyOr(r.currency) }));
+  // Partner network charges the card hold did not cover (review fix 2).
+  const { roamingOwed } = await import('./roaming-pay.js');
+  const roaming = (await roamingOwed(principal.appDriverId)).map((r) => ({
+    chargeId: r.id, kind: 'roaming', owedMinor: Number(r.shortfall_minor), site: r.site ?? r.location_id, endedAt: r.created_at, currency: currencyOr(r.currency),
+  }));
+  return [...roaming, ...own].slice(0, 10);
 }
 
 /** Is the unpaid session paid yet (the app polls this while the driver pays)? */
 export async function unpaidStatus(principal: DriverPrincipal, chargeId: string) {
   const h = await unpaidOf(principal, chargeId);
-  return h ? { kind: h.kind === 'postpay' ? 'postpay' : 'expired_hold', owedIdr: h.owedIdr, paid: h.paid } : null;
+  return h ? { kind: h.kind === 'postpay' ? 'postpay' : h.kind === 'roaming' ? 'roaming' : 'expired_hold', owedMinor: h.owedMinor, paid: h.paid } : null;
 }
 
 /** Dev/sandbox: the driver's latest payment for the unpaid session is paid, exactly as the acquirer's notification would settle it. */
@@ -668,7 +743,7 @@ export async function confirmUnpaidPayment(principal: DriverPrincipal, chargeId:
     `SELECT id, provider FROM payment_intent WHERE settles_intent_id = $1 AND mode = 'settlement' AND state = 'pending' ORDER BY created_at DESC LIMIT 1`, [h.pi.id]);
   if (!s) return { ok: false, error: 'Belum ada pembayaran untuk tagihan ini.' };
   if (s.provider !== 'mock') return { ok: false, error: 'Menunggu konfirmasi pembayaran dari penyedia.' };
-  await query(`UPDATE payment_intent SET state = 'captured', amount_captured_idr = amount_authorised_idr, captured_at = now(), updated_at = now() WHERE id = $1 AND state = 'pending'`, [s.id]);
+  await query(`UPDATE payment_intent SET state = 'captured', amount_captured_minor = amount_authorised_minor, captured_at = now(), updated_at = now() WHERE id = $1 AND state = 'pending'`, [s.id]);
   const { settlementPaid } = await import('../services/payments/holds.js');
   await settlementPaid(s.id);
   return { ok: true };
@@ -679,8 +754,8 @@ async function paidInAppOf(intentId: string, holdError: string | null) {
   const m = /payment ([0-9a-f-]{36})\)/.exec(holdError ?? '');
   if (!m) return null;
   const s = await one<{ channel: string | null; paid: number }>(
-    `SELECT channel, amount_captured_idr AS paid FROM payment_intent WHERE id = $1 AND settles_intent_id = $2`, [m[1], intentId]);
-  return s ? { amountIdr: Number(s.paid), channel: s.channel } : null;
+    `SELECT channel, amount_captured_minor AS paid FROM payment_intent WHERE id = $1 AND settles_intent_id = $2`, [m[1], intentId]);
+  return s ? { amountMinor: Number(s.paid), channel: s.channel } : null;
 }
 interface ChargeRow {
   id: string;
@@ -692,7 +767,7 @@ interface ChargeRow {
   payment_intent_id: string | null;
   session_id: string | null;
   mode: string;
-  amount_idr: number | null;
+  amount_minor: number | null;
   created_at: Date;
 }
 
@@ -768,7 +843,7 @@ export async function startCharge(principal: DriverPrincipal, chargeId: string):
 /** A refund owed to (or paid to) the driver for this charge, when there is one. */
 export interface RefundInfo {
   state: 'due' | 'processing' | 'refunded' | 'failed';
-  amountIdr: number;
+  amountMinor: number;
   reason: string | null;
   reference: string | null;
   refundedAt: string | null;
@@ -776,14 +851,14 @@ export interface RefundInfo {
 
 async function refundOf(paymentIntentId: string | null): Promise<RefundInfo | null> {
   if (!paymentIntentId) return null;
-  const r = await one<{ refund_state: RefundInfo['state'] | null; refund_due_idr: number | null; refunded_idr: number | null; refund_reason: string | null; refund_ref: string | null; refunded_at: Date | null }>(
-    `SELECT refund_state, refund_due_idr, refunded_idr, refund_reason, refund_ref, refunded_at FROM payment_intent WHERE id = $1`,
+  const r = await one<{ refund_state: RefundInfo['state'] | null; refund_due_minor: number | null; refunded_minor: number | null; refund_reason: string | null; refund_ref: string | null; refunded_at: Date | null }>(
+    `SELECT refund_state, refund_due_minor, refunded_minor, refund_reason, refund_ref, refunded_at FROM payment_intent WHERE id = $1`,
     [paymentIntentId],
   );
   if (!r?.refund_state) return null;
   return {
     state: r.refund_state,
-    amountIdr: Number(r.refunded_idr ?? r.refund_due_idr ?? 0),
+    amountMinor: Number(r.refunded_minor ?? r.refund_due_minor ?? 0),
     reason: r.refund_reason,
     // A bank-transfer reference is the operator's; the driver only needs to know it was paid.
     reference: r.refund_state === 'refunded' ? r.refund_ref : null,
@@ -802,15 +877,15 @@ export interface LiveStatus {
   durationMin: number;
   startedAt: string | null;
   // prepaid progress
-  amountIdr: number | null;
+  amountMinor: number | null;
   allowanceKwh: number | null;
   progressPct: number | null;
-  /** The cost so far, PBJT-TL and PPN included (= cost.totalIdr; kept for older app builds). */
-  estimatedIdr: number | null;
+  /** The cost so far, PBJT-TL and PPN included (= cost.totalMinor; kept for older app builds). */
+  estimatedMinor: number | null;
   /** The cost so far, priced as the charge record will be; `final` once it exists. */
   cost?: {
-    totalIdr: number; subtotalIdr: number; taxIdr: number; discountIdr: number;
-    idleFeeIdr: number; idleMinutes: number; asOf: string; final: boolean;
+    totalMinor: number; subtotalMinor: number; taxTotalMinor: number; discountMinor: number;
+    idleFeeMinor: number; idleMinutes: number; asOf: string; final: boolean;
   } | null;
   siteName: string;
   connectorLabel: string;
@@ -847,7 +922,8 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
   const base = {
     chargeId: dc.id,
     mode: dc.mode,
-    amountIdr: dc.amount_idr,
+    amountMinor: dc.amount_minor,
+    currency: currencyOr(c?.currency),
     siteName: c?.site_name ?? '—',
     connectorLabel: c ? `${c.current_type} ${Math.round(c.max_power_w / 100) / 10} kW` : '—',
   };
@@ -858,7 +934,7 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
       const paid = isPaidForStart(intent);
       // An unused card hold that was released: nothing was taken, nothing to refund.
       if ((intent?.mode === 'preauth' || intent?.mode === 'postpay') && (intent.hold_state === 'released' || intent.hold_state === 'releasing')) {
-        return { ...base, state: 'released', energyKwh: 0, powerKw: null, durationMin: 0, startedAt: null, allowanceKwh: null, progressPct: 0, estimatedIdr: null, hasReceipt: false };
+        return { ...base, state: 'released', energyKwh: 0, powerKw: null, durationMin: 0, startedAt: null, allowanceKwh: null, progressPct: 0, estimatedMinor: null, hasReceipt: false };
       }
       // Paid, never started, window expired: the money is on its way back.
       const refund = await refundOf(dc.payment_intent_id);
@@ -872,7 +948,7 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
         startedAt: null,
         allowanceKwh: null,
         progressPct: 0,
-        estimatedIdr: null,
+        estimatedMinor: null,
         hasReceipt: false,
       };
     }
@@ -885,7 +961,7 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
       startedAt: null,
       allowanceKwh: null,
       progressPct: 0,
-      estimatedIdr: null,
+      estimatedMinor: null,
       hasReceipt: false,
     };
   }
@@ -913,7 +989,7 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
 
   // The cost so far, priced exactly as the charge record will be (every payment mode).
   const cost = await runningCost(session.id).catch(() => null);
-  const estimatedIdr = cost ? cost.totalIdr : null;
+  const estimatedMinor = cost ? cost.totalMinor : null;
 
   const cdr = await one<{ id: string }>(`SELECT id FROM cdr WHERE session_id = $1`, [session.id]);
 
@@ -935,10 +1011,10 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
     startedAt: startedAt.toISOString(),
     allowanceKwh,
     progressPct,
-    estimatedIdr,
+    estimatedMinor,
     cost: cost && {
-      totalIdr: cost.totalIdr, subtotalIdr: cost.subtotalIdr, taxIdr: cost.taxIdr, discountIdr: cost.discountIdr,
-      idleFeeIdr: cost.idleFeeIdr, idleMinutes: cost.idleMinutes, asOf: cost.asOf, final: cost.final,
+      totalMinor: cost.totalMinor, subtotalMinor: cost.subtotalMinor, taxTotalMinor: cost.taxTotalMinor, discountMinor: cost.discountMinor,
+      idleFeeMinor: cost.idleFeeMinor, idleMinutes: cost.idleMinutes, asOf: cost.asOf, final: cost.final,
     },
     hasReceipt: Boolean(cdr),
     v2x: await driverV2x(session.id),
@@ -958,13 +1034,13 @@ async function driverV2x(sessionId: string) {
     consentSource: v.consentSource,
     minSocPercent: v.minSocPercent ?? v.siteProgramme.minSocPercent,
     siteMinSocPercent: v.siteProgramme.minSocPercent,
-    creditIdrPerKwh: v.consent ? v.creditIdrPerKwh : v.siteProgramme.creditIdrPerKwh,
+    creditMinorPerKwh: v.consent ? v.creditMinorPerKwh : v.siteProgramme.creditMinorPerKwh,
     windows: v.siteProgramme.windows,
     socPercent: v.socPercent,
     discharging: v.discharging,
     dischargeKw: v.dischargeW ? Math.round(v.dischargeW / 100) / 10 : null,
     exportKwh: Math.round(v.exportWh / 10) / 100,
-    creditIdr: v.creditIdr,
+    creditMinor: v.creditMinor,
     notDischargingBecause: v.notDischargingBecause,
   };
 }
@@ -1025,14 +1101,15 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
 
   const row = await one<any>(
     `SELECT cs.id AS session_id, cs.started_at, cs.ended_at, cs.energy_wh, cs.duration_s,
-            cs.idle_minutes, cs.payment_mode, cs.prepaid_amount_idr,
+            cs.idle_minutes, cs.payment_mode, cs.prepaid_amount_minor,
             cp.ocpp_identity, e.evse_id AS connector_no, s.name AS site_name, s.address, s.spklu_id,
             -- Seller of record: the site owner when it is set as such, else the operator.
             CASE WHEN so.seller_of_record = 'owner' THEN COALESCE(so.legal_name, so.name) ELSE o.name END AS operator,
             CASE WHEN so.seller_of_record = 'owner' THEN so.npwp ELSE o.npwp END AS operator_npwp,
             CASE WHEN so.seller_of_record = 'owner' THEN so.pkp ELSE o.pkp END AS operator_pkp,
-            d.lines, d.subtotal_idr, d.pbjt_idr, d.pbjt_rate_bps, d.ppn_dpp_idr, d.ppn_rate_bps, d.ppn_idr,
-            d.total_idr, d.regulatory_flags, d.id AS cdr_id
+            d.lines, d.subtotal_minor, d.local_tax_minor, d.local_tax_rate_bps, d.tax_base_minor, d.tax_rate_bps, d.tax_minor,
+            d.total_minor, d.regulatory_flags, d.id AS cdr_id,
+            cs.currency, s.country_code, s.timezone AS site_timezone, d.tax_scheme, d.prices_include_tax, cs.org_id
        FROM driver_charge dc
        JOIN charging_session cs ON (cs.id = dc.session_id
              OR (cs.connector_uuid = dc.connector_uuid AND cs.token_id = dc.token_id
@@ -1061,19 +1138,19 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
    * statement.
    */
   let settlement: {
-    paidIdr: number; usedIdr: number; refundIdr: number; topUpIdr: number; refund: RefundInfo | null;
+    paidMinor: number; usedMinor: number; refundMinor: number; topUpMinor: number; refund: RefundInfo | null;
     /** A card hold: what was held, what is (being) charged, and what was released at once. */
     hold?: {
-      heldIdr: number; chargedIdr: number; releasedIdr: number; state: string | null;
-      /** The authorisation expired before it was captured: unpaidIdr is owed, payable in the app with payOptions. */
-      expired?: boolean; unpaidIdr?: number;
+      heldMinor: number; chargedMinor: number; releasedMinor: number; state: string | null;
+      /** The authorisation expired before it was captured: unpaidMinor is owed, payable in the app with payOptions. */
+      expired?: boolean; unpaidMinor?: number;
       payOptions?: { paymentMethods: unknown[]; savedCards: unknown[]; linkedWallets: unknown[] } | null;
       /** An expired hold the driver has since paid in the app: how much, and with what. */
-      paidInApp?: { amountIdr: number; channel: string | null } | null;
+      paidInApp?: { amountMinor: number; channel: string | null } | null;
     };
     /** Post-pay: the limit, what is (being) charged to the linked e-wallet, and — while unpaid — how to pay. */
     postpay?: {
-      limitIdr: number; chargedIdr: number; state: string | null; channel: string | null; unpaid: boolean; checkoutUrl: string | null; error: string | null; linkEnded: boolean;
+      limitMinor: number; chargedMinor: number; state: string | null; channel: string | null; unpaid: boolean; checkoutUrl: string | null; error: string | null; linkEnded: boolean;
       /** The charge failed for lack of balance. */
       insufficient?: boolean;
       /** The e-wallet PIN confirmation expired unconfirmed. */
@@ -1085,17 +1162,17 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
       /** The charge failed (link ended, insufficient balance, …) or waits for the PIN: the session can be paid in the app with any of these. */
       payOptions?: { paymentMethods: unknown[]; savedCards: unknown[]; linkedWallets: unknown[] } | null;
       /** Paid in the app after the charge failed: how much, with what, and why it was needed. */
-      paidInApp?: { amountIdr: number; channel: string | null; reason: 'link_ended' | 'charge_failed' | 'pin_not_confirmed' | 'pin_expired' | 'pin_denied' | 'pin_cancelled' } | null;
+      paidInApp?: { amountMinor: number; channel: string | null; reason: 'link_ended' | 'charge_failed' | 'pin_not_confirmed' | 'pin_expired' | 'pin_denied' | 'pin_cancelled' } | null;
     };
   } | null = null;
   if (dc.mode === 'prepaid' && dc.payment_intent_id && row.cdr_id) {
-    const pi = await one<{ captured: number | null; mode: string; authorised: number | null; hold_capture_idr: number | null; hold_state: string | null; channel: string | null; checkout_url: string | null; hold_error: string | null }>(
-      `SELECT amount_captured_idr AS captured, mode, amount_authorised_idr AS authorised, hold_capture_idr, hold_state, channel, checkout_url, hold_error FROM payment_intent WHERE id = $1`,
+    const pi = await one<{ captured: number | null; mode: string; authorised: number | null; hold_capture_minor: number | null; hold_state: string | null; channel: string | null; checkout_url: string | null; hold_error: string | null; currency: string }>(
+      `SELECT amount_captured_minor AS captured, mode, amount_authorised_minor AS authorised, hold_capture_minor, hold_state, channel, checkout_url, hold_error, currency FROM payment_intent WHERE id = $1`,
       [dc.payment_intent_id],
     );
-    const used = Number(row.total_idr ?? 0);
+    const used = Number(row.total_minor ?? 0);
     if (pi?.mode === 'postpay') {
-      const charged = Number(pi.captured ?? pi.hold_capture_idr ?? Math.min(used, Number(pi.authorised ?? 0)));
+      const charged = Number(pi.captured ?? pi.hold_capture_minor ?? Math.min(used, Number(pi.authorised ?? 0)));
       const unpaid = pi.hold_state === 'capture_failed' || pi.hold_state === 'capturing';
       // The e-wallet link ended (unlinked in the e-wallet app or expired): pay in the app with another method,
       // or link it again and "pay now". Once paid in the app, the receipt says so.
@@ -1105,10 +1182,10 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
       // Any failed charge (link ended, insufficient balance, …) can be paid in the app with another method.
       const failed = pi.hold_state === 'capture_failed';
       const awaitingPin = pi.hold_state === 'capturing' && !!pi.hold_error?.startsWith('waiting for the driver');
-      const setup = failed || awaitingPin ? await paymentSetupFor(dc.org_id, principal) : null;
+      const setup = failed || awaitingPin ? await paymentSetupFor(dc.org_id, principal, countryOfCurrency(currencyOr(pi.currency))!.code) : null;
       settlement = {
-        paidIdr: pi.hold_state === 'captured' ? charged : 0, usedIdr: used, refundIdr: 0, topUpIdr: Math.max(0, used - Number(pi.authorised ?? 0)), refund: null,
-        postpay: { limitIdr: Number(pi.authorised ?? 0), chargedIdr: charged, state: pi.hold_state, channel: pi.channel, unpaid,
+        paidMinor: pi.hold_state === 'captured' ? charged : 0, usedMinor: used, refundMinor: 0, topUpMinor: Math.max(0, used - Number(pi.authorised ?? 0)), refund: null,
+        postpay: { limitMinor: Number(pi.authorised ?? 0), chargedMinor: charged, state: pi.hold_state, channel: pi.channel, unpaid,
           checkoutUrl: pi.hold_state === 'capturing' ? pi.checkout_url : null, error: pi.hold_state === 'capture_failed' ? pi.hold_error : null,
           linkEnded,
           /** The e-wallet refused the charge for lack of balance: top up and pay now, or pay another way. */
@@ -1124,89 +1201,101 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
       };
     }
     if (pi?.mode === 'preauth') {
-      const held = Number(pi.authorised ?? dc.amount_idr ?? 0);
+      const held = Number(pi.authorised ?? dc.amount_minor ?? 0);
       // The authorisation expired at the acquirer before it was captured: nothing was taken from the card,
       // the hold is gone, and the driver can pay what is owed in the app (then it is paid in the app).
       const expiredHold = !!pi.hold_error?.startsWith(HOLD_EXPIRED);
       const expired = expiredHold && pi.hold_state === 'capture_failed';
       const paidInApp = expiredHold && pi.hold_state === 'captured';
-      const charged = expired ? 0 : Number(pi.captured ?? pi.hold_capture_idr ?? Math.min(used, held));
+      const charged = expired ? 0 : Number(pi.captured ?? pi.hold_capture_minor ?? Math.min(used, held));
       if (expired || paidInApp) {
-        const owed = Number(pi.hold_capture_idr ?? Math.min(used, held));
-        const setup = expired ? await paymentSetupFor(dc.org_id, principal) : null;
+        const owed = Number(pi.hold_capture_minor ?? Math.min(used, held));
+        const setup = expired ? await paymentSetupFor(dc.org_id, principal, countryOfCurrency(currencyOr(pi.currency))!.code) : null;
         const inApp = paidInApp ? await paidInAppOf(dc.payment_intent_id, pi.hold_error) : null;
-        const via = inApp ? { channel: inApp.channel, paid: inApp.amountIdr } : null;
+        const via = inApp ? { channel: inApp.channel, paid: inApp.amountMinor } : null;
         settlement = {
-          paidIdr: paidInApp ? Number(via?.paid ?? pi.captured ?? owed) : 0, usedIdr: used, refundIdr: 0, topUpIdr: Math.max(0, used - held), refund: null,
+          paidMinor: paidInApp ? Number(via?.paid ?? pi.captured ?? owed) : 0, usedMinor: used, refundMinor: 0, topUpMinor: Math.max(0, used - held), refund: null,
           hold: {
-            heldIdr: held, chargedIdr: 0, releasedIdr: held, state: pi.hold_state, expired: true, unpaidIdr: expired ? owed : 0,
+            heldMinor: held, chargedMinor: 0, releasedMinor: held, state: pi.hold_state, expired: true, unpaidMinor: expired ? owed : 0,
             payOptions: setup ? { paymentMethods: setup.paymentMethods, savedCards: setup.savedCards, linkedWallets: setup.linkedWallets } : null,
-            paidInApp: paidInApp ? { amountIdr: Number(via?.paid ?? pi.captured ?? owed), channel: via?.channel ?? null } : null,
+            paidInApp: paidInApp ? { amountMinor: Number(via?.paid ?? pi.captured ?? owed), channel: via?.channel ?? null } : null,
           },
         };
       } else {
         settlement = {
-          paidIdr: charged, usedIdr: used, refundIdr: 0, topUpIdr: Math.max(0, used - held), refund: null,
-          hold: { heldIdr: held, chargedIdr: charged, releasedIdr: Math.max(0, held - charged), state: pi.hold_state },
+          paidMinor: charged, usedMinor: used, refundMinor: 0, topUpMinor: Math.max(0, used - held), refund: null,
+          hold: { heldMinor: held, chargedMinor: charged, releasedMinor: Math.max(0, held - charged), state: pi.hold_state },
         };
       }
     }
-    const paid = Number(pi?.captured ?? dc.amount_idr ?? 0);
+    const paid = Number(pi?.captured ?? dc.amount_minor ?? 0);
     if (!settlement) settlement = {
-      paidIdr: paid,
-      usedIdr: used,
-      refundIdr: Math.max(0, paid - used),
-      topUpIdr: Math.max(0, used - paid),
+      paidMinor: paid,
+      usedMinor: used,
+      refundMinor: Math.max(0, paid - used),
+      topUpMinor: Math.max(0, used - paid),
       refund: await refundOf(dc.payment_intent_id),
     };
   }
 
   // Loyalty points this session used and earned (when the operator runs a loyalty program).
   const pts = row.session_id
-    ? await one<{ earned: number; used: number; used_idr: number }>(
+    ? await one<{ earned: number; used: number; used_minor: number }>(
         `SELECT COALESCE(sum(points) FILTER (WHERE kind = 'earn'), 0)::int AS earned, COALESCE(-sum(points) FILTER (WHERE kind = 'redeem'), 0)::int AS used,
-                COALESCE(-sum(value_idr) FILTER (WHERE kind = 'redeem'), 0)::int AS used_idr
+                COALESCE(-sum(value_minor) FILTER (WHERE kind = 'redeem'), 0)::int AS used_minor
            FROM loyalty_entry WHERE session_id = $1`, [row.session_id])
     : null;
 
+  // Outside Indonesia the seller's tax number is the country's (GST / SST registration), never the Indonesian NPWP.
+  const foreign = (row.country_code ?? 'ID') !== 'ID';
+  const reg = foreign
+    ? await taxContextForSite(String(row.org_id), { country_code: row.country_code, timezone: row.site_timezone }, new Date(row.ended_at ?? row.started_at ?? Date.now())).catch(() => null)
+    : null;
   return {
     chargeId,
     receiptNo: `PS-${String(row.session_id).slice(0, 8).toUpperCase()}`,
     mode: dc.mode,
     sessionId: row.session_id,
-    loyalty: pts && (pts.earned || pts.used) ? { earnedPoints: pts.earned, usedPoints: pts.used, usedIdr: pts.used_idr } : null,
+    loyalty: pts && (pts.earned || pts.used) ? { earnedPoints: pts.earned, usedPoints: pts.used, usedMinor: pts.used_minor } : null,
     station: {
       name: row.site_name,
       address: row.address,
       spkluId: row.spklu_id,
       operator: row.operator,
-      operatorNpwp: row.operator_npwp,
-      operatorPkp: Boolean(row.operator_pkp),
+      operatorNpwp: foreign ? null : row.operator_npwp,
+      operatorPkp: foreign ? false : Boolean(row.operator_pkp),
+      taxRegistration: reg?.registered && reg.registrationNo ? { label: row.country_code === 'SG' ? 'GST Reg. No.' : 'SST No.', number: reg.registrationNo } : null,
     },
     connector: `${row.ocpp_identity} / ${row.connector_no}`,
+    // Every amount on this receipt is in this currency; outside Indonesia the tax is the country's (GST / SST).
+    currency: currencyOr(row.currency),
+    countryCode: row.country_code ?? 'ID',
+    timezone: row.site_timezone ?? null,
+    taxScheme: row.tax_scheme ?? null,
+    pricesIncludeTax: Boolean(row.prices_include_tax),
     startedAt: row.started_at,
     endedAt: row.ended_at,
     energyKwh: Math.round(Number(row.energy_wh) / 10) / 100,
     durationMin: Math.round(Number(row.duration_s ?? 0) / 60),
     idleMinutes: Number(row.idle_minutes ?? 0),
     paymentMode: row.payment_mode,
-    prepaidAmountIdr: row.prepaid_amount_idr,
+    prepaidAmountMinor: row.prepaid_amount_minor,
     settlement,
     rated: Boolean(row.cdr_id),
-    lines: row.lines ?? [],
+    lines: upgradeLegacyKeys(row.lines ?? []),
     tax: row.cdr_id
       ? {
-          subtotalIdr: row.subtotal_idr,
-          pbjtIdr: row.pbjt_idr,
-          pbjtRateBps: row.pbjt_rate_bps,
-          ppnDppIdr: row.ppn_dpp_idr,
+          subtotalMinor: row.subtotal_minor,
+          localTaxMinor: row.local_tax_minor,
+          localTaxRateBps: row.local_tax_rate_bps,
+          taxBaseMinor: row.tax_base_minor,
           // The statutory PPN rate on DPP nilai lain (12% × 11/12 = 11% effective).
           // 0 when the tariff is set to PPN-exempt (v1.3) — the app then hides the PPN lines.
-          ppnRateBps: row.ppn_rate_bps != null ? Number(row.ppn_rate_bps) : config.tax.ppnRateBps,
-          ppnEffectiveRateBps: Number(row.ppn_idr ?? 0) > 0 ? effectivePpnRateBps() : 0,
-          dppFraction: `${config.tax.ppnDppNumerator}/${config.tax.ppnDppDenominator}`,
-          ppnIdr: row.ppn_idr,
-          totalIdr: row.total_idr,
+          ppnRateBps: row.tax_rate_bps != null ? Number(row.tax_rate_bps) : config.tax.id.ppnRateBps,
+          ppnEffectiveRateBps: Number(row.tax_minor ?? 0) > 0 ? effectivePpnRateBps() : 0,
+          dppFraction: `${config.tax.id.ppnDppNumerator}/${config.tax.id.ppnDppDenominator}`,
+          taxMinor: row.tax_minor,
+          totalMinor: row.total_minor,
         }
       : null,
     flags: row.regulatory_flags ?? [],
@@ -1237,10 +1326,11 @@ export async function receiptDocument(principal: DriverPrincipal, chargeId: stri
 /** `orgId`: a white-label app shows only charges at its operator's sites. */
 export async function history(principal: DriverPrincipal, limit = 40, orgId: string | null = null): Promise<any[]> {
   const rows = await many<any>(
-    `SELECT dc.id AS charge_id, dc.mode, dc.amount_idr, dc.created_at,
+    `SELECT dc.id AS charge_id, dc.mode, dc.amount_minor, dc.created_at,
             s.name AS site_name, s.address,
             cs.id AS session_id, cs.state, cs.energy_wh, cs.started_at, cs.ended_at, cs.duration_s,
-            d.total_idr, pi.refund_state, COALESCE(pi.refunded_idr, pi.refund_due_idr) AS refund_idr
+            d.total_minor, pi.refund_state, COALESCE(pi.refunded_minor, pi.refund_due_minor) AS refund_minor,
+            (SELECT co.currency FROM country co WHERE co.code = s.country_code) AS currency
        FROM driver_charge dc
        LEFT JOIN payment_intent pi ON pi.id = dc.payment_intent_id
        JOIN site si ON si.id = (SELECT site_id FROM connector c
@@ -1275,12 +1365,13 @@ export async function history(principal: DriverPrincipal, limit = 40, orgId: str
       createdAt: r.created_at,
       state: r.state ?? (r.session_id ? 'active' : r.refund_state === 'refunded' ? 'refunded' : r.refund_state ? 'refund_pending' : 'no_session'),
       refundState: r.refund_state ?? null,
-      refundIdr: r.refund_idr != null ? Number(r.refund_idr) : null,
+      refundMinor: r.refund_minor != null ? Number(r.refund_minor) : null,
       energyKwh: r.energy_wh != null ? Math.round(Number(r.energy_wh) / 10) / 100 : null,
       startedAt: r.started_at,
       endedAt: r.ended_at,
       durationMin: r.duration_s != null ? Math.round(Number(r.duration_s) / 60) : null,
-      totalIdr: r.total_idr ?? r.amount_idr ?? null,
+      totalMinor: r.total_minor ?? r.amount_minor ?? null,
+      currency: currencyOr(r.currency),
     });
   }
   return out;

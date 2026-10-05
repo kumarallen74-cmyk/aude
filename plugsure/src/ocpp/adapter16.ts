@@ -714,12 +714,15 @@ export async function authorizeIdTag(
     status: string;
     valid_to: Date | null;
     energy_limit_wh: number | null;
-    spend_limit_idr: number | null;
+    spend_limit_minor: number | null;
+    spend_limit_currency: string;
+    site_currency: string;
     pnc_on: boolean;
   }>(
     // A Plug & Charge contract (kind 'emaid') is stored without separators; a
     // charger may present the eMAID with them (ID-PLS-C12345678).
-    `SELECT t.id, t.org_id, t.kind, t.status, t.valid_to, t.energy_limit_wh, t.spend_limit_idr,
+    `SELECT t.id, t.org_id, t.kind, t.status, t.valid_to, t.energy_limit_wh, t.spend_limit_minor, t.spend_limit_currency,
+            (SELECT co.currency FROM country co WHERE co.code = s.country_code) AS site_currency,
             (o.pnc_settings->>'enabled')::boolean IS TRUE AS pnc_on
        FROM token t
        JOIN site s ON s.org_id = t.org_id
@@ -734,6 +737,9 @@ export async function authorizeIdTag(
   if (!row) return (await authorizeRoaming(chargePointId, idTag)) ?? { status: 'Invalid' };
   // Contracts work only while the operator has Plug & Charge switched on.
   if (row.kind === 'emaid' && !row.pnc_on) return { status: 'Invalid' };
+  // An app driver's virtual roaming token (OCPI APP_USER, driver/roaming-pay.ts) pays through a card hold on
+  // a partner network only: it never starts a session at our own chargers.
+  if (row.kind === 'app') return { status: 'Invalid' };
   /**
    * A prepaid claim token's valid_to is stamped at CHECKOUT (driver/charge.ts),
    * but its claim window runs from PAYMENT (sessions.PREPAID_CLAIM_WINDOW_MIN):
@@ -834,7 +840,8 @@ export async function authorizeIdTag(
    * ordinary card is unchanged.
    */
   // Usage includes the card's roaming charges on other networks (OCPI CDRs).
-  if (status === 'Accepted' && (await overLimit(row))) status = 'Blocked';
+  // A spending limit is in one currency: at a site in another currency the card is refused (fail closed).
+  if (status === 'Accepted' && (await overLimit(row, row.site_currency))) status = 'Blocked';
 
   const expiry = prepaidUntil ?? (row.valid_to ? new Date(row.valid_to) : null);
   return {

@@ -1,4 +1,15 @@
-import { $, $$, esc, api, state, registerView, pageHead, icon, field, callout, table, fmt, tag, kpi, modal, confirmDialog, toast, formValues } from '../core.js';
+import { $, $$, esc, api, state, registerView, pageHead, icon, field, callout, table, fmt, tag, kpi, modal, confirmDialog, toast, formValues, countryCurrency, isRupiah, toMinor, toMajor } from '../core.js';
+
+/** Currencies a plan or promotion can be in: those of the organisation's sites, the home country's first. */
+const orgCurrencies = () => [...new Set([countryCurrency(state.me?.org?.homeCountry), ...(state.me?.org?.countries ?? []).map((c) => c.currency)])];
+const curOf = (p) => p.currency ?? orgCurrencies()[0];
+/** Amounts in forms are in major units (RM 12.50); rupiah as before (whole rupiah). */
+const major = (minor, cur) => (minor == null || minor === '' ? '' : toMajor(minor, cur));
+const minorOf = (x, cur) => (x === '' || x == null ? null : toMinor(String(x), cur));
+/** The currency choice on a new plan or promotion (fixed afterwards); nothing when the organisation has only one. */
+const currencyField = (p) => (p.id || orgCurrencies().length < 2 ? `<input type="hidden" name="currency" value="${esc(curOf(p))}">`
+  : field('Currency', `<select name="currency">${orgCurrencies().map((c) => `<option value="${esc(c)}"${c === curOf(p) ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>`, { help: 'Applies only to sessions in this currency. Fixed once created.' }));
+const wireSym = (b) => { const sel = $('select[name=currency]', b); sel?.addEventListener('change', () => $$('[data-sym]', b).forEach((x) => { x.textContent = fmt.sym(sel.value); })); };
 
 /**
  * Promotions & plans — memberships and offers that change what a session costs.
@@ -8,8 +19,8 @@ import { $, $$, esc, api, state, registerView, pageHead, icon, field, callout, t
 
 const KIND = {
   energy_percent: ['% off energy', (v) => `${fmt.num(v)}% off energy`],
-  energy_rate: ['Promo price per kWh', (v) => `${fmt.idr(v)}/kWh`],
-  amount_off: ['Rupiah off', (v) => `${fmt.idr(v)} off`],
+  energy_rate: ['Promo price per kWh', (v, cur) => `${isRupiah(cur) ? fmt.idr(v) : fmt.rate(v, cur)}/kWh`],
+  amount_off: ['Rupiah off', (v, cur) => `${fmt.money(v, cur)} off`],
   free_kwh: ['Free kWh', (v) => `${fmt.num(v)} kWh free`],
   waive_fees: ['Service fee waived', () => 'service fee waived'],
 };
@@ -17,7 +28,7 @@ const AUDIENCE = { everyone: 'Everyone', new_drivers: 'New drivers (first sessio
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const toLocalInput = (iso) => (iso ? new Date(new Date(iso).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
 const planBenefits = (p) => [
-  p.member_rate_idr != null ? `${fmt.idr(p.member_rate_idr)}/kWh` : '',
+  p.member_rate != null ? `${isRupiah(p.currency) ? fmt.idr(p.member_rate) : fmt.rate(p.member_rate, p.currency)}/kWh` : '',
   p.energy_discount_bps ? `${p.energy_discount_bps / 100}% off energy` : '',
   p.included_kwh ? `${fmt.num(p.included_kwh)} kWh included` : '',
   p.waive_session_fees ? 'no service fee' : '',
@@ -64,8 +75,9 @@ function promoForm(p, L) {
   const days = p.days_mask ?? 127;
   return `<div class="form">
     ${field('Name', `<input name="name" value="${esc(p.name ?? '')}" placeholder="Happy hour malam">`)}
+    ${currencyField(p)}
     ${field('Offer', `<select name="kind">${Object.entries(KIND).map(([k, [l]]) => `<option value="${k}"${p.kind === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
-    ${field('Value', `<input name="value" type="number" min="0" step="any" value="${esc(p.value ?? '')}">`, { help: '% for "% off", rupiah for a price or amount, kWh for free kWh; ignored for "service fee waived".' })}
+    ${field('Value', `<input name="value" type="number" min="0" step="any" value="${esc(p.kind === 'amount_off' ? major(p.value, curOf(p)) : p.value ?? '')}">`, { help: isRupiah(curOf(p)) && orgCurrencies().length < 2 ? '% for "% off", rupiah for a price or amount, kWh for free kWh; ignored for "service fee waived".' : '% for "% off", an amount in the currency for a price or amount off, kWh for free kWh; ignored for "service fee waived".' })}
     ${field('Who', `<select name="audience">${Object.entries(AUDIENCE).map(([k, l]) => `<option value="${k}"${(p.audience ?? 'everyone') === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
     ${field('Promo code', `<input name="code" value="${esc(p.code ?? '')}" placeholder="HEMAT20" style="text-transform:uppercase">`, { opt: true, help: 'Drivers enter it at checkout in the app. Needed for "whoever enters the code".' })}
     ${field('Fleet accounts', multi('fleetAccountIds', L.accounts, p.fleet_account_ids, (a) => a.name), { opt: true })}
@@ -80,7 +92,7 @@ function promoForm(p, L) {
     ${field('Minimum kWh', `<input name="minKwh" type="number" min="0" step="any" value="${esc(p.min_kwh ?? 0)}">`)}
     ${field('Total uses', `<input name="maxRedemptions" type="number" min="1" value="${esc(p.max_redemptions ?? '')}">`, { opt: true })}
     ${field('Uses per customer', `<input name="maxPerCustomer" type="number" min="1" value="${esc(p.max_per_customer ?? '')}">`, { opt: true })}
-    ${field('Budget (Rp)', `<input name="budgetIdr" type="number" min="1" value="${esc(p.budget_idr ?? '')}">`, { opt: true, help: 'The offer stops once this much discount has been given.' })}
+    ${field(`Budget (<span data-sym>${esc(fmt.sym(curOf(p)))}</span>)`, `<input name="budgetMinor" type="number" min="0" step="any" value="${esc(major(p.budget_minor, curOf(p)))}">`, { opt: true, labelHtml: true, help: 'The offer stops once this much discount has been given.' })}
     <div class="field full"><label class="check"><input type="checkbox" name="stacksWithMembership"${p.stacks_with_membership === false ? '' : ' checked'}> <span>Also for members, on top of their plan</span></label></div>
     <div class="field full"><label class="check"><input type="checkbox" name="active"${p.active === false ? '' : ' checked'}> <span>Active</span></label></div>
   </div>`;
@@ -88,13 +100,15 @@ function promoForm(p, L) {
 function readPromo(b) {
   const v = formValues(b);
   const mask = $$('[data-day]', b).reduce((m, x) => (x.checked ? m | (1 << Number(x.dataset.day)) : m), 0);
+  const cur = v.currency || orgCurrencies()[0];
   return {
-    name: v.name, kind: v.kind, value: Number(v.value || 0), audience: v.audience, code: v.code || null,
+    ...(v.currency ? { currency: v.currency } : {}),
+    name: v.name, kind: v.kind, value: v.kind === 'amount_off' ? minorOf(v.value || 0, cur) : Number(v.value || 0), audience: v.audience, code: v.code || null,
     fleetAccountIds: selectedOf(b, 'fleetAccountIds'), planIds: selectedOf(b, 'planIds'), siteIds: selectedOf(b, 'siteIds'),
     currentType: v.currentType || null, startsAt: v.startsAt ? new Date(v.startsAt).toISOString() : null, endsAt: v.endsAt ? new Date(v.endsAt).toISOString() : null,
     daysMask: mask, timeFrom: v.timeFrom || null, timeTo: v.timeTo || null, minKwh: Number(v.minKwh || 0),
     maxRedemptions: v.maxRedemptions ? Number(v.maxRedemptions) : null, maxPerCustomer: v.maxPerCustomer ? Number(v.maxPerCustomer) : null,
-    budgetIdr: v.budgetIdr ? Number(v.budgetIdr) : null, stacksWithMembership: v.stacksWithMembership, active: v.active,
+    budgetMinor: v.budgetMinor ? minorOf(v.budgetMinor, cur) : null, stacksWithMembership: v.stacksWithMembership, active: v.active,
   };
 }
 
@@ -106,25 +120,25 @@ async function renderPromotions(box, canWrite) {
     const now = Date.now();
     table($('[data-list]', box), {
       columns: [
-        { label: 'Promotion', render: (p) => `<div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(KIND[p.kind][1](p.value))}${p.code ? ` · code <span class="mono">${esc(p.code)}</span>` : ''}</div>` },
+        { label: 'Promotion', render: (p) => `<div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(KIND[p.kind][1](p.value, p.currency))}${p.code ? ` · code <span class="mono">${esc(p.code)}</span>` : ''}</div>` },
         { label: 'Who', render: (p) => esc(AUDIENCE[p.audience]) },
         { label: 'When', render: (p) => `<div class="cell-sub">${esc(fmt.date(p.starts_at))} – ${p.ends_at ? esc(fmt.date(p.ends_at)) : 'open'}${p.time_from ? ` · ${esc(p.time_from)}–${esc(p.time_to)}` : ''}${p.days_mask !== 127 ? ` · ${DAYS.filter((_, i) => (p.days_mask >> i) & 1).join(', ')}` : ''}</div>` },
         { label: 'Status', render: (p) => (!p.active ? tag('t-mute', 'off') : p.ends_at && new Date(p.ends_at) < now ? tag('t-mute', 'ended') : new Date(p.starts_at) > now ? tag('t-info', 'scheduled') : tag('t-ok', 'running')) },
         { label: 'Uses', num: true, render: (p) => `${fmt.num(p.redemptions)}${p.max_redemptions ? ` / ${fmt.num(p.max_redemptions)}` : ''}<div class="cell-sub">${fmt.num(p.customers)} customers</div>` },
-        { label: 'Discount given', num: true, render: (p) => `<b>${fmt.idr(p.discount_idr)}</b>${p.budget_idr ? `<div class="cell-sub">of ${fmt.idr(p.budget_idr)}</div>` : ''}` },
+        { label: 'Discount given', num: true, render: (p) => `<b>${fmt.money(p.discount_minor, p.currency)}</b>${p.budget_minor ? `<div class="cell-sub">of ${fmt.money(p.budget_minor, p.currency)}</div>` : ''}` },
       ],
       rows: promotions,
       empty: 'No promotions yet.',
       onRow: canWrite ? (p) => edit(p) : null,
     });
   };
-  const edit = (p = {}) => modal({
+  const edit = (p = {}) => wireSym(modal({
     title: p.id ? `Edit ${p.name}` : 'New promotion', size: 'lg', body: promoForm(p, L),
     actions: [{ label: 'Cancel' }, { label: p.id ? 'Save' : 'Create', kind: 'primary', async onClick(ctx) {
       try { await api(p.id ? `/v1/promotions/${p.id}` : '/v1/promotions', { method: p.id ? 'PUT' : 'POST', body: readPromo(ctx.body) }); toast('Saved', 'ok'); load(); }
       catch (e) { toast(e.message, 'crit'); return false; }
     } }],
-  });
+  }).body);
   $('[data-add]', box)?.addEventListener('click', () => edit());
   await load();
 }
@@ -134,8 +148,9 @@ async function renderPromotions(box, canWrite) {
 function planForm(p, L) {
   return `<div class="form">
     ${field('Name', `<input name="name" value="${esc(p.name ?? '')}" placeholder="Member Hemat">`)}
-    ${field('Monthly fee (Rp, before tax)', `<input name="monthlyFeeIdr" type="number" min="0" step="1" value="${esc(p.monthly_fee_idr ?? 0)}">`)}
-    ${field('Member price per kWh (Rp)', `<input name="memberRateIdr" type="number" min="0" step="any" value="${esc(p.member_rate_idr ?? '')}">`, { opt: true, help: 'Energy is billed at this price where it is lower than the tariff.' })}
+    ${currencyField(p)}
+    ${field(`Monthly fee (<span data-sym>${esc(fmt.sym(curOf(p)))}</span>, ${isRupiah(curOf(p)) && orgCurrencies().length < 2 ? 'before tax' : 'before tax where tax is added'})`, `<input name="monthlyFeeMinor" type="number" min="0" step="${isRupiah(curOf(p)) && orgCurrencies().length < 2 ? '1' : 'any'}" value="${esc(major(p.monthly_fee_minor ?? 0, curOf(p)))}">`, { labelHtml: true })}
+    ${field(`Member price per kWh (<span data-sym>${esc(fmt.sym(curOf(p)))}</span>)`, `<input name="memberRate" type="number" min="0" step="any" value="${esc(p.member_rate ?? '')}">`, { opt: true, labelHtml: true, help: 'Energy is billed at this price where it is lower than the tariff.' })}
     ${field('Discount on energy (%)', `<input name="energyDiscountPercent" type="number" min="0" max="100" step="any" value="${esc((p.energy_discount_bps ?? 0) / 100)}">`)}
     ${field('Included kWh per month', `<input name="includedKwh" type="number" min="0" step="any" value="${esc(p.included_kwh ?? 0)}">`)}
     ${field('AC / DC', `<select name="currentType"><option value="">Both</option><option value="AC"${p.current_type === 'AC' ? ' selected' : ''}>AC only</option><option value="DC"${p.current_type === 'DC' ? ' selected' : ''}>DC only</option></select>`)}
@@ -148,8 +163,10 @@ function planForm(p, L) {
 }
 function readPlan(b) {
   const v = formValues(b);
+  const cur = v.currency || orgCurrencies()[0];
   return {
-    name: v.name, monthlyFeeIdr: Number(v.monthlyFeeIdr || 0), memberRateIdr: v.memberRateIdr === '' ? null : Number(v.memberRateIdr),
+    ...(v.currency ? { currency: v.currency } : {}),
+    name: v.name, monthlyFeeMinor: minorOf(v.monthlyFeeMinor || 0, cur), memberRate: v.memberRate === '' ? null : Number(v.memberRate),
     energyDiscountPercent: Number(v.energyDiscountPercent || 0), includedKwh: Number(v.includedKwh || 0), currentType: v.currentType || null,
     siteIds: selectedOf(b, 'siteIds'), description: v.description, waiveSessionFees: v.waiveSessionFees, offeredInApp: v.offeredInApp, active: v.active,
   };
@@ -164,7 +181,7 @@ async function renderPlans(box, canWrite) {
     table($('[data-list]', box), {
       columns: [
         { label: 'Plan', render: (p) => `<div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(planBenefits(p))}</div>` },
-        { label: 'Fee / month', num: true, render: (p) => fmt.idr(p.monthly_fee_idr) },
+        { label: 'Fee / month', num: true, render: (p) => fmt.money(p.monthly_fee_minor, p.currency) },
         { label: 'Where', render: (p) => `${esc(p.current_type ?? 'AC & DC')}${p.site_ids?.length ? ` · ${p.site_ids.length} site(s)` : ''}` },
         { label: 'In app', render: (p) => (p.offered_in_app ? tag('t-info', 'offered') : '—') },
         { label: 'Members', num: true, render: (p) => fmt.num(p.members) },
@@ -175,13 +192,13 @@ async function renderPlans(box, canWrite) {
       onRow: canWrite ? (p) => edit(p) : null,
     });
   };
-  const edit = (p = {}) => modal({
+  const edit = (p = {}) => wireSym(modal({
     title: p.id ? `Edit ${p.name}` : 'New plan', size: 'lg', body: planForm(p, L),
     actions: [{ label: 'Cancel' }, { label: p.id ? 'Save' : 'Create', kind: 'primary', async onClick(ctx) {
       try { await api(p.id ? `/v1/subscription-plans/${p.id}` : '/v1/subscription-plans', { method: p.id ? 'PUT' : 'POST', body: readPlan(ctx.body) }); toast('Saved', 'ok'); load(); }
       catch (e) { toast(e.message, 'crit'); return false; }
     } }],
-  });
+  }).body);
   $('[data-add]', box)?.addEventListener('click', () => edit());
   await load();
 }
@@ -217,7 +234,7 @@ async function renderMembers(box, canWrite) {
   $('[data-add]', box)?.addEventListener('click', () => modal({
     title: 'Enrol a member',
     body: `<div class="form one">
-      ${field('Plan', `<select name="planId">${L.plans.filter((p) => p.active).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} — ${fmt.idr(p.monthly_fee_idr)}/month</option>`).join('')}</select>`)}
+      ${field('Plan', `<select name="planId">${L.plans.filter((p) => p.active).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} — ${fmt.money(p.monthly_fee_minor, p.currency)}/month</option>`).join('')}</select>`)}
       ${field('Member', `<select name="subscriberKind"><option value="fleet_account">A fleet account (all its cards)</option><option value="card">One card</option></select>`)}
       ${field('Fleet account', `<select name="fleetAccountId">${L.accounts.map((a) => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select>`)}
       ${field('Card UID', '<input name="cardUid" placeholder="for one card" autocomplete="off">')}
@@ -243,16 +260,16 @@ async function renderLoyalty(box, canWrite) {
     box.innerHTML = `
       ${callout('info', 'Drivers signed in to the app earn points on what each session costs them. Those who tick “use my points” have them taken off their next sessions automatically — like a discount, before PBJT-TL and PPN. Points are spent oldest first and expire after the set number of months.')}
       <div class="grid k4 section">
-        ${kpi('Loyalty', p.enabled ? 'On' : 'Off', p.enabled ? `${esc(p.earnPer1000Idr)} pt / Rp 1,000 · 1 pt = ${fmt.idr(p.pointValueIdr)}` : 'switch it on below')}
-        ${kpi('Points outstanding', fmt.num(s.outstandingPoints), `worth ${fmt.idr(s.liabilityIdr)} · ${fmt.num(s.members)} driver(s)`)}
+        ${kpi('Loyalty', p.enabled ? 'On' : 'Off', p.enabled ? `${esc(p.earnPer1000Minor)} pt / Rp 1,000 · 1 pt = ${fmt.idr(p.pointValueMinor)}` : 'switch it on below')}
+        ${kpi('Points outstanding', fmt.num(s.outstandingPoints), `worth ${fmt.idr(s.liabilityMinor)} · ${fmt.num(s.members)} driver(s)`)}
         ${kpi('Earned this month', fmt.num(s.thisMonth.earned), `${fmt.num(s.thisMonth.expired)} expired`)}
-        ${kpi('Spent this month', fmt.num(s.thisMonth.redeemed), `${fmt.idr(s.thisMonth.discountIdr)} discount given`)}
+        ${kpi('Spent this month', fmt.num(s.thisMonth.redeemed), `${fmt.idr(s.thisMonth.discountMinor)} discount given`)}
       </div>
       <div class="card section"><header><h3>Program</h3></header><div class="body">
         <div class="form">
           <div class="field full"><label class="check"><input type="checkbox" name="enabled"${p.enabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}> <span>Loyalty points are on</span></label></div>
-          ${field('Points per Rp 1,000', `<input name="earnPer1000Idr" inputmode="numeric" value="${esc(p.earnPer1000Idr)}"${canWrite ? '' : ' disabled'}>`, { help: 'Of the session receipt total, rounded down.' })}
-          ${field('Value of a point (Rp)', `<input name="pointValueIdr" inputmode="numeric" value="${esc(p.pointValueIdr)}"${canWrite ? '' : ' disabled'}>`, { help: `With these settings a driver gets ${((p.earnPer1000Idr * p.pointValueIdr) / 10).toLocaleString('en-GB', { maximumFractionDigits: 2 })}% back.` })}
+          ${field('Points per Rp 1,000', `<input name="earnPer1000Minor" inputmode="numeric" value="${esc(p.earnPer1000Minor)}"${canWrite ? '' : ' disabled'}>`, { help: 'Of the session receipt total, rounded down.' })}
+          ${field('Value of a point (Rp)', `<input name="pointValueMinor" inputmode="numeric" value="${esc(p.pointValueMinor)}"${canWrite ? '' : ' disabled'}>`, { help: `With these settings a driver gets ${((p.earnPer1000Minor * p.pointValueMinor) / 10).toLocaleString('en-GB', { maximumFractionDigits: 2 })}% back.` })}
           ${field('Most points may pay of a session (%)', `<input name="maxRedeemPercent" inputmode="decimal" value="${esc(p.maxRedeemBps / 100)}"${canWrite ? '' : ' disabled'}>`, { help: 'Of the energy and service fees.' })}
           ${field('Points expire after (months)', `<input name="expiryMonths" inputmode="numeric" value="${esc(p.expiryMonths)}"${canWrite ? '' : ' disabled'}>`)}
         </div>
@@ -262,7 +279,7 @@ async function renderLoyalty(box, canWrite) {
     table($('[data-members]', box), {
       columns: [
         { label: 'Driver', render: (x) => `<div class="cell-title">${esc(x.name ?? x.phone)}</div><div class="cell-sub mono">${esc(x.phone)}</div>` },
-        { label: 'Points', num: true, render: (x) => `<b>${fmt.num(x.balance)}</b><div class="cell-sub">${fmt.idr(x.balance * p.pointValueIdr)}</div>` },
+        { label: 'Points', num: true, render: (x) => `<b>${fmt.num(x.balance)}</b><div class="cell-sub">${fmt.idr(x.balance * p.pointValueMinor)}</div>` },
         { label: 'Uses them', render: (x) => (x.autoRedeem ? tag('t-ok', 'yes') : tag('t-mute', 'saving')) },
         { label: 'Last activity', render: (x) => esc(fmt.ago(x.lastActivity)) },
         { label: '', render: (x) => (canWrite ? `<button class="btn sm ghost" type="button" data-adjust="${esc(x.appDriverId)}">Adjust</button>` : '') },
@@ -273,7 +290,7 @@ async function renderLoyalty(box, canWrite) {
     $('[data-save]', box)?.addEventListener('click', async () => {
       const v = formValues(box);
       try {
-        await api('/v1/loyalty', { method: 'PUT', body: { enabled: !!v.enabled, earnPer1000Idr: Number(v.earnPer1000Idr), pointValueIdr: Number(v.pointValueIdr), maxRedeemBps: Math.round(Number(v.maxRedeemPercent) * 100), expiryMonths: Number(v.expiryMonths) } });
+        await api('/v1/loyalty', { method: 'PUT', body: { enabled: !!v.enabled, earnPer1000Minor: Number(v.earnPer1000Minor), pointValueMinor: Number(v.pointValueMinor), maxRedeemBps: Math.round(Number(v.maxRedeemPercent) * 100), expiryMonths: Number(v.expiryMonths) } });
         toast('Loyalty program saved', 'ok'); draw();
       } catch (e) { toast(e.message, 'crit'); }
     });

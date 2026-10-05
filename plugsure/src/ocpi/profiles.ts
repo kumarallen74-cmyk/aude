@@ -7,7 +7,7 @@ import { runControlLoop, LOAD_MGMT_STACK } from '../services/smartcharging.js';
 import { parseChargingProfile, ocpiDateTime, STATUS, type ChargingProfileIn } from './mapping.js';
 import { partnerUrlProblem } from './client.js';
 import { enqueuePush } from './push.js';
-import type { PartnerRow } from './store.js';
+import type { ActingParty, PartnerRow } from './store.js';
 
 /**
  * ChargingProfiles, CPO role (OCPI 2.2.1 § 14): a partner (the driver's eMSP,
@@ -48,7 +48,11 @@ interface SessionRow {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function activeSession(partner: PartnerRow, sessionId: string): Promise<SessionRow | null> {
+/**
+ * The partner's driver's active session. Behind a hub (`acting` = the eMSP in OCPI-from), the session's
+ * token must also be that eMSP's: the hub's connection carries every eMSP behind it (v1.7.1, WP H0).
+ */
+async function activeSession(partner: PartnerRow, sessionId: string, acting: ActingParty | null): Promise<SessionRow | null> {
   if (!UUID_RE.test(sessionId)) return null;
   return one<SessionRow>(
     `SELECT cs.id, cs.org_id, cs.site_id, cs.charge_point_id, cs.connector_uuid, cp.ocpp_identity, e.evse_id AS evse_no, cs.started_at
@@ -56,8 +60,9 @@ async function activeSession(partner: PartnerRow, sessionId: string): Promise<Se
        JOIN charge_point cp ON cp.id = cs.charge_point_id
        JOIN connector c ON c.id = cs.connector_uuid
        JOIN evse e ON e.id = c.evse_uuid
-      WHERE cs.id = $1 AND cs.org_id = $2 AND cs.ocpi_partner_id = $3 AND cs.state = 'active'`,
-    [sessionId, partner.org_id, partner.id],
+      WHERE cs.id = $1 AND cs.org_id = $2 AND cs.ocpi_partner_id = $3 AND cs.state = 'active'
+        AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM ocpi_token tk WHERE tk.id = cs.ocpi_token_id AND tk.country_code = $4 AND tk.party_id = $5))`,
+    [sessionId, partner.org_id, partner.id, acting?.country_code ?? null, acting?.party_id ?? null],
   );
 }
 
@@ -72,11 +77,14 @@ function checkResponseUrl(url: unknown): string | ProfileOutcome {
   return !u || problem ? invalid(`response_url ${problem ?? 'is required'}`) : u;
 }
 
-/** POST a result to the partner's response_url, through the outbox (it survives a partner outage). */
-async function sendResult(partner: PartnerRow, url: string, body: unknown) {
+/**
+ * POST a result to the partner's response_url, through the outbox (it survives a partner outage).
+ * Through a hub it is addressed (OCPI-to) to the eMSP that asked, not to the hub.
+ */
+async function sendResult(partner: PartnerRow, url: string, body: unknown, acting: ActingParty | null) {
   await enqueuePush({
     orgId: partner.org_id, partnerId: partner.id, module: 'chargingprofiles', action: 'result',
-    objectKey: `profile:${randomUUID()}`, url, body, to: { country_code: partner.country_code, party_id: partner.party_id }, always: true,
+    objectKey: `profile:${randomUUID()}`, url, body, to: acting ?? { country_code: partner.country_code, party_id: partner.party_id }, always: true,
   });
 }
 
@@ -100,12 +108,12 @@ async function applyNow(s: SessionRow): Promise<'ACCEPTED' | 'REJECTED'> {
 }
 
 /** PUT {session_id}: set (or replace) the partner's limit for this session. */
-export async function setProfile(partner: PartnerRow, sessionId: string, b: any): Promise<ProfileOutcome> {
+export async function setProfile(partner: PartnerRow, sessionId: string, b: any, acting: ActingParty | null = null): Promise<ProfileOutcome> {
   const url = checkResponseUrl(b?.response_url);
   if (typeof url !== 'string') return url;
   const profile = parseChargingProfile(b?.charging_profile);
   if (typeof profile === 'string') return invalid(profile);
-  const s = await activeSession(partner, sessionId);
+  const s = await activeSession(partner, sessionId, acting);
   if (!s) return answer('UNKNOWN_SESSION');
   const prev = await one<{ recent: boolean }>(
     `SELECT received_at > now() - make_interval(secs => $2) AS recent FROM ocpi_charging_profile WHERE session_id = $1`,
@@ -122,21 +130,21 @@ export async function setProfile(partner: PartnerRow, sessionId: string, b: any)
   return accepted(async () => {
     const result = await applyNow(s);
     await query(`UPDATE ocpi_charging_profile SET last_result = $2, applied_at = CASE WHEN $2 = 'ACCEPTED' THEN now() END WHERE session_id = $1`, [s.id, result]);
-    await sendResult(partner, url, { result });
+    await sendResult(partner, url, { result }, acting);
   });
 }
 
 /** DELETE {session_id}: lift the partner's limit. */
-export async function clearProfile(partner: PartnerRow, sessionId: string, responseUrl: unknown): Promise<ProfileOutcome> {
+export async function clearProfile(partner: PartnerRow, sessionId: string, responseUrl: unknown, acting: ActingParty | null = null): Promise<ProfileOutcome> {
   const url = checkResponseUrl(responseUrl);
   if (typeof url !== 'string') return url;
-  const s = await activeSession(partner, sessionId);
+  const s = await activeSession(partner, sessionId, acting);
   if (!s) return answer('UNKNOWN_SESSION');
   const gone = await query(`DELETE FROM ocpi_charging_profile WHERE session_id = $1`, [s.id]);
   return accepted(async () => {
     // Nothing to lift: OCPI's UNKNOWN ("no profile matched the request").
     const result = (gone.rowCount ?? 0) === 0 ? 'UNKNOWN' : await applyNow(s);
-    await sendResult(partner, url, { result });
+    await sendResult(partner, url, { result }, acting);
   });
 }
 
@@ -145,12 +153,12 @@ export async function clearProfile(partner: PartnerRow, sessionId: string, respo
  * `duration` seconds. Asked of the charger (GetCompositeSchedule); a charger
  * that answers without a schedule is described by the last profile we sent it.
  */
-export async function activeProfile(partner: PartnerRow, sessionId: string, q: Record<string, unknown>): Promise<ProfileOutcome> {
+export async function activeProfile(partner: PartnerRow, sessionId: string, q: Record<string, unknown>, acting: ActingParty | null = null): Promise<ProfileOutcome> {
   const url = checkResponseUrl(q?.response_url);
   if (typeof url !== 'string') return url;
   const duration = Number(q?.duration);
   if (!Number.isInteger(duration) || duration <= 0 || duration > 86_400) return invalid('duration must be a whole number of seconds, up to 86400');
-  const s = await activeSession(partner, sessionId);
+  const s = await activeSession(partner, sessionId, acting);
   if (!s) return answer('UNKNOWN_SESSION');
   return accepted(async () => {
     const now = new Date();
@@ -176,7 +184,7 @@ export async function activeProfile(partner: PartnerRow, sessionId: string, q: R
         result = profile ? 'ACCEPTED' : 'UNKNOWN';
       }
     } catch { result = 'REJECTED'; }
-    await sendResult(partner, url, { result, ...(profile ? { profile } : {}) });
+    await sendResult(partner, url, { result, ...(profile ? { profile } : {}) }, acting);
   });
 }
 

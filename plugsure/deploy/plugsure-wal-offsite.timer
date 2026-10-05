@@ -1,0 +1,13 @@
+# Every 5 minutes: check WAL archiving and copy new segments off the host.
+# Install with plugsure-basebackup.service (see the notes there).
+
+[Unit]
+Description=PlugSure WAL archive check and off-host copy, every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

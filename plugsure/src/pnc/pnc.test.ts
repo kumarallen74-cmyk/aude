@@ -89,7 +89,7 @@ dbDescribe('Plug & Charge: the test PKI', () => {
   test('renewal: a certificate ending within a week raises an alert; an unreachable charger is not asked', async () => {
     const slug = 'pnc-renewal-test';
     const org = (await one<{ id: string }>(`INSERT INTO organisation (name, slug, pnc_settings) VALUES ('PnC Renewal Test', $1, '{"enabled":true}') ON CONFLICT (slug) DO UPDATE SET pnc_settings = EXCLUDED.pnc_settings RETURNING id`, [slug]))!.id;
-    const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'PnC Renewal Hub', 1000) RETURNING id`, [org]))!.id;
+    const site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'PnC Renewal Hub', 1000) RETURNING id`, [org]))!.id;
     const ident = `PNC-RENEW-${Date.now()}`;
     const cp = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity, status, pnc_enabled) VALUES ($1, $2, 'online', true) RETURNING id`, [site, ident]))!.id;
     await query(`INSERT INTO pnc_certificate (org_id, charge_point_id, certificate_type, state, not_after) VALUES ($1, $2, 'V2GCertificate', 'delivered', now() + interval '5 days')`, [org, cp]);

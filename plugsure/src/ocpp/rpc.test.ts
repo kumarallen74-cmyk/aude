@@ -2,7 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import type { WebSocket } from 'ws';
-import { OcppRpcConnection, OcppCallError } from './rpc.js';
+import { OcppRpcConnection, OcppCallError, wireErrorCode, inboundErrorCode } from './rpc.js';
+import type { OcppVersion } from '../domain/canonical.js';
 
 /**
  * A WebSocket stand-in: records what the CSMS puts on the wire and lets a test
@@ -22,7 +23,7 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-function harness(handler: (action: string, payload: any) => Promise<any> | any) {
+function harness(handler: (action: string, payload: any) => Promise<any> | any, version?: OcppVersion) {
   const ws = new FakeSocket();
   const calls: Array<{ action: string; payload: any }> = [];
   const conn = new OcppRpcConnection(
@@ -32,7 +33,7 @@ function harness(handler: (action: string, payload: any) => Promise<any> | any) 
       calls.push({ action, payload: payload as any });
       return handler(action, payload);
     },
-    { callTimeoutMs: 1_000 },
+    { callTimeoutMs: 1_000, ...(version ? { version } : {}) },
   );
   const inbound = async (frame: unknown[]) => {
     ws.emit('message', Buffer.from(JSON.stringify(frame)));
@@ -186,4 +187,120 @@ describe('inbound ordering', () => {
     await tick(20);
     assert.deepEqual(ws.sent.find((f) => f[0] === 3 && f[1] === 'x')?.[2], { status: 'Accepted' });
   });
+});
+
+/**
+ * OCPP 1.6 and OCPP 2.0.1/2.1 use different RPC error code lists. Every 2.x
+ * connection used to be answered with 1.6 codes (FormationViolation is not a
+ * 2.0.1 code) and a 2.x charger's own FormatViolation / RpcFrameworkError was
+ * read as GenericError.
+ */
+describe('version-aware RPC error codes', () => {
+  const raw = (h: ReturnType<typeof harness>, text: string) => {
+    h.ws.emit('message', Buffer.from(text));
+    return new Promise((r) => setTimeout(r, 5));
+  };
+
+  test('1.6 frame-level errors are unchanged', async () => {
+    const h = harness(() => ({}));
+    await raw(h, 'not json');
+    await raw(h, '{"a":1}');
+    await h.inbound([2, 42, 'Heartbeat', {}]);
+    await h.inbound([9, 'm1', 'Heartbeat', {}]);
+    assert.deepEqual(h.ws.sent.map((f) => f[2]), ['FormationViolation', 'FormationViolation', 'ProtocolError', 'ProtocolError']);
+  });
+
+  test('1.6 payload that is not an object is still FormationViolation', async () => {
+    const h = harness(() => ({}));
+    await h.inbound([2, 'p1', 'Heartbeat', 'oops']);
+    assert.equal(h.ws.sent[0]![2], 'FormationViolation');
+  });
+
+  for (const v of ['ocpp2.0.1', 'ocpp2.1'] as const) {
+    test(`${v}: payload syntax error is FormatViolation, never FormationViolation`, async () => {
+      const h = harness(() => ({}), v);
+      await h.inbound([2, 'p1', 'Heartbeat', 'oops']);
+      assert.equal(h.ws.sent[0]![0], 4);
+      assert.equal(h.ws.sent[0]![2], 'FormatViolation');
+    });
+
+    test(`${v}: a handler throwing the 1.6 code is translated on the wire`, async () => {
+      const h = harness(() => { throw new OcppCallError('FormationViolation', 'bad'); }, v);
+      await h.inbound([2, 'h1', 'Heartbeat', {}]);
+      assert.equal(h.ws.sent[0]![2], 'FormatViolation');
+    });
+
+    test(`${v}: unreadable frames are RpcFrameworkError, unknown MessageTypeId is MessageTypeNotSupported`, async () => {
+      const h = harness(() => ({}), v);
+      await raw(h, 'not json');
+      await h.inbound([2, 42, 'Heartbeat', {}]);
+      await h.inbound([9, 'm1', 'Heartbeat', {}]);
+      assert.deepEqual(h.ws.sent.map((f) => f[2]), ['RpcFrameworkError', 'RpcFrameworkError', 'MessageTypeNotSupported']);
+      assert.equal(h.ws.sent[2]![1], 'm1', 'the MessageId is echoed when it was readable');
+    });
+
+    test(`${v}: inbound 2.x-only CALLERROR codes are kept, not downgraded`, async () => {
+      for (const code of ['FormatViolation', 'RpcFrameworkError', 'MessageTypeNotSupported']) {
+        const h = harness(() => ({}), v);
+        const p = h.conn.call('Reset', { type: 'Immediate' });
+        await new Promise((r) => setTimeout(r, 2));
+        const out = h.ws.sent.find((f) => f[0] === 2)!;
+        h.ws.emit('message', Buffer.from(JSON.stringify([4, out[1], code, 'nope', {}])));
+        await assert.rejects(p, (e: any) => e instanceof OcppCallError && e.code === code);
+      }
+    });
+  }
+
+  test('1.6: a 2.x-only inbound code is still GenericError (1.6 behaviour kept)', async () => {
+    const h = harness(() => ({}));
+    const p = h.conn.call('Reset', { type: 'Hard' });
+    await new Promise((r) => setTimeout(r, 2));
+    const out = h.ws.sent.find((f) => f[0] === 2)!;
+    h.ws.emit('message', Buffer.from(JSON.stringify([4, out[1], 'FormatViolation', 'nope', {}])));
+    await assert.rejects(p, (e: any) => e instanceof OcppCallError && e.code === 'GenericError');
+  });
+
+  test('code mapping helpers', () => {
+    assert.equal(wireErrorCode('FormationViolation', 'ocpp1.6'), 'FormationViolation');
+    assert.equal(wireErrorCode('FormatViolation', 'ocpp1.6'), 'FormationViolation');
+    assert.equal(wireErrorCode('RpcFrameworkError', 'ocpp1.6'), 'ProtocolError');
+    assert.equal(wireErrorCode('FormationViolation', 'ocpp2.0.1'), 'FormatViolation');
+    assert.equal(wireErrorCode('ProtocolError', 'ocpp2.0.1'), 'ProtocolError');
+    assert.deepEqual(inboundErrorCode('FormationViolation', 'ocpp2.0.1'), { code: 'FormatViolation', standard: false });
+    assert.deepEqual(inboundErrorCode('FormationViolation', 'ocpp1.6'), { code: 'FormationViolation', standard: true });
+    assert.deepEqual(inboundErrorCode('Bogus', 'ocpp2.1'), { code: 'GenericError', standard: false });
+    assert.deepEqual(inboundErrorCode(7, 'ocpp1.6'), { code: 'GenericError', standard: false });
+  });
+});
+
+/** OCPP 2.1 adds CALLRESULTERROR (5) and SEND (6); neither may be answered. */
+describe('OCPP 2.1 message types 5 and 6', () => {
+  test('2.1: SEND and CALLRESULTERROR are accepted silently and the connection carries on', async () => {
+    const h = harness(() => ({ currentTime: '2026-10-02T00:00:00Z' }), 'ocpp2.1');
+    await h.inbound([6, 's1', 'NotifyPeriodicEventStream', { id: 1, pending: 0, basetime: '2026-10-02T00:00:00Z', data: [] }]);
+    await h.inbound([5, 'r1', 'FormatViolation', 'bad result', {}]);
+    assert.equal(h.ws.sent.length, 0, 'nothing is ever sent back');
+    assert.equal(h.calls.length, 0, 'SEND does not reach the CALL handlers');
+    await h.inbound([2, 'hb', 'Heartbeat', {}]);
+    assert.equal(h.ws.sent[0]![0], 3, 'later CALLs are still answered');
+  });
+
+  test('2.1: a CALLRESULTERROR does not disturb our outstanding call', async () => {
+    const h = harness(() => ({}), 'ocpp2.1');
+    const p = h.conn.call('Reset', { type: 'Immediate' });
+    await new Promise((r) => setTimeout(r, 2));
+    const out = h.ws.sent.find((f) => f[0] === 2)!;
+    await h.inbound([5, out[1], 'InternalError', 'x', {}]);
+    h.ws.emit('message', Buffer.from(JSON.stringify([3, out[1], { status: 'Accepted' }])));
+    assert.deepEqual(await p, { status: 'Accepted' });
+  });
+
+  for (const v of ['ocpp1.6', 'ocpp2.0.1'] as const) {
+    test(`${v}: types 5 and 6 are still refused`, async () => {
+      const h = harness(() => ({}), v);
+      await h.inbound([6, 's1', 'X', {}]);
+      assert.equal(h.ws.sent[0]![0], 4);
+      assert.equal(h.ws.sent[0]![2], v === 'ocpp1.6' ? 'ProtocolError' : 'MessageTypeNotSupported');
+    });
+  }
 });

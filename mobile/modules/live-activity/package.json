@@ -1,0 +1,7 @@
+{
+  "name": "plugsure-live-activity",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Expo module: ActivityKit bridge for the charging Live Activity (start / update / end, push tokens).",
+  "main": "index.ts"
+}

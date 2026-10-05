@@ -1,8 +1,62 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
+import { COUNTRIES } from './domain/country.js';
+
+/**
+ * The PLATFORM's default zone (platform-wide statements, the platform operator's
+ * alerts): Indonesia's first zone, WIB. Per-organisation work uses
+ * organisation.timezone and per-site work site.timezone (docs/MULTI-COUNTRY-DESIGN.md §D5).
+ */
+const PLATFORM_TZ = COUNTRIES.ID.timezones[0]!;
 
 const num = (v: string | undefined, d: number) => (v === undefined ? d : Number(v));
 const bool = (v: string | undefined, d: boolean) => (v === undefined ? d : v === 'true' || v === '1');
+
+/** HUB_PARTIES: "CC*PID" per country, comma-separated; one per country code. Malformed → refuse to start. */
+export function parseHubParties(raw: string): Array<{ country_code: string; party_id: string }> {
+  const out: Array<{ country_code: string; party_id: string }> = [];
+  for (const item of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const m = /^([A-Z]{2})\*([A-Z0-9]{3})$/.exec(item.toUpperCase());
+    if (!m) throw new Error(`HUB_PARTIES: "${item}" is not CC*PID (e.g. ID*PSH)`);
+    if (out.some((p) => p.country_code === m[1])) throw new Error(`HUB_PARTIES: two parties for ${m[1]}`);
+    out.push({ country_code: m[1]!, party_id: m[2]! });
+  }
+  if (!out.length) throw new Error('HUB_PARTIES: at least one hub party is needed');
+  return out;
+}
+
+export const DEFAULT_HUB_PARTIES = 'ID*PSH,MY*PSH,SG*PSH';
+/**
+ * HUB_PARTIES as configured. Unset or set empty (as an .env template may leave it) means the default. A
+ * malformed value refuses to start only when the hub is enabled: with HUB_ENABLED=false nothing reads the hub
+ * parties, and a hub setting must never stop a CSMS that does not run the hub.
+ */
+export function hubPartiesFrom(raw: string | undefined, enabled: boolean): Array<{ country_code: string; party_id: string }> {
+  if (raw === undefined || raw.trim() === '') return parseHubParties(DEFAULT_HUB_PARTIES);
+  if (enabled) return parseHubParties(raw);
+  try { return parseHubParties(raw); } catch { return parseHubParties(DEFAULT_HUB_PARTIES); }
+}
+
+/**
+ * HUB_* clearing settings (docs/HUB-DESIGN.md §8, WP H2). Whole days within sane bounds; a value outside them
+ * refuses to start rather than silently settling on the wrong calendar.
+ */
+export function hubDays(name: string, raw: string | undefined, dflt: number, min: number, max: number): number {
+  if (raw === undefined || raw.trim() === '') return dflt;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${name}: a whole number of days, ${min} to ${max}`);
+  return n;
+}
+export function hubCycle(raw: string | undefined): 'monthly' | 'weekly' {
+  const v = (raw ?? 'monthly').trim().toLowerCase();
+  if (v !== 'monthly' && v !== 'weekly') throw new Error('HUB_CYCLE: monthly or weekly');
+  return v;
+}
+export function hubEntity(raw: string | undefined): 'ID' | 'MY' | 'SG' {
+  const v = (raw ?? 'SG').trim().toUpperCase();
+  if (v !== 'ID' && v !== 'MY' && v !== 'SG') throw new Error('HUB_DEFAULT_ENTITY: ID, MY or SG');
+  return v;
+}
 
 /** The release, from package.json (one level above both src/ and dist/). */
 function packageVersion(): string {
@@ -13,8 +67,43 @@ function packageVersion(): string {
   }
 }
 
+/**
+ * NODE_ENV, failing CLOSED.
+ *
+ * A missing NODE_ENV used to mean development: OTP codes returned to the caller, the
+ * gateway on every interface, chargers auto-adopted, the session cookie not Secure. And it
+ * goes missing easily — systemd's EnvironmentFile= OVERRIDES Environment=, so the
+ * NODE_ENV=development that .env.example shipped beat the units' NODE_ENV=production.
+ *
+ * Unset (or blank) is now treated as production by every check below, and the API, the
+ * gateway and the all-in-one process refuse to start at all (assertNodeEnvSet): name the
+ * environment you mean. `development` and `test` stay exactly as they were.
+ */
+const NODE_ENV = (process.env.NODE_ENV ?? '').trim();
+const ENV = NODE_ENV || 'production';
+
+/**
+ * Why the process should not start under this NODE_ENV, or null. Only a MISSING value is
+ * refused here; any other value that is not development/test already behaves as
+ * production (isRelaxedEnv).
+ */
+export function nodeEnvProblem(value: string | undefined): string | null {
+  if ((value ?? '').trim()) return null;
+  return (
+    'NODE_ENV is not set. Refusing to start: set NODE_ENV=production for a deployment ' +
+    '(the systemd units, Dockerfile and docker-compose.yml do), or NODE_ENV=development on a ' +
+    'workstation (see README.md). An unset NODE_ENV used to mean development.'
+  );
+}
+
+/** Called first by every server entrypoint (src/apps/*). */
+export function assertNodeEnvSet(env: Record<string, string | undefined> = process.env): void {
+  const problem = nodeEnvProblem(env.NODE_ENV);
+  if (problem) throw new Error(problem);
+}
+
 export const config = {
-  env: process.env.NODE_ENV ?? 'development',
+  env: ENV,
   version: packageVersion(),
 
   databaseUrl:
@@ -33,7 +122,7 @@ export const config = {
      * exposure). Set OCPP_HOST=0.0.0.0 only for a gateway that chargers or a
      * remote API host reach without a local proxy.
      */
-    host: process.env.OCPP_HOST ?? ((process.env.NODE_ENV ?? 'development') === 'development' ? '0.0.0.0' : '127.0.0.1'),
+    host: process.env.OCPP_HOST ?? (ENV === 'development' ? '0.0.0.0' : '127.0.0.1'),
     /** Path prefix. The charge point ID is ALWAYS the final path segment. */
     path: process.env.OCPP_PATH ?? '/ocpp',
     /**
@@ -108,7 +197,7 @@ export const config = {
     /** Adopt unknown charge points automatically instead of parking them. Dev only. */
     // Defaults ON only in development. Elsewhere an unknown identity must be adopted by
     // an operator: auto-adoption enrols any stranger into the first site ever created.
-    autoAdopt: bool(process.env.OCPP_AUTO_ADOPT, (process.env.NODE_ENV ?? 'development') === 'development'),
+    autoAdopt: bool(process.env.OCPP_AUTO_ADOPT, ENV === 'development'),
     /**
      * The site auto-adopted chargers join: a site id, or a site name. Unset, only a
      * development or test gateway falls back to the oldest site; anywhere else an
@@ -158,7 +247,7 @@ export const config = {
      */
     keyRateLimitShared: bool(
       process.env.API_RATE_LIMIT_SHARED,
-      !['development', 'test'].includes(process.env.NODE_ENV ?? 'development'),
+      !['development', 'test'].includes(ENV),
     ),
     /**
      * Trusted reverse proxies, as a comma-separated list of IPs or CIDRs.
@@ -194,12 +283,23 @@ export const config = {
      */
     ocppPublicUrl: (process.env.OCPP_PUBLIC_URL ?? '').replace(/\/+$/, ''),
     /** Console session cookie is Secure (HTTPS-only). Off only for a plain-http bench. */
-    cookieSecure: bool(process.env.CONSOLE_COOKIE_SECURE, (process.env.NODE_ENV ?? 'development') === 'production'),
+    cookieSecure: bool(process.env.CONSOLE_COOKIE_SECURE, ENV === 'production'),
     /** Consecutive failed logins before an account is locked. */
     loginMaxFailures: num(process.env.LOGIN_MAX_FAILURES, 5),
     loginLockMinutes: num(process.env.LOGIN_LOCK_MINUTES, 15),
     /** Minimum operator password length. */
     passwordMinLength: num(process.env.PASSWORD_MIN_LENGTH, 12),
+    /**
+     * Host names on which an ADMINISTRATOR account (platform permissions, or user
+     * management) may sign in and use a console session, comma-separated. Empty = any
+     * host (unchanged behaviour). Set it to the office-only console name when the console
+     * is also served on an internet-facing portal hostname (deploy/Caddyfile): portal
+     * users keep signing in there, administrators are refused like a wrong password.
+     */
+    adminHosts: (process.env.CONSOLE_ADMIN_HOSTS ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase().replace(/\.$/, ''))
+      .filter(Boolean),
   },
 
   /** Where uploaded firmware images and retrieved diagnostic logs are stored. */
@@ -255,7 +355,7 @@ export const config = {
    * token as above) instead of the PKI.
    */
   pnc: {
-    pki: (process.env.PNC_PKI ?? ((process.env.NODE_ENV ?? 'development') === 'production' ? 'none' : 'mock')) as 'none' | 'mock' | 'http',
+    pki: (process.env.PNC_PKI ?? (ENV === 'production' ? 'none' : 'mock')) as 'none' | 'mock' | 'http',
     pkiUrl: (process.env.PNC_PKI_URL ?? '').replace(/\/+$/, ''),
     pkiToken: process.env.PNC_PKI_TOKEN ?? '',
     signer: (process.env.PNC_V2G_SIGNER ?? 'pki') as 'pki' | 'vault',
@@ -299,7 +399,7 @@ export const config = {
     /** Console origin put in notification links. Falls back to PUBLIC_BASE_URL. */
     consoleUrl: (process.env.CONSOLE_PUBLIC_URL ?? process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, ''),
     /** Time zone for quiet hours and times printed in messages. */
-    timeZone: process.env.ALERT_TIMEZONE ?? 'Asia/Jakarta',
+    timeZone: process.env.ALERT_TIMEZONE ?? PLATFORM_TZ,
     /**
      * Flood guard: at most this many messages per recipient and channel in 15
      * minutes. A site-wide power cut raises an alert per charger; past the limit
@@ -314,7 +414,7 @@ export const config = {
     issuerName: process.env.BILLING_ISSUER_NAME ?? 'PT. RailSure Solutions Indonesia (PlugSure)',
     issuerNpwp: process.env.BILLING_ISSUER_NPWP ?? '',
     /** Calendar months are cut in this time zone. */
-    timeZone: process.env.BILLING_TIMEZONE ?? 'Asia/Jakarta',
+    timeZone: process.env.BILLING_TIMEZONE ?? PLATFORM_TZ,
   },
 
   /** Roaming over OCPI 2.2.1, as the charge point operator (partners live in the database). */
@@ -324,7 +424,8 @@ export const config = {
      * versions URL handed to partners is `<this>/ocpi/versions`. Defaults to
      * PUBLIC_BASE_URL.
      */
-    publicUrl: (process.env.OCPI_PUBLIC_URL ?? process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, ''),
+    // Set but empty (as in .env.example) counts as unset: fall back to PUBLIC_BASE_URL, as the error messages promise.
+    publicUrl: (process.env.OCPI_PUBLIC_URL || process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
     /**
      * Whether PBJT-TL is part of a CDR's excl_vat amount. It is a regional tax
      * on electricity, not VAT, so by default excl_vat = subtotal + PBJT and
@@ -337,6 +438,56 @@ export const config = {
     requestTimeoutMs: num(process.env.OCPI_REQUEST_TIMEOUT_MS, 15_000),
     /** Seconds we tell a partner to wait for a command's asynchronous result. */
     commandTimeoutS: num(process.env.OCPI_COMMAND_TIMEOUT_S, 60),
+  },
+
+  /**
+   * PlugSure Hub (docs/HUB-DESIGN.md): PlugSure as an OCPI 2.2.1 roaming hub. Off by default: while
+   * HUB_ENABLED is false nothing under /hub is mounted, no hub worker runs and no existing behaviour changes.
+   */
+  hub: {
+    enabled: bool(process.env.HUB_ENABLED, false),
+    /** Public origin of the hub surface (its own host, e.g. https://hub.plugsure.asia). Default (also when set empty, as in .env.example): OCPI_PUBLIC_URL. */
+    publicUrl: (process.env.HUB_PUBLIC_URL || process.env.OCPI_PUBLIC_URL || process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
+    /** The hub's own parties (role HUB), one per country: "ID*PSH,MY*PSH,SG*PSH" [OWNER: party ids]. */
+    parties: hubPartiesFrom(process.env.HUB_PARTIES, bool(process.env.HUB_ENABLED, false)),
+    businessName: process.env.HUB_BUSINESS_NAME ?? 'PlugSure Hub',
+    website: process.env.HUB_WEBSITE ?? '',
+    /** Tenants may join the hub themselves (POST /v1/roaming/hub/join); else only a platform admin joins them. */
+    selfJoin: bool(process.env.HUB_SELF_JOIN, false),
+    /** Agreements become active only after a platform admin approves them too. */
+    agreementPlatformApproval: bool(process.env.HUB_AGREEMENT_PLATFORM_APPROVAL, false),
+    forwardTimeoutMs: num(process.env.HUB_FORWARD_TIMEOUT_MS, 10_000),
+    /** Real-time authorisation through the hub: below OCPI_REALTIME_AUTH_TIMEOUT_MS so the hub answers 4002 first. */
+    realtimeTimeoutMs: num(process.env.HUB_REALTIME_TIMEOUT_MS, 4_000),
+    /** How long a rewritten command response_url stays valid. */
+    callbackTtlS: num(process.env.HUB_CALLBACK_TTL_S, 900),
+    /** Minutes without traffic before a member's versions URL is checked (OCPI: "start with 5 minutes"). */
+    aliveAfterMin: num(process.env.HUB_ALIVE_AFTER_MIN, 5),
+    /** Minutes an old token stays valid after a forced rotation. */
+    tokenGraceMin: num(process.env.HUB_TOKEN_GRACE_MIN, 60),
+    /**
+     * Clearing and settlement (WP H2). [OWNER] every default below is a working assumption (§14.1-3).
+     */
+    /** Days after receipt an eMSP may dispute a CDR (an agreement may set its own: hub_agreement.dispute_days). */
+    disputeDays: hubDays('HUB_DISPUTE_DAYS', process.env.HUB_DISPUTE_DAYS, 14, 1, 90),
+    /** Days the CPO has to accept or reject a dispute before it is escalated to the platform. */
+    disputeResponseDays: hubDays('HUB_DISPUTE_RESPONSE_DAYS', process.env.HUB_DISPUTE_RESPONSE_DAYS, 10, 1, 60),
+    /** Days the eMSP has to escalate a rejected dispute; after that the rejection stands (expired). */
+    disputeEscalateDays: hubDays('HUB_DISPUTE_ESCALATE_DAYS', process.env.HUB_DISPUTE_ESCALATE_DAYS, 5, 1, 60),
+    /** Days the CPO has to send the credit CDR for an accepted dispute before it is escalated. */
+    creditDueDays: hubDays('HUB_CREDIT_DUE_DAYS', process.env.HUB_CREDIT_DUE_DAYS, 10, 1, 60),
+    /** Payment terms of a settlement position (and of a hub fee invoice), from finalisation. */
+    paymentTermsDays: hubDays('HUB_PAYMENT_TERMS_DAYS', process.env.HUB_PAYMENT_TERMS_DAYS, 14, 1, 120),
+    /** Settlement cycle per currency, in the currency's country time zone. */
+    cycle: hubCycle(process.env.HUB_CYCLE),
+    /** The PlugSure entity that invoices a member whose country has no entity (cross-border, reverse charge). */
+    defaultEntity: hubEntity(process.env.HUB_DEFAULT_ENTITY),
+    /** A CDR whose session ended more than this many days before it reached the hub is flagged late_cdr. */
+    lateCdrDays: hubDays('HUB_LATE_CDR_DAYS', process.env.HUB_LATE_CDR_DAYS, 60, 1, 3650),
+    /** Alert hub.forward_error_rate: share of a connection's outbound legs in 15 min that failed (HTTP ≥ 400, OCPI ≥ 2000, no answer). */
+    alertErrorRatePct: num(process.env.HUB_ALERT_ERROR_RATE_PCT, 25),
+    /** …counted only once the connection had at least this many outbound legs in those 15 min. */
+    alertMinRequests: num(process.env.HUB_ALERT_MIN_REQUESTS, 20),
   },
 
   /** Driver app: map, push notifications, reservations. */
@@ -368,6 +519,10 @@ export const config = {
     reservationsEnabled: bool(process.env.DRIVER_RESERVATIONS, true),
     /** Unused reservations in 24 h after which a driver may not reserve again that day. */
     reservationNoShowLimit: num(process.env.DRIVER_RESERVATION_NO_SHOW_LIMIT, 2),
+    /** Requests a minute per device token on /d/ (driver/rate-limit.ts). */
+    deviceRateLimitPerMin: num(process.env.DRIVER_DEVICE_RATE_LIMIT_PER_MIN, 600),
+    /** Requests a minute per client address on /d/: an abuse cap, high enough for carrier NAT. */
+    ipRateLimitPerMin: num(process.env.DRIVER_IP_RATE_LIMIT_PER_MIN, 6000),
   },
 
   /** Background workers (control loop, compliance sweep, FOTA scheduler). */
@@ -415,39 +570,47 @@ export const config = {
     minBillableWh: num(process.env.MIN_BILLABLE_WH, 100),
   },
 
+  /**
+   * Tax parameters per scheme (docs/MULTI-COUNTRY-DESIGN.md §D3). Indonesia's are
+   * the same env variables as before; Singapore GST / Malaysian service tax rates
+   * are effective-dated in services/tax/rates.ts and per-registration.
+   */
   tax: {
-    /**
-     * PPN. Statutory headline rate is 12% since 1 Jan 2025, but non-luxury goods
-     * and services use "DPP nilai lain" = 11/12 x selling price, giving an
-     * effective 11%. Compute it EXACTLY as the regulation specifies:
-     *   DPP  = 11/12 x price
-     *   PPN  = 12%   x DPP
-     * Applying 11% directly yields the right total but the WRONG DPP on the
-     * faktur pajak, which fails an audit.
-     */
-    ppnRateBps: num(process.env.PPN_RATE_BPS, 1200),
-    ppnDppNumerator: num(process.env.PPN_DPP_NUM, 11),
-    ppnDppDenominator: num(process.env.PPN_DPP_DEN, 12),
-    /**
-     * Whether PBJT (regional electricity tax) sits inside the PPN base.
-     * Market practice (e.g. Voltron receipts) applies PPN last, on top of the
-     * PBJT-inclusive amount. VERIFY with a tax advisor before go-live.
-     */
-    pbjtInsidePpnBase: bool(process.env.PBJT_IN_PPN_BASE, true),
-    /**
-     * What PBJT is levied on: 'energy' (the energy lines only) or 'subtotal'
-     * (everything, including the service and admin fees).
-     *
-     * PBJT is *atas tenaga listrik* — a tax on electricity consumption. A biaya
-     * layanan is not tenaga listrik, and the shipped behaviour taxed it anyway:
-     * Rp 1,387 per 40 kWh session, and DPP, PPN and the faktur pajak all inherit
-     * the error. 'energy' is the reading we believe is correct; it defaults that
-     * way, and 'subtotal' restores the old behaviour if your advisor disagrees.
-     * VERIFY before go-live.
-     */
-    pbjtBase: (process.env.PBJT_BASE ?? 'energy') as 'energy' | 'subtotal',
-    /** IDR has no practical subunit. Round the payable total to this multiple. */
-    roundingUnitIdr: num(process.env.ROUNDING_UNIT_IDR, 1),
+    /** Indonesia: PPN on DPP nilai lain, PBJT-TL per kabupaten/kota (services/tax/id.ts). */
+    id: {
+      /**
+       * PPN. Statutory headline rate is 12% since 1 Jan 2025, but non-luxury goods
+       * and services use "DPP nilai lain" = 11/12 x selling price, giving an
+       * effective 11%. Compute it EXACTLY as the regulation specifies:
+       *   DPP  = 11/12 x price
+       *   PPN  = 12%   x DPP
+       * Applying 11% directly yields the right total but the WRONG DPP on the
+       * faktur pajak, which fails an audit.
+       */
+      ppnRateBps: num(process.env.PPN_RATE_BPS, 1200),
+      ppnDppNumerator: num(process.env.PPN_DPP_NUM, 11),
+      ppnDppDenominator: num(process.env.PPN_DPP_DEN, 12),
+      /**
+       * Whether PBJT (regional electricity tax) sits inside the PPN base.
+       * Market practice (e.g. Voltron receipts) applies PPN last, on top of the
+       * PBJT-inclusive amount. VERIFY with a tax advisor before go-live.
+       */
+      pbjtInsidePpnBase: bool(process.env.PBJT_IN_PPN_BASE, true),
+      /**
+       * What PBJT is levied on: 'energy' (the energy lines only) or 'subtotal'
+       * (everything, including the service and admin fees).
+       *
+       * PBJT is *atas tenaga listrik* — a tax on electricity consumption. A biaya
+       * layanan is not tenaga listrik, and the shipped behaviour taxed it anyway:
+       * Rp 1,387 per 40 kWh session, and DPP, PPN and the faktur pajak all inherit
+       * the error. 'energy' is the reading we believe is correct; it defaults that
+       * way, and 'subtotal' restores the old behaviour if your advisor disagrees.
+       * VERIFY before go-live.
+       */
+      pbjtBase: (process.env.PBJT_BASE ?? 'energy') as 'energy' | 'subtotal',
+      /** IDR has no practical subunit. Round the payable total to this multiple. */
+      roundingUnitIdr: num(process.env.ROUNDING_UNIT_IDR, 1),
+    },
   },
 
   /**
@@ -456,31 +619,52 @@ export const config = {
    * unregulated. VERIFY whether Kepmen 24.K/TL.01/MEM.L/2025 supersedes these.
    */
   regulatory: {
-    serviceFeeCeilingIdr: {
-      slow: null as number | null,      // <= 7 kW
-      medium: null as number | null,    // > 7 kW .. 22 kW
-      fast: 25_000,                     // > 22 kW .. 50 kW
-      ultrafast: 57_000,                // > 50 kW
+    /** Indonesia: PLN formula ceilings, Kepmen ESDM 182.K/2023 fee caps (services/regulatory/id.ts). */
+    id: {
+      serviceFeeCeilingIdr: {
+        slow: null as number | null,      // <= 7 kW
+        medium: null as number | null,    // > 7 kW .. 22 kW
+        fast: 25_000,                     // > 22 kW .. 50 kW
+        ultrafast: 57_000,                // > 50 kW
+      },
+      /** Retail energy ceiling = N_max x base. N is capped at 1.5 for layanan khusus. */
+      layananKhususBase: Number(process.env.PLN_LK_BASE ?? 1645),
+      layananKhususNMax: 1.5,
+      curahBase: Number(process.env.PLN_CURAH_BASE ?? 707),
+      curahQMin: 0.8,
+      curahQMax: 3.0,
+      /** PBJT cap for general electricity consumption under UU 1/2022 (HKPD). */
+      pbjtMaxBps: 1000,
+      /**
+       * Per-session cap on occupancy (idle / per-minute) charges.
+       *
+       * This is NOT a figure from Kepmen ESDM 182.K/2023 — that instrument caps the
+       * biaya layanan for the charging service, and an overstay penalty is a
+       * commercially distinct charge that Indonesian operators do levy. It is a
+       * platform safety bound: without it an abandoned vehicle accrues an unbounded
+       * fee, which is how a 60 kWh delivery came out at Rp 6,692,360. Operators may
+       * raise it deliberately; nothing may exceed it by accident.
+       */
+      idleFeeCapIdr: Number(process.env.IDLE_FEE_CAP_IDR ?? 100_000),
     },
-    /** Retail energy ceiling = N_max x base. N is capped at 1.5 for layanan khusus. */
-    layananKhususBase: Number(process.env.PLN_LK_BASE ?? 1645),
-    layananKhususNMax: 1.5,
-    curahBase: Number(process.env.PLN_CURAH_BASE ?? 707),
-    curahQMin: 0.8,
-    curahQMax: 3.0,
-    /** PBJT cap for general electricity consumption under UU 1/2022 (HKPD). */
-    pbjtMaxBps: 1000,
     /**
-     * Per-session cap on occupancy (idle / per-minute) charges.
-     *
-     * This is NOT a figure from Kepmen ESDM 182.K/2023 — that instrument caps the
-     * biaya layanan for the charging service, and an overstay penalty is a
-     * commercially distinct charge that Indonesian operators do levy. It is a
-     * platform safety bound: without it an abandoned vehicle accrues an unbounded
-     * fee, which is how a 60 kWh delivery came out at Rp 6,692,360. Operators may
-     * raise it deliberately; nothing may exceed it by accident.
+     * The same platform cap per currency, in PlugSure minor units of that currency
+     * (docs/MULTI-COUNTRY-DESIGN.md §D4): IDR is regulatory.id.idleFeeCapIdr (whole
+     * rupiah); MYR / SGD default 3000 (RM 30 / S$ 30). Malaysia and Singapore have
+     * no price regulation; this bound is PlugSure's own.
      */
-    idleFeeCapIdr: Number(process.env.IDLE_FEE_CAP_IDR ?? 100_000),
+    idleFeeCap: {
+      MYR: Number(process.env.IDLE_FEE_CAP_MYR ?? 3_000),
+      SGD: Number(process.env.IDLE_FEE_CAP_SGD ?? 3_000),
+    },
+  },
+
+  /**
+   * Multi-country (docs/MULTI-COUNTRY-DESIGN.md). Off: only Indonesian sites can
+   * be created (exactly the v1.6 behaviour); on: Malaysian and Singapore sites too.
+   */
+  features: {
+    multiCountry: bool(process.env.MULTI_COUNTRY, false),
   },
 
   /** WBP (peak) window used to classify time-of-use blocks. Configurable per tenant later. */

@@ -99,11 +99,11 @@ export class XenditProvider implements PaymentProvider {
     const expiresAt = new Date(Date.now() + (a.expiresInS ?? 900) * 1000).toISOString();
     const r = await providerFetch(`${this.base()}/qr_codes`, {
       method: 'POST', headers: this.headers(),
-      body: JSON.stringify({ reference_id: referenceId, type: 'DYNAMIC', currency: 'IDR', amount: Math.round(a.amountIdr), expires_at: expiresAt }),
+      body: JSON.stringify({ reference_id: referenceId, type: 'DYNAMIC', currency: 'IDR', amount: Math.round(a.amountMinor), expires_at: expiresAt }),
     });
     const j = r.body ?? {};
     if (r.status >= 300 || !j.qr_string) throw new Error(`Xendit QR code failed: ${r.status} ${j.error_code ?? ''} ${j.message ?? r.text.slice(0, 200)}`.trim());
-    return { providerRef: referenceId, qrString: j.qr_string, amountIdr: a.amountIdr, expiresAt: j.expires_at ?? expiresAt, status: 'pending' };
+    return { providerRef: referenceId, qrString: j.qr_string, amountMinor: a.amountMinor, expiresAt: j.expires_at ?? expiresAt, status: 'pending' };
   }
 
   /** Payments API v3 (sessions, payment requests, captures). */
@@ -147,14 +147,14 @@ export class XenditProvider implements PaymentProvider {
   async chargeWallet(a: WalletChargeArgs): Promise<SavedCardCharge> {
     // GoPay: a v3 payment request on its payment token (the same call as a saved card, as a sale).
     if (a.channel === 'GOPAY') {
-      const c = await this.chargeSavedCard({ referenceId: a.referenceId, amountIdr: a.amountIdr, token: a.token, preauth: false, returnUrl: a.returnUrl, customerId: a.customerId, description: a.description });
+      const c = await this.chargeSavedCard({ referenceId: a.referenceId, amountMinor: a.amountMinor, token: a.token, preauth: false, returnUrl: a.returnUrl, customerId: a.customerId, description: a.description });
       return c.linkEnded ? { ...c, message: `the GoPay link has ended; link it again (${c.message ?? 'refused'})` } : c;
     }
     const referenceId = this.orderRef(a.referenceId);
     const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
     const r = await providerFetch(`${this.base()}/payment_requests`, {
       method: 'POST', headers: { ...this.headers(), 'idempotency-key': referenceId },
-      body: JSON.stringify({ reference_id: referenceId, amount: Math.round(a.amountIdr), currency: 'IDR', payment_method_id: a.token, ...(a.description ? { description: a.description.slice(0, 250) } : {}) }),
+      body: JSON.stringify({ reference_id: referenceId, amount: Math.round(a.amountMinor), currency: 'IDR', payment_method_id: a.token, ...(a.description ? { description: a.description.slice(0, 250) } : {}) }),
     });
     const j = r.body ?? {};
     // Refused: was the link ended in the e-wallet app, or did it expire (the payment method INACTIVE / EXPIRED)?
@@ -257,7 +257,7 @@ export class XenditProvider implements PaymentProvider {
     const r = await providerFetch(`${this.base()}/v3/payment_requests`, {
       method: 'POST', headers: { ...this.v3Headers(), 'idempotency-key': referenceId },
       body: JSON.stringify({
-        reference_id: referenceId, type: 'PAY', country: 'ID', currency: 'IDR', request_amount: Math.round(a.amountIdr), capture_method: 'AUTOMATIC',
+        reference_id: referenceId, type: 'PAY', country: 'ID', currency: 'IDR', request_amount: Math.round(a.amountMinor), capture_method: 'AUTOMATIC',
         channel_code: 'GOPAY', channel_properties: { success_return_url: a.returnUrl, failure_return_url: a.returnUrl },
         ...(a.description ? { description: a.description.slice(0, 250) } : {}),
       }),
@@ -273,7 +273,7 @@ export class XenditProvider implements PaymentProvider {
     const r = await providerFetch(`${this.base()}/sessions`, {
       method: 'POST', headers: this.v3Headers(),
       body: JSON.stringify({
-        reference_id: referenceId, session_type: 'PAY', mode: 'PAYMENT_LINK', country: 'ID', currency: 'IDR', amount: Math.round(a.amountIdr),
+        reference_id: referenceId, session_type: 'PAY', mode: 'PAYMENT_LINK', country: 'ID', currency: 'IDR', amount: Math.round(a.amountMinor),
         allowed_payment_channels: ['CARDS'], capture_method: a.preauth ? 'MANUAL' : 'AUTOMATIC',
         ...(a.saveCard ? { allow_save_payment_method: 'FORCED' } : {}),
         customer: { reference_id: a.customerId ?? referenceId, type: 'INDIVIDUAL', individual_detail: { given_names: 'PlugSure driver' } },
@@ -292,7 +292,7 @@ export class XenditProvider implements PaymentProvider {
     const r = await providerFetch(`${this.base()}/v3/payment_requests`, {
       method: 'POST', headers: { ...this.v3Headers(), 'idempotency-key': referenceId },
       body: JSON.stringify({
-        reference_id: referenceId, type: 'PAY', country: 'ID', currency: 'IDR', request_amount: Math.round(a.amountIdr),
+        reference_id: referenceId, type: 'PAY', country: 'ID', currency: 'IDR', request_amount: Math.round(a.amountMinor),
         capture_method: a.preauth ? 'MANUAL' : 'AUTOMATIC', payment_token_id: a.token,
         channel_properties: { success_return_url: a.returnUrl, failure_return_url: a.returnUrl },
         ...(a.description ? { description: a.description.slice(0, 250) } : {}),
@@ -316,7 +316,7 @@ export class XenditProvider implements PaymentProvider {
     if (!a.providerPaymentId) return { ok: false, error: 'the Xendit payment request of the hold is unknown (its callback never arrived)' };
     const r = await providerFetch(`${this.base()}/v3/payment_requests/${encodeURIComponent(a.providerPaymentId)}/captures`, {
       method: 'POST', headers: { ...this.v3Headers(), 'idempotency-key': a.idempotencyKey },
-      body: JSON.stringify({ capture_amount: Math.round(a.amountIdr) }),
+      body: JSON.stringify({ capture_amount: Math.round(a.amountMinor) }),
     });
     const j = r.body ?? {};
     if (r.status < 300 && ['SUCCEEDED', 'PENDING', undefined].includes(j.status)) return { ok: true, raw: j };
@@ -330,7 +330,7 @@ export class XenditProvider implements PaymentProvider {
     return !!r && r.status < 300 && r.body?.status === 'EXPIRED';
   }
 
-  async releaseHold(a: Omit<HoldArgs, 'amountIdr'>): Promise<HoldResult> {
+  async releaseHold(a: Omit<HoldArgs, 'amountMinor'>): Promise<HoldResult> {
     if (!a.providerPaymentId) return { ok: true, raw: { note: 'never authorised at Xendit: nothing held' } };
     const r = await providerFetch(`${this.base()}/v3/payment_requests/${encodeURIComponent(a.providerPaymentId)}/cancel`, {
       method: 'POST', headers: { ...this.v3Headers(), 'idempotency-key': a.idempotencyKey },
@@ -351,7 +351,7 @@ export class XenditProvider implements PaymentProvider {
       const r = await providerFetch(`${this.base()}/v2/invoices`, {
         method: 'POST', headers: this.headers(),
         body: JSON.stringify({
-          external_id: referenceId, amount: Math.round(a.amountIdr), currency: 'IDR', payment_methods: ['CREDIT_CARD'],
+          external_id: referenceId, amount: Math.round(a.amountMinor), currency: 'IDR', payment_methods: ['CREDIT_CARD'],
           invoice_duration: expiresInS, success_redirect_url: a.returnUrl, failure_redirect_url: a.returnUrl,
           ...(a.description ? { description: a.description.slice(0, 250) } : {}),
         }),
@@ -365,7 +365,7 @@ export class XenditProvider implements PaymentProvider {
     const r = await providerFetch(`${this.base()}/ewallets/charges`, {
       method: 'POST', headers: this.headers(),
       body: JSON.stringify({
-        reference_id: referenceId, currency: 'IDR', amount: Math.round(a.amountIdr), checkout_method: 'ONE_TIME_PAYMENT', channel_code: `ID_${a.channel}`,
+        reference_id: referenceId, currency: 'IDR', amount: Math.round(a.amountMinor), checkout_method: 'ONE_TIME_PAYMENT', channel_code: `ID_${a.channel}`,
         channel_properties: a.channel === 'OVO' ? { mobile_number: a.customerPhone } : { success_redirect_url: a.returnUrl },
       }),
     });
@@ -409,7 +409,7 @@ export class XenditProvider implements PaymentProvider {
     // Invoice (cards): a flat body without an event.
     if (!j?.event && j?.external_id) {
       const st = String(j.status ?? '');
-      return { providerRef: String(j.external_id), paid: st === 'PAID' || st === 'SETTLED', status: st, amountIdr: j.paid_amount != null ? Math.round(Number(j.paid_amount)) : j.amount != null ? Math.round(Number(j.amount)) : null, paymentId: j.id ? String(j.id) : undefined };
+      return { providerRef: String(j.external_id), paid: st === 'PAID' || st === 'SETTLED', status: st, amountMinor: j.paid_amount != null ? Math.round(Number(j.paid_amount)) : j.amount != null ? Math.round(Number(j.amount)) : null, paymentId: j.id ? String(j.id) : undefined };
     }
     // Only payment events are payments: a GoPay link (payment_token.*, which also carries a reference_id) belongs to
     // parseLinkEvent, and a refund (refund.*: status SUCCEEDED, an amount, the payment's reference) is not money received.
@@ -428,7 +428,7 @@ export class XenditProvider implements PaymentProvider {
       : undefined;
     // A failed payment carries its reason (e.g. FAILED USER_DECLINED_THE_TRANSACTION: the driver refused it in the e-wallet).
     const status = `${String(d.status ?? j.event ?? '')}${d.status === 'FAILED' && d.failure_code ? ` ${String(d.failure_code)}` : ''}`;
-    return { providerRef: String(d.reference_id), paid, authorised, status, amountIdr: amount != null ? Math.round(Number(amount)) : null, paymentId: paymentId ? String(paymentId) : undefined, ...(savedCard ? { savedCard } : {}) };
+    return { providerRef: String(d.reference_id), paid, authorised, status, amountMinor: amount != null ? Math.round(Number(amount)) : null, paymentId: paymentId ? String(paymentId) : undefined, ...(savedCard ? { savedCard } : {}) };
   }
 
   verifyWebhook(rawBody: string, headers: Record<string, string | string[] | undefined>): boolean { return this.parseNotification(rawBody, headers) !== null; }
@@ -441,7 +441,7 @@ export class XenditProvider implements PaymentProvider {
       // A linked e-wallet payment (a payment request): the Refunds API.
       const r = await providerFetch(`${this.base()}/refunds`, {
         method: 'POST', headers: { ...this.headers(), 'Idempotency-key': a.idempotencyKey },
-        body: JSON.stringify({ payment_request_id: a.providerPaymentId, amount: Math.round(a.amountIdr), currency: 'IDR', reason: 'REQUESTED_BY_CUSTOMER' }),
+        body: JSON.stringify({ payment_request_id: a.providerPaymentId, amount: Math.round(a.amountMinor), currency: 'IDR', reason: 'REQUESTED_BY_CUSTOMER' }),
       });
       const j = r.body ?? {};
       if (r.status >= 300) return { status: 'failed', refundRef: '', raw: { status: r.status, error: j.error_code ?? j.message ?? r.text.slice(0, 200) } };
@@ -449,7 +449,7 @@ export class XenditProvider implements PaymentProvider {
     }
     const r = await providerFetch(`${this.base()}/ewallets/charges/${encodeURIComponent(a.providerPaymentId)}/refunds`, {
       method: 'POST', headers: { ...this.headers(), 'Idempotency-key': a.idempotencyKey },
-      body: JSON.stringify({ amount: Math.round(a.amountIdr), reason: 'REQUESTED_BY_CUSTOMER' }),
+      body: JSON.stringify({ amount: Math.round(a.amountMinor), reason: 'REQUESTED_BY_CUSTOMER' }),
     });
     const j = r.body ?? {};
     if (r.status >= 300) return { status: 'failed', refundRef: '', raw: { status: r.status, error: j.error_code ?? j.message ?? r.text.slice(0, 200) } };

@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import { currencyOr, moneyText } from '../domain/money.js';
+import { assertCountry, currencyOfCountry, countryOfCurrency } from '../domain/country.js';
+import { defaultTimezone } from '../domain/timezone.js';
+import { resolveTaxContext } from './tax/index.js';
+import { upgradeLegacyKeys } from '../domain/money.js';
 import type { PoolClient } from 'pg';
 import { one, many, query, tx } from '../db/pool.js';
 import { logger } from '../logger.js';
@@ -14,7 +19,7 @@ import { energyWhFrom, energySeriesFrom, powerWFrom } from '../domain/canonical.
 import { markRefundDue } from './refunds.js';
 import { linkRoamingSession } from '../ocpi/authorize.js';
 import { normaliseEmaid } from '../pnc/emaid.js';
-import { attachNeeds, applyFleetConsent, trackMeter, creditIdr } from './v2x.js';
+import { attachNeeds, applyFleetConsent, trackMeter, creditMinor } from './v2x.js';
 import { storeSigned, assessSession } from './signed-metering.js';
 
 /**
@@ -71,7 +76,7 @@ export interface SessionRow {
   energy_wh: number;
   idle_minutes: number;
   needs_review: boolean;
-  prepaid_amount_idr: number | null;
+  prepaid_amount_minor: number | null;
   prepaid_energy_wh: number | null;
   payment_mode: string | null;
   flags: unknown[];
@@ -119,6 +124,13 @@ export interface UnauthorisedStart {
 export interface TransactionEventOptions {
   /** Started only: record the start as unauthorised (see UnauthorisedStart). */
   unauthorised?: UnauthorisedStart;
+  /**
+   * Ended only, OCPP 2.0.1/2.1: an Ended event for a transaction the CSMS never
+   * saw start is recorded from what the event carries, parked for review
+   * (recordUnknownEnd). 1.6 never sets it: a 1.6 StopTransaction for an unknown
+   * id is most often the stop of a live start we refused, and stays log-only.
+   */
+  reconstructUnknownEnd?: boolean;
 }
 
 export async function handleTransactionEvent(
@@ -138,7 +150,7 @@ export async function handleTransactionEvent(
     case 'Updated':
       return updateSession(ev, connector);
     case 'Ended':
-      return endSession(ev, connector);
+      return endSession(ev, connector, opts.reconstructUnknownEnd === true);
   }
 }
 
@@ -249,8 +261,10 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised:
       `INSERT INTO charging_session
           (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
            token_id, state, started_at, meter_start_wh, meter_start_unknown, energy_wh, payment_mode,
-           prepaid_amount_idr, prepaid_energy_wh, payment_intent_id, flags, needs_review, review_reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16,$17)
+           prepaid_amount_minor, prepaid_energy_wh, payment_intent_id, flags, needs_review, review_reason, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16,$17,
+               -- Frozen here from the site's country, never re-derived (docs/MULTI-COUNTRY-DESIGN.md §5.5).
+               (SELECT co.currency FROM site si JOIN country co ON co.code = si.country_code WHERE si.id = $2))
        ON CONFLICT (idem_key) DO UPDATE
           SET ocpp_transaction_id = COALESCE(charging_session.ocpp_transaction_id, EXCLUDED.ocpp_transaction_id)
        RETURNING *, (xmax = 0) AS inserted`,
@@ -266,7 +280,7 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised:
         startWh,
         observedStartWh === null,
         prepaid ? 'prepurchase' : 'postpaid',
-        prepaid?.amount_authorised_idr ?? null,
+        prepaid?.amount_authorised_minor ?? null,
         prepaid?.allowance_wh ?? null,
         prepaid?.id ?? null,
         JSON.stringify(flags),
@@ -548,10 +562,10 @@ export async function attachLateToken(
           SET token_id = $2,
               payment_mode = CASE WHEN $3::uuid IS NOT NULL THEN 'prepurchase' ELSE payment_mode END,
               payment_intent_id = COALESCE($3, payment_intent_id),
-              prepaid_amount_idr = COALESCE($4, prepaid_amount_idr),
+              prepaid_amount_minor = COALESCE($4, prepaid_amount_minor),
               prepaid_energy_wh = COALESCE($5, prepaid_energy_wh)
         WHERE id = $1`,
-      [row.id, token?.id ?? null, prepaid?.id ?? null, prepaid?.amount_authorised_idr ?? null, prepaid?.allowance_wh ?? null],
+      [row.id, token?.id ?? null, prepaid?.id ?? null, prepaid?.amount_authorised_minor ?? null, prepaid?.allowance_wh ?? null],
     );
     if (prepaid) await client.query(`UPDATE payment_intent SET session_id = $2 WHERE id = $1`, [prepaid.id, row.id]);
     return { status, sessionId: row.id, orgId: row.org_id, refused: false, roaming: !token };
@@ -578,7 +592,12 @@ export async function attachLateToken(
 
 // ------------------------------------------------------------------ end
 
-async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<SessionRow | null> {
+async function endSession(ev: TransactionEvent, c: ConnectorRow, reconstructUnknown = false): Promise<SessionRow | null> {
+  let unknown = false;
+  // Set when the stop finds the session already closed: a replayed Ended /
+  // StopTransaction (stations resend from their offline queue until they see a
+  // response), or the replay of an Ended that recordUnknownEnd reconstructed.
+  let replay = false;
   const result = await tx(async (client) => {
     const cur = await client.query<SessionRow>(
       `SELECT * FROM charging_session
@@ -589,10 +608,19 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
     );
     const row = cur.rows[0];
     if (!row) {
-      logger.warn({ tx: ev.transactionId }, 'stop for unknown transaction — replay of a lost start?');
+      if (!reconstructUnknown) logger.warn({ tx: ev.transactionId }, 'stop for unknown transaction — replay of a lost start?');
+      unknown = true;
       return null;
     }
-    if (row.state !== 'active') return row; // idempotent: a replayed stop is a no-op
+    if (row.state !== 'active') {
+      // Idempotent: a replayed stop is a no-op. Returning the row alone was not
+      // enough — the caller then saw `state = 'ended'` and announced the end
+      // again (session.ended to OCPI partners and the driver app) and re-ran
+      // rating, which for a parked session re-raised the needs-review alert on
+      // every replay. The `replay` flag makes the caller stop here too.
+      replay = true;
+      return row;
+    }
 
     await insertMeterValues(row.id, ev.meterValue, client);
     await trackMeter(row.id, ev.meterValue, ev.operationMode, client);
@@ -783,6 +811,11 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
     return upd.rows[0] ?? row;
   });
 
+  if (unknown && reconstructUnknown) return recordUnknownEnd(ev, c);
+  // A replay changes nothing: no event, no alert, no rating. A session that
+  // ended but whose rating crashed is not stranded by this — the reconciliation
+  // pass (reconcileStuckSessions) re-rates ended sessions without a CDR.
+  if (replay) return result;
   if (!result || result.state !== 'ended') return result;
 
   bus.emit('session.ended', {
@@ -799,6 +832,135 @@ async function endSession(ev: TransactionEvent, c: ConnectorRow): Promise<Sessio
 
   await rateAndCreateCdr(result.id);
   return result;
+}
+
+// ------------------------------------------------------------------ end of an unknown transaction
+
+/**
+ * An OCPP 2.0.1 TransactionEvent(Ended) for a transaction the CSMS never saw
+ * start: its Started was lost (sent while the WebSocket was half-open, dropped
+ * by a station whose offline queue overflowed, or answered after the station had
+ * given up), or it predates the station's adoption. It used to be logged and
+ * dropped — and the energy with it.
+ *
+ * Unlike a 1.6 StopTransaction, an Ended event carries enough to record the
+ * transaction: its transactionId, the EVSE, the end time, stoppedReason, usually
+ * the token, and the meter values the station was configured to send at the end
+ * (SampledDataTxEndedMeasurands — often Transaction.Begin AND Transaction.End).
+ * It is recorded the way an after-the-fact unauthorised start is (startSession
+ * with `unauthorised`): a session with NO payer — the token is kept in the flag
+ * for the reviewer, never bound — no prepaid claim, no roaming link, parked with
+ * a violation so no CDR is issued until an operator decides. Nothing is billed.
+ *
+ * It is written straight in its ended state rather than through startSession:
+ * a start would close whatever session is running on the EVSE NOW as
+ * "superseded", attach that session's charging needs, and announce a
+ * session.started / session.ended (OCPI partners, the driver app) for a
+ * transaction nobody approved. The idempotency key is derived from the
+ * transactionId, so a replayed Ended finds the recorded row and changes nothing.
+ *
+ * Energy: the spread of the registers the event carries (lowest to highest).
+ * With fewer than two registers the start is unknown and 0 Wh is recorded with
+ * the end register kept for the reviewer — never the lifetime register.
+ *
+ * Not recorded: an Ended with stoppedReason DeAuthorized that shows no energy.
+ * That is the station ending a start we refused live (it opened no session, by
+ * design) — recording each one would bury the review queue in refused cards.
+ */
+async function recordUnknownEnd(ev: TransactionEvent, c: ConnectorRow): Promise<SessionRow | null> {
+  const series = energySeriesFrom(ev.meterValue);
+  const endWh = energyWhFrom(ev.meterValue);
+  const startKnown = series.length >= 2 && endWh !== null;
+  const startWh = startKnown ? Math.min(...series) : (endWh ?? 0);
+  const energy = startKnown ? Math.max(0, endWh! - startWh) : 0;
+
+  if (ev.stoppedReason === 'DeAuthorized' && energy <= 0) {
+    logger.warn(
+      { cp: ev.evse.ocppIdentity, tx: ev.transactionId, seqNo: ev.seqNo },
+      'Ended (DeAuthorized, no energy) for an unknown transaction — the end of a start that was refused; not recorded',
+    );
+    return null;
+  }
+
+  // The start time is not known; the earliest time the event mentions stands in for it.
+  const endMs = Date.parse(ev.timestamp);
+  const times = ev.meterValue.map((m) => Date.parse(m.timestamp)).filter((t) => Number.isFinite(t));
+  const startMs = Math.min(...times, Number.isFinite(endMs) ? endMs : Infinity);
+  const startedAt = Number.isFinite(startMs) ? new Date(startMs).toISOString() : ev.timestamp;
+  const endedAt = Number.isFinite(endMs) ? ev.timestamp : startedAt;
+  const durationS = Math.max(0, Math.round((Date.parse(endedAt) - Date.parse(startedAt)) / 1000));
+
+  const idTag = ev.idToken?.idToken ?? null;
+  const missed = ev.seqNo > 0 ? ` TransactionEvents seqNo 0-${ev.seqNo - 1} were never received.` : '';
+  const measured = startKnown
+    ? `${energy} Wh between the registers it carries (${startWh} → ${endWh} Wh).`
+    : endWh !== null
+      ? `Only an end register (${endWh} Wh) was reported, so the energy is unknown; 0 Wh recorded.`
+      : 'No energy register was reported; 0 Wh recorded.';
+  const flags: SessionFlag[] = [{
+    code: 'TRANSACTION_RECONSTRUCTED',
+    severity: 'violation',
+    message:
+      `${ev.evse.ocppIdentity} ended transaction ${ev.transactionId} that was never seen to start; ` +
+      `recorded from its end event: ${measured}${missed}` +
+      `${idTag ? ` Token ${idTag} (not bound).` : ''} Start time is approximate. ` +
+      'Recorded, not billed: parked until an operator decides who pays.',
+    ...(idTag ? { idToken: idTag } : {}),
+  }];
+  const skew = clockSkewFlag(ev.timestamp);
+  if (skew) flags.push(skew);
+
+  const ins = await one<SessionRow>(
+    `INSERT INTO charging_session
+        (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
+         token_id, state, started_at, ended_at, meter_start_wh, meter_start_unknown, meter_stop_wh, energy_wh,
+         duration_s, stop_reason, payment_mode, flags, needs_review, review_reason, ocpp_seq_no, currency)
+     VALUES ($1,$2,$3,$4,$5,$6,NULL,'ended',$7,$8,$9,$10,$11,$12,$13,$14,'postpaid',$15,true,'TRANSACTION_RECONSTRUCTED',$16,
+             (SELECT co.currency FROM site si JOIN country co ON co.code = si.country_code WHERE si.id = $2))
+     ON CONFLICT (idem_key) DO NOTHING
+     RETURNING *`,
+    [
+      c.org_id,
+      c.site_id,
+      c.id,
+      c.charge_point_id,
+      sessionIdemKey(ev.evse.ocppIdentity, ev.evse.evseId, `ended-unknown:${ev.transactionId}`, 0, ''),
+      ev.transactionId,
+      startedAt,
+      endedAt,
+      startWh,
+      !startKnown,
+      endWh,
+      energy,
+      durationS,
+      ev.stoppedReason ?? null,
+      JSON.stringify(flags),
+      ev.seqNo,
+    ],
+  );
+  if (!ins) {
+    // A concurrent or replayed copy of this Ended recorded it first — or the station reused a
+    // transactionId after a reset. Say so: the second case loses a session silently otherwise.
+    logger.warn(
+      { cp: ev.evse.ocppIdentity, tx: ev.transactionId, seqNo: ev.seqNo },
+      'Ended for an unknown transaction already recorded under this transactionId — not recorded again (replay, or the station reused the id)',
+    );
+    return null;
+  }
+
+  await insertMeterValues(ins.id, ev.meterValue);
+  logger.warn(
+    { sessionId: ins.id, cp: ev.evse.ocppIdentity, tx: ev.transactionId, energyWh: energy, seqNo: ev.seqNo },
+    'Ended for an unknown transaction — recorded from the end event and parked for review, not billed',
+  );
+  bus.emit('alert.raised', {
+    orgId: ins.org_id,
+    kind: 'session.needs_review',
+    severity: 'warning',
+    message: `${ev.evse.ocppIdentity} ended transaction ${ev.transactionId} that was never seen to start ` +
+      `(${energy} Wh). Session ${ins.id} is recorded for review and will not be billed automatically.`,
+  });
+  return ins;
 }
 
 // ------------------------------------------------------------------ bidirectional
@@ -847,7 +1009,8 @@ async function whoForSession(s: { id: string; token_id: string | null; connector
 }
 
 /** The session columns pricing needs (rateAndCreateCdr's and runningCost's SELECT). */
-const PRICING_SELECT = `SELECT cs.*, c.max_power_w, c.current_type, si.pbjt_rate_bps, si.timezone, pi.mode AS intent_mode
+const PRICING_SELECT = `SELECT cs.*, c.max_power_w, c.current_type, si.local_tax_rate_bps, si.timezone, si.country_code, si.tax_overrides,
+            pi.mode AS intent_mode
        FROM charging_session cs
        JOIN connector c ON c.id = cs.connector_uuid
        JOIN site si ON si.id = cs.site_id
@@ -857,7 +1020,7 @@ const PRICING_SELECT = `SELECT cs.*, c.max_power_w, c.current_type, si.pbjt_rate
 interface Priced {
   result: RatingResult;
   chosen: PriceAdjustment[];
-  spent: { points: number; amountIdr: number } | null;
+  spent: { points: number; amountMinor: number } | null;
   benefits: Benefits | null;
   who: Who;
   fallback: boolean;
@@ -908,26 +1071,34 @@ async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleM
   const startedAt = new Date(s.started_at);
   const { tariff, fallback } = await loadTariffForConnector(s.connector_uuid, s.org_id, startedAt);
 
+  // The session's currency was frozen at StartTransaction from the site's country
+  // (never re-derived); the tax context is resolved once, at the supply date.
+  const country = assertCountry(s.country_code ?? 'ID');
+  const currency = currencyOr(s.currency, currencyOfCountry(country));
+  const timezone: string = s.timezone ?? defaultTimezone(country);
+  const tax = await resolveTaxContext({ orgId: s.org_id, country, at: startedAt, timezone, overrides: s.tax_overrides });
   const baseCtx = {
     startedAt,
     endedAt: at.endedAt,
     energyWh: at.energyWh,
     connectorMaxPowerW: Number(s.max_power_w),
-    pbjtRateBps: Number(s.pbjt_rate_bps),
+    localTaxRateBps: Number(s.local_tax_rate_bps),
     idleMinutes: at.idleMinutes,
-    timezone: s.timezone,
+    timezone,
+    currency,
+    tax,
   };
   // Energy the car gave back (bidirectional charging): credited before PBJT-TL and PPN, at the
   // rate fixed when the driver or fleet agreed, and never below zero (applyAdjustments).
   const exportWh = Number(s.energy_export_wh ?? 0);
-  const v2xCredit = creditIdr(exportWh, s.v2x_credit_idr_per_kwh);
+  const v2xCredit = creditMinor(exportWh, s.v2x_credit_minor_per_kwh);
   const v2xAdj: PriceAdjustment[] = v2xCredit > 0
-    ? [{ source: 'v2x', id: s.id, name: `Energy given back (${(exportWh / 1000).toFixed(2)} kWh)`, amountOffIdr: v2xCredit }]
+    ? [{ source: 'v2x', id: s.id, name: `Energy given back (${(exportWh / 1000).toFixed(2)} kWh)`, amountOffMinor: v2xCredit }]
     : [];
   // Memberships and promotions: every allowed combination is rated and the
   // cheapest for the customer is billed.
   const who = await whoForSession(s);
-  const found = await benefitsFor(s.org_id, who, { siteId: s.site_id, currentType: s.current_type }, startedAt, s.timezone ?? 'Asia/Jakarta')
+  const found = await benefitsFor(s.org_id, who, { siteId: s.site_id, currentType: s.current_type, currency }, startedAt, timezone)
     .catch((e) => { logger.warn({ sessionId: s.id, err: (e as Error).message }, 'benefits lookup failed — rated without them'); return null; });
   const excluded = limits.excludePromotions;
   const benefits = found && (limits.noPromotions || excluded?.size)
@@ -938,23 +1109,23 @@ async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleM
     ? (() => {
         const p = pickCheapest(adjustmentOptions(benefits, baseCtx.energyWh / 1000), (adjustments) => {
           const r = rateSession(tariff, { ...baseCtx, adjustments: [...adjustments, ...v2xAdj] });
-          return { ...r, total: r.tax.totalIdr };
+          return { ...r, total: r.tax.totalMinor };
         });
         chosen = p.option;
         return p.result;
       })()
     : rateSession(tariff, { ...baseCtx, adjustments: v2xAdj });
   // Loyalty points, for a driver who chose to use them: on top of the cheapest combination, before PBJT-TL and PPN.
-  let spent: { points: number; amountIdr: number } | null = null;
+  let spent: { points: number; amountMinor: number } | null = null;
   const points = pointsAllowed(s) && limits.maxPoints !== 0
-    ? await redemptionFor(s.org_id, who.appDriverId)
+    ? await redemptionFor(s.org_id, who.appDriverId, currency)
       .catch((e) => { logger.warn({ sessionId: s.id, err: (e as Error).message }, 'loyalty lookup failed — rated without points'); return null; })
     : null;
   if (points) {
     const balance = limits.maxPoints != null ? Math.min(points.balance, limits.maxPoints) : points.balance;
     const r = pointsToRedeem(balance, discountable(result.lines), points.program);
     if (r.points > 0) {
-      result = rateSession(tariff, { ...baseCtx, adjustments: [...chosen, ...v2xAdj, pointsAdjustment(r.points, r.amountIdr)] });
+      result = rateSession(tariff, { ...baseCtx, adjustments: [...chosen, ...v2xAdj, pointsAdjustment(r.points, r.amountMinor)] });
       spent = r;
     }
   }
@@ -1082,7 +1253,7 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
       // The promotion: still within its limits, counted under its lock.
       for (const [id, t] of adjustmentTotals(result.lines)) {
         if (t.source !== 'promotion') continue;
-        const ok = await reservePromotion(client, s.org_id, sessionId, id, benefits?.customerKey ?? null, t.discountIdr);
+        const ok = await reservePromotion(client, s.org_id, sessionId, id, benefits?.customerKey ?? null, t.discountMinor);
         if (!ok) {
           logger.info({ sessionId, promotion: id }, 'promotion limit reached meanwhile — re-pricing without it');
           limits.excludePromotions.add(id);
@@ -1091,24 +1262,30 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
       }
 
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO cdr (session_id, org_id, lines, subtotal_idr, pbjt_rate_bps, pbjt_idr,
-                          ppn_dpp_idr, ppn_rate_bps, ppn_idr, total_idr, tariff_snapshot, regulatory_flags)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        `INSERT INTO cdr (session_id, org_id, lines, subtotal_minor, local_tax_rate_bps, local_tax_minor,
+                          tax_base_minor, tax_rate_bps, tax_minor, total_minor, tariff_snapshot, regulatory_flags,
+                          currency, tax_scheme, prices_include_tax, rounding_minor, tax_detail)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (session_id) DO NOTHING
          RETURNING id`,
         [
           sessionId,
           s.org_id,
           JSON.stringify(result.lines),
-          result.tax.subtotalIdr,
-          result.tax.pbjtRateBps,
-          result.tax.pbjtIdr,
-          result.tax.ppnDppIdr,
-          result.tax.ppnRateBps,
-          result.tax.ppnIdr,
-          result.tax.totalIdr,
+          result.tax.subtotalMinor,
+          result.tax.localTaxRateBps,
+          result.tax.localTaxMinor,
+          result.tax.taxBaseMinor,
+          result.tax.taxRateBps,
+          result.tax.taxMinor,
+          result.tax.totalMinor,
           JSON.stringify(result.tariffSnapshot),
           JSON.stringify(flags),
+          currencyOr(s.currency),
+          result.tax.scheme,
+          result.tax.pricesIncludeTax,
+          result.tax.roundingMinor,
+          JSON.stringify(result.tax.detail ?? {}),
         ],
       );
       const cdr = ins.rows[0] ?? null;
@@ -1116,7 +1293,7 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
         if (benefits) await recordBenefits(s.org_id, sessionId, result.lines, benefits, energyWh / 1000, client);
         // Points spent on this session, and earned on what it cost. A failure here
         // rolls the CDR back with it: no CDR keeps a discount nobody paid for.
-        await recordLoyalty(s.org_id, sessionId, who.appDriverId, result.tax.totalIdr, spent, client);
+        await recordLoyalty(s.org_id, sessionId, who.appDriverId, result.tax.totalMinor, spent, client, currencyOr(s.currency));
         await client.query(`UPDATE charging_session SET state = 'rated', rated_at = now() WHERE id = $1`, [sessionId]);
       }
       return { done: true as const, cdr };
@@ -1131,9 +1308,12 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
 
   const { cdr, priced } = outcome;
   if (cdr) {
-    bus.emit('cdr.created', { orgId: s.org_id, cdrId: cdr.id, sessionId, totalIdr: priced.result.tax.totalIdr });
-    logger.info({ sessionId, cdrId: cdr.id, totalIdr: priced.result.tax.totalIdr }, 'CDR created');
-    await settlePrepaid(sessionId, s.org_id, priced.result.tax.totalIdr);
+    bus.emit('cdr.created', { orgId: s.org_id, cdrId: cdr.id, sessionId, totalMinor: priced.result.tax.totalMinor, currency: currencyOr(s.currency) });
+    logger.info({ sessionId, cdrId: cdr.id, totalMinor: priced.result.tax.totalMinor }, 'CDR created');
+    // The CDR has committed: a settlement that fails now must not fail the rating. It is left unsettled and
+    // recoverUnsettledPayments (the worker) settles it after a grace period.
+    await settlePrepaid(sessionId, s.org_id, priced.result.tax.totalMinor).catch((e) =>
+      logger.error({ sessionId, err: (e as Error).message }, 'payment settlement failed after the CDR; left for the settlement recovery sweep'));
   }
   return cdr;
 }
@@ -1149,34 +1329,59 @@ export async function rateAndCreateCdr(sessionId: string, opts: { force?: boolea
  * −Rp 58,552 (energy given away to a walk-up guest with no card on file). Every
  * one of those was recorded as `state = rated, needs_review = false`.
  *
- * There is no refund rail in this build, and pretending otherwise would be
- * worse than saying so: the delta is recorded and raised as an alert for the
- * operator, and the session is parked when the customer is owed money.
+ * Now the delta is recorded on the payment (settlement_delta_minor) and acted on:
+ * money held for energy never delivered is queued in the refund queue
+ * (services/refunds.ts: paid back through the acquirer by the refunds worker,
+ * or marked refunded by hand under Refunds) with a `prepaid.refund_due` alert;
+ * an invoice above what was collected raises `prepaid.under_collected`. The
+ * session itself is not parked for either — its billing is correct; what needs
+ * action is the payment.
  */
-const SETTLEMENT_TOLERANCE_IDR = 1_000;
-
-async function settlePrepaid(sessionId: string, orgId: string, invoicedIdr: number): Promise<void> {
-  const intent = await one<{ id: string; captured: number | null; minted: boolean; mode: string }>(
-    `SELECT id, amount_captured_idr AS captured, claim_token_minted AS minted, mode
+async function settlePrepaid(sessionId: string, orgId: string, invoicedMinor: number): Promise<void> {
+  const intent = await one<{ id: string; captured: number | null; minted: boolean; mode: string; hold_state: string | null; hold_capture: number | null; currency: string }>(
+    `SELECT id, amount_captured_minor AS captured, claim_token_minted AS minted, mode, hold_state, hold_capture_minor AS hold_capture, currency
        FROM payment_intent
-      WHERE session_id = $1 AND mode IN ('prepurchase', 'preauth', 'postpay') AND settled_at IS NULL`,
+      WHERE session_id = $1 AND mode IN ('prepurchase', 'preauth', 'postpay') AND settled_at IS NULL
+      ORDER BY created_at
+      LIMIT 1`,
     [sessionId],
   );
   if (!intent) return;
+  // Below this the invoice and what was collected are treated as equal (per currency: Rp 1,000 / RM 0.20 / S$ 0.10).
+  const cur = currencyOr(intent.currency);
+  const SETTLEMENT_TOLERANCE_MINOR = countryOfCurrency(cur)!.settlementToleranceMinor;
+  // IDR messages exactly as v1.6 wrote them.
+  const grouped = (m: number) => moneyText(m, cur, 'id');
+  const plain = (m: number) => moneyText(m, cur, 'plain');
+
+  /**
+   * SAFE TO RUN AGAIN, AND SAFE TO STOP HALFWAY.
+   *
+   * This runs after the CDR has committed, outside its transaction. A crash or a
+   * database error part-way used to leave the payment unsettled for good: the
+   * CDR existed, so rating returned early, and no sweep looked at payments of
+   * rated sessions. recoverUnsettledPayments() now finds those and calls this
+   * again, so every step that MOVES MONEY comes first and is idempotent on its
+   * own (the hold's state-guarded transition, the refund queue's
+   * `refund_state IS NULL` guard, retiring the token), and only then is the
+   * payment marked settled — by exactly one caller (`settled_at IS NULL`
+   * guard). The alerts and flags below are sent by that caller alone, so a
+   * repeat run does not raise them twice.
+   */
 
   // A card hold: capture what the session cost (up to the hold); the rest is released, nothing to refund.
   let captured = Number(intent.captured ?? 0);
   if (intent.mode === 'preauth' || intent.mode === 'postpay') {
-    const { settleHold } = await import('./payments/holds.js');
-    captured = (await settleHold(intent.id, invoicedIdr)).captureIdr;
+    if (intent.hold_state == null || intent.hold_state === 'held') {
+      const { settleHold } = await import('./payments/holds.js');
+      captured = (await settleHold(intent.id, invoicedMinor)).captureMinor;
+    } else {
+      // An earlier run already asked for the capture (and stopped before marking the payment settled). Asking
+      // again would reset a failed or expired capture's retries and alerts: the hold worker owns it from here.
+      captured = Number(intent.hold_capture ?? 0);
+    }
   }
-  const delta = invoicedIdr - captured;
-
-  await query(
-    `UPDATE payment_intent SET settlement_delta_idr = $2, settled_at = now(), updated_at = now()
-      WHERE id = $1`,
-    [intent.id, delta],
-  );
+  const delta = invoicedMinor - captured;
 
   // Retire a minted single-use token so the same payment screen cannot be reused.
   if (intent.minted) {
@@ -1188,7 +1393,21 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedIdr: numb
     );
   }
 
-  if (Math.abs(delta) <= SETTLEMENT_TOLERANCE_IDR) return;
+  // Money held for energy that was never delivered: queued for refund BEFORE the payment is marked settled, so a
+  // crash in between leaves it to be found again (markRefundDue queues it once).
+  const owed = -delta;
+  if (delta < -SETTLEMENT_TOLERANCE_MINOR) await markRefundDue(intent.id, owed, 'Unused prepaid balance');
+
+  const claimed = await one<{ id: string }>(
+    `UPDATE payment_intent SET settlement_delta_minor = $2, settled_at = now(), updated_at = now()
+      WHERE id = $1 AND settled_at IS NULL
+      RETURNING id`,
+    [intent.id, delta],
+  );
+  // Settled meanwhile by another run (the recovery sweep and a late inline settlement): it raised the alerts.
+  if (!claimed) return;
+
+  if (Math.abs(delta) <= SETTLEMENT_TOLERANCE_MINOR) return;
 
   if (delta > 0) {
     bus.emit('alert.raised', {
@@ -1196,29 +1415,26 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedIdr: numb
       kind: 'prepaid.under_collected',
       severity: 'warning',
       message:
-        `Session ${sessionId} invoiced Rp ${delta.toLocaleString('id-ID')} more than was collected ` +
-        `(Rp ${invoicedIdr.toLocaleString('id-ID')} vs Rp ${captured.toLocaleString('id-ID')}). ` +
+        `Session ${sessionId} invoiced ${grouped(delta)} more than was collected ` +
+        `(${grouped(invoicedMinor)} vs ${grouped(captured)}). ` +
         `A prepaid driver has no card on file, so this is unrecoverable unless they return.`,
     });
     await addFlag(sessionId, {
       code: 'PREPAID_UNDER_COLLECTED',
       severity: 'warning',
-      message: `Invoiced Rp ${invoicedIdr} against Rp ${captured} collected; Rp ${delta} short.`,
+      message: `Invoiced ${plain(invoicedMinor)} against ${plain(captured)} collected; ${plain(delta)} short.`,
     });
     return;
   }
 
-  // Money held for energy that was never delivered. This one owes the customer.
-  // The session's billing is correct; what needs action is the payment, so it
-  // goes to the refund queue (services/refunds.ts) instead of parking the session.
-  const owed = -delta;
-  await markRefundDue(intent.id, owed, 'Unused prepaid balance');
+  // This one owes the customer. The session's billing is correct; what needs action is the payment, so it
+  // went to the refund queue (services/refunds.ts, above) instead of parking the session.
   bus.emit('alert.raised', {
     orgId,
     kind: 'prepaid.refund_due',
     severity: 'warning',
     message:
-      `Session ${sessionId} collected Rp ${owed.toLocaleString('id-ID')} more than it delivered. ` +
+      `Session ${sessionId} collected ${grouped(owed)} more than it delivered. ` +
       `A refund is due to the payer — process it under Refunds.`,
     targetType: 'payment_intent',
     targetId: intent.id,
@@ -1226,8 +1442,86 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedIdr: numb
   await addFlag(sessionId, {
     code: 'PREPAID_REFUND_DUE',
     severity: 'info',
-    message: `Collected Rp ${captured} for an invoice of Rp ${invoicedIdr}; Rp ${owed} is owed back (refund queued).`,
+    message: `Collected ${plain(captured)} for an invoice of ${plain(invoicedMinor)}; ${plain(owed)} is owed back (refund queued).`,
   });
+}
+
+/** How long after its CDR a payment may stay unsettled before the recovery sweep settles it (the inline path's grace). */
+const SETTLEMENT_RECOVERY_GRACE_MIN = 5;
+/** How far back the recovery sweep looks; older ones are left to an operator (a hold has expired at the acquirer by then). */
+const SETTLEMENT_RECOVERY_LOOKBACK_DAYS = 30;
+
+/**
+ * SETTLEMENT_RECOVERY_NOT_BEFORE (ISO timestamp, optional): the sweep ignores CDRs issued
+ * before it. Set it to the upgrade time when 1.5.1 is first deployed, so the first pass
+ * does not capture, charge or refund OLD payments that operations may already have
+ * settled by hand at the acquirer (that would collect or refund twice). Review those old
+ * ones with `npm run settlement:report`, settle what is genuinely open, then remove the
+ * setting. An unparseable value is refused at start-up rather than silently ignored.
+ */
+export function settlementRecoveryNotBefore(env: Record<string, string | undefined> = process.env): Date | null {
+  const raw = (env.SETTLEMENT_RECOVERY_NOT_BEFORE ?? '').trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) throw new Error(`SETTLEMENT_RECOVERY_NOT_BEFORE is not a valid timestamp: ${raw}`);
+  return d;
+}
+
+/** The unsettled-payment selection, shared by the sweep and the read-only report. */
+export const UNSETTLED_PAYMENTS_SQL = `
+  SELECT DISTINCT ON (pi.session_id) pi.session_id, d.org_id, d.total_minor, pi.id AS intent_id, pi.mode,
+         pi.hold_state, d.issued_at
+    FROM payment_intent pi
+    JOIN cdr d ON d.session_id = pi.session_id
+   WHERE pi.mode IN ('prepurchase', 'preauth', 'postpay') AND pi.settled_at IS NULL
+     AND d.issued_at < now() - make_interval(mins => $1::int)
+     AND d.issued_at > now() - make_interval(days => $2::int)
+     AND ($3::uuid IS NULL OR pi.org_id = $3)
+     AND ($4::timestamptz IS NULL OR d.issued_at >= $4)
+   ORDER BY pi.session_id`;
+
+export function unsettledPaymentsParams(orgId?: string, notBefore: Date | null = settlementRecoveryNotBefore()) {
+  return [SETTLEMENT_RECOVERY_GRACE_MIN, SETTLEMENT_RECOVERY_LOOKBACK_DAYS, orgId ?? null, notBefore];
+}
+
+/**
+ * Settle payments of sessions that were rated but never settled.
+ *
+ * rateAndCreateCdr settles the payment (captures the card hold, charges the
+ * post-pay e-wallet, queues the refund of an unused pre-purchase) AFTER the CDR
+ * has committed. A crash or a database error in between left the hold `held`
+ * until it lapsed at the acquirer — the session delivered, nothing collected —
+ * and the unused balance never reached the refund queue. Nothing looked again:
+ * a retried rating returns early because the CDR exists, reconciliation only
+ * rates sessions WITHOUT a CDR, and the hold sweep only releases holds that
+ * never started a session.
+ *
+ * This finds those payments (unsettled, their session's CDR older than the
+ * grace period, so the inline settlement is not raced) and runs the same
+ * settlement with the CDR's total. Running it twice is harmless: settlePrepaid
+ * moves money only through state-guarded updates and marks the payment
+ * settled once. Runs in the worker (one runner platform-wide), which passes no
+ * `orgId` and sweeps every tenant; `orgId` scopes it to one (tests).
+ */
+export async function recoverUnsettledPayments(orgId?: string): Promise<number> {
+  const rows = await many<{ session_id: string; org_id: string; total_minor: number }>(
+    `SELECT * FROM (${UNSETTLED_PAYMENTS_SQL}) u
+      ORDER BY random()   -- not session order: 100 payments that keep failing must not starve the rest
+      LIMIT 100`,
+    unsettledPaymentsParams(orgId),
+  );
+  let n = 0;
+  for (const r of rows) {
+    try {
+      await settlePrepaid(r.session_id, r.org_id, Number(r.total_minor));
+      n++;
+    } catch (e) {
+      // One payment failing must not stop the others; it is found again on the next pass.
+      logger.warn({ sessionId: r.session_id, err: (e as Error).message }, 'settlement recovery failed for a session; retried next pass');
+    }
+  }
+  if (n) logger.warn({ settled: n }, 'settled payments of rated sessions that had been left unsettled (crash after rating?)');
+  return n;
 }
 
 // ------------------------------------------------------------------ recovery
@@ -1589,14 +1883,14 @@ async function computeIdleMinutes(client: Pick<PoolClient, 'query'>, sessionId: 
 
 export interface RunningCost {
   /** What the driver pays if the charge stopped now, PBJT-TL and PPN included. */
-  totalIdr: number;
-  subtotalIdr: number;
+  totalMinor: number;
+  subtotalMinor: number;
   /** PBJT-TL plus PPN. */
-  taxIdr: number;
+  taxTotalMinor: number;
   /** Memberships, promotions, loyalty points and energy given back, already taken off. */
-  discountIdr: number;
+  discountMinor: number;
   /** Idle fee so far (plugged in, no longer drawing). Included in the total. */
-  idleFeeIdr: number;
+  idleFeeMinor: number;
   idleMinutes: number;
   energyWh: number;
   /** When it was worked out. */
@@ -1626,12 +1920,12 @@ function remember(sessionId: string, key: string, value: RunningCost, now: numbe
 }
 
 function figures(lines: CdrLineLike[]) {
-  let discountIdr = 0;
-  for (const d of adjustmentTotals(lines as any).values()) discountIdr += d.discountIdr;
-  const idleFeeIdr = lines.filter((l) => l.kind === 'idle' && !l.adjustment).reduce((a, l) => a + Number(l.amountIdr), 0);
-  return { discountIdr, idleFeeIdr };
+  let discountMinor = 0;
+  for (const d of adjustmentTotals(lines as any).values()) discountMinor += d.discountMinor;
+  const idleFeeMinor = lines.filter((l) => l.kind === 'idle' && !l.adjustment).reduce((a, l) => a + Number(l.amountMinor), 0);
+  return { discountMinor, idleFeeMinor };
 }
-type CdrLineLike = { kind: string; amountIdr: number; adjustment?: unknown };
+type CdrLineLike = { kind: string; amountMinor: number; adjustment?: unknown };
 
 /**
  * The cost of a charge so far: priced exactly as the final charge record will be (same tariff as of
@@ -1645,12 +1939,12 @@ export async function runningCost(sessionId: string, now = new Date()): Promise<
   const s = await one<any>(PRICING_SELECT, [sessionId]);
   if (!s) return null;
 
-  const cdr = await one<{ lines: CdrLineLike[]; subtotal_idr: number; pbjt_idr: number; ppn_idr: number; total_idr: number; issued_at: Date }>(
-    `SELECT lines, subtotal_idr, pbjt_idr, ppn_idr, total_idr, issued_at FROM cdr WHERE session_id = $1`, [sessionId]);
+  const cdr = await one<{ lines: CdrLineLike[]; subtotal_minor: number; local_tax_minor: number; tax_minor: number; total_minor: number; issued_at: Date }>(
+    `SELECT lines, subtotal_minor, local_tax_minor, tax_minor, total_minor, issued_at FROM cdr WHERE session_id = $1`, [sessionId]);
   if (cdr) {
-    const f = figures(cdr.lines ?? []);
+    const f = figures(upgradeLegacyKeys(cdr.lines ?? []));
     return {
-      totalIdr: Number(cdr.total_idr), subtotalIdr: Number(cdr.subtotal_idr), taxIdr: Number(cdr.pbjt_idr) + Number(cdr.ppn_idr),
+      totalMinor: Number(cdr.total_minor), subtotalMinor: Number(cdr.subtotal_minor), taxTotalMinor: Number(cdr.local_tax_minor) + Number(cdr.tax_minor),
       ...f, idleMinutes: Number(s.idle_minutes ?? 0), energyWh: Number(s.energy_wh),
       asOf: new Date(cdr.issued_at).toISOString(), final: true,
     };
@@ -1666,9 +1960,9 @@ export async function runningCost(sessionId: string, now = new Date()): Promise<
 
   const { result } = await priceSession(s, { endedAt, energyWh, idleMinutes });
   const value: RunningCost = {
-    totalIdr: result.tax.totalIdr,
-    subtotalIdr: result.tax.subtotalIdr,
-    taxIdr: result.tax.pbjtIdr + result.tax.ppnIdr,
+    totalMinor: result.tax.totalMinor,
+    subtotalMinor: result.tax.subtotalMinor,
+    taxTotalMinor: result.tax.localTaxMinor + result.tax.taxMinor,
     ...figures(result.lines),
     idleMinutes,
     energyWh,
@@ -1741,7 +2035,7 @@ async function claimPrepaidIntent(
 ) {
   const r = await client.query<{
     id: string;
-    amount_authorised_idr: number;
+    amount_authorised_minor: number;
     allowance_wh: number;
     claim_id_tag: string | null;
   }>(
@@ -1768,7 +2062,7 @@ async function claimPrepaidIntent(
          ORDER BY (claim_id_tag IS NOT NULL) DESC, created_at ASC
          LIMIT 1
       )
-      RETURNING id, amount_authorised_idr, allowance_wh, claim_id_tag`,
+      RETURNING id, amount_authorised_minor, allowance_wh, claim_id_tag`,
     [connectorUuid, idTag, payerOnly],
   );
   return r.rows[0] ?? null;
@@ -1823,12 +2117,12 @@ export async function activeSessionOnConnector(connectorUuid: string) {
 }
 
 export async function recentSessions(orgId: string, limit = 50, siteIds: string[] | null = null) {
-  return many(
+  const rows = await many<any>(
     `SELECT cs.id, cs.started_at, cs.ended_at, cs.state, cs.energy_wh, cs.duration_s,
             cs.stop_reason, cs.needs_review, cs.review_reason, cs.flags, cs.idle_minutes,
-            cs.payment_mode, cs.prepaid_amount_idr, cs.prepaid_energy_wh,
+            cs.payment_mode, cs.prepaid_amount_minor, cs.prepaid_energy_wh, cs.currency,
             cp.ocpp_identity, e.evse_id AS evse_no, s.name AS site_name,
-            d.total_idr, d.subtotal_idr, d.pbjt_idr, d.ppn_idr, d.ppn_dpp_idr, d.lines,
+            d.total_minor, d.subtotal_minor, d.local_tax_minor, d.tax_minor, d.tax_base_minor, d.lines,
             d.regulatory_flags
        FROM charging_session cs
        JOIN charge_point cp ON cp.id = cs.charge_point_id
@@ -1842,4 +2136,6 @@ export async function recentSessions(orgId: string, limit = 50, siteIds: string[
       LIMIT $2`,
     [orgId, limit, siteIds],
   );
+  // CDR lines frozen before 1.7 say amountIdr.
+  return rows.map((r) => (r.lines ? { ...r, lines: upgradeLegacyKeys(r.lines) } : r));
 }

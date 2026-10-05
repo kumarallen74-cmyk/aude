@@ -71,3 +71,33 @@ test('hub client info: validated against the URL, and written back in OCPI form'
   assert.match(parseClientInfo({ country_code: 'NL', party_id: 'ABC', role: 'BANK', status: 'OFFLINE', last_updated: '2026-09-28T10:00:00Z' }) as string, /role must be/);
   assert.match(parseClientInfo({ country_code: 'NL', party_id: 'ABC', role: 'CPO', status: 'OFFLINE' }) as string, /last_updated/);
 });
+
+// ── multi-country: one OCPI party per (organisation, country)
+import { ourCredentials } from './registration.js';
+import { pickParty } from './store.js';
+
+test('credentials list a CPO role per country party and the eMSP role of the home party', () => {
+  const home = { country_code: 'ID', party_id: 'PLS', business_name: 'PT PlugSure' };
+  const sg = { country_code: 'SG', party_id: 'PLS', business_name: 'PlugSure SG Pte Ltd', website: 'https://plugsure.sg' };
+  const c = ourCredentials([home, sg], 'tok', 'https://ocpi.example');
+  assert.deepEqual(c.roles.map((r) => [r.role, r.country_code, r.party_id, r.business_details.name]), [
+    ['CPO', 'ID', 'PLS', 'PT PlugSure'],
+    ['EMSP', 'ID', 'PLS', 'PT PlugSure'],
+    ['CPO', 'SG', 'PLS', 'PlugSure SG Pte Ltd'],
+  ]);
+  // One party: exactly the v1.6 credentials.
+  assert.deepEqual(ourCredentials(home, 'tok', 'https://ocpi.example').roles.map((r) => r.role), ['CPO', 'EMSP']);
+  assert.deepEqual(ourCredentials([home], 'tok', 'https://ocpi.example'), ourCredentials(home, 'tok', 'https://ocpi.example'));
+});
+
+test('a site is published under the party of its country only — never under another country\'s (review 9)', () => {
+  const home = { country_code: 'ID', party_id: 'PLS', business_name: 'A' };
+  const my = { country_code: 'MY', party_id: 'PLM', business_name: 'B' };
+  assert.equal(pickParty([home, my], 'MY'), my);
+  assert.equal(pickParty([home, my], 'ID'), home);
+  assert.equal(pickParty([home, my], 'SG'), null, 'no SG party: not published (flagged), not the Indonesian identity');
+  assert.equal(pickParty([home, my], null), home, 'no country (legacy caller): the home party');
+  assert.equal(pickParty(home, 'MY'), null, 'a single Indonesian party does not stand for a Malaysian site');
+  assert.equal(pickParty(home, 'ID'), home);
+  assert.equal(pickParty([], 'ID'), null);
+});

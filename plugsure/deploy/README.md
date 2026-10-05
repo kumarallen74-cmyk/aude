@@ -12,8 +12,20 @@
 > Caddy `/ocpp/*` route.
 >
 > **Workers** (load management, compliance, reconciliation, FOTA) run in the
-> gateway (`RUN_WORKERS=true`, the default). Set `RUN_WORKERS=false` on any second
-> gateway replica. The gateway watches its own health and logs a warning only
+> gateway (`RUN_WORKERS=true`, the default).
+>
+> **Run exactly ONE gateway.** (Corrected in v1.5.1: earlier revisions said a
+> second gateway replica could be added with `RUN_WORKERS=false`. It cannot.) The
+> charger sockets and the connection registry live in the gateway's memory, and
+> the API reaches chargers through ONE `GATEWAY_INTERNAL_URL`: with two gateways,
+> every charger connected to the other one shows offline in the console and
+> refuses every remote command, and load management only sees half the site.
+> There is no gateway-to-gateway routing yet (docs/PLUGSURE-ARCHITECTURE.md §4.3
+> describes the planned design). For availability, restart the one gateway
+> quickly (systemd `Restart=always`, compose `restart: unless-stopped`): chargers
+> reconnect on their own. The API may run several replicas.
+>
+> The gateway watches its own health and logs a warning only
 > when something is wrong:
 > - `gateway health`: event-loop delay over 1 s, queries waiting for a
 >   database connection, or a worker pass running over a minute;
@@ -29,7 +41,7 @@
 > - at once, when a connector reports Available to the gateway holding its socket;
 > - every 15 s by the reservations worker. This pass also retries a hold the charger refused, and ends waits that ran out.
 >
-> Keep `RUN_WORKERS=true` on exactly one gateway; nothing else to configure.
+> Keep `RUN_WORKERS=true` on the (one) gateway; nothing else to configure.
 >
 > **Partner-charger reservations** (migration 034). Fleet drivers with a roaming card
 > can reserve a partner operator's charger; PlugSure sends the operator OCPI
@@ -334,7 +346,7 @@ openssl rand -hex 32   # -> SECRETS_KEY
 | `TZ` | `Asia/Jakarta` | **not cosmetic** — WBP/LWBP tariff blocks are evaluated in local time |
 | **`OCPP_MIN_SECURITY_PROFILE`** | **`2`** | **wss + HTTP Basic. The OCPP 1.6 certification baseline and the only acceptable production setting.** `0` (the code default) accepts any charger with no credential at all; `1` accepts Basic over plaintext. Setting this to `2` makes `checkAuth()` demand Basic credentials matching the stored `AuthorizationKey` for every connection. |
 | **`OCPP_TRUST_PROXY_PROTO`** | **`true`** *(when TLS terminates at Caddy)* | **Required whenever `OCPP_MIN_SECURITY_PROFILE >= 2` and TLS is NOT terminated by the gateway itself.** `isTls()` learns the scheme from `X-Forwarded-Proto`, which it ignores unless this is set — so the documented production stack (profile 2 behind Caddy) previously refused 100 % of connections with `403 Security profile 2 requires TLS` while logging a healthy "listening" line. The gateway now refuses to start in that combination. Only enable it when the proxy is the sole ingress and strips client-supplied forwarding headers, or a direct client can claim TLS it does not have. |
-| `OCPP_TRUSTED_PROXIES` | `127.0.0.1,::1` *(compose adds `172.16.0.0/12`)* | Addresses or CIDRs whose `X-Forwarded-Proto` and `X-Client-Cert-Fingerprint` the gateway believes. From any other peer those headers are ignored, so a client that reaches port 9220 directly cannot claim TLS or present another charger's certificate fingerprint. List the address your TLS terminator connects from. |
+| `OCPP_TRUSTED_PROXIES` | `127.0.0.1,::1` *(compose adds only its network's fixed gateway, `PLUGSURE_NET_GATEWAY`, default `172.31.253.1` — where the host's Caddy appears from)* | Addresses or CIDRs whose `X-Forwarded-Proto` and `X-Client-Cert-Fingerprint` the gateway believes. From any other peer those headers are ignored, so a client that reaches port 9220 directly cannot claim TLS or present another charger's certificate fingerprint. List the address your TLS terminator connects from. |
 | **`OCPP_AUTO_ADOPT`** | **`false`** | **Production must not adopt strangers.** The code default is `true` only under `NODE_ENV=development` and `false` everywhere else; set it explicitly anyway. With `true` any charge point that connects is created and attached to `OCPP_AUTO_ADOPT_SITE` — that is a bench convenience, and in the field it means an unknown unit can enrol itself into a tenant's fleet and start producing billable sessions. With `false`, unknown identities are parked and refused with `404 unknown charge point — parked for adoption`, and you adopt them deliberately from the console. |
 | **`OCPP_VERSIONS`** | **`ocpp1.6,ocpp2.0.1`** | Subprotocols the gateway negotiates, in order of preference. The code default is `ocpp1.6` alone: a unit offering only `ocpp2.0.1` is then refused with `400 No supported OCPP subprotocol offered`. Keep `ocpp1.6` alone until a 2.0.1 model has passed acceptance. Add `ocpp2.1` for OCPP 2.1 stations (needed for bidirectional charging). Sandbox virtual chargers registered as 2.0.1 or 2.1 need those versions listed here too. |
 | `OCPP_PORT` | `9220` | behind Caddy; never published directly |
@@ -352,6 +364,9 @@ openssl rand -hex 32   # -> SECRETS_KEY
 | `CONNECTION_ATTEMPT_RETENTION_DAYS` | `30` | Same for the connection-attempt log. |
 | `MIGRATION_LOCK_TIMEOUT` | `10s` | How long one migration may wait for a table lock. Past it the migration fails and rolls back (retry; find the blocker in `pg_stat_activity`) rather than queueing every query on that table behind it. Migrators also take an advisory lock, so two never run at once. |
 | **`API_TRUSTED_PROXIES`** | *(your ingress IP)* | Comma-separated IPs/CIDRs whose `X-Forwarded-For` is believed. **Leave unset unless you terminate TLS at a proxy.** This used to be a hardcoded "trust everyone", which let any caller forge a fresh client IP per request and so never hit the rate limit — brute force against a bearer token was free — and poisoned the client IP recorded in the audit log. With Caddy on the same host, set `API_TRUSTED_PROXIES=127.0.0.1`. |
+| `CONSOLE_MFA_REQUIRED` | `true` | Two-step verification (authenticator app) is required for administrator accounts (user management or any platform permission). Such a user without it is made to enrol at next sign-in, before the console opens. Wrong codes count towards `LOGIN_MAX_FAILURES`. `false` makes it optional (logged as a warning). Lost phone: another administrator uses *Users & Roles → Reset two-step verification*. |
+| `CONSOLE_ADMIN_HOSTS` | *(empty: any host)* | Console host names on which administrator accounts may sign in and use a session. Set it to the office-only console name when the console is also published on a portal hostname (see the `deploy/Caddyfile` note). |
+| `MS_CLIENT_ID`, `MS_CLIENT_SECRET` / `MS_CLIENT_SECRET_FILE` | *(unset: off)* | "Sign in with Microsoft" for the console (v1.6.0). Register PlugSure once in Azure as a multi-tenant app with the redirect URI `PUBLIC_BASE_URL` + `/v1/auth/microsoft/callback`; each operator's administrator then connects their own Entra tenant under *Users & Roles → Microsoft sign-in*. No users are created from Microsoft. Further settings (`MS_SIGNIN_HOSTS`, `MS_TRUST_MFA_CLAIM`, `MS_SIGNIN_RATE_PER_MIN`), secret rotation and troubleshooting: [`MICROSOFT-SIGN-IN.md`](MICROSOFT-SIGN-IN.md). The API needs outbound HTTPS to `login.microsoftonline.com`. |
 | `IDLE_FEE_CAP_IDR` | `100000` | Hard per-session cap on idle/occupancy charges. Not a regulatory figure — a platform safety bound. An unbounded idle fee turned a 60 kWh delivery into a Rp 6,692,360 invoice. Raise it deliberately or not at all. |
 | `PPN_RATE_BPS` | `1200` | 12 % headline rate |
 | `PPN_DPP_NUM` / `PPN_DPP_DEN` | `11` / `12` | *DPP nilai lain*: DPP = 11/12 × price, PPN = 12 % × DPP. Do not "simplify" to 11 % — the total matches but the DPP printed on the faktur pajak is wrong and fails an audit. |
@@ -862,6 +877,9 @@ sudo -u postgres psql -c "CREATE ROLE plugsure NOLOGIN" 2>/dev/null || true
 sudo -u postgres psql -c "CREATE ROLE plugsure_app NOLOGIN" 2>/dev/null || true
 sudo -u postgres createdb plugsure_restore -O plugsure
 time pg_restore --exit-on-error --jobs=4 -d plugsure_restore plugsure-db-<stamp>.dump
+#    pg_restore does not bring back the runtime role's row-level-security default (048):
+#    re-apply it before anything connects (deploy/pitr/RESTORE.md §2a).
+sudo -u postgres psql -d plugsure_restore -c "ALTER ROLE plugsure_app IN DATABASE plugsure_restore SET app.rls_bypass = 'on'"
 
 # 3. Check it is complete and current.
 psql -d plugsure_restore -c "select max(name) from schema_migration"
@@ -878,6 +896,17 @@ tar -xzf plugsure-storage-<stamp>.tar.gz -C /tmp/restore-check
 # 6. Record how long steps 2-5 took: that is your real recovery time.
 sudo -u postgres dropdb plugsure_restore
 ```
+
+**Point-in-time recovery (v1.5.1).** The nightly dump can lose up to a day of
+sessions, payments and refunds. For production, also turn on continuous WAL
+archiving with a weekly base backup, which can restore to any moment (5 minutes
+of loss on the host, about 10 off it): `deploy/pitr/postgresql-pitr.conf`,
+`tools/backup/{wal-archive,wal-restore,pg-basebackup,wal-offsite}.sh`,
+`deploy/plugsure-basebackup.{service,timer}` and
+`deploy/plugsure-wal-offsite.{service,timer}`. Setup, the restore, the monthly
+restore test and the local proof are in **`deploy/pitr/RESTORE.md`**. Keep the
+nightly dump as well (portable, per-table). On RDS use its own point-in-time
+restore instead.
 
 For the real thing: stop both units, restore into a fresh `plugsure` database,
 restore `STORAGE_DIR`, start `plugsure-api` (migrations then bring an older dump
@@ -928,9 +957,11 @@ psql "$OWNER_URL" -c \
 ## 9. Health checks
 
 ```bash
-# API (loopback only)
+# API (loopback only). 200 {"ok":true,…}; 503 {"ok":false,"db":false,…} when the
+# database does not answer (v1.5.1: it used to answer 200 with ok:false, which every
+# status-code health check — Docker, compose, a load balancer — took for healthy).
 curl -s http://127.0.0.1:9200/healthz | jq
-# {"ok":true,"connectedChargePoints":1,"time":"..."}
+# {"ok":true,"db":true,"connectedChargePoints":1,"time":"..."}
 
 # Gateway — /healthz reports database reachability and the live charger count.
 curl -s http://127.0.0.1:9220/healthz | jq
@@ -948,6 +979,35 @@ docker inspect --format '{{.State.Health.Status}}' plugsure-gateway-1
 
 `connectedChargePoints` is the number that matters on integration day: it is a
 live count of chargers holding a WebSocket.
+
+### Background worker health and the dead-man's switch (v1.5.1)
+
+The gateway's background workers (refunds, card holds, pass renewals, roaming
+push, webhooks, alert routing, …) used to report failures only as log lines.
+Now a worker that **fails 3 passes in a row** (`WORKER_ALERT_FAILURES`, and for
+at least a minute) or **has not completed a pass for 3× its interval** (at least
+10 minutes) raises an ordinary alert, kind `platform.worker_failing` ("Background
+worker failing"; critical for refunds, card holds, pass renewals, reconciliation,
+unpaid reminders and alert routing, warning otherwise). One alert per worker while
+it lasts (repeats fold into it, also across a gateway restart), resolved
+automatically by the worker's next successful pass. It goes to the platform
+operator's organisation: `OPS_ALERT_ORG_ID` if set, else every organisation with
+a platform administrator (`create-admin --platform-admin`), else the only
+organisation. Route it like any alert (Govern → Alert routing: a rule for kind
+"Background worker failing" or `platform.*`, to an on-call rota).
+
+Per-worker detail (failure streak, last success, last error, alert state, the
+heartbeat) for a platform administrator: `GET /v1/platform/health` on the API
+(it asks the gateway over the bridge). Not on `/healthz`, which is public.
+
+An alert cannot report that the gateway is down, that the database is, or that
+alert routing itself is the worker failing. For that, set **`HEARTBEAT_URL`** on
+the gateway to an external dead-man's switch — e.g. a healthchecks.io check
+(period 1 min, grace 5 min) whose URL is `https://hc-ping.com/<uuid>`. The
+gateway GETs it at most once a minute (`HEARTBEAT_INTERVAL_MS`), and only after
+a health round in which every worker was healthy; the service alarms when the
+pings stop. It goes through the outbound guard (https, public addresses only, in
+production).
 
 **Reaching the console.** The API requires a bearer token on every `/v1/` route
 — an API key (`psk_…`) or a console session (`pss_…`). The seed prints one key,
@@ -1126,8 +1186,13 @@ Deployment-relevant, and none of them are fixed by this runbook:
   published on its own hostname.
 * **No log shipping off-box** beyond rotation; add the CloudWatch agent (§8).
 * **Backups are only as good as the last rehearsal.** The nightly backup timer
-  (§7 "Backups and restore rehearsal") is shipped but not installed by default,
-  and it copies off the host only if `BACKUP_OFFSITE_CMD` is set.
+  and the PITR timers (§7 "Backups and restore rehearsal", `deploy/pitr/RESTORE.md`)
+  are shipped but not installed by default, and they copy off the host only if
+  `BACKUP_OFFSITE_CMD` / `WAL_OFFSITE_CMD` are set (a bucket and credentials you
+  provide).
+* **One gateway only.** Charger sockets live in the gateway's memory and the API
+  reaches one `GATEWAY_INTERNAL_URL`; there is no gateway-to-gateway routing
+  (docs/PLUGSURE-ARCHITECTURE.md §4.3). Availability is a fast restart.
 
 Fixed since the previous revision of this list: `npm ci` works (§0), and the API
 drains in-flight requests on SIGTERM like the gateway (open console live streams

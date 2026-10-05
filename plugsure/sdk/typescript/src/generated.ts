@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.5.0";
+export const API_VERSION = "1.9.0-dev";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -259,6 +259,8 @@ export interface AuthLoginResult {
   };
   /** True after an administrator issued a one-time password; every other route answers 403 until it is changed. */
   mustChangePassword: boolean;
+  /** The password was right and the account has two-step verification: the session is pending, and only POST /v1/auth/mfa/verify (and sign-out) answer until the code is given. */
+  mfaRequired?: boolean;
 }
 
 export interface AuthMe {
@@ -268,12 +270,25 @@ export interface AuthMe {
     name: string;
     email: string | null;
     mustChangePassword?: boolean;
+    /** Two-step verification of the signed-in operator. */
+    mfa?: MfaStatus | null;
+    /** Required and not set up: every route but enrolment answers 403 until it is. */
+    mfaEnrolmentRequired?: boolean;
+    /** This session signed in with Microsoft and Microsoft reported multi-factor authentication: the console’s two-step verification counts as done. */
+    mfaViaMicrosoft?: boolean;
+    /** How this console session signed in (null for an API key). */
+    signedInWith?: "password" | "microsoft" | null;
   };
   org: {
     id: string;
     name?: string;
     pkp?: boolean;
     npwp?: string | null;
+    /** The organisation's home country (default for new sites). */
+    homeCountry?: "ID" | "MY" | "SG";
+    /** The organisation's reporting time zone (IANA), e.g. Asia/Jakarta. */
+    timezone?: string;
+    defaultLocale?: "id" | "en";
   };
   roles: {
     name: string;
@@ -297,6 +312,8 @@ export interface AuthMe {
     legal_name?: string | null;
   }[];
   features: {
+    /** MULTI_COUNTRY: Malaysian and Singapore sites may be created. */
+    multiCountry?: boolean;
     vault: boolean;
     bridge: boolean;
     publicBaseUrl?: string | null;
@@ -311,6 +328,8 @@ export interface AuthMe {
     env: string;
     /** The installed PlugSure release (package.json version). */
     version: string;
+    /** “Sign in with Microsoft” is configured on this installation (MS_CLIENT_ID). */
+    microsoftSignIn?: boolean;
   };
   /** The organisation’s own console brand (v1.5.0); null for the PlugSure console. */
   consoleBrand?: ConsoleBrandView | null;
@@ -337,9 +356,13 @@ export interface AvailabilityRow {
   longestOutageMin: number;
   sessions: number;
   energyKwh: number;
-  revenueIdr: number;
+  revenueMinor: number;
+  /** The site's currency (IDR, MYR or SGD). */
+  currency?: string;
   /** Connector-time in sessions over connector-time in the window, percent. */
   utilisationPct: number | null;
+  /** Deprecated: the v1.6 name of `revenueMinor`, present while the amount is in IDR. */
+  revenueIdr?: number;
 }
 
 export interface BillingFinaliseInput {
@@ -360,10 +383,14 @@ export type BillingOwnerRow = BillingShareFigures & {
   customPlan: boolean;
   status: "draft" | "final";
   number: string | null;
-  platformPpnIdr?: number;
-  invoiceTotalIdr?: number;
+  platformPpnMinor?: number;
+  invoiceTotalMinor?: number;
   /** Number of statement warnings. */
   warnings?: number;
+  /** Deprecated: the v1.6 name of `platformPpnMinor`, present while the amount is in IDR. */
+  platformPpnIdr?: number;
+  /** Deprecated: the v1.6 name of `invoiceTotalMinor`, present while the amount is in IDR. */
+  invoiceTotalIdr?: number;
 };
 
 export interface BillingOwnersOverview {
@@ -413,12 +440,26 @@ export interface BillingShareFigures {
   chargers?: number;
   sessions?: number;
   energyKwh?: number;
+  grossMinor?: number;
+  localTaxMinor?: number;
+  taxMinor?: number;
+  baseMinor?: number;
+  mdrMinor?: number;
+  ownerShareMinor?: number;
+  platformShareMinor?: number;
+  /** Deprecated: the v1.6 name of `grossMinor`, present while the amount is in IDR. */
   grossIdr?: number;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
   pbjtIdr?: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
   ppnIdr?: number;
+  /** Deprecated: the v1.6 name of `baseMinor`, present while the amount is in IDR. */
   baseIdr?: number;
+  /** Deprecated: the v1.6 name of `mdrMinor`, present while the amount is in IDR. */
   mdrIdr?: number;
+  /** Deprecated: the v1.6 name of `ownerShareMinor`, present while the amount is in IDR. */
   ownerShareIdr?: number;
+  /** Deprecated: the v1.6 name of `platformShareMinor`, present while the amount is in IDR. */
   platformShareIdr?: number;
 }
 
@@ -510,9 +551,9 @@ export interface CardHold {
   kind: "card_hold" | "postpay";
   channel?: string | null;
   state: "held" | "capturing" | "captured" | "capture_failed" | "releasing" | "released" | "release_failed";
-  heldIdr: number | null;
-  captureIdr?: number | null;
-  capturedIdr?: number | null;
+  heldMinor: number | null;
+  captureMinor?: number | null;
+  capturedMinor?: number | null;
   attempts: number;
   error?: string | null;
   nextAttemptAt?: string | null;
@@ -528,6 +569,12 @@ export interface CardHold {
   sessionId?: string | null;
   site?: string | null;
   charger?: string | null;
+  /** Deprecated: the v1.6 name of `heldMinor`, present while the amount is in IDR. */
+  heldIdr?: number | null;
+  /** Deprecated: the v1.6 name of `captureMinor`, present while the amount is in IDR. */
+  captureIdr?: number | null;
+  /** Deprecated: the v1.6 name of `capturedMinor`, present while the amount is in IDR. */
+  capturedIdr?: number | null;
 }
 
 export interface ChargePoint {
@@ -658,9 +705,11 @@ export interface CheckoutQrisCharge {
   providerRef: string;
   /** Payload to render as a QR code. */
   qrString: string;
-  amountIdr: number;
+  amountMinor: number;
   expiresAt: string;
   status: "pending" | "paid" | "expired" | "failed";
+  /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+  amountIdr?: number;
 }
 
 export interface CheckoutQrisResult {
@@ -669,13 +718,15 @@ export interface CheckoutQrisResult {
   /** Energy the payment buys, quoted against the worst-case tariff block. */
   allowanceWh: number;
   allowanceKwh: number;
-  estimatedMdrIdr: number;
+  estimatedMdrMinor: number;
   inZeroMdrBand: boolean;
   /** The only idTag that can claim this payment. Show it to the driver. */
   startToken: string;
   /** true when PlugSure generated the token (walk-up), false when the caller supplied idToken. */
   startTokenMinted: boolean;
   expiresInMinutes: number;
+  /** Deprecated: the v1.6 name of `estimatedMdrMinor`, present while the amount is in IDR. */
+  estimatedMdrIdr?: number;
 }
 
 export interface CommandRemoteStartResult {
@@ -866,7 +917,7 @@ export interface ComplianceSite {
   slo_issued_at?: string | null;
   slo_expires_at?: string | null;
   kabupaten_kota_code?: string | null;
-  pbjt_rate_bps: number;
+  local_tax_rate_bps: number;
   meters: ComplianceMeter[];
   spkluParsed: {
     raw?: string;
@@ -882,6 +933,8 @@ export interface ComplianceSite {
   spkluIdValid: boolean | null;
   municipalityMatchesSpklu: boolean | null;
   sloDaysRemaining: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_rate_bps`, present while the amount is in IDR. */
+  pbjt_rate_bps?: number;
 }
 
 export interface ConfigChangeRequest {
@@ -1138,14 +1191,18 @@ export interface Dashboard {
   today: {
     sessions: number;
     energy_wh: number;
-    revenue_idr: number;
+    revenue_minor: number;
     active: number;
+    /** Deprecated: the v1.6 name of `revenue_minor`, present while the amount is in IDR. */
+    revenue_idr?: number;
   } | null;
   series: {
     day: string;
     energy_wh: number;
-    revenue_idr: number;
+    revenue_minor: number;
     sessions: number;
+    /** Deprecated: the v1.6 name of `revenue_minor`, present while the amount is in IDR. */
+    revenue_idr?: number;
   }[];
   alerts: {
     critical: number;
@@ -1238,6 +1295,55 @@ export interface DriverAppBrand {
   /** Apple accepted the key, Team ID and bundle identifier at the last check (or refused them while sending). */
   apnsCheckOk?: boolean | null;
   apnsCheckDetail?: string | null;
+  /** operator: a white-label app limited to this operator’s chargers. network: the PlugSure app itself (PlugSure Mobility), every operator’s chargers. */
+  scope?: "operator" | "network";
+  /** Android notifications: the Firebase project of the stored service account. */
+  fcmProjectId?: string | null;
+  fcmClientEmail?: string | null;
+  /** A Firebase service account is stored: the Android app gets native notifications (FCM HTTP v1). */
+  fcmConfigured?: boolean;
+  fcmCheckedAt?: string | null;
+  fcmCheckOk?: boolean | null;
+  fcmCheckDetail?: string | null;
+  appConfig?: DriverAppConfig;
+}
+
+/** The native apps’ version gate and remote configuration, served to them by GET /d/v1/app/config. Every part is optional. */
+export interface DriverAppConfig {
+  ios?: DriverAppRelease;
+  android?: DriverAppRelease;
+  maintenance?: {
+    active?: boolean;
+    messageId?: string;
+    messageEn?: string;
+  };
+  /** Feature switches (absent: the default). A switch cannot turn on what the server does not offer (roaming, reservations). */
+  features?: {
+    roaming?: boolean;
+    reservations?: boolean;
+    queue?: boolean;
+    memberships?: boolean;
+    favourites?: boolean;
+    liveActivities?: boolean;
+    accountDeletion?: boolean;
+    applePay?: boolean;
+    googlePay?: boolean;
+    routePlanner?: boolean;
+  };
+  links?: {
+    support?: string;
+    faq?: string;
+    status?: string;
+  };
+}
+
+export interface DriverAppRelease {
+  /** Older versions must update before anything else (blocking screen). */
+  minSupported?: string;
+  /** Older versions see a dismissable "update available". */
+  latest?: string;
+  /** https:// store page (Android default: the Play page of the package). */
+  storeUrl?: string;
 }
 
 export interface DriverAppView {
@@ -1405,9 +1511,11 @@ export interface FleetAccount {
   cards?: unknown;
   open_invoices?: number;
   /** Still owed on issued invoices, after credit notes. */
-  outstanding_idr?: number;
+  outstanding_minor?: number;
   /** Fleet customer portal users (list). */
   portal_users?: number;
+  /** Deprecated: the v1.6 name of `outstanding_minor`, present while the amount is in IDR. */
+  outstanding_idr?: number;
 }
 
 export type FleetAccountDetail = FleetAccount;
@@ -1460,14 +1568,24 @@ export interface FleetBillingSettings {
 export interface FleetCreditLine {
   description: string;
   /** Credited, PPN included. */
-  amountIdr: number;
+  amountMinor: number;
   /** Carries PPN (split like an invoice line). */
   taxed: boolean;
   /** Price subject to PPN. */
-  taxBaseIdr?: number;
+  taxableMinor?: number;
   /** DPP nilai lain, 11/12 of the price. */
-  dppIdr?: number;
+  taxBaseMinor?: number;
   /** 12% of the DPP. */
+  taxMinor?: number;
+  /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+  amountIdr?: number;
+  /** Deprecated: the v1.6 name of `taxableMinor`, present while the amount is in IDR. */
+  taxBaseIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  ppnDppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  dppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
   ppnIdr?: number;
 }
 
@@ -1480,10 +1598,10 @@ export interface FleetCreditNote {
   settlement: "invoice" | "refund" | "next_invoice";
   reason: string;
   lines: FleetCreditLine[];
-  dppIdr: number;
-  ppnIdr: number;
+  taxBaseMinor: number;
+  taxMinor: number;
   /** Total credited, PPN included. */
-  totalIdr: number;
+  totalMinor: number;
   issuedAt?: string;
   issuedDate?: string;
   issuedBy?: string | null;
@@ -1500,13 +1618,23 @@ export interface FleetCreditNote {
     number?: string;
     issuedDate?: string;
     periodLabel?: string;
-    totalIdr?: number;
+    totalMinor?: number;
     efakturNumber?: string | null;
     status?: string;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
   };
   accountId?: string;
   seller?: FleetSeller;
   buyer?: Record<string, unknown>;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  ppnDppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  dppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number;
+  /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+  totalIdr?: number;
 }
 
 export interface FleetCreditNoteRow {
@@ -1515,8 +1643,8 @@ export interface FleetCreditNoteRow {
   status: "issued" | "void";
   settlement: "invoice" | "refund" | "next_invoice";
   reason?: string;
-  total_idr: number;
-  ppn_idr?: number;
+  total_minor: number;
+  tax_minor?: number;
   issued_at?: string;
   refunded_at?: string | null;
   refund_reference?: string | null;
@@ -1529,6 +1657,10 @@ export interface FleetCreditNoteRow {
   applied_invoice?: string | null;
   /** Still to refund, or waiting for the next invoice. */
   pending: boolean;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number;
+  /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+  ppn_idr?: number;
 }
 
 export interface FleetInvoiceRow {
@@ -1540,9 +1672,9 @@ export interface FleetInvoiceRow {
   due_date?: string;
   sessions?: number;
   energy_wh?: number;
-  ppn_idr?: number;
-  roaming_total_idr?: number;
-  total_idr: number;
+  tax_minor?: number;
+  roaming_total_minor?: number;
+  total_minor: number;
   paid_at?: string | null;
   paid_reference?: string | null;
   voided_at?: string | null;
@@ -1554,10 +1686,22 @@ export interface FleetInvoiceRow {
   /** Issued, something still owed, and past its due date. */
   overdue: boolean;
   /** Credit notes settled against this invoice. */
-  credited_idr?: number;
+  credited_minor?: number;
   /** Earlier credit notes deducted from this invoice. */
-  prior_credit_idr?: number;
+  prior_credit_minor?: number;
   /** Still owed: total less both kinds of credit (0 once paid). */
+  balance_minor?: number;
+  /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+  ppn_idr?: number;
+  /** Deprecated: the v1.6 name of `roaming_total_minor`, present while the amount is in IDR. */
+  roaming_total_idr?: number;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number;
+  /** Deprecated: the v1.6 name of `credited_minor`, present while the amount is in IDR. */
+  credited_idr?: number;
+  /** Deprecated: the v1.6 name of `prior_credit_minor`, present while the amount is in IDR. */
+  prior_credit_idr?: number;
+  /** Deprecated: the v1.6 name of `balance_minor`, present while the amount is in IDR. */
   balance_idr?: number;
 }
 
@@ -1575,15 +1719,29 @@ export interface FleetSiteLine {
   sessions: number;
   energyWh: number;
   /** Energy, service and admin fees. */
-  subtotalIdr: number;
-  pbjtIdr: number;
+  subtotalMinor: number;
+  localTaxMinor: number;
   /** Price subject to PPN (e-Faktur TaxBase). */
-  taxBaseIdr: number;
+  taxableMinor: number;
   /** DPP nilai lain, 11/12 of the price. */
-  dppIdr: number;
-  ppnIdr: number;
-  totalIdr: number;
+  taxBaseMinor: number;
+  taxMinor: number;
+  totalMinor: number;
   untaxedSessions?: number;
+  /** Deprecated: the v1.6 name of `subtotalMinor`, present while the amount is in IDR. */
+  subtotalIdr?: number;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+  pbjtIdr?: number;
+  /** Deprecated: the v1.6 name of `taxableMinor`, present while the amount is in IDR. */
+  taxBaseIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  ppnDppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  dppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number;
+  /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+  totalIdr?: number;
 }
 
 /** A fleet account's month: a live draft of what is not yet invoiced, or the frozen invoice. */
@@ -1629,7 +1787,11 @@ export interface FleetStatement {
     holder?: string | null;
     sessions?: number;
     energyWh?: number;
+    totalMinor?: number;
+    roamingMinor?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
     totalIdr?: number;
+    /** Deprecated: the v1.6 name of `roamingMinor`, present while the amount is in IDR. */
     roamingIdr?: number;
   }[];
   sessions: {
@@ -1642,13 +1804,27 @@ export interface FleetStatement {
     cardUid: string;
     holder?: string | null;
     energyWh: number;
-    subtotalIdr?: number;
-    pbjtIdr?: number;
-    ppnDppIdr?: number;
+    subtotalMinor?: number;
+    localTaxMinor?: number;
+    taxBaseMinor?: number;
     ppnRateBps?: number;
-    ppnIdr?: number;
+    taxMinor?: number;
     /** The session receipt total. */
-    totalIdr: number;
+    totalMinor: number;
+    taxableMinor?: number;
+    /** Deprecated: the v1.6 name of `subtotalMinor`, present while the amount is in IDR. */
+    subtotalIdr?: number;
+    /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+    pbjtIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    ppnDppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    dppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+    ppnIdr?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
+    /** Deprecated: the v1.6 name of `taxableMinor`, present while the amount is in IDR. */
     taxBaseIdr?: number;
   }[];
   roaming: {
@@ -1663,51 +1839,91 @@ export interface FleetStatement {
     inclVat?: number | null;
     currency?: string;
     /** Re-billed amount. */
-    amountIdr: number;
+    amountMinor: number;
+    /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+    amountIdr?: number;
   }[];
   fees?: {
     subscriptionId?: string;
     planName?: string;
     subscriber?: string;
-    feeIdr?: number;
-    taxBaseIdr?: number;
-    dppIdr?: number;
-    ppnIdr?: number;
-    totalIdr?: number;
+    feeMinor?: number;
+    taxableMinor?: number;
+    taxBaseMinor?: number;
+    taxMinor?: number;
+    totalMinor?: number;
     periodStart?: string;
     periodEnd?: string;
+    /** Deprecated: the v1.6 name of `feeMinor`, present while the amount is in IDR. */
+    feeIdr?: number;
+    /** Deprecated: the v1.6 name of `taxableMinor`, present while the amount is in IDR. */
+    taxBaseIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    ppnDppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    dppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+    ppnIdr?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
   }[];
   totals: {
     sessions: number;
     energyWh: number;
-    subtotalIdr: number;
-    pbjtIdr: number;
-    taxBaseIdr: number;
-    dppIdr: number;
-    ppnIdr: number;
-    ownTotalIdr: number;
+    subtotalMinor: number;
+    localTaxMinor: number;
+    taxableMinor: number;
+    taxBaseMinor: number;
+    taxMinor: number;
+    ownTotalMinor: number;
     roamingSessions?: number;
-    roamingIdr: number;
+    roamingMinor: number;
     /** Membership fees incl. PPN. */
-    feesIdr?: number;
+    feesMinor?: number;
     /** Total due. */
-    totalIdr: number;
+    totalMinor: number;
     /** Sum of the per-session receipts. */
-    receiptsTotalIdr?: number;
+    receiptsTotalMinor?: number;
     /** Invoice minus receipts (PPN computed per invoice line). */
+    roundingMinor?: number;
+    /** Deprecated: the v1.6 name of `subtotalMinor`, present while the amount is in IDR. */
+    subtotalIdr?: number;
+    /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+    pbjtIdr?: number;
+    /** Deprecated: the v1.6 name of `taxableMinor`, present while the amount is in IDR. */
+    taxBaseIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    ppnDppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    dppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+    ppnIdr?: number;
+    /** Deprecated: the v1.6 name of `ownTotalMinor`, present while the amount is in IDR. */
+    ownTotalIdr?: number;
+    /** Deprecated: the v1.6 name of `roamingMinor`, present while the amount is in IDR. */
+    roamingIdr?: number;
+    /** Deprecated: the v1.6 name of `feesMinor`, present while the amount is in IDR. */
+    feesIdr?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
+    /** Deprecated: the v1.6 name of `receiptsTotalMinor`, present while the amount is in IDR. */
+    receiptsTotalIdr?: number;
+    /** Deprecated: the v1.6 name of `roundingMinor`, present while the amount is in IDR. */
     roundingIdr?: number;
   };
   warnings: string[];
   /** Credit notes settled against this invoice. */
-  creditedIdr?: number;
+  creditedMinor?: number;
   /** Earlier credit notes deducted from this invoice. */
-  priorCreditIdr?: number;
+  priorCreditMinor?: number;
   /** Still owed on an issued invoice (0 once paid or for a draft). */
-  balanceIdr?: number;
+  balanceMinor?: number;
   priorCredits?: {
     id?: string;
     number?: string;
     invoiceNumber?: string;
+    totalMinor?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
     totalIdr?: number;
   }[];
   creditNotes?: {
@@ -1716,12 +1932,22 @@ export interface FleetStatement {
     status?: "issued" | "void";
     settlement?: "invoice" | "refund" | "next_invoice";
     reason?: string;
-    totalIdr?: number;
-    ppnIdr?: number;
+    totalMinor?: number;
+    taxMinor?: number;
     issuedAt?: string;
     refundedAt?: string | null;
     applied?: boolean;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
+    /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+    ppnIdr?: number;
   }[];
+  /** Deprecated: the v1.6 name of `creditedMinor`, present while the amount is in IDR. */
+  creditedIdr?: number;
+  /** Deprecated: the v1.6 name of `priorCreditMinor`, present while the amount is in IDR. */
+  priorCreditIdr?: number;
+  /** Deprecated: the v1.6 name of `balanceMinor`, present while the amount is in IDR. */
+  balanceIdr?: number;
 }
 
 export interface Frame {
@@ -1759,6 +1985,8 @@ export interface IntegrationInput {
   /** Only the secrets to set or change; an empty or missing field keeps the stored one. */
   secrets?: Record<string, unknown>;
   enabled?: boolean;
+  /** Payments: the country of this acquirer account (one account per organisation and country; its currency follows). Stripe needs MY or SG; the Indonesian acquirers take ID only. MY/SG need MULTI_COUNTRY=true (409 otherwise). */
+  countryCode?: "ID" | "MY" | "SG";
 }
 
 export interface IntegrationKind {
@@ -1780,6 +2008,8 @@ export interface IntegrationKind {
     id?: string;
     scope?: "org" | "platform";
     provider?: string;
+    /** Payments: the country this acquirer account serves (ID for every v1.6 account). */
+    countryCode?: "ID" | "MY" | "SG";
     /** Non-secret settings. */
     settings?: Record<string, unknown>;
     /** Secret fields that are set, as a hint (last characters). Secret values are never returned. */
@@ -1825,28 +2055,36 @@ export interface LocalListSyncResult {
 export interface LoyaltyProgram {
   enabled: boolean;
   /** Points earned per Rp 1,000 of a session's receipt total (rounded down). */
-  earnPer1000Idr: number;
+  earnPer1000Minor: number;
   /** What one point takes off a session, in rupiah. */
-  pointValueIdr: number;
+  pointValueMinor: number;
   /** The most of a session's energy and fees points may pay, in basis points (5000 = half). */
   maxRedeemBps: number;
   /** Each earning expires this many months after it was earned; points are spent oldest first. */
   expiryMonths: number;
+  /** Deprecated: the v1.6 name of `earnPer1000Minor`, present while the amount is in IDR. */
+  earnPer1000Idr?: number;
+  /** Deprecated: the v1.6 name of `pointValueMinor`, present while the amount is in IDR. */
+  pointValueIdr?: number;
 }
 
 export interface LoyaltyStats {
   program: LoyaltyProgram;
   outstandingPoints: number;
   /** What the outstanding points are worth. */
-  liabilityIdr: number;
+  liabilityMinor: number;
   /** Drivers holding points. */
   members: number;
   thisMonth: {
     earned?: number;
     redeemed?: number;
-    discountIdr?: number;
+    discountMinor?: number;
     expired?: number;
+    /** Deprecated: the v1.6 name of `discountMinor`, present while the amount is in IDR. */
+    discountIdr?: number;
   };
+  /** Deprecated: the v1.6 name of `liabilityMinor`, present while the amount is in IDR. */
+  liabilityIdr?: number;
 }
 
 export interface Meta {
@@ -1891,6 +2129,39 @@ export interface MetaConsoleRole {
   siteScoped: boolean;
   ownerScoped?: boolean;
   description: string;
+}
+
+export interface MfaEnrolment {
+  /** The TOTP secret, base32 — for typing into an app that cannot scan. */
+  secret: string;
+  /** otpauth://totp/… (SHA1, 6 digits, 30 s). */
+  uri: string;
+  /** The URI as a PNG QR code (data: URL). */
+  qrDataUrl: string;
+}
+
+export interface MfaStatus {
+  enabled: boolean;
+  enabledAt: string | null;
+  recoveryCodesLeft: number;
+  /** Two-step verification is required for this account (an administrator, with CONSOLE_MFA_REQUIRED on). */
+  required: boolean;
+}
+
+/** The Microsoft Entra tenant the organisation connected for “Sign in with Microsoft”. */
+export interface MicrosoftTenant {
+  /** The Entra directory (tenant) id, from the validated sign-in that connected it. */
+  tenantId: string;
+  /** When not empty, a first Microsoft sign-in is matched to a console user only by an address in one of these domains. */
+  allowedDomains: string[];
+  linkedAt: string;
+  /** The administrator who connected it. */
+  linkedBy: {
+    id: string;
+    name: string;
+  } | null;
+  /** The Microsoft account that proved control of the tenant. */
+  linkedByAccount: string | null;
 }
 
 export interface OcpiMessage {
@@ -1959,6 +2230,46 @@ export interface OnboardingCharger {
   online: boolean;
   /** Where the charger is: waiting for its first connection, refused at the handshake, connected but not activated, getting its certificate, or connected. */
   stage: "waiting" | "registered" | "refused" | "awaiting_activation" | "certificate_in_progress" | "needs_certificate" | "connected";
+}
+
+export interface OrgSettings {
+  name?: string;
+  /** ID, MY or SG. */
+  homeCountry: string;
+  /** Reporting time zone (IANA). */
+  timezone: string;
+  defaultLocale: "id" | "en";
+  /** Whether Malaysia and Singapore are enabled on this platform. */
+  multiCountry?: boolean;
+  /** Indonesia: the PKP status billing applies (organisation record), shown when no registration row exists. */
+  indonesiaPkp?: {
+    registered: boolean;
+    npwp: string | null;
+  };
+  /** Active sites per country code. */
+  sitesByCountry?: Record<string, number>;
+  countries: {
+    code?: string;
+    name?: string;
+    currency?: string;
+    timezones?: string[];
+    scheme?: string;
+    displayPricesInclTax?: boolean;
+  }[];
+  taxRegistrations: {
+    id: string;
+    countryCode: string;
+    /** ID_PKP, MY_SST or SG_GST. */
+    scheme: string;
+    registrationNo?: string | null;
+    registered: boolean;
+    evChargingTaxable?: boolean;
+    rateBps?: number | null;
+    effectiveFrom: string;
+    effectiveTo?: string | null;
+    createdAt?: string;
+    createdBy?: string | null;
+  }[];
 }
 
 export interface OwnerInput {
@@ -2206,15 +2517,19 @@ export interface Promotion {
   min_kwh?: number;
   max_redemptions?: number | null;
   max_per_customer?: number | null;
-  budget_idr?: number | null;
+  budget_minor?: number | null;
   stacks_with_membership: boolean;
   active: boolean;
   created_at?: string;
   updated_at?: string;
   redemptions?: number;
   /** Discount given so far. */
-  discount_idr?: number;
+  discount_minor?: number;
   customers?: number;
+  /** Deprecated: the v1.6 name of `budget_minor`, present while the amount is in IDR. */
+  budget_idr?: number | null;
+  /** Deprecated: the v1.6 name of `discount_minor`, present while the amount is in IDR. */
+  discount_idr?: number;
 }
 
 export interface PromotionInput {
@@ -2236,9 +2551,13 @@ export interface PromotionInput {
   minKwh?: number;
   maxRedemptions?: number | null;
   maxPerCustomer?: number | null;
-  budgetIdr?: number | null;
+  budgetMinor?: number | null;
   stacksWithMembership?: boolean;
   active?: boolean;
+  /** Set when created (default IDR); fixed after. Applies to sessions in it only. */
+  currency?: "IDR" | "MYR" | "SGD";
+  /** Deprecated: the v1.6 name of `budgetMinor`, present while the amount is in IDR. */
+  budgetIdr?: number | null;
 }
 
 export interface QuirkProfile {
@@ -2263,8 +2582,8 @@ export interface RefundOutcome {
 export interface RefundRow {
   id: string;
   refund_state: "due" | "processing" | "refunded" | "failed";
-  refund_due_idr?: number | null;
-  refunded_idr?: number | null;
+  refund_due_minor?: number | null;
+  refunded_minor?: number | null;
   refund_reason?: string | null;
   refund_method?: "provider" | "manual" | null;
   refund_ref?: string | null;
@@ -2274,7 +2593,7 @@ export interface RefundRow {
   provider: string;
   provider_ref?: string | null;
   method: string;
-  amount_captured_idr?: number | null;
+  amount_captured_minor?: number | null;
   paid_at: string;
   session_id?: string | null;
   site_name?: string | null;
@@ -2282,13 +2601,33 @@ export interface RefundRow {
   connector_no?: number | null;
   driver_phone?: string | null;
   refunded_by_name?: string | null;
+  /** Deprecated: the v1.6 name of `refund_due_minor`, present while the amount is in IDR. */
+  refund_due_idr?: number | null;
+  /** Deprecated: the v1.6 name of `refunded_minor`, present while the amount is in IDR. */
+  refunded_idr?: number | null;
+  /** Deprecated: the v1.6 name of `amount_captured_minor`, present while the amount is in IDR. */
+  amount_captured_idr?: number | null;
 }
 
 export interface RefundSummary {
   due_count: number;
-  due_idr: number;
+  /** Rupiah (IDR); other currencies are in by_currency. */
+  due_minor: number;
   failed_count: number;
-  refunded_30d_idr: number;
+  refunded_30d_minor: number;
+  by_currency?: {
+    currency?: string;
+    due_minor?: number;
+    refunded_30d_minor?: number;
+    /** Deprecated: the v1.6 name of `due_minor`, present while the amount is in IDR. */
+    due_idr?: number;
+    /** Deprecated: the v1.6 name of `refunded_30d_minor`, present while the amount is in IDR. */
+    refunded_30d_idr?: number;
+  }[];
+  /** Deprecated: the v1.6 name of `due_minor`, present while the amount is in IDR. */
+  due_idr?: number;
+  /** Deprecated: the v1.6 name of `refunded_30d_minor`, present while the amount is in IDR. */
+  refunded_30d_idr?: number;
 }
 
 export interface RoamingAbroadCdr {
@@ -2348,11 +2687,21 @@ export interface RoamingCard {
   /** eMAID-style contract id, given when the card is first shared. */
   contract_id?: string | null;
   energy_limit_wh?: number | null;
-  spend_limit_idr?: number | null;
+  spend_limit_minor?: number | null;
   /** Charge records received for this card from other networks. */
   roaming_cdrs: number;
-  /** Total IDR charged to this card on other networks. */
-  roaming_idr: number;
+  /** Charged to this card on other networks in its spending-limit currency (minor units). */
+  roaming_minor: number;
+  /** The currency of the spending limit (IDR, MYR or SGD). */
+  spend_limit_currency?: string;
+  roaming_currency?: string;
+  roaming_cdrs_held?: number;
+  /** Charged on other networks per currency (minor units); never added across currencies. */
+  roaming_by_currency?: Record<string, number>;
+  /** Deprecated: the v1.6 name of `spend_limit_minor`, present while the amount is in IDR. */
+  spend_limit_idr?: number | null;
+  /** Deprecated: the v1.6 name of `roaming_minor`, present while the amount is in IDR. */
+  roaming_idr?: number;
 }
 
 export interface RoamingChargingLimit {
@@ -2440,8 +2789,10 @@ export interface RoamingNetworkLocation {
 }
 
 export interface RoamingOverview {
-  /** This operator’s roaming identity, or null until set. */
+  /** This operator’s roaming identity (the home party), or null until set. */
   party: RoamingParty | null;
+  /** Every OCPI party of the operator, one per country, the home party first. */
+  parties?: RoamingPartyOfCountry[];
   /** Our OCPI versions URL, to give to partners. */
   versionsUrl: string;
   partners: RoamingPartnerSummary[];
@@ -2526,6 +2877,15 @@ export interface RoamingParty {
   website?: string | null;
 }
 
+export interface RoamingPartyOfCountry {
+  country_code: string;
+  party_id: string;
+  business_name: string;
+  website?: string | null;
+  /** The home party: the eMSP identity and the one connections are made with. */
+  is_home: boolean;
+}
+
 export interface RoamingSession {
   id: string;
   started_at: string;
@@ -2540,9 +2900,11 @@ export interface RoamingSession {
   visual_number?: string | null;
   site_name: string;
   ocpp_identity: string;
-  total_idr?: number | null;
+  total_minor?: number | null;
   /** State of the CDR delivery to the partner: pending | delivered | failed, or null before one is queued. */
   cdr_push_state?: string | null;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number | null;
 }
 
 export interface RoamingSite {
@@ -2651,14 +3013,32 @@ export interface SandboxSummary {
 }
 
 export interface SessionBreakdown {
-  energySubtotalIdr?: number | null;
-  serviceFeeIdr?: number | null;
-  idleFeeIdr?: number | null;
-  pbjtIdr?: number | null;
-  dppIdr?: number | null;
-  ppnIdr?: number | null;
+  energySubtotalMinor?: number | null;
+  serviceFeeMinor?: number | null;
+  idleFeeMinor?: number | null;
+  localTaxMinor?: number | null;
+  taxBaseMinor?: number | null;
+  taxMinor?: number | null;
   /** Estimated QRIS MDR (the operator’s cost, not charged to the driver). */
-  mdrIdr: number;
+  mdrMinor: number;
+  grossTotalMinor?: number | null;
+  /** Deprecated: the v1.6 name of `energySubtotalMinor`, present while the amount is in IDR. */
+  energySubtotalIdr?: number | null;
+  /** Deprecated: the v1.6 name of `serviceFeeMinor`, present while the amount is in IDR. */
+  serviceFeeIdr?: number | null;
+  /** Deprecated: the v1.6 name of `idleFeeMinor`, present while the amount is in IDR. */
+  idleFeeIdr?: number | null;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+  pbjtIdr?: number | null;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  ppnDppIdr?: number | null;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  dppIdr?: number | null;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number | null;
+  /** Deprecated: the v1.6 name of `mdrMinor`, present while the amount is in IDR. */
+  mdrIdr?: number;
+  /** Deprecated: the v1.6 name of `grossTotalMinor`, present while the amount is in IDR. */
   grossTotalIdr?: number | null;
 }
 
@@ -2680,7 +3060,7 @@ export interface SessionDetail {
   meter_stop_wh?: number | null;
   energy_wh: number;
   duration_s?: number | null;
-  prepaid_amount_idr?: number | null;
+  prepaid_amount_minor?: number | null;
   prepaid_energy_wh?: number | null;
   payment_mode?: string | null;
   created_at?: string;
@@ -2701,12 +3081,12 @@ export interface SessionDetail {
   ocpi_authorization_reference?: string | null;
   /** Frozen CDR lines; null until the session is rated. */
   lines?: unknown[] | null;
-  subtotal_idr?: number | null;
-  pbjt_idr?: number | null;
-  pbjt_rate_bps?: number | null;
-  ppn_dpp_idr?: number | null;
-  ppn_idr?: number | null;
-  total_idr?: number | null;
+  subtotal_minor?: number | null;
+  local_tax_minor?: number | null;
+  local_tax_rate_bps?: number | null;
+  tax_base_minor?: number | null;
+  tax_minor?: number | null;
+  total_minor?: number | null;
   tariff_snapshot?: Record<string, unknown> | null;
   regulatory_flags?: unknown[] | null;
   /** Energy the car gave back (bidirectional charging), from the export register. */
@@ -2734,13 +3114,33 @@ export interface SessionDetail {
     consent?: boolean;
     consentSource?: "driver" | "fleet" | null;
     minSocPercent?: number | null;
-    creditIdrPerKwh?: number | null;
-    creditIdr?: number;
+    creditMinorPerKwh?: number | null;
+    creditMinor?: number;
     discharging?: boolean;
     dischargeW?: number | null;
     notDischargingBecause?: string | null;
     canOffer?: boolean;
+    /** Deprecated: the v1.6 name of `creditMinorPerKwh`, present while the amount is in IDR. */
+    creditIdrPerKwh?: number | null;
+    /** Deprecated: the v1.6 name of `creditMinor`, present while the amount is in IDR. */
+    creditIdr?: number;
   } | null;
+  /** Deprecated: the v1.6 name of `prepaid_amount_minor`, present while the amount is in IDR. */
+  prepaid_amount_idr?: number | null;
+  /** Deprecated: the v1.6 name of `subtotal_minor`, present while the amount is in IDR. */
+  subtotal_idr?: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_minor`, present while the amount is in IDR. */
+  pbjt_idr?: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_rate_bps`, present while the amount is in IDR. */
+  pbjt_rate_bps?: number | null;
+  /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+  ppn_dpp_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+  dpp_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+  ppn_idr?: number | null;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number | null;
 }
 
 export interface SessionListItem {
@@ -2758,17 +3158,17 @@ export interface SessionListItem {
   flags?: unknown[];
   idle_minutes: number;
   payment_mode?: string | null;
-  prepaid_amount_idr?: number | null;
+  prepaid_amount_minor?: number | null;
   /** Unfiltered listing only. */
   prepaid_energy_wh?: number | null;
   ocpp_identity: string;
   evse_no: number;
   site_name: string;
-  total_idr?: number | null;
-  subtotal_idr?: number | null;
-  pbjt_idr?: number | null;
-  ppn_idr?: number | null;
-  ppn_dpp_idr?: number | null;
+  total_minor?: number | null;
+  subtotal_minor?: number | null;
+  local_tax_minor?: number | null;
+  tax_minor?: number | null;
+  tax_base_minor?: number | null;
   /** Frozen CDR lines (unfiltered listing only; filtered results carry `breakdown` instead). */
   lines?: unknown[] | null;
   regulatory_flags?: unknown[] | null;
@@ -2784,14 +3184,32 @@ export interface SessionListItem {
   /** Always null for site-scoped callers. */
   holder_name?: string | null;
   cdr_id?: string | null;
-  pbjt_rate_bps?: number | null;
-  ppn_rate_bps?: number | null;
+  local_tax_rate_bps?: number | null;
+  tax_rate_bps?: number | null;
   issued_at?: string | null;
   payment_method?: string | null;
   payment_state?: string | null;
   /** paid | invoiced | pending | unbilled | review | in_progress | failed | refunded | free. */
   payment_status?: string;
   breakdown?: SessionBreakdown;
+  /** Deprecated: the v1.6 name of `prepaid_amount_minor`, present while the amount is in IDR. */
+  prepaid_amount_idr?: number | null;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number | null;
+  /** Deprecated: the v1.6 name of `subtotal_minor`, present while the amount is in IDR. */
+  subtotal_idr?: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_minor`, present while the amount is in IDR. */
+  pbjt_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+  ppn_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+  ppn_dpp_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+  dpp_idr?: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_rate_bps`, present while the amount is in IDR. */
+  pbjt_rate_bps?: number | null;
+  /** Deprecated: the v1.6 name of `tax_rate_bps`, present while the amount is in IDR. */
+  ppn_rate_bps?: number | null;
 }
 
 export interface SessionMeterValue {
@@ -2817,15 +3235,33 @@ export interface SessionRerateResult {
 }
 
 export interface SessionSearchBreakdown {
-  energySubtotalIdr: number | null;
-  serviceFeeIdr: number | null;
-  idleFeeIdr: number | null;
-  pbjtIdr: number | null;
-  dppIdr: number | null;
-  ppnIdr: number | null;
+  energySubtotalMinor: number | null;
+  serviceFeeMinor: number | null;
+  idleFeeMinor: number | null;
+  localTaxMinor: number | null;
+  taxBaseMinor: number | null;
+  taxMinor: number | null;
   /** Estimated QRIS MDR (operator cost, not charged to the driver); 0 for other methods. */
-  mdrIdr: number;
-  grossTotalIdr: number | null;
+  mdrMinor: number;
+  grossTotalMinor: number | null;
+  /** Deprecated: the v1.6 name of `energySubtotalMinor`, present while the amount is in IDR. */
+  energySubtotalIdr?: number | null;
+  /** Deprecated: the v1.6 name of `serviceFeeMinor`, present while the amount is in IDR. */
+  serviceFeeIdr?: number | null;
+  /** Deprecated: the v1.6 name of `idleFeeMinor`, present while the amount is in IDR. */
+  idleFeeIdr?: number | null;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+  pbjtIdr?: number | null;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  ppnDppIdr?: number | null;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  dppIdr?: number | null;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number | null;
+  /** Deprecated: the v1.6 name of `mdrMinor`, present while the amount is in IDR. */
+  mdrIdr?: number;
+  /** Deprecated: the v1.6 name of `grossTotalMinor`, present while the amount is in IDR. */
+  grossTotalIdr?: number | null;
 }
 
 export interface SessionSearchResult {
@@ -2834,9 +3270,15 @@ export interface SessionSearchResult {
   totals: {
     sessions: number;
     energy_wh: number;
-    revenue_idr: number;
-    pbjt_idr: number;
-    ppn_idr: number;
+    revenue_minor: number;
+    local_tax_minor: number;
+    tax_minor: number;
+    /** Deprecated: the v1.6 name of `revenue_minor`, present while the amount is in IDR. */
+    revenue_idr?: number;
+    /** Deprecated: the v1.6 name of `local_tax_minor`, present while the amount is in IDR. */
+    pbjt_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+    ppn_idr?: number;
   };
   limit: number;
   offset: number;
@@ -2857,7 +3299,7 @@ export interface SessionSearchRow {
   review_reason?: string | null;
   idle_minutes?: number;
   payment_mode?: string | null;
-  prepaid_amount_idr?: number | null;
+  prepaid_amount_minor?: number | null;
   ocpp_identity: string;
   display_name?: string | null;
   evse_no?: number;
@@ -2870,19 +3312,37 @@ export interface SessionSearchRow {
   /** Always null for site-scoped users. */
   holder_name?: string | null;
   cdr_id?: string | null;
-  subtotal_idr?: number | null;
-  pbjt_idr?: number | null;
-  pbjt_rate_bps?: number | null;
-  ppn_dpp_idr?: number | null;
-  ppn_rate_bps?: number | null;
-  ppn_idr?: number | null;
-  total_idr?: number | null;
+  subtotal_minor?: number | null;
+  local_tax_minor?: number | null;
+  local_tax_rate_bps?: number | null;
+  tax_base_minor?: number | null;
+  tax_rate_bps?: number | null;
+  tax_minor?: number | null;
+  total_minor?: number | null;
   regulatory_flags?: unknown[] | null;
   issued_at?: string | null;
   payment_method?: string | null;
   payment_state?: string | null;
   payment_status: string;
   breakdown: SessionSearchBreakdown;
+  /** Deprecated: the v1.6 name of `prepaid_amount_minor`, present while the amount is in IDR. */
+  prepaid_amount_idr?: number | null;
+  /** Deprecated: the v1.6 name of `subtotal_minor`, present while the amount is in IDR. */
+  subtotal_idr?: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_minor`, present while the amount is in IDR. */
+  pbjt_idr?: number | null;
+  /** Deprecated: the v1.6 name of `local_tax_rate_bps`, present while the amount is in IDR. */
+  pbjt_rate_bps?: number | null;
+  /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+  ppn_dpp_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+  dpp_idr?: number | null;
+  /** Deprecated: the v1.6 name of `tax_rate_bps`, present while the amount is in IDR. */
+  ppn_rate_bps?: number | null;
+  /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+  ppn_idr?: number | null;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number | null;
 }
 
 export interface SignedMeterData {
@@ -2957,7 +3417,7 @@ export interface SiteDetail {
   slo_issuer?: string | null;
   slo_issued_at?: string | null;
   slo_expires_at?: string | null;
-  pbjt_rate_bps?: number;
+  local_tax_rate_bps?: number;
   /** Minutes a charger here may be offline before the critical alert; null = the fleet default (OFFLINE_ALERT_MINUTES). */
   offline_alert_minutes?: number | null;
   /** The driver queue is on at this site. */
@@ -2969,7 +3429,7 @@ export interface SiteDetail {
   /** Longest wait before a place in the queue ends. */
   queue_max_wait_minutes?: number;
   /** Fee for reserving a connector here in the driver app, before PPN; 0 = free. */
-  reservation_fee_idr?: number;
+  reservation_fee_minor?: number;
   /** Bidirectional charging programme: cars whose drivers agree may give energy back (OCPP 2.1). */
   v2x_enabled?: boolean;
   /** Local hours when cars may give energy back (HH:MM; to < from wraps midnight). */
@@ -2984,7 +3444,7 @@ export interface SiteDetail {
   /** Battery floor: no car is discharged below it (a driver may choose a higher one). */
   v2x_min_soc_percent?: number;
   /** Driver credit per kWh given back, taken off the session before tax. */
-  v2x_credit_idr_per_kwh?: number;
+  v2x_credit_minor_per_kwh?: number;
   /** Signed meter data (OCMF): ignored, kept and checked (default), or required to bill a session. */
   signed_meter_policy?: "off" | "record" | "require";
   archived_at?: string | null;
@@ -2999,22 +3459,36 @@ export interface SiteDetail {
   strategy?: string | null;
   curtailed?: boolean | null;
   computed: SiteComputed;
+  /** Deprecated: the v1.6 name of `local_tax_rate_bps`, present while the amount is in IDR. */
+  pbjt_rate_bps?: number;
+  /** Deprecated: the v1.6 name of `reservation_fee_minor`, present while the amount is in IDR. */
+  reservation_fee_idr?: number;
+  /** Deprecated: the v1.6 name of `v2x_credit_minor_per_kwh`, present while the amount is in IDR. */
+  v2x_credit_idr_per_kwh?: number;
 }
 
 /** Site fields. On update only the fields sent are changed; an empty string clears a text field. Validation runs at save time. */
 export interface SiteInput {
+  /** The site's country: its currency, time zones, tax and regulation follow. Default: the organisation's home country. MY and SG need MULTI_COUNTRY=true; it cannot change once the site has a session (409). */
+  countryCode?: "ID" | "MY" | "SG";
+  /** Per-site tax override honoured by every tax engine, e.g. { "exempt": true, "reason": "private depot" }. */
+  taxOverrides?: {
+    exempt?: boolean;
+    reason?: string;
+  };
   name?: string;
   address?: string | null;
   city?: string | null;
-  /** 5-digit Indonesian postal code. */
+  /** Postal code of the site's country: 5 digits (ID, MY), 6 digits (SG). */
   postalCode?: string | null;
-  /** 4-digit BPS kabupaten/kota code, e.g. 3171. */
+  /** 4-digit BPS kabupaten/kota code, e.g. 3171. Indonesian sites only. */
   kabupatenKotaCode?: string | null;
-  /** Latitude within Indonesia (-11.5 to 6.5). */
+  /** Latitude within the site's country (Indonesia -11.5 to 6.5). */
   lat?: number | null;
-  /** Longitude within Indonesia (94 to 141.5). */
+  /** Longitude within the site's country (Indonesia 94 to 141.5). */
   lon?: number | null;
-  timezone?: "Asia/Jakarta" | "Asia/Makassar" | "Asia/Jayapura";
+  /** One of the country's zones (ID: WIB, WITA, WIT; MY: MYT; SG: SGT). Default: the country's first. */
+  timezone?: "Asia/Jakarta" | "Asia/Pontianak" | "Asia/Makassar" | "Asia/Jayapura" | "Asia/Kuala_Lumpur" | "Asia/Kuching" | "Asia/Singapore";
   /** PLN tariff group, e.g. L/TR, L/TM, B-2/TR, B-3/TM, I-3/TM. */
   gridTariffGroup?: string | null;
   /** Subscribed capacity in kVA (0 < kVA <= 100000). Above 200 kVA a TR/TM warning is returned. */
@@ -3034,7 +3508,7 @@ export interface SiteInput {
   /** YYYY-MM-DD, after sloIssuedAt. */
   sloExpiresAt?: string | null;
   /** PBJT-TL rate in basis points (1000 = 10%). */
-  pbjtRateBps?: number;
+  localTaxRateBps?: number;
   /** Minutes a charger here may be offline before the critical "charger offline" alert. Null or empty = the fleet default (OFFLINE_ALERT_MINUTES). */
   offlineAlertMinutes?: number | null;
   /** Driver queue on or off. Switching it off ends the places of drivers still waiting (they are told). */
@@ -3046,7 +3520,7 @@ export interface SiteInput {
   /** Longest wait; a place ends after it. */
   queueMaxWaitMinutes?: number;
   /** Fee for reserving a connector here in the driver app, before PPN (added when the operator is PKP). App drivers pay it before the connector is held; a fleet card’s goes on the fleet invoice. Kept once held; not charged when the charger refuses or the driver cancels within 2 minutes. 0 or empty = free. */
-  reservationFeeIdr?: number;
+  reservationFeeMinor?: number;
   /** Bidirectional charging programme (V2G / V2B). Needs OCPP 2.1 chargers and ISO 15118-20 cars; nothing discharges without the driver’s or the fleet’s consent. */
   v2xEnabled?: boolean;
   /** When cars may give energy back, in local time: [{from, to}] or text such as "17:00-22:00, 05:00-07:00". 00:00-00:00 is all day. */
@@ -3063,6 +3537,12 @@ export interface SiteInput {
   /** Signed meter data (OCMF, from calibration-law meters). record: kept, checked against the connector’s meter key and the bill, problems flagged. require: a session is billed only when its signed start and end readings verify against the registered key and match the bill; otherwise it is parked for review. off: ignored. */
   signedMeterPolicy?: "off" | "record" | "require";
   /** Driver credit per kWh given back, taken off the session before PBJT-TL and PPN (never below zero). Fixed for a session when the driver agrees. */
+  v2xCreditMinorPerKwh?: number;
+  /** Deprecated: the v1.6 name of `localTaxRateBps`, present while the amount is in IDR. */
+  pbjtRateBps?: number;
+  /** Deprecated: the v1.6 name of `reservationFeeMinor`, present while the amount is in IDR. */
+  reservationFeeIdr?: number;
+  /** Deprecated: the v1.6 name of `v2xCreditMinorPerKwh`, present while the amount is in IDR. */
   v2xCreditIdrPerKwh?: number;
 }
 
@@ -3088,7 +3568,7 @@ export interface SiteListItem {
   slo_issuer?: string | null;
   slo_issued_at?: string | null;
   slo_expires_at?: string | null;
-  pbjt_rate_bps?: number;
+  local_tax_rate_bps?: number;
   /** Minutes a charger here may be offline before the critical alert; null = the fleet default (OFFLINE_ALERT_MINUTES). */
   offline_alert_minutes?: number | null;
   /** The driver queue is on at this site. */
@@ -3100,7 +3580,7 @@ export interface SiteListItem {
   /** Longest wait before a place in the queue ends. */
   queue_max_wait_minutes?: number;
   /** Fee for reserving a connector here in the driver app, before PPN; 0 = free. */
-  reservation_fee_idr?: number;
+  reservation_fee_minor?: number;
   /** Bidirectional charging programme: cars whose drivers agree may give energy back (OCPP 2.1). */
   v2x_enabled?: boolean;
   /** Local hours when cars may give energy back (HH:MM; to < from wraps midnight). */
@@ -3115,7 +3595,7 @@ export interface SiteListItem {
   /** Battery floor: no car is discharged below it (a driver may choose a higher one). */
   v2x_min_soc_percent?: number;
   /** Driver credit per kWh given back, taken off the session before tax. */
-  v2x_credit_idr_per_kwh?: number;
+  v2x_credit_minor_per_kwh?: number;
   /** Signed meter data (OCMF): ignored, kept and checked (default), or required to bill a session. */
   signed_meter_policy?: "off" | "record" | "require";
   archived_at?: string | null;
@@ -3136,6 +3616,12 @@ export interface SiteListItem {
   live_status: "empty" | "online" | "offline" | "partial";
   computed: SiteComputed;
   spklu_valid?: boolean | null;
+  /** Deprecated: the v1.6 name of `local_tax_rate_bps`, present while the amount is in IDR. */
+  pbjt_rate_bps?: number;
+  /** Deprecated: the v1.6 name of `reservation_fee_minor`, present while the amount is in IDR. */
+  reservation_fee_idr?: number;
+  /** Deprecated: the v1.6 name of `v2x_credit_minor_per_kwh`, present while the amount is in IDR. */
+  v2x_credit_idr_per_kwh?: number;
 }
 
 export interface SiteSaved {
@@ -3192,16 +3678,36 @@ export interface StatementChargerLine {
   activeDays?: number;
   sessions: number;
   energyWh?: number;
-  gtvIdr?: number;
-  pbjtIdr?: number;
-  ppnIdr?: number;
-  grossIdr?: number;
-  mdrIdr?: number;
+  gtvMinor?: number;
+  localTaxMinor?: number;
+  taxMinor?: number;
+  grossMinor?: number;
+  mdrMinor?: number;
   inReview?: number;
+  commissionMinor?: number;
+  minimumMinor?: number;
+  topUpMinor?: number;
+  privateFeeMinor?: number;
+  feeMinor?: number;
+  /** Deprecated: the v1.6 name of `gtvMinor`, present while the amount is in IDR. */
+  gtvIdr?: number;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+  pbjtIdr?: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number;
+  /** Deprecated: the v1.6 name of `grossMinor`, present while the amount is in IDR. */
+  grossIdr?: number;
+  /** Deprecated: the v1.6 name of `mdrMinor`, present while the amount is in IDR. */
+  mdrIdr?: number;
+  /** Deprecated: the v1.6 name of `commissionMinor`, present while the amount is in IDR. */
   commissionIdr?: number;
+  /** Deprecated: the v1.6 name of `minimumMinor`, present while the amount is in IDR. */
   minimumIdr?: number;
+  /** Deprecated: the v1.6 name of `topUpMinor`, present while the amount is in IDR. */
   topUpIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeMinor`, present while the amount is in IDR. */
   privateFeeIdr?: number;
+  /** Deprecated: the v1.6 name of `feeMinor`, present while the amount is in IDR. */
   feeIdr?: number;
 }
 
@@ -3209,16 +3715,34 @@ export interface StatementFinalisedRow {
   /** A calendar month, YYYY-MM. */
   period: string;
   number: string;
-  gtv_idr: number;
-  commission_idr: number;
-  minimum_topup_idr?: number;
-  private_fee_idr?: number;
-  mdr_credit_idr?: number;
-  net_idr: number;
-  ppn_idr: number;
-  total_idr: number;
-  owner_share_idr?: number | null;
+  gtv_minor: number;
+  commission_minor: number;
+  minimum_topup_minor?: number;
+  private_fee_minor?: number;
+  mdr_credit_minor?: number;
+  net_minor: number;
+  tax_minor: number;
+  total_minor: number;
+  owner_share_minor?: number | null;
   finalised_at: string;
+  /** Deprecated: the v1.6 name of `gtv_minor`, present while the amount is in IDR. */
+  gtv_idr?: number;
+  /** Deprecated: the v1.6 name of `commission_minor`, present while the amount is in IDR. */
+  commission_idr?: number;
+  /** Deprecated: the v1.6 name of `minimum_topup_minor`, present while the amount is in IDR. */
+  minimum_topup_idr?: number;
+  /** Deprecated: the v1.6 name of `private_fee_minor`, present while the amount is in IDR. */
+  private_fee_idr?: number;
+  /** Deprecated: the v1.6 name of `mdr_credit_minor`, present while the amount is in IDR. */
+  mdr_credit_idr?: number;
+  /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+  net_idr?: number;
+  /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+  ppn_idr?: number;
+  /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+  total_idr?: number;
+  /** Deprecated: the v1.6 name of `owner_share_minor`, present while the amount is in IDR. */
+  owner_share_idr?: number | null;
 }
 
 export interface StatementParty {
@@ -3230,29 +3754,47 @@ export interface StatementParty {
 export interface StatementPlan {
   tiers: StatementTier[];
   tierMode: "whole" | "marginal";
-  minPerChargerAcIdr: number;
-  minPerChargerDcIdr: number;
-  privateFeeAcIdr: number;
-  privateFeeDcIdr: number;
+  minPerChargerAcMinor: number;
+  minPerChargerDcMinor: number;
+  privateFeeAcMinor: number;
+  privateFeeDcMinor: number;
   mdrBorneBy: "platform" | "site_owner";
   prorate: boolean;
+  /** Deprecated: the v1.6 name of `minPerChargerAcMinor`, present while the amount is in IDR. */
+  minPerChargerAcIdr?: number;
+  /** Deprecated: the v1.6 name of `minPerChargerDcMinor`, present while the amount is in IDR. */
+  minPerChargerDcIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeAcMinor`, present while the amount is in IDR. */
+  privateFeeAcIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeDcMinor`, present while the amount is in IDR. */
+  privateFeeDcIdr?: number;
 }
 
 /** Fields left out take the published rates. */
 export interface StatementPlanInput {
-  /** Ascending upper bounds (exclusive); the last tier has upToIdr null. */
+  /** Ascending upper bounds (exclusive); the last tier has upToMinor null. */
   tiers?: {
     name?: string;
-    upToIdr?: number | null;
+    upToMinor?: number | null;
     rateBps: number;
+    /** Deprecated: the v1.6 name of `upToMinor`, present while the amount is in IDR. */
+    upToIdr?: number | null;
   }[];
   tierMode?: "whole" | "marginal";
-  minPerChargerAcIdr?: number;
-  minPerChargerDcIdr?: number;
-  privateFeeAcIdr?: number;
-  privateFeeDcIdr?: number;
+  minPerChargerAcMinor?: number;
+  minPerChargerDcMinor?: number;
+  privateFeeAcMinor?: number;
+  privateFeeDcMinor?: number;
   mdrBorneBy?: "platform" | "site_owner";
   prorate?: boolean;
+  /** Deprecated: the v1.6 name of `minPerChargerAcMinor`, present while the amount is in IDR. */
+  minPerChargerAcIdr?: number;
+  /** Deprecated: the v1.6 name of `minPerChargerDcMinor`, present while the amount is in IDR. */
+  minPerChargerDcIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeAcMinor`, present while the amount is in IDR. */
+  privateFeeAcIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeDcMinor`, present while the amount is in IDR. */
+  privateFeeDcIdr?: number;
 }
 
 export interface StatementSiteLine {
@@ -3263,47 +3805,109 @@ export interface StatementSiteLine {
   rateBps?: number | null;
   sessions?: number;
   energyKwh?: number;
-  gtvIdr?: number;
-  pbjtIdr?: number;
-  ppnIdr?: number;
-  grossIdr?: number;
-  commissionIdr?: number;
-  minimumTopUpIdr?: number;
-  privateFeeIdr?: number;
-  feeIdr?: number;
-  mdrIdr?: number;
-  mdrCreditIdr?: number;
-  platformShareIdr?: number;
-  ownerShareIdr?: number;
+  gtvMinor?: number;
+  localTaxMinor?: number;
+  taxMinor?: number;
+  grossMinor?: number;
+  commissionMinor?: number;
+  minimumTopUpMinor?: number;
+  privateFeeMinor?: number;
+  feeMinor?: number;
+  mdrMinor?: number;
+  mdrCreditMinor?: number;
+  platformShareMinor?: number;
+  ownerShareMinor?: number;
   warnings?: string[];
   chargers: StatementChargerLine[];
+  /** Deprecated: the v1.6 name of `gtvMinor`, present while the amount is in IDR. */
+  gtvIdr?: number;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+  pbjtIdr?: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number;
+  /** Deprecated: the v1.6 name of `grossMinor`, present while the amount is in IDR. */
+  grossIdr?: number;
+  /** Deprecated: the v1.6 name of `commissionMinor`, present while the amount is in IDR. */
+  commissionIdr?: number;
+  /** Deprecated: the v1.6 name of `minimumTopUpMinor`, present while the amount is in IDR. */
+  minimumTopUpIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeMinor`, present while the amount is in IDR. */
+  privateFeeIdr?: number;
+  /** Deprecated: the v1.6 name of `feeMinor`, present while the amount is in IDR. */
+  feeIdr?: number;
+  /** Deprecated: the v1.6 name of `mdrMinor`, present while the amount is in IDR. */
+  mdrIdr?: number;
+  /** Deprecated: the v1.6 name of `mdrCreditMinor`, present while the amount is in IDR. */
+  mdrCreditIdr?: number;
+  /** Deprecated: the v1.6 name of `platformShareMinor`, present while the amount is in IDR. */
+  platformShareIdr?: number;
+  /** Deprecated: the v1.6 name of `ownerShareMinor`, present while the amount is in IDR. */
+  ownerShareIdr?: number;
 }
 
 export interface StatementTier {
   name: string;
-  upToIdr: number | null;
+  upToMinor: number | null;
   rateBps: number;
+  /** Deprecated: the v1.6 name of `upToMinor`, present while the amount is in IDR. */
+  upToIdr?: number | null;
 }
 
 export interface StatementTotals {
   sessions: number;
   energyKwh?: number;
-  gtvIdr: number;
+  gtvMinor: number;
+  localTaxMinor?: number;
+  ppnCollectedMinor?: number;
+  grossCollectedMinor?: number;
+  commissionMinor?: number;
+  minimumTopUpMinor?: number;
+  privateFeeMinor?: number;
+  feesMinor?: number;
+  mdrEstimateMinor?: number;
+  mdrCreditMinor?: number;
+  netMinor: number;
+  taxBaseMinor?: number;
+  taxMinor: number;
+  totalMinor: number;
+  pph23Minor?: number;
+  platformShareMinor?: number;
+  ownerShareMinor?: number;
+  /** Deprecated: the v1.6 name of `gtvMinor`, present while the amount is in IDR. */
+  gtvIdr?: number;
+  /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
   pbjtIdr?: number;
+  /** Deprecated: the v1.6 name of `ppnCollectedMinor`, present while the amount is in IDR. */
   ppnCollectedIdr?: number;
+  /** Deprecated: the v1.6 name of `grossCollectedMinor`, present while the amount is in IDR. */
   grossCollectedIdr?: number;
+  /** Deprecated: the v1.6 name of `commissionMinor`, present while the amount is in IDR. */
   commissionIdr?: number;
+  /** Deprecated: the v1.6 name of `minimumTopUpMinor`, present while the amount is in IDR. */
   minimumTopUpIdr?: number;
+  /** Deprecated: the v1.6 name of `privateFeeMinor`, present while the amount is in IDR. */
   privateFeeIdr?: number;
+  /** Deprecated: the v1.6 name of `feesMinor`, present while the amount is in IDR. */
   feesIdr?: number;
+  /** Deprecated: the v1.6 name of `mdrEstimateMinor`, present while the amount is in IDR. */
   mdrEstimateIdr?: number;
+  /** Deprecated: the v1.6 name of `mdrCreditMinor`, present while the amount is in IDR. */
   mdrCreditIdr?: number;
-  netIdr: number;
+  /** Deprecated: the v1.6 name of `netMinor`, present while the amount is in IDR. */
+  netIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+  ppnDppIdr?: number;
+  /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
   dppIdr?: number;
-  ppnIdr: number;
-  totalIdr: number;
+  /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+  ppnIdr?: number;
+  /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+  totalIdr?: number;
+  /** Deprecated: the v1.6 name of `pph23Minor`, present while the amount is in IDR. */
   pph23Idr?: number;
+  /** Deprecated: the v1.6 name of `platformShareMinor`, present while the amount is in IDR. */
   platformShareIdr?: number;
+  /** Deprecated: the v1.6 name of `ownerShareMinor`, present while the amount is in IDR. */
   ownerShareIdr?: number;
 }
 
@@ -3363,11 +3967,11 @@ export interface SubscriptionPlan {
   name: string;
   description?: string | null;
   /** Before tax. */
-  monthly_fee_idr: number;
+  monthly_fee_minor: number;
   /** Discount on energy in basis points (1000 = 10%). */
   energy_discount_bps: number;
   /** Member price per kWh, used where it is lower than the tariff. */
-  member_rate_idr?: number | null;
+  member_rate?: number | null;
   /** kWh per month (or per 30-day pass) at no charge. */
   included_kwh: number;
   waive_session_fees: boolean;
@@ -3379,13 +3983,19 @@ export interface SubscriptionPlan {
   created_at?: string;
   updated_at?: string;
   members?: number;
+  /** Deprecated: the v1.6 name of `monthly_fee_minor`, present while the amount is in IDR. */
+  monthly_fee_idr?: number;
+  /** Deprecated: the v1.6 name of `member_rate`, present while the amount is in IDR. */
+  member_rate_idr?: number | null;
 }
 
 export interface SubscriptionPlanInput {
   name?: string;
   description?: string;
-  monthlyFeeIdr?: number;
-  memberRateIdr?: number | null;
+  /** Set when created (default IDR); fixed after. */
+  currency?: "IDR" | "MYR" | "SGD";
+  monthlyFeeMinor?: number;
+  memberRate?: number | null;
   energyDiscountPercent?: number;
   includedKwh?: number;
   waiveSessionFees?: boolean;
@@ -3393,6 +4003,10 @@ export interface SubscriptionPlanInput {
   siteIds?: string[];
   offeredInApp?: boolean;
   active?: boolean;
+  /** Deprecated: the v1.6 name of `monthlyFeeMinor`, present while the amount is in IDR. */
+  monthlyFeeIdr?: number;
+  /** Deprecated: the v1.6 name of `memberRate`, present while the amount is in IDR. */
+  memberRateIdr?: number | null;
 }
 
 export interface Tariff {
@@ -3498,19 +4112,37 @@ export interface TariffRating {
     quantity: number;
     unit: string;
     unitRate: number;
-    amountIdr: number;
+    amountMinor: number;
     touBlock?: string;
+    /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+    amountIdr?: number;
   }[];
   chargingClass: "slow" | "medium" | "fast" | "ultrafast";
   tax: {
-    subtotalIdr: number;
-    pbjtBaseIdr?: number;
-    pbjtRateBps?: number;
-    pbjtIdr: number;
-    ppnDppIdr: number;
+    subtotalMinor: number;
+    localTaxBaseMinor?: number;
+    localTaxRateBps?: number;
+    localTaxMinor: number;
+    taxBaseMinor: number;
     ppnRateBps?: number;
-    ppnIdr: number;
-    totalIdr: number;
+    taxMinor: number;
+    totalMinor: number;
+    /** Deprecated: the v1.6 name of `subtotalMinor`, present while the amount is in IDR. */
+    subtotalIdr?: number;
+    /** Deprecated: the v1.6 name of `localTaxBaseMinor`, present while the amount is in IDR. */
+    pbjtBaseIdr?: number;
+    /** Deprecated: the v1.6 name of `localTaxRateBps`, present while the amount is in IDR. */
+    pbjtRateBps?: number;
+    /** Deprecated: the v1.6 name of `localTaxMinor`, present while the amount is in IDR. */
+    pbjtIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    ppnDppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxBaseMinor`, present while the amount is in IDR. */
+    dppIdr?: number;
+    /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+    ppnIdr?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
   };
   flags: TariffFlag[];
   tariffSnapshot: Record<string, unknown>;
@@ -3528,15 +4160,21 @@ export interface Token {
   account_type: "retail" | "fleet" | "vip" | "technician";
   fleet_name?: string | null;
   energy_limit_wh?: number | null;
-  spend_limit_idr?: number | null;
+  spend_limit_minor?: number | null;
+  /** The spending limit's currency; charges in another currency are refused. */
+  spend_limit_currency?: string;
   notes?: string | null;
   created_at?: string;
   updated_at?: string;
   has_pin: boolean;
   lifetime_energy_wh: number;
   total_sessions: number;
-  lifetime_spend_idr: number;
+  lifetime_spend_minor: number;
   last_used_at?: string | null;
+  /** Deprecated: the v1.6 name of `spend_limit_minor`, present while the amount is in IDR. */
+  spend_limit_idr?: number | null;
+  /** Deprecated: the v1.6 name of `lifetime_spend_minor`, present while the amount is in IDR. */
+  lifetime_spend_idr?: number;
 }
 
 export interface TokenCreated {
@@ -3559,12 +4197,16 @@ export interface TokenInput {
   validTo?: string | null;
   /** Lifetime energy cap in kWh (stored in Wh). */
   energyLimitKwh?: number | null;
-  /** Lifetime spend cap in IDR. */
-  spendLimitIdr?: number | null;
+  /** Lifetime spend cap, in minor units of spendLimitCurrency. */
+  spendLimitMinor?: number | null;
+  /** Default IDR. */
+  spendLimitCurrency?: "IDR" | "MYR" | "SGD";
   offlineAllowed?: boolean;
   notes?: string | null;
   /** 4-8 digit PIN for the driver app; stored hashed. null removes it. */
   pin?: string | null;
+  /** Deprecated: the v1.6 name of `spendLimitMinor`, present while the amount is in IDR. */
+  spendLimitIdr?: number | null;
 }
 
 export interface TokenUnknownTag {
@@ -3620,6 +4262,11 @@ export interface UserRow {
   locked: boolean;
   has_password: boolean;
   must_change_password: boolean;
+  /** Two-step verification (authenticator app) is on. */
+  mfa_enabled?: boolean;
+  /** Bound to a Microsoft account (“Sign in with Microsoft” finds the user by it). */
+  microsoft_bound?: boolean;
+  microsoft_bound_at?: string | null;
   roles: {
     role: string;
     /** org, site or owner */
@@ -3720,7 +4367,11 @@ export type Event_cdr_created = {
     orgId: string;
     cdrId: string;
     sessionId: string;
-    totalIdr: number;
+    /** In minor units of `currency` (IDR: whole rupiah). */
+    totalMinor: number;
+    currency: "IDR" | "MYR" | "SGD";
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
   };
 };
 
@@ -3803,9 +4454,12 @@ export type Event_refund_completed = {
   data: {
     orgId: string;
     paymentIntentId: string;
-    amountIdr: number;
+    amountMinor: number;
+    currency: "IDR" | "MYR" | "SGD";
     method: "provider" | "manual";
     reference: string;
+    /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+    amountIdr?: number;
   };
 };
 
@@ -3818,8 +4472,11 @@ export type Event_refund_due = {
   data: {
     orgId: string;
     paymentIntentId: string;
-    amountIdr: number;
+    amountMinor: number;
+    currency: "IDR" | "MYR" | "SGD";
     reason: string;
+    /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+    amountIdr?: number;
   };
 };
 
@@ -3879,6 +4536,14 @@ export type ActivateChargePointResponse = {
   activated: boolean;
 };
 
+export type AddEvidenceOrCommentToDisputeBody = {
+  note: string;
+};
+
+export type AddEvidenceOrCommentToDisputeResponse = {
+  notes: Record<string, unknown>[];
+};
+
 export type AddOnCallOverrideBody = {
   contactId: string;
   startsAt: string;
@@ -3936,6 +4601,32 @@ export type AdoptPendingChargerResponse = {
   ok: true;
   chargePointId?: string;
   identity: string;
+};
+
+export type AnswerDisputeCpoSideAcceptOrRejectBody = {
+  action: "accept" | "reject";
+  note?: string;
+};
+
+export type AnswerDisputeCpoSideAcceptOrRejectResponse = {
+  dispute: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  };
 };
 
 export type ApplyLoadPlanNowResponse = {
@@ -4016,8 +4707,15 @@ export type CardHoldsAndPostPayEWalletChargesResponse = {
     held: number;
     inProgress: number;
     failed: number;
-    heldIdr: number;
+    /** Rupiah (IDR). */
+    heldMinor: number;
     expired?: number;
+    /** Rupiah (IDR). */
+    expiredMinor?: number;
+    expiredByCurrency?: Record<string, number>;
+    /** Deprecated: the v1.6 name of `heldMinor`, present while the amount is in IDR. */
+    heldIdr?: number;
+    /** Deprecated: the v1.6 name of `expiredMinor`, present while the amount is in IDR. */
     expiredIdr?: number;
   };
 };
@@ -4035,6 +4733,22 @@ export type ChangeConnectorAvailabilityBody = {
   reason?: string;
 };
 
+export type ChangeDriverAppRoamingSettingsBody = {
+  appDrivers?: boolean;
+  /** Hold per currency code, minor units. */
+  holdMinor?: Record<string, number | null>;
+  /** Deprecated: the v1.6 name of `holdMinor`, present while the amount is in IDR. */
+  holdIdr?: Record<string, number | null>;
+};
+
+export type ChangeDriverAppRoamingSettingsResponse = {
+  ok: boolean;
+  appDrivers?: boolean;
+  holdMinor?: Record<string, unknown>;
+  /** Deprecated: the v1.6 name of `holdMinor`, present while the amount is in IDR. */
+  holdIdr?: Record<string, unknown>;
+};
+
 export type ChangeFleetAccountCardsBody = {
   add?: string[];
   remove?: string[];
@@ -4043,6 +4757,17 @@ export type ChangeFleetAccountCardsBody = {
 export type ChangeFleetAccountCardsResponse = {
   account: FleetAccountDetail;
   unknown: string[];
+};
+
+export type ChangeHomeCountryReportingTimeZoneOrDefaultLanguageBody = {
+  homeCountry?: "ID" | "MY" | "SG";
+  /** IANA zone, e.g. Asia/Singapore. */
+  timezone?: string;
+  defaultLocale?: "id" | "en";
+};
+
+export type ChangeNativeAppsVersionGateAndRemoteConfigurationResponse = {
+  appConfig: DriverAppConfig;
 };
 
 export type ChargersAndTheirV2gCertificatesResponse = {
@@ -4065,6 +4790,10 @@ export type ChargersClientCertificatesResponse = {
   certificates: StationCertificate[];
 };
 
+export type CheckAndroidNotificationsServiceAccountWithGoogleAgainResponse = DriverAppView & {
+  androidPushDevices?: number;
+};
+
 export type CheckChargingProfileDriftResponse = {
   checked: number;
   drift: number;
@@ -4075,10 +4804,59 @@ export type ClearReviewAndBillSessionBody = {
   force?: boolean;
 };
 
+export type ConfirmPaymentWasReceivedPayeeResponse = {
+  payment: {
+    id?: string;
+    position_id?: string;
+    payer_member_id?: string;
+    payee_member_id?: string;
+    currency?: string;
+    amount_minor?: number;
+    method?: string;
+    reference?: string | null;
+    paid_at?: string;
+    recorded_side?: string;
+    confirmed_by_payee_at?: string | null;
+    /** Deprecated: the v1.6 name of `amount_minor`, present while the amount is in IDR. */
+    amount_idr?: number;
+  };
+  position: {
+    id?: string;
+    run_id?: string;
+    currency?: string;
+    member_a_id?: string;
+    member_b_id?: string;
+    a_owes_b_minor?: number;
+    b_owes_a_minor?: number;
+    net_minor?: number;
+    payer_member_id?: string | null;
+    payee_member_id?: string | null;
+    cdr_count?: number;
+    paid_minor?: number;
+    outstanding_minor?: number;
+    status?: "open" | "partially_paid" | "paid" | "confirmed" | "overdue" | "written_off" | "nothing_due";
+    due_date?: string;
+    overdue_since?: string | null;
+    period?: string | null;
+    /** Deprecated: the v1.6 name of `a_owes_b_minor`, present while the amount is in IDR. */
+    a_owes_b_idr?: number;
+    /** Deprecated: the v1.6 name of `b_owes_a_minor`, present while the amount is in IDR. */
+    b_owes_a_idr?: number;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `paid_minor`, present while the amount is in IDR. */
+    paid_idr?: number;
+    /** Deprecated: the v1.6 name of `outstanding_minor`, present while the amount is in IDR. */
+    outstanding_idr?: number;
+  };
+};
+
 export type ConnectOrChangeIntegrationResponse = {
   id?: string;
   scope?: "org" | "platform";
   provider?: string;
+  /** Payments: the country this acquirer account serves (ID for every v1.6 account). */
+  countryCode?: "ID" | "MY" | "SG";
   /** Non-secret settings. */
   settings?: Record<string, unknown>;
   /** Secret fields that are set, as a hint (last characters). Secret values are never returned. */
@@ -4160,12 +4938,14 @@ export type CreateOrChangeDriverAppBody = {
 };
 
 export type CreateQrisPrePurchaseBody = {
-  amountIdr: number;
+  amountMinor?: number;
   /** The charge point. */
   ocppIdentity: string;
   connectorId?: number;
   /** A token this organisation issued to the driver; omit for a walk-up. */
   idToken?: string;
+  /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+  amountIdr?: number;
 };
 
 export type CreateRoamingPartnerBody = {
@@ -4187,6 +4967,10 @@ export type CreateSiteOwnerResponse = {
 
 export type CreateTariffBody = {
   name?: string;
+  /** The tariff's country: its regulation, tax and currency (IDR, MYR, SGD). Rates are decimals in that currency's major unit. MY and SG need MULTI_COUNTRY=true. */
+  countryCode?: "ID" | "MY" | "SG";
+  /** The rates include the tax (default: SG and MY yes, ID no; Indonesian tariffs cannot). */
+  pricesIncludeTax?: boolean;
   plnScheme?: "curah" | "layanan_khusus" | "none";
   /** PLN base rate (IDR/kWh) the multiplier applies to. */
   plnBaseRate?: number;
@@ -4277,8 +5061,66 @@ export type DescribeThisSandboxResponse = {
   timeScale: number;
 };
 
+export type DisconnectMicrosoftTenantResponse = {
+  ok: true;
+  tenantId: string;
+  usersUnbound: number;
+  sessionsEnded: number;
+};
+
 export type DisconnectRoamingPartnerResponse = {
   ok: true;
+};
+
+export type DisputeCdrEMSPSideWithinItsDisputeWindowBody = {
+  reason: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+  message: string;
+  claimed_minor?: number;
+  /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+  claimed_idr?: number;
+};
+
+export type DisputeCdrEMSPSideWithinItsDisputeWindowResponse = {
+  dispute: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  };
+};
+
+export type DisputeWithItsNotesResponse = {
+  dispute: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  };
+  notes: Record<string, unknown>[];
 };
 
 export type EMailCreditNoteBody = {
@@ -4310,6 +5152,31 @@ export type EnrolMemberBody = {
   notes?: string;
 };
 
+export type EscalateRejectedDisputeToPlatformEMSPSideBody = {
+  note?: string;
+};
+
+export type EscalateRejectedDisputeToPlatformEMSPSideResponse = {
+  dispute: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  };
+};
+
 export type FetchPkiRootCertificatesResponse = {
   anchors: PncTrustAnchor[];
   received: number;
@@ -4335,6 +5202,28 @@ export type GetAuditLogResponse = {
   chain: AuditChain;
 };
 
+export type GetConnectedMicrosoftTenantResponse = {
+  tenant: MicrosoftTenant | null;
+  boundUsers: number;
+  /** Null when this console address does not offer Microsoft sign-in. */
+  redirectUri: string | null;
+};
+
+export type GetDriverAppRoamingSettingsResponse = {
+  appDrivers: boolean;
+  holds: {
+    currency: string;
+    /** Minor units of the currency. */
+    holdMinor: number;
+    defaultMinor: number;
+    custom: boolean;
+    /** Deprecated: the v1.6 name of `holdMinor`, present while the amount is in IDR. */
+    holdIdr?: number;
+    /** Deprecated: the v1.6 name of `defaultMinor`, present while the amount is in IDR. */
+    defaultIdr?: number;
+  }[];
+};
+
 export type GetFleetBillingMonthResponse = {
   period: string;
   periodLabel?: string;
@@ -4351,9 +5240,9 @@ export type GetFleetBillingMonthResponse = {
     number?: string | null;
     sessions: number;
     energyWh?: number;
-    ppnIdr?: number;
-    roamingIdr?: number;
-    totalIdr: number;
+    taxMinor?: number;
+    roamingMinor?: number;
+    totalMinor: number;
     dueDate?: string | null;
     overdue?: boolean;
     efakturExported?: boolean;
@@ -4361,9 +5250,17 @@ export type GetFleetBillingMonthResponse = {
     sent?: boolean;
     voided?: number;
     warnings?: number;
+    /** Deprecated: the v1.6 name of `taxMinor`, present while the amount is in IDR. */
+    ppnIdr?: number;
+    /** Deprecated: the v1.6 name of `roamingMinor`, present while the amount is in IDR. */
+    roamingIdr?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
+    totalIdr?: number;
   }[];
   unassigned: {
     sessions?: number;
+    totalMinor?: number;
+    /** Deprecated: the v1.6 name of `totalMinor`, present while the amount is in IDR. */
     totalIdr?: number;
   };
 };
@@ -4426,6 +5323,31 @@ export type IntegrationsAndTheirStatusResponse = {
   kinds: IntegrationKind[];
   production: boolean;
   publicBaseUrl?: string;
+  paymentsByCountry?: {
+    countryCode?: "MY" | "SG";
+    own?: {
+      id?: string;
+      scope?: "org" | "platform";
+      provider?: string;
+      /** Payments: the country this acquirer account serves (ID for every v1.6 account). */
+      countryCode?: "ID" | "MY" | "SG";
+      /** Non-secret settings. */
+      settings?: Record<string, unknown>;
+      /** Secret fields that are set, as a hint (last characters). Secret values are never returned. */
+      secretHints?: Record<string, unknown>;
+      enabled?: boolean;
+      webhookPath?: string | null;
+      webhookUrl?: string | null;
+      lastTest?: {
+        at?: string;
+        ok?: boolean | null;
+        message?: string | null;
+      } | null;
+      updatedAt?: string;
+    } | null;
+    platform?: Record<string, unknown> | null;
+    effective?: Record<string, unknown> | null;
+  }[];
 };
 
 export type IssueApiKeyBody = {
@@ -4454,9 +5376,11 @@ export type IssueCreditNoteBody = {
   lines?: {
     description: string;
     /** PPN included. */
-    amountIdr: number;
+    amountMinor?: number;
     /** Default: whether the invoice carries PPN. */
     taxed?: boolean;
+    /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
+    amountIdr?: number;
   }[];
   /** For a paid invoice only. */
   settlement?: "refund" | "next_invoice";
@@ -4483,6 +5407,8 @@ export type IssueEveryFleetAccountInvoiceForMonthResponse = {
 export type IssueFleetAccountInvoiceForMonthBody = {
   fleetAccountId: string;
   period: string;
+  /** Default IDR: one invoice per account, month and currency. */
+  currency?: "IDR" | "MYR" | "SGD";
 };
 
 export type IssueTestContractCertificateBody = {
@@ -4519,6 +5445,19 @@ export type ListContractsEMAIDsResponse = {
   contracts: PncContract[];
 };
 
+export type ListCountriesPlugSureOperatesInResponse = {
+  countries: {
+    /** ISO 3166-1 alpha-2: ID, MY or SG. */
+    code: string;
+    name: string;
+    /** ISO 4217: IDR, MYR or SGD. */
+    currency: string;
+    timezones: string[];
+    displayPricesInclTax: boolean;
+    defaultLocale: "id" | "en";
+  }[];
+};
+
 export type ListCreditNotesResponse = {
   creditNotes: FleetCreditNoteRow[];
 };
@@ -4553,6 +5492,10 @@ export type ListMembersResponse = {
 
 export type ListMembershipPlansResponse = {
   plans: SubscriptionPlan[];
+};
+
+export type ListOcpiPartiesOnePerCountryResponse = {
+  parties: RoamingPartyOfCountry[];
 };
 
 export type ListPartnerChargeRecordsHeldForReviewResponse = {
@@ -4603,6 +5546,322 @@ export type ListWebhookEndpointsResponse = {
   rows: WebhookEndpointRow[];
 };
 
+export type MyCommissionTermsPerCurrencyResponse = {
+  feePlans: Record<string, unknown>;
+};
+
+export type MyDisputesBothSidesResponse = {
+  disputes: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  }[];
+};
+
+export type MyHubCDRsBothSidesResponse = {
+  cdrs: {
+    id?: string;
+    cdr_id?: string;
+    session_id?: string | null;
+    credit?: boolean;
+    credit_reference_id?: string | null;
+    credits_cdr_id?: string | null;
+    credited_by_cdr_id?: string | null;
+    currency?: string;
+    total_excl_minor?: number;
+    total_incl_minor?: number | null;
+    energy_kwh?: number;
+    start_at?: string;
+    end_at?: string;
+    cpo?: string;
+    emsp?: string;
+    status?: "held" | "pending" | "disputed" | "accepted" | "credited" | "written_off" | "void";
+    flags?: string[];
+    dispute_deadline?: string;
+    accepted_at?: string | null;
+    forward_state?: "pending" | "delivered" | "failed" | "not_needed";
+    fee_cpo_minor?: number | null;
+    fee_emsp_minor?: number | null;
+    settlement_run_id?: string | null;
+    hold_note?: string | null;
+    source?: "push" | "pull";
+    received_at?: string;
+    agreement_id?: string | null;
+    cpo_member_id?: string;
+    emsp_member_id?: string;
+    cpo_member_name?: string | null;
+    emsp_member_name?: string | null;
+    dispute_id?: string | null;
+    /** Deprecated: the v1.6 name of `total_excl_minor`, present while the amount is in IDR. */
+    total_excl_idr?: number;
+    /** Deprecated: the v1.6 name of `total_incl_minor`, present while the amount is in IDR. */
+    total_incl_idr?: number | null;
+    /** Deprecated: the v1.6 name of `fee_cpo_minor`, present while the amount is in IDR. */
+    fee_cpo_idr?: number | null;
+    /** Deprecated: the v1.6 name of `fee_emsp_minor`, present while the amount is in IDR. */
+    fee_emsp_idr?: number | null;
+  }[];
+  next_cursor?: string | null;
+};
+
+export type MyHubFeeInvoicesResponse = {
+  feeInvoices: {
+    id?: string;
+    member_id?: string;
+    entity_country?: string;
+    run_id?: string | null;
+    currency?: string;
+    number?: string;
+    net_minor?: number;
+    tax_scheme?: "ID_PPN" | "SG_GST" | "MY_SST" | "NONE" | "REVERSE_CHARGE";
+    tax_rate_bps?: number;
+    tax_base_minor?: number;
+    tax_minor?: number;
+    total_minor?: number;
+    wht_expected_minor?: number;
+    status?: "issued" | "paid" | "void";
+    due_date?: string;
+    paid_at?: string | null;
+    data?: Record<string, unknown>;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_rate_bps`, present while the amount is in IDR. */
+    ppn_rate_bps?: number;
+    /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+    ppn_dpp_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+    dpp_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+    ppn_idr?: number;
+    /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+    total_idr?: number;
+    /** Deprecated: the v1.6 name of `wht_expected_minor`, present while the amount is in IDR. */
+    wht_expected_idr?: number;
+  }[];
+};
+
+export type MyHubStatementsResponse = {
+  statements: {
+    id?: string;
+    run_id?: string;
+    member_id?: string;
+    currency?: string;
+    period?: string;
+    number?: string;
+    receivable_minor?: number;
+    payable_minor?: number;
+    net_minor?: number;
+    fee_net_minor?: number;
+    fee_invoice_id?: string | null;
+    cdr_count?: number;
+    issued_at?: string;
+    data?: Record<string, unknown>;
+    /** Deprecated: the v1.6 name of `receivable_minor`, present while the amount is in IDR. */
+    receivable_idr?: number;
+    /** Deprecated: the v1.6 name of `payable_minor`, present while the amount is in IDR. */
+    payable_idr?: number;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `fee_net_minor`, present while the amount is in IDR. */
+    fee_net_idr?: number;
+  }[];
+};
+
+export type MySettlementPositionsResponse = {
+  positions: {
+    id?: string;
+    run_id?: string;
+    currency?: string;
+    member_a_id?: string;
+    member_b_id?: string;
+    a_owes_b_minor?: number;
+    b_owes_a_minor?: number;
+    net_minor?: number;
+    payer_member_id?: string | null;
+    payee_member_id?: string | null;
+    cdr_count?: number;
+    paid_minor?: number;
+    outstanding_minor?: number;
+    status?: "open" | "partially_paid" | "paid" | "confirmed" | "overdue" | "written_off" | "nothing_due";
+    due_date?: string;
+    overdue_since?: string | null;
+    period?: string | null;
+    /** Deprecated: the v1.6 name of `a_owes_b_minor`, present while the amount is in IDR. */
+    a_owes_b_idr?: number;
+    /** Deprecated: the v1.6 name of `b_owes_a_minor`, present while the amount is in IDR. */
+    b_owes_a_idr?: number;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `paid_minor`, present while the amount is in IDR. */
+    paid_idr?: number;
+    /** Deprecated: the v1.6 name of `outstanding_minor`, present while the amount is in IDR. */
+    outstanding_idr?: number;
+  }[];
+};
+
+export type NativeAppsVersionGateAndRemoteConfigurationResponse = {
+  appConfig: DriverAppConfig;
+};
+
+export type OneOfMyHubCDRsResponse = {
+  /** A ledger row: one per (CPO party, CDR id), pushed or pulled through the hub. */
+  cdr: {
+    id?: string;
+    cdr_id?: string;
+    session_id?: string | null;
+    credit?: boolean;
+    credit_reference_id?: string | null;
+    credits_cdr_id?: string | null;
+    credited_by_cdr_id?: string | null;
+    currency?: string;
+    total_excl_minor?: number;
+    total_incl_minor?: number | null;
+    energy_kwh?: number;
+    start_at?: string;
+    end_at?: string;
+    cpo?: string;
+    emsp?: string;
+    status?: "held" | "pending" | "disputed" | "accepted" | "credited" | "written_off" | "void";
+    flags?: string[];
+    dispute_deadline?: string;
+    accepted_at?: string | null;
+    forward_state?: "pending" | "delivered" | "failed" | "not_needed";
+    fee_cpo_minor?: number | null;
+    fee_emsp_minor?: number | null;
+    settlement_run_id?: string | null;
+    hold_note?: string | null;
+    source?: "push" | "pull";
+    received_at?: string;
+    agreement_id?: string | null;
+    cpo_member_id?: string;
+    emsp_member_id?: string;
+    cpo_member_name?: string | null;
+    emsp_member_name?: string | null;
+    dispute_id?: string | null;
+    /** Deprecated: the v1.6 name of `total_excl_minor`, present while the amount is in IDR. */
+    total_excl_idr?: number;
+    /** Deprecated: the v1.6 name of `total_incl_minor`, present while the amount is in IDR. */
+    total_incl_idr?: number | null;
+    /** Deprecated: the v1.6 name of `fee_cpo_minor`, present while the amount is in IDR. */
+    fee_cpo_idr?: number | null;
+    /** Deprecated: the v1.6 name of `fee_emsp_minor`, present while the amount is in IDR. */
+    fee_emsp_idr?: number | null;
+  };
+  disputes?: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  }[];
+  related?: Record<string, unknown>[];
+};
+
+export type OneOfMyHubFeeInvoicesResponse = {
+  feeInvoice: {
+    id?: string;
+    member_id?: string;
+    entity_country?: string;
+    run_id?: string | null;
+    currency?: string;
+    number?: string;
+    net_minor?: number;
+    tax_scheme?: "ID_PPN" | "SG_GST" | "MY_SST" | "NONE" | "REVERSE_CHARGE";
+    tax_rate_bps?: number;
+    tax_base_minor?: number;
+    tax_minor?: number;
+    total_minor?: number;
+    wht_expected_minor?: number;
+    status?: "issued" | "paid" | "void";
+    due_date?: string;
+    paid_at?: string | null;
+    data?: Record<string, unknown>;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_rate_bps`, present while the amount is in IDR. */
+    ppn_rate_bps?: number;
+    /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+    ppn_dpp_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_base_minor`, present while the amount is in IDR. */
+    dpp_idr?: number;
+    /** Deprecated: the v1.6 name of `tax_minor`, present while the amount is in IDR. */
+    ppn_idr?: number;
+    /** Deprecated: the v1.6 name of `total_minor`, present while the amount is in IDR. */
+    total_idr?: number;
+    /** Deprecated: the v1.6 name of `wht_expected_minor`, present while the amount is in IDR. */
+    wht_expected_idr?: number;
+  };
+};
+
+export type OneOfMyHubStatementsResponse = {
+  statement: {
+    id?: string;
+    run_id?: string;
+    member_id?: string;
+    currency?: string;
+    period?: string;
+    number?: string;
+    receivable_minor?: number;
+    payable_minor?: number;
+    net_minor?: number;
+    fee_net_minor?: number;
+    fee_invoice_id?: string | null;
+    cdr_count?: number;
+    issued_at?: string;
+    data?: Record<string, unknown>;
+    /** Deprecated: the v1.6 name of `receivable_minor`, present while the amount is in IDR. */
+    receivable_idr?: number;
+    /** Deprecated: the v1.6 name of `payable_minor`, present while the amount is in IDR. */
+    payable_idr?: number;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `fee_net_minor`, present while the amount is in IDR. */
+    fee_net_idr?: number;
+  };
+};
+
+export type PaymentsOnMyPositionsResponse = {
+  payments: {
+    id?: string;
+    position_id?: string;
+    payer_member_id?: string;
+    payee_member_id?: string;
+    currency?: string;
+    amount_minor?: number;
+    method?: string;
+    reference?: string | null;
+    paid_at?: string;
+    recorded_side?: string;
+    confirmed_by_payee_at?: string | null;
+    /** Deprecated: the v1.6 name of `amount_minor`, present while the amount is in IDR. */
+    amount_idr?: number;
+  }[];
+};
+
 export type PlugChargeExchangeLogResponse = {
   events: PncEvent[];
 };
@@ -4616,8 +5875,10 @@ export type PreviewTariffBody = {
   energyWh?: number;
   connectorMaxPowerW?: number;
   /** PBJT rate in basis points. */
-  pbjtRateBps?: number;
+  localTaxRateBps?: number;
   idleMinutes?: number;
+  /** Deprecated: the v1.6 name of `localTaxRateBps`, present while the amount is in IDR. */
+  pbjtRateBps?: number;
 };
 
 export type ProvisionDefaultChargingProfilesResponse = {
@@ -4677,6 +5938,64 @@ export type RecordFakturPajakNumberBody = {
   number?: string | null;
 };
 
+export type RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedBody = {
+  position_id: string;
+  amount_minor?: number;
+  paid_at: string;
+  reference: string;
+  method?: "bank_transfer" | "stripe_connect" | "xendit" | "other";
+  note?: string;
+  /** Deprecated: the v1.6 name of `amount_minor`, present while the amount is in IDR. */
+  amount_idr?: number;
+};
+
+export type RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedResponse = {
+  payment: {
+    id?: string;
+    position_id?: string;
+    payer_member_id?: string;
+    payee_member_id?: string;
+    currency?: string;
+    amount_minor?: number;
+    method?: string;
+    reference?: string | null;
+    paid_at?: string;
+    recorded_side?: string;
+    confirmed_by_payee_at?: string | null;
+    /** Deprecated: the v1.6 name of `amount_minor`, present while the amount is in IDR. */
+    amount_idr?: number;
+  };
+  position: {
+    id?: string;
+    run_id?: string;
+    currency?: string;
+    member_a_id?: string;
+    member_b_id?: string;
+    a_owes_b_minor?: number;
+    b_owes_a_minor?: number;
+    net_minor?: number;
+    payer_member_id?: string | null;
+    payee_member_id?: string | null;
+    cdr_count?: number;
+    paid_minor?: number;
+    outstanding_minor?: number;
+    status?: "open" | "partially_paid" | "paid" | "confirmed" | "overdue" | "written_off" | "nothing_due";
+    due_date?: string;
+    overdue_since?: string | null;
+    period?: string | null;
+    /** Deprecated: the v1.6 name of `a_owes_b_minor`, present while the amount is in IDR. */
+    a_owes_b_idr?: number;
+    /** Deprecated: the v1.6 name of `b_owes_a_minor`, present while the amount is in IDR. */
+    b_owes_a_idr?: number;
+    /** Deprecated: the v1.6 name of `net_minor`, present while the amount is in IDR. */
+    net_idr?: number;
+    /** Deprecated: the v1.6 name of `paid_minor`, present while the amount is in IDR. */
+    paid_idr?: number;
+    /** Deprecated: the v1.6 name of `outstanding_minor`, present while the amount is in IDR. */
+    outstanding_idr?: number;
+  };
+};
+
 export type RecordPaymentOfFleetInvoiceBody = {
   paidAt?: string;
   reference?: string;
@@ -4691,6 +6010,19 @@ export type RecordRefundPaidByBankTransferResponse = {
   ok: true;
   state: "refunded";
   refundRef: string;
+};
+
+export type RecordTaxRegistrationInCountryBody = {
+  countryCode: "ID" | "MY" | "SG";
+  /** Default true. */
+  registered?: boolean;
+  /** NPWP (15–16 digits), SST or GST registration number. Required when registered. */
+  registrationNo?: string | null;
+  effectiveFrom: string;
+  /** Malaysia only. */
+  evChargingTaxable?: boolean;
+  /** Basis points; empty for the statutory rate (SST 8 %, GST 9 %). */
+  rateBps?: number | null;
 };
 
 export type RegisterChargePointBody = {
@@ -4740,6 +6072,10 @@ export type RejectHeldPartnerChargeRecordResponse = {
   status: "rejected";
 };
 
+export type RemoveAndroidNotificationsServiceAccountResponse = {
+  ok: true;
+};
+
 export type RemoveConsoleBrandResponse = {
   ok: true;
 };
@@ -4758,6 +6094,10 @@ export type RemoveIntegrationConsoleSettingsResponse = {
 
 export type RemoveIOSNotificationsKeyResponse = {
   ok: true;
+};
+
+export type RemoveOcpiPartyOfCountryResponse = {
+  ok: boolean;
 };
 
 export type RemoveOnCallOverrideResponse = {
@@ -4824,6 +6164,10 @@ export type ResetChargePointBody = {
 export type ResetThisSandboxChargersResponse = {
   ok: boolean;
   reset: string[];
+};
+
+export type ResetUserTwoStepVerificationResponse = {
+  ok: true;
 };
 
 export type ResolveAlertResponse = {
@@ -4930,6 +6274,22 @@ export type SaveFleetBillingSettingsBody = {
   };
 };
 
+export type SaveLoyaltyProgramBody = {
+  enabled: boolean;
+  /** Points earned per Rp 1,000 of a session's receipt total (rounded down). */
+  earnPer1000Minor?: number;
+  /** What one point takes off a session, in rupiah. */
+  pointValueMinor?: number;
+  /** The most of a session's energy and fees points may pay, in basis points (5000 = half). */
+  maxRedeemBps: number;
+  /** Each earning expires this many months after it was earned; points are spent oldest first. */
+  expiryMonths: number;
+  /** Deprecated: the v1.6 name of `earnPer1000Minor`, present while the amount is in IDR. */
+  earnPer1000Idr?: number;
+  /** Deprecated: the v1.6 name of `pointValueMinor`, present while the amount is in IDR. */
+  pointValueIdr?: number;
+};
+
 export type SendCommandToChargePointBody = {
   connectorId?: number;
   /** remote-start. */
@@ -5000,12 +6360,39 @@ export type SendTestAlertMessageResponse = {
   error: string | null;
 };
 
+export type SetAccountCounterpartiesPayIntoBody = {
+  bank_details: string;
+};
+
+export type SetAccountCounterpartiesPayIntoResponse = {
+  ok?: boolean;
+};
+
+export type SetAllowedEMailDomainsBody = {
+  allowedDomains: string[];
+};
+
+export type SetAllowedEMailDomainsResponse = {
+  tenant: MicrosoftTenant;
+};
+
 export type SetConnectorLoadManagementPrioritiesResponse = {
   ok: true;
 };
 
 export type SetEvseAndConnectorTopologyResponse = {
   ok: true;
+};
+
+export type SetOcpiPartyOfCountryBody = {
+  /** Three letters or digits. Upper-cased. */
+  partyId: string;
+  businessName: string;
+  website?: string;
+};
+
+export type SetOcpiPartyOfCountryResponse = {
+  party: RoamingParty;
 };
 
 export type SetRoamingIdentityBody = {
@@ -5216,6 +6603,8 @@ export type TestIntegrationBody = {
   scope?: "org" | "platform";
   /** Sign-in codes: send a real test code to this number. */
   phone?: string;
+  /** Payments: which country's account (Stripe: also checks the Stripe account is registered in that country). */
+  countryCode?: "ID" | "MY" | "SG";
 };
 
 export type TestIntegrationResponse = {
@@ -5227,6 +6616,10 @@ export type TriggerMessageFromChargePointBody = {
   /** BootNotification, Heartbeat, MeterValues, StatusNotification, DiagnosticsStatusNotification, FirmwareStatusNotification. */
   requestedMessage?: string;
   connectorId?: number;
+};
+
+export type UnbindUserFromTheirMicrosoftAccountResponse = {
+  ok: true;
 };
 
 export type UnlockConnectorBody = {
@@ -5255,6 +6648,15 @@ export type UpdateWebhookEndpointBody = WebhookEndpointInput & {
 
 export type UpdateWebhookEndpointResponse = {
   endpoint: WebhookEndpoint;
+};
+
+export type UploadAndroidNotificationsServiceAccountFcmBody = {
+  /** The service account JSON. */
+  serviceAccount: Record<string, unknown> | string;
+};
+
+export type UploadAndroidNotificationsServiceAccountFcmResponse = DriverAppView & {
+  androidPushDevices?: number;
 };
 
 export type UploadAppIconBody = {
@@ -5314,6 +6716,31 @@ export type VoidFleetInvoiceResponse = {
   fakturWarning?: string | null;
 };
 
+export type WithdrawMyDisputeEMSPSideBody = {
+  note?: string;
+};
+
+export type WithdrawMyDisputeEMSPSideResponse = {
+  dispute: {
+    id?: string;
+    hub_cdr_id?: string;
+    cdr_id?: string;
+    raised_by?: "emsp" | "platform";
+    reason?: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
+    currency?: string;
+    claimed_minor?: number | null;
+    message?: string;
+    status?: "open" | "accepted" | "rejected" | "escalated" | "credited" | "expired" | "resolved" | "withdrawn";
+    resolution?: "credited" | "upheld" | "written_off" | null;
+    respond_by?: string;
+    credit_due_by?: string | null;
+    escalate_by?: string | null;
+    credit_cdr_id?: string | null;
+    /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
+    claimed_idr?: number | null;
+  };
+};
+
 /** Every operation of the API, one method each. `PlugSure` (index.ts) adds the transport. */
 export class Operations {
   constructor(protected readonly transport: Transport) {}
@@ -5359,6 +6786,20 @@ export class Operations {
     identity: string;
   }, options?: RequestOptions): Promise<ActivateChargePointResponse> {
     return this.transport.request<ActivateChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/activate", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
+   * Add evidence or a comment to a dispute
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/disputes/{id}/notes` · needs `roaming:write`
+   */
+  addEvidenceOrCommentToDispute(params: {
+    id: string;
+    body: AddEvidenceOrCommentToDisputeBody;
+  }, options?: RequestOptions): Promise<AddEvidenceOrCommentToDisputeResponse> {
+    return this.transport.request<AddEvidenceOrCommentToDisputeResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/notes", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -5443,6 +6884,22 @@ export class Operations {
     body: AdoptPendingChargerBody;
   }, options?: RequestOptions): Promise<AdoptPendingChargerResponse> {
     return this.transport.request<AdoptPendingChargerResponse>({ method: "POST", path: "/v1/pending-chargers/{identity}/adopt", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Answer a dispute (CPO side): accept or reject
+   *
+   * accept: you will send a credit CDR (and a corrected CDR) through the hub; reject: a note is required.
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/disputes/{id}/respond` · needs `roaming:write`
+   */
+  answerDisputeCpoSideAcceptOrReject(params: {
+    id: string;
+    body: AnswerDisputeCpoSideAcceptOrRejectBody;
+  }, options?: RequestOptions): Promise<AnswerDisputeCpoSideAcceptOrRejectResponse> {
+    return this.transport.request<AnswerDisputeCpoSideAcceptOrRejectResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/respond", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -5717,6 +7174,19 @@ export class Operations {
   }
 
   /**
+   * Change the driver-app roaming settings
+   *
+   * Turns partner networks on or off for app drivers and sets the hold per currency (minor units; up to 50 times the country default; leave a currency out for the default). Audited.
+   *
+   * `PUT /v1/roaming/settings` · needs `roaming:write`
+   */
+  changeDriverAppRoamingSettings(params: {
+    body: ChangeDriverAppRoamingSettingsBody;
+  }, options?: RequestOptions): Promise<ChangeDriverAppRoamingSettingsResponse> {
+    return this.transport.request<ChangeDriverAppRoamingSettingsResponse>({ method: "PUT", path: "/v1/roaming/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a fleet account's cards
    *
    * Adds cards (by UID) to the account — they become fleet cards with its fleet name — and removes others. UIDs that are not registered cards are returned in `unknown`.
@@ -5729,6 +7199,32 @@ export class Operations {
     body: ChangeFleetAccountCardsBody;
   }, options?: RequestOptions): Promise<ChangeFleetAccountCardsResponse> {
     return this.transport.request<ChangeFleetAccountCardsResponse>({ method: "PUT", path: "/v1/fleet-accounts/{id}/cards", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change the home country, reporting time zone or default language
+   *
+   * Fields left out keep their value. The time zone is one of a country the organisation is in (home or a site's). Malaysia and Singapore as home country need MULTI_COUNTRY. 422 with `errors` per field. Audited.
+   *
+   * `PUT /v1/org/settings` · needs `org:write`
+   */
+  changeHomeCountryReportingTimeZoneOrDefaultLanguage(params: {
+    body: ChangeHomeCountryReportingTimeZoneOrDefaultLanguageBody;
+  }, options?: RequestOptions): Promise<OrgSettings> {
+    return this.transport.request<OrgSettings>({ method: "PUT", path: "/v1/org/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change the native apps’ version gate and remote configuration
+   *
+   * Replaces the whole configuration. Apps below `minSupported` must update (blocking screen); below `latest` they offer an update. `maintenance.active` shows the message (Indonesian / English) instead of the app. 422 with `fields` for a bad version, address or unknown feature.
+   *
+   * `PUT /v1/driver-app/app-config` · needs `org:write`
+   */
+  changeNativeAppsVersionGateAndRemoteConfiguration(params: {
+    body: DriverAppConfig;
+  }, options?: RequestOptions): Promise<ChangeNativeAppsVersionGateAndRemoteConfigurationResponse> {
+    return this.transport.request<ChangeNativeAppsVersionGateAndRemoteConfigurationResponse>({ method: "PUT", path: "/v1/driver-app/app-config", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -5773,6 +7269,17 @@ export class Operations {
    */
   chargingStationCa(options?: RequestOptions): Promise<ChargerCa> {
     return this.transport.request<ChargerCa>({ method: "GET", path: "/v1/charger-ca", accept: "json" }, options);
+  }
+
+  /**
+   * Check the Android notifications service account with Google again
+   *
+   * A validate-only send to a token that cannot exist: Google checks the service account first, so nobody is notified.
+   *
+   * `POST /v1/driver-app/fcm/check` · needs `org:write`
+   */
+  checkAndroidNotificationsServiceAccountWithGoogleAgain(options?: RequestOptions): Promise<CheckAndroidNotificationsServiceAccountWithGoogleAgainResponse> {
+    return this.transport.request<CheckAndroidNotificationsServiceAccountWithGoogleAgainResponse>({ method: "POST", path: "/v1/driver-app/fcm/check", accept: "json" }, options);
   }
 
   /**
@@ -5830,9 +7337,22 @@ export class Operations {
   }
 
   /**
+   * Confirm a payment was received (payee)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/payments/{id}/confirm` · needs `roaming:write`
+   */
+  confirmPaymentWasReceivedPayee(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<ConfirmPaymentWasReceivedPayeeResponse> {
+    return this.transport.request<ConfirmPaymentWasReceivedPayeeResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/payments/{id}/confirm", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Connect or change an integration
    *
-   * Saves the provider, its settings and (sealed with SECRETS_KEY) its secrets. Payments: the operator's own merchant account (org:write), or the platform default (platform:admin); settings.methods chooses the payment methods drivers may use among those the acquirer offers (QRIS, GOPAY, SHOPEEPAY, OVO, DANA, LINKAJA, CARD; at least one; default QRIS). The other kinds are platform-wide (platform:admin). Test doubles are refused in production. Audited as integration.updated, without secret values.
+   * Saves the provider, its settings and (sealed with SECRETS_KEY) its secrets. Payments: the operator's own merchant account (org:write), or the platform default (platform:admin); settings.methods chooses the payment methods drivers may use among those the acquirer offers (QRIS, GOPAY, SHOPEEPAY, OVO, DANA, LINKAJA, CARD; Stripe: CARD, PAYNOW (SG), FPX (MY), GRABPAY; at least one; default QRIS, Stripe CARD). countryCode picks the country's account (Stripe for MY and SG: publishable key, secret key, webhook signing secret; test keys refused in production unless settings.allowTestMode — deploy/STRIPE.md). The other kinds are platform-wide (platform:admin). Test doubles are refused in production. Audited as integration.updated, without secret values.
    *
    * `PUT /v1/integrations/{kind}`
    */
@@ -6194,6 +7714,17 @@ export class Operations {
   }
 
   /**
+   * Disconnect the Microsoft tenant
+   *
+   * Microsoft sign-in stops for the organisation: every user’s binding to a Microsoft account is removed and every session signed in with Microsoft ends. Password sign-in is not affected. A signed-in administrator only: API keys are refused (403). Audited.
+   *
+   * `DELETE /v1/auth/microsoft/tenant` · needs `user:write`
+   */
+  disconnectMicrosoftTenant(options?: RequestOptions): Promise<DisconnectMicrosoftTenantResponse> {
+    return this.transport.request<DisconnectMicrosoftTenantResponse>({ method: "DELETE", path: "/v1/auth/microsoft/tenant", accept: "json" }, options);
+  }
+
+  /**
    * Disconnect a roaming partner
    *
    * Closes the connection: tells a connected partner (DELETE on its credentials endpoint), revokes both tokens and fails every pending call to it. Audited as roaming.partner_disconnected.
@@ -6205,6 +7736,33 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<DisconnectRoamingPartnerResponse> {
     return this.transport.request<DisconnectRoamingPartnerResponse>({ method: "DELETE", path: "/v1/roaming/partners/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Dispute a CDR (eMSP side, within its dispute window)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/cdrs/{id}/dispute` · needs `roaming:write`
+   */
+  disputeCdrEMSPSideWithinItsDisputeWindow(params: {
+    id: string;
+    body: DisputeCdrEMSPSideWithinItsDisputeWindowBody;
+  }, options?: RequestOptions): Promise<DisputeCdrEMSPSideWithinItsDisputeWindowResponse> {
+    return this.transport.request<DisputeCdrEMSPSideWithinItsDisputeWindowResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/cdrs/{id}/dispute", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A dispute with its notes
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/disputes/{id}` · needs `roaming:read`
+   */
+  disputeWithItsNotes(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<DisputeWithItsNotesResponse> {
+    return this.transport.request<DisputeWithItsNotesResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/disputes/{id}", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -6273,6 +7831,8 @@ export class Operations {
     query: {
       /** Month, YYYY-MM. */
       period: string;
+      /** The statement's currency: IDR (default), MYR or SGD. An account charging in several currencies has one statement and invoice per currency. */
+      currency?: "IDR" | "MYR" | "SGD";
     };
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/fleet-accounts/{id}/statement.pdf", pathParams: { id: params.id }, query: params.query, accept: "binary" }, options);
@@ -6301,6 +7861,8 @@ export class Operations {
    */
   downloadStatementAsCsv(params?: {
     query?: {
+      /** Statement currency: IDR (default), MYR or SGD. */
+      currency?: "IDR" | "MYR" | "SGD";
       /** Statement month, YYYY-MM. Defaults to the current month in the billing time zone (Asia/Jakarta). Anything else is a 400. */
       month?: string;
       /** A site owner of the organisation (UUID). */
@@ -6379,6 +7941,20 @@ export class Operations {
   }
 
   /**
+   * Escalate a rejected dispute to the platform (eMSP side)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/disputes/{id}/escalate` · needs `roaming:write`
+   */
+  escalateRejectedDisputeToPlatformEMSPSide(params: {
+    id: string;
+    body: EscalateRejectedDisputeToPlatformEMSPSideBody;
+  }, options?: RequestOptions): Promise<EscalateRejectedDisputeToPlatformEMSPSideResponse> {
+    return this.transport.request<EscalateRejectedDisputeToPlatformEMSPSideResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/escalate", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Export charges on other networks as CSV
    *
    * Every charge record partners sent for our cards in the range, as a CSV attachment (columns start, end, partner, operator, location, city, card, contract_id, holder, fleet, kwh, currency, total_excl_vat, total_incl_vat, cdr_id, session_id).
@@ -6415,6 +7991,23 @@ export class Operations {
   }
 
   /**
+   * Export my hub CDRs (CSV)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/cdrs.csv` · needs `roaming:read`
+   */
+  exportMyHubCDRsCsv(params?: {
+    query?: {
+      side?: "cpo" | "emsp";
+      status?: string;
+      currency?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/roaming/hub/clearing/cdrs.csv", query: params?.query, accept: "text" }, options);
+  }
+
+  /**
    * Export OCPP frames as NDJSON
    *
    * Downloads up to 50,000 frames for one charge point, oldest first, one JSON object per line (same fields as the frame list). Same access rule as the frame list.
@@ -6431,7 +8024,7 @@ export class Operations {
   /**
    * Export sessions as CSV
    *
-   * Downloads up to 50,000 matching sessions as UTF-8 CSV with a byte-order mark (for Excel), including the tax breakdown. Cells that start with a formula character are prefixed to prevent formula injection; site-scoped users get masked cards. Each export is audited as session.exported.
+   * Downloads up to 50,000 matching sessions as UTF-8 CSV with a byte-order mark (for Excel), including the tax breakdown. Cells that start with a formula character are prefixed to prevent formula injection; site-scoped users get masked cards. Each export is audited as session.exported. Columns: an organisation whose sites are all in Indonesia gets the v1.5 columns unchanged (legacy names `energy_subtotal_idr` … `gross_total_idr`, rupiah); an organisation with a site outside Indonesia gets `energy_subtotal_minor` … `gross_total_minor` in minor units of the row's currency, with a `currency` column last.
    *
    * `GET /v1/sessions.csv` · needs `session:export`, `session:read`
    */
@@ -6535,6 +8128,8 @@ export class Operations {
     query?: {
       /** Statement month, YYYY-MM. Defaults to the current month in the billing time zone (Asia/Jakarta). Anything else is a 400. */
       month?: string;
+      /** Statement currency: IDR (default), MYR or SGD. */
+      currency?: "IDR" | "MYR" | "SGD";
     };
   }, options?: RequestOptions): Promise<BillingOwnersOverview> {
     return this.transport.request<BillingOwnersOverview>({ method: "GET", path: "/v1/billing/owners", query: params?.query, accept: "json" }, options);
@@ -6577,6 +8172,8 @@ export class Operations {
    */
   getCommissionAndFeeStatement(params?: {
     query?: {
+      /** Statement currency: IDR (default), MYR or SGD. */
+      currency?: "IDR" | "MYR" | "SGD";
       /** Statement month, YYYY-MM. Defaults to the current month in the billing time zone (Asia/Jakarta). Anything else is a 400. */
       month?: string;
       /** A site owner of the organisation (UUID). Site Owner users may only name their own. */
@@ -6644,6 +8241,17 @@ export class Operations {
   }
 
   /**
+   * Get the connected Microsoft tenant
+   *
+   * The organisation’s connected Entra tenant (or null), how many users are bound to a Microsoft account, and the redirect URI for this console address. 404 when Microsoft sign-in is not configured.
+   *
+   * `GET /v1/auth/microsoft/tenant` · needs `user:read`
+   */
+  getConnectedMicrosoftTenant(options?: RequestOptions): Promise<GetConnectedMicrosoftTenantResponse> {
+    return this.transport.request<GetConnectedMicrosoftTenantResponse>({ method: "GET", path: "/v1/auth/microsoft/tenant", accept: "json" }, options);
+  }
+
+  /**
    * Get a credit note
    *
    * **Permissions checked:** `invoice:read`.
@@ -6655,6 +8263,17 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<FleetCreditNote> {
     return this.transport.request<FleetCreditNote>({ method: "GET", path: "/v1/fleet-credit-notes/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Get the driver-app roaming settings
+   *
+   * Whether signed-in app drivers may charge on partner networks, and the card hold placed before such a charge, per currency (the operator's amount, else the country default).
+   *
+   * `GET /v1/roaming/settings` · needs `roaming:read`
+   */
+  getDriverAppRoamingSettings(options?: RequestOptions): Promise<GetDriverAppRoamingSettingsResponse> {
+    return this.transport.request<GetDriverAppRoamingSettingsResponse>({ method: "GET", path: "/v1/roaming/settings", accept: "json" }, options);
   }
 
   /**
@@ -6698,6 +8317,8 @@ export class Operations {
     query: {
       /** Month, YYYY-MM. */
       period: string;
+      /** The statement's currency: IDR (default), MYR or SGD. An account charging in several currencies has one statement and invoice per currency. */
+      currency?: "IDR" | "MYR" | "SGD";
     };
   }, options?: RequestOptions): Promise<FleetStatement> {
     return this.transport.request<FleetStatement>({ method: "GET", path: "/v1/fleet-accounts/{id}/statement", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
@@ -6765,6 +8386,17 @@ export class Operations {
   }
 
   /**
+   * Get the organisation's country settings
+   *
+   * Home country (default for new sites, the roaming identity), reporting time zone (statements, alerts, console times), default language, the sites per country, and the tax registrations per country (effective-dated: PKP in Indonesia, service tax in Malaysia, GST in Singapore).
+   *
+   * `GET /v1/org/settings` · needs `org:read`
+   */
+  getOrganisationCountrySettings(options?: RequestOptions): Promise<OrgSettings> {
+    return this.transport.request<OrgSettings>({ method: "GET", path: "/v1/org/settings", accept: "json" }, options);
+  }
+
+  /**
    * Get a printable statement
    *
    * The same statement as GET /v1/billing/statement, as a self-contained printable HTML page.
@@ -6773,6 +8405,8 @@ export class Operations {
    */
   getPrintableStatement(params?: {
     query?: {
+      /** Statement currency: IDR (default), MYR or SGD. */
+      currency?: "IDR" | "MYR" | "SGD";
       /** Statement month, YYYY-MM. Defaults to the current month in the billing time zone (Asia/Jakarta). Anything else is a 400. */
       month?: string;
       /** A site owner of the organisation (UUID). */
@@ -7092,6 +8726,17 @@ export class Operations {
   }
 
   /**
+   * Join PlugSure Hub (when HUB_SELF_JOIN)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/join` · needs `roaming:write`
+   */
+  joinPlugSureHubWhenHubSelfJoin(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/roaming/hub/join", accept: "json" }, options);
+  }
+
+  /**
    * List alert notifications
    *
    * The notification outbox and delivery log, newest first, at most 300 rows, with the alert, contact and rule each message came from.
@@ -7274,6 +8919,17 @@ export class Operations {
   }
 
   /**
+   * List the countries PlugSure operates in
+   *
+   * Indonesia, Malaysia and Singapore: currency, the time zones a site there may use (first = default), whether consumer prices are shown including tax, and the default language.
+   *
+   * `GET /v1/countries`
+   */
+  listCountriesPlugSureOperatesIn(options?: RequestOptions): Promise<ListCountriesPlugSureOperatesInResponse> {
+    return this.transport.request<ListCountriesPlugSureOperatesInResponse>({ method: "GET", path: "/v1/countries", accept: "json" }, options);
+  }
+
+  /**
    * List credit notes
    *
    * Credit notes, newest first. `open=true` lists only those still to refund or waiting for the next invoice.
@@ -7439,6 +9095,17 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<OcpiMessage[]> {
     return this.transport.request<OcpiMessage[]>({ method: "GET", path: "/v1/roaming/partners/{id}/messages", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * List the OCPI parties (one per country)
+   *
+   * Every OCPI party of the operator, the home party first. A site is published under the party of its country, else under the home party.
+   *
+   * `GET /v1/roaming/parties` · needs `roaming:read`
+   */
+  listOcpiPartiesOnePerCountry(options?: RequestOptions): Promise<ListOcpiPartiesOnePerCountryResponse> {
+    return this.transport.request<ListOcpiPartiesOnePerCountryResponse>({ method: "GET", path: "/v1/roaming/parties", accept: "json" }, options);
   }
 
   /**
@@ -7692,6 +9359,238 @@ export class Operations {
   }
 
   /**
+   * My commission terms per currency
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/fee-plans` · needs `roaming:read`
+   */
+  myCommissionTermsPerCurrency(options?: RequestOptions): Promise<MyCommissionTermsPerCurrencyResponse> {
+    return this.transport.request<MyCommissionTermsPerCurrencyResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-plans", accept: "json" }, options);
+  }
+
+  /**
+   * My disputes (both sides)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/disputes` · needs `roaming:read`
+   */
+  myDisputesBothSides(params?: {
+    query?: {
+      status?: string;
+      side?: "cpo" | "emsp";
+    };
+  }, options?: RequestOptions): Promise<MyDisputesBothSidesResponse> {
+    return this.transport.request<MyDisputesBothSidesResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/disputes", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * My fee invoice as PDF
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/fee-invoices/{id}/pdf` · needs `roaming:read`
+   */
+  myFeeInvoiceAsPdf(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-invoices/{id}/pdf", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
+   * My fee invoice as printable HTML
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/fee-invoices/{id}/html` · needs `roaming:read`
+   */
+  myFeeInvoiceAsPrintableHtml(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-invoices/{id}/html", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * My hub CDRs (both sides)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/cdrs` · needs `roaming:read`
+   */
+  myHubCDRsBothSides(params?: {
+    query?: {
+      /** one or more, comma-separated */
+      status?: string;
+      flag?: string;
+      currency?: string;
+      agreement?: string;
+      run?: string;
+      unsettled?: boolean;
+      from?: string;
+      to?: string;
+      /** CDR or session id contains */
+      q?: string;
+      /** next_cursor of the previous page */
+      cursor?: string;
+      limit?: number;
+      side?: "cpo" | "emsp";
+    };
+  }, options?: RequestOptions): Promise<MyHubCDRsBothSidesResponse> {
+    return this.transport.request<MyHubCDRsBothSidesResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/cdrs", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * My hub clearing summary
+   *
+   * Membership, ledger counts per side/currency/status, open disputes, outstanding positions, own bank details.
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/summary` · needs `roaming:read`
+   */
+  myHubClearingSummary(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/roaming/hub/clearing/summary", accept: "json" }, options);
+  }
+
+  /**
+   * My hub fee invoices
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/fee-invoices` · needs `roaming:read`
+   */
+  myHubFeeInvoices(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<MyHubFeeInvoicesResponse> {
+    return this.transport.request<MyHubFeeInvoicesResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-invoices", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * My hub statements
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/statements` · needs `roaming:read`
+   */
+  myHubStatements(params?: {
+    query?: {
+      currency?: string;
+      period?: string;
+    };
+  }, options?: RequestOptions): Promise<MyHubStatementsResponse> {
+    return this.transport.request<MyHubStatementsResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/statements", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * My settlement positions
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/positions` · needs `roaming:read`
+   */
+  mySettlementPositions(params?: {
+    query?: {
+      status?: string;
+      currency?: string;
+      run?: string;
+    };
+  }, options?: RequestOptions): Promise<MySettlementPositionsResponse> {
+    return this.transport.request<MySettlementPositionsResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/positions", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * My statement as PDF
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/statements/{id}/pdf` · needs `roaming:read`
+   */
+  myStatementAsPdf(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/roaming/hub/clearing/statements/{id}/pdf", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
+   * My statement as printable HTML
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/statements/{id}/html` · needs `roaming:read`
+   */
+  myStatementAsPrintableHtml(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/roaming/hub/clearing/statements/{id}/html", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * My statement's CDRs as CSV
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/statements/{id}/csv` · needs `roaming:read`
+   */
+  myStatementCDRsAsCsv(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/roaming/hub/clearing/statements/{id}/csv", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * The native apps’ version gate and remote configuration
+   *
+   * **Permissions checked:** `org:read`.
+   *
+   * `GET /v1/driver-app/app-config` · needs `org:read`
+   */
+  nativeAppsVersionGateAndRemoteConfiguration(options?: RequestOptions): Promise<NativeAppsVersionGateAndRemoteConfigurationResponse> {
+    return this.transport.request<NativeAppsVersionGateAndRemoteConfigurationResponse>({ method: "GET", path: "/v1/driver-app/app-config", accept: "json" }, options);
+  }
+
+  /**
+   * One of my hub CDRs
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/cdrs/{id}` · needs `roaming:read`
+   */
+  oneOfMyHubCDRs(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<OneOfMyHubCDRsResponse> {
+    return this.transport.request<OneOfMyHubCDRsResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/cdrs/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * One of my hub fee invoices
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/fee-invoices/{id}` · needs `roaming:read`
+   */
+  oneOfMyHubFeeInvoices(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<OneOfMyHubFeeInvoicesResponse> {
+    return this.transport.request<OneOfMyHubFeeInvoicesResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-invoices/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * One of my hub statements
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/statements/{id}` · needs `roaming:read`
+   */
+  oneOfMyHubStatements(params: {
+    id: string;
+  }, options?: RequestOptions): Promise<OneOfMyHubStatementsResponse> {
+    return this.transport.request<OneOfMyHubStatementsResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/statements/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * The operator’s console brand
    *
    * The name, tagline, colours, logo and web address the operator’s console uses instead of PlugSure’s, and the colours as the console applies them in both themes.
@@ -7711,6 +9610,21 @@ export class Operations {
    */
   operatorOwnDriverApp(options?: RequestOptions): Promise<DriverAppView> {
     return this.transport.request<DriverAppView>({ method: "GET", path: "/v1/driver-app", accept: "json" }, options);
+  }
+
+  /**
+   * Payments on my positions
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub/clearing/payments` · needs `roaming:read`
+   */
+  paymentsOnMyPositions(params?: {
+    query?: {
+      position?: string;
+    };
+  }, options?: RequestOptions): Promise<PaymentsOnMyPositionsResponse> {
+    return this.transport.request<PaymentsOnMyPositionsResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/payments", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -7795,6 +9709,8 @@ export class Operations {
     query: {
       /** Month, YYYY-MM. */
       period: string;
+      /** The statement's currency: IDR (default), MYR or SGD. An account charging in several currencies has one statement and invoice per currency. */
+      currency?: "IDR" | "MYR" | "SGD";
     };
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/fleet-accounts/{id}/statement.html", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
@@ -7970,6 +9886,19 @@ export class Operations {
   }
 
   /**
+   * Record a payment (as payer, or as payee: counts as confirmed)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/payments` · needs `roaming:write`
+   */
+  recordPaymentAsPayerOrAsPayeeCountsAsConfirmed(params: {
+    body: RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedBody;
+  }, options?: RequestOptions): Promise<RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedResponse> {
+    return this.transport.request<RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/payments", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record payment of a fleet invoice
    *
    * **Permissions checked:** `invoice:write`.
@@ -7997,6 +9926,19 @@ export class Operations {
     body: RecordRefundPaidByBankTransferBody;
   }, options?: RequestOptions): Promise<RecordRefundPaidByBankTransferResponse> {
     return this.transport.request<RecordRefundPaidByBankTransferResponse>({ method: "POST", path: "/v1/refunds/{id}/mark-refunded", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a tax registration in a country
+   *
+   * From the date given, sessions in that country are taxed by it; the registration in force there before ends that day (409 when the new date is not after its start). `registered: false` records that the organisation is not registered from that date. Malaysia: service tax is charged on EV charging only with `evChargingTaxable: true`. An Indonesian registration in force today also sets the organisation's PKP / NPWP. Audited.
+   *
+   * `POST /v1/org/tax-registrations` · needs `org:write`
+   */
+  recordTaxRegistrationInCountry(params: {
+    body: RecordTaxRegistrationInCountryBody;
+  }, options?: RequestOptions): Promise<OrgSettings> {
+    return this.transport.request<OrgSettings>({ method: "POST", path: "/v1/org/tax-registrations", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -8068,6 +10010,17 @@ export class Operations {
   }
 
   /**
+   * Remove the Android notifications service account
+   *
+   * The Android app stops getting notifications; queued ones fail.
+   *
+   * `DELETE /v1/driver-app/fcm` · needs `org:write`
+   */
+  removeAndroidNotificationsServiceAccount(options?: RequestOptions): Promise<RemoveAndroidNotificationsServiceAccountResponse> {
+    return this.transport.request<RemoveAndroidNotificationsServiceAccountResponse>({ method: "DELETE", path: "/v1/driver-app/fcm", accept: "json" }, options);
+  }
+
+  /**
    * Remove the console brand
    *
    * The console goes back to the PlugSure brand. Its web address, if any, then shows the PlugSure sign-in page and accepts any account again.
@@ -8124,7 +10077,7 @@ export class Operations {
   /**
    * Remove an integration's console settings
    *
-   * The environment variables (or the default) apply again.
+   * The environment variables (or the default) apply again. A payments account is archived (its payments keep their webhook and refunds).
    *
    * `DELETE /v1/integrations/{kind}`
    */
@@ -8133,6 +10086,8 @@ export class Operations {
     kind: string;
     query?: {
       scope?: "org" | "platform";
+      /** Payments: which country's account. */
+      countryCode?: "ID" | "MY" | "SG";
     };
   }, options?: RequestOptions): Promise<RemoveIntegrationConsoleSettingsResponse> {
     return this.transport.request<RemoveIntegrationConsoleSettingsResponse>({ method: "DELETE", path: "/v1/integrations/{kind}", pathParams: { kind: params.kind }, query: params.query, accept: "json" }, options);
@@ -8147,6 +10102,20 @@ export class Operations {
    */
   removeIOSNotificationsKey(options?: RequestOptions): Promise<RemoveIOSNotificationsKeyResponse> {
     return this.transport.request<RemoveIOSNotificationsKeyResponse>({ method: "DELETE", path: "/v1/driver-app/apns", accept: "json" }, options);
+  }
+
+  /**
+   * Remove the OCPI party of a country
+   *
+   * Removes a non-home party; that country's sites are then published under the home party. Audited as roaming.party_removed.
+   *
+   * `DELETE /v1/roaming/parties/{country}` · needs `roaming:write`
+   */
+  removeOcpiPartyOfCountry(params: {
+    /** ISO 3166-1 alpha-2. */
+    country: string;
+  }, options?: RequestOptions): Promise<RemoveOcpiPartyOfCountryResponse> {
+    return this.transport.request<RemoveOcpiPartyOfCountryResponse>({ method: "DELETE", path: "/v1/roaming/parties/{country}", pathParams: { country: params.country }, accept: "json" }, options);
   }
 
   /**
@@ -8368,6 +10337,20 @@ export class Operations {
   }
 
   /**
+   * Reset a user's two-step verification
+   *
+   * For a lost phone and recovery codes: removes the authenticator secret and every recovery code and ends every session of the user. Where two-step verification is required (administrators) the user sets it up again at next sign-in. Not on yourself; within your own authority only. Audited.
+   *
+   * `POST /v1/users/{id}/reset-mfa` · needs `user:write`
+   */
+  resetUserTwoStepVerification(params: {
+    /** User id (UUID). */
+    id: string;
+  }, options?: RequestOptions): Promise<ResetUserTwoStepVerificationResponse> {
+    return this.transport.request<ResetUserTwoStepVerificationResponse>({ method: "POST", path: "/v1/users/{id}/reset-mfa", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Resolve an alert
    *
    * Closes an open alert. Contacts who were notified get a "resolved" notice if their rule asks for one. Audited.
@@ -8529,7 +10512,7 @@ export class Operations {
    * `PUT /v1/loyalty` · needs `tariff:write`
    */
   saveLoyaltyProgram(params: {
-    body: LoyaltyProgram;
+    body: SaveLoyaltyProgramBody;
   }, options?: RequestOptions): Promise<LoyaltyStats> {
     return this.transport.request<LoyaltyStats>({ method: "PUT", path: "/v1/loyalty", body: params.body, bodyType: "json", accept: "json" }, options);
   }
@@ -8629,6 +10612,34 @@ export class Operations {
   }
 
   /**
+   * Set the account counterparties pay into
+   *
+   * Sealed at rest; printed as the payment instruction on payers' statements.
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `PUT /v1/roaming/hub/clearing/bank-details` · needs `roaming:write`
+   */
+  setAccountCounterpartiesPayInto(params: {
+    body: SetAccountCounterpartiesPayIntoBody;
+  }, options?: RequestOptions): Promise<SetAccountCounterpartiesPayIntoResponse> {
+    return this.transport.request<SetAccountCounterpartiesPayIntoResponse>({ method: "PUT", path: "/v1/roaming/hub/clearing/bank-details", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the allowed e-mail domains
+   *
+   * Up to 20 domain names; empty = any address of the tenant may be matched to a console user (not recommended). A signed-in administrator only: API keys are refused (403). Audited.
+   *
+   * `PUT /v1/auth/microsoft/tenant` · needs `user:write`
+   */
+  setAllowedEMailDomains(params: {
+    body: SetAllowedEMailDomainsBody;
+  }, options?: RequestOptions): Promise<SetAllowedEMailDomainsResponse> {
+    return this.transport.request<SetAllowedEMailDomainsResponse>({ method: "PUT", path: "/v1/auth/microsoft/tenant", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set connector load-management priorities
    *
    * Sets the priority of each listed connector (clamped to -100..100; higher wins under the priority strategy). Every connector must be at this site, or the request is refused with 400; entries before the bad one are applied. Audited as site.power_priorities.changed.
@@ -8656,6 +10667,21 @@ export class Operations {
     body: EvseTopology;
   }, options?: RequestOptions): Promise<SetEvseAndConnectorTopologyResponse> {
     return this.transport.request<SetEvseAndConnectorTopologyResponse>({ method: "PUT", path: "/v1/charge-points/{identity}/evses", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the OCPI party of a country
+   *
+   * Adds or updates the party under which the operator publishes its sites in another country (MY, SG). The home party is set with PUT /v1/roaming/party. All parties are listed in our OCPI credentials (one CPO role each). Audited as roaming.party_set.
+   *
+   * `PUT /v1/roaming/parties/{country}` · needs `roaming:write`
+   */
+  setOcpiPartyOfCountry(params: {
+    /** ISO 3166-1 alpha-2: ID, MY or SG. */
+    country: string;
+    body: SetOcpiPartyOfCountryBody;
+  }, options?: RequestOptions): Promise<SetOcpiPartyOfCountryResponse> {
+    return this.transport.request<SetOcpiPartyOfCountryResponse>({ method: "PUT", path: "/v1/roaming/parties/{country}", pathParams: { country: params.country }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -8975,6 +11001,19 @@ export class Operations {
   }
 
   /**
+   * This operator's hub membership
+   *
+   * Membership, its parties and the roaming agreements they are in (counterparty name, status, module flags). Never tokens or endpoints.
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `GET /v1/roaming/hub` · needs `roaming:read`
+   */
+  thisOperatorHubMembership(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/roaming/hub", accept: "json" }, options);
+  }
+
+  /**
    * Trigger a message from a charge point
    *
    * Sends TriggerMessage, asking the charger to send a message now (StatusNotification by default). Audited.
@@ -8987,6 +11026,20 @@ export class Operations {
     body: TriggerMessageFromChargePointBody;
   }, options?: RequestOptions): Promise<CommandResult> {
     return this.transport.request<CommandResult>({ method: "POST", path: "/v1/charge-points/{identity}/trigger", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Unbind a user from their Microsoft account
+   *
+   * The user’s next Microsoft sign-in is matched by e-mail address again and binds afresh; their sessions signed in with Microsoft end (password sessions do not). Within your own authority only. Audited.
+   *
+   * `DELETE /v1/users/{id}/microsoft` · needs `user:write`
+   */
+  unbindUserFromTheirMicrosoftAccount(params: {
+    /** User id (UUID). */
+    id: string;
+  }, options?: RequestOptions): Promise<UnbindUserFromTheirMicrosoftAccountResponse> {
+    return this.transport.request<UnbindUserFromTheirMicrosoftAccountResponse>({ method: "DELETE", path: "/v1/users/{id}/microsoft", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -9153,6 +11206,19 @@ export class Operations {
   }
 
   /**
+   * Upload the Android notifications service account (FCM)
+   *
+   * The Firebase project’s service account key (Firebase console → Project settings → Service accounts → Generate new private key), as the JSON object or its text. It must be the project of the Android app’s google-services.json and hold the “Firebase Cloud Messaging API Admin” role. Stored encrypted, never returned, and checked with Google at once (a validate-only send: nobody is notified; the result is in fcmCheckOk / fcmCheckDetail).
+   *
+   * `PUT /v1/driver-app/fcm` · needs `org:write`
+   */
+  uploadAndroidNotificationsServiceAccountFcm(params: {
+    body: UploadAndroidNotificationsServiceAccountFcmBody;
+  }, options?: RequestOptions): Promise<UploadAndroidNotificationsServiceAccountFcmResponse> {
+    return this.transport.request<UploadAndroidNotificationsServiceAccountFcmResponse>({ method: "PUT", path: "/v1/driver-app/fcm", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Upload the app icon
    *
    * A square PNG, 512 to 2048 pixels (1024 is best), up to 2 MB, as base64. The launcher, store, maskable and App Store icons are made from it.
@@ -9276,5 +11342,19 @@ export class Operations {
     body: VoidFleetInvoiceBody;
   }, options?: RequestOptions): Promise<VoidFleetInvoiceResponse> {
     return this.transport.request<VoidFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Withdraw my dispute (eMSP side)
+   *
+   * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
+   *
+   * `POST /v1/roaming/hub/clearing/disputes/{id}/withdraw` · needs `roaming:write`
+   */
+  withdrawMyDisputeEMSPSide(params: {
+    id: string;
+    body: WithdrawMyDisputeEMSPSideBody;
+  }, options?: RequestOptions): Promise<WithdrawMyDisputeEMSPSideResponse> {
+    return this.transport.request<WithdrawMyDisputeEMSPSideResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/withdraw", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 }

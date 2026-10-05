@@ -82,7 +82,7 @@ async function appendEntries(orgId: string | null, n: number): Promise<RawRow[]>
       action: 'refund.issued',
       targetType: 'payment',
       targetId: `pay-${i}`,
-      after: { amountIdr: 5_000_000, reason: 'charger fault' },
+      after: { amountMinor: 5_000_000, reason: 'charger fault' },
       ip: '10.0.0.1',
       userAgent: 'console/1.0',
     });
@@ -290,7 +290,7 @@ dbDescribe('audit chain — tampering', () => {
     // The exact audit finding: 5,000,000 becomes 500.
     await asSuperuserBypassingTriggers(`UPDATE audit_log SET after_state = $2 WHERE id = $1`, [
       victim.id,
-      JSON.stringify({ amountIdr: 500, reason: 'charger fault' }),
+      JSON.stringify({ amountMinor: 500, reason: 'charger fault' }),
     ]);
     await recomputeChainUnkeyed(ORG_A);
 
@@ -316,7 +316,7 @@ dbDescribe('audit chain — tampering', () => {
 
     await asSuperuserBypassingTriggers(`UPDATE audit_log SET after_state = $2 WHERE id = $1`, [
       victim.id,
-      JSON.stringify({ amountIdr: 500, reason: 'charger fault' }),
+      JSON.stringify({ amountMinor: 500, reason: 'charger fault' }),
     ]);
     await recomputeForwardUnkeyed(ORG_A, victim.id);
 
@@ -435,7 +435,7 @@ dbDescribe('audit chain — tampering', () => {
       `INSERT INTO audit_log (org_id, actor_type, actor_id, action, target_type, target_id,
                               after_state, seq, prev_hash, hash)
        VALUES ($1,'user','attacker','refund.issued','payment','pay-x',$2,$3,$4,$5)`,
-      [ORG_A, JSON.stringify({ amountIdr: 1 }), last.seq + 1, last.hash, plausible],
+      [ORG_A, JSON.stringify({ amountMinor: 1 }), last.seq + 1, last.hash, plausible],
     );
 
     const r = await verifyChain(ORG_A);

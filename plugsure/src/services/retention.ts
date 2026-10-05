@@ -9,6 +9,8 @@ import { logger } from '../logger.js';
  *                       OCPP_FRAME_RETENTION_DAYS, default 90
  *   connection_attempt  every WebSocket upgrade, accepted or refused:
  *                       CONNECTION_ATTEMPT_RETENTION_DAYS, default 30
+ *   oidc_login_tx       "Sign in with Microsoft" transactions past their ten minutes
+ *                       (abandoned at Microsoft); also trimmed at each sign-in start
  *   api_key_rate_bucket shared rate-limit buckets idle for a day (a bucket idle
  *                       that long is full; dropping it changes nothing)
  *
@@ -35,6 +37,8 @@ export interface RetentionResult {
   ocppFrames: number;
   connectionAttempts: number;
   rateBuckets: number;
+  /** Expired "Sign in with Microsoft" transactions removed. */
+  oidcTransactions: number;
   /** True when the pass stopped on its time budget with old rows still left. */
   incomplete: boolean;
 }
@@ -99,7 +103,7 @@ export async function runRetention(opts: {
   const pause = opts.pauseMs ?? PAUSE_MS;
   const now = opts.now ?? Date.now();
   const deadline = Date.now() + (opts.maxPassMs ?? MAX_PASS_MS);
-  const out: RetentionResult = { ocppFrames: 0, connectionAttempts: 0, rateBuckets: 0, incomplete: false };
+  const out: RetentionResult = { ocppFrames: 0, connectionAttempts: 0, rateBuckets: 0, oidcTransactions: 0, incomplete: false };
 
   // 0 (or a negative / non-numeric value) keeps that table forever.
   if (frameDays > 0) {
@@ -116,6 +120,8 @@ export async function runRetention(opts: {
   }
   const b = await query(`DELETE FROM api_key_rate_bucket WHERE updated_at < now() - interval '1 day'`).catch(() => null);
   out.rateBuckets = b?.rowCount ?? 0;
+  const t = await query(`DELETE FROM oidc_login_tx WHERE expires_at < now()`).catch(() => null);
+  out.oidcTransactions = t?.rowCount ?? 0;
 
   if (out.ocppFrames || out.connectionAttempts || out.incomplete) {
     logger.info({ ...out, frameDays, attemptDays }, out.incomplete ? 'retention pass stopped on its time budget; the next pass continues' : 'retention pass');

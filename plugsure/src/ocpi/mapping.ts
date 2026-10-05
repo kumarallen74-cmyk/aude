@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { config } from '../config.js';
-import { plnEnergyRate, usesFormulaRate, type Tariff, type TariffComponent, type CdrLine } from '../services/tariff.js';
+import { usesFormulaRate, type Tariff, type TariffComponent, type CdrLine } from '../services/tariff.js';
+import { profileFor, priceText } from '../services/regulatory/index.js';
+import { effectiveVatPercent } from '../services/tax/id.js';
+import { countryOf } from '../domain/country.js';
+import { currencyOr, toMajor, moneyText, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
 
 /**
  * PlugSure's data model -> OCPI 2.2.1 objects.
@@ -136,9 +140,15 @@ export interface SiteIn {
   postal_code: string | null;
   lat: number | null;
   lon: number | null;
-  timezone: string | null;
+  /** IANA zone of the site (required by OCPI; there is no Jakarta default). */
+  timezone: string;
+  /** ISO 3166-1 alpha-2 of the site (absent = ID, a pre-1.7 row); published as alpha-3. */
+  country_code?: string | null;
   last_updated: Date;
 }
+
+/** OCPI `country`: ISO 3166-1 alpha-3 of the site's country (IDN, MYS, SGP). */
+const alpha3Of = (s: Pick<SiteIn, 'country_code'>) => countryOf(s.country_code ?? 'ID').alpha3;
 
 /**
  * OCPP connector status -> OCPI EVSE status.
@@ -164,6 +174,30 @@ export function evseStatusFor(e: Pick<EvseIn, 'decommissioned' | 'online' | 'res
     case 'Faulted': return 'OUTOFORDER';
     default: return 'UNKNOWN';
   }
+}
+
+/**
+ * The OCPI status of an EVSE with SEVERAL connectors (an OCPI EVSE has a list of
+ * them; a dual-gun 2.0.1 EVSE is one EVSE with two). Only `connectors[0]` used to
+ * be consulted, so a CCS2 gun out of order hid a CHAdeMO gun that could charge.
+ * The EVSE is as usable as its most usable connector: CHARGING / RESERVED (the
+ * EVSE is taken), then AVAILABLE, then the out-of-service states. With one
+ * connector — every 1.6 EVSE — this is exactly evseStatusFor(e, connectors[0]).
+ */
+const EVSE_STATUS_RANK: Record<string, number> = {
+  CHARGING: 60, RESERVED: 50, BLOCKED: 45, AVAILABLE: 40, OUTOFORDER: 30, INOPERATIVE: 20, PLANNED: 15, UNKNOWN: 10, REMOVED: 0,
+};
+export function evseStatusOfConnectors(
+  e: Pick<EvseIn, 'decommissioned' | 'online' | 'reserved'>,
+  connectors: Array<Pick<ConnectorIn, 'status' | 'maintenance_reason'>>,
+): EvseStatus {
+  if (connectors.length <= 1) return evseStatusFor(e, connectors[0]);
+  let best: EvseStatus | null = null;
+  for (const c of connectors) {
+    const s = evseStatusFor(e, c);
+    if (best === null || (EVSE_STATUS_RANK[s] ?? 0) > (EVSE_STATUS_RANK[best] ?? 0)) best = s;
+  }
+  return best!;
 }
 
 /** PlugSure plug codes (services/chargepoints.ts CONNECTOR_TYPES) -> OCPI standard and format. */
@@ -214,7 +248,7 @@ export function buildEvse(party: Party, e: EvseIn) {
   return {
     uid: evseUid(e.ocpp_identity, e.evse_no),
     evse_id: emi3EvseId(party, e.ocpp_identity, e.evse_no),
-    status: evseStatusFor(e, e.connectors[0]),
+    status: evseStatusOfConnectors(e, e.connectors),
     capabilities: ['RFID_READER', 'REMOTE_START_STOP_CAPABLE', 'UNLOCK_CAPABLE', 'RESERVABLE'],
     connectors: e.connectors.map(buildConnector),
     physical_reference: trunc(e.display_name ? `${e.display_name}`.replace(/\s+/g, ' ') : String(e.evse_no), 16),
@@ -247,11 +281,11 @@ export function buildLocation(party: Party, s: SiteIn, evses: EvseIn[], opts: { 
     address: trunc(s.address, 45),
     city: cityOf(s),
     ...(s.postal_code ? { postal_code: trunc(s.postal_code, 10) } : {}),
-    country: 'IDN',
+    country: alpha3Of(s),
     coordinates: { latitude: (s.lat ?? 0).toFixed(6), longitude: (s.lon ?? 0).toFixed(6) },
     evses: evses.map((e) => buildEvse(party, e)),
     operator: { name: party.business_name, ...(party.website ? { website: party.website } : {}) },
-    time_zone: s.timezone ?? 'Asia/Jakarta',
+    time_zone: s.timezone,
     last_updated: ocpiDateTime(lastUpdated),
   };
 }
@@ -268,12 +302,8 @@ export function contentHash(o: unknown): string {
 
 // ─────────────────────────────────────────────── tariffs
 
-/** PPN as the percentage a driver effectively pays: 12 % of DPP 11/12 = 11 %. */
-export function effectiveVatPercent(ppnApplies: boolean | undefined): number {
-  if (ppnApplies === false) return 0;
-  const { ppnRateBps, ppnDppNumerator, ppnDppDenominator } = config.tax;
-  return Math.round((ppnRateBps / 100) * (ppnDppNumerator / ppnDppDenominator) * 100) / 100;
-}
+/** PPN as the percentage a driver effectively pays (moved to services/tax/id.ts; re-exported). */
+export { effectiveVatPercent };
 
 const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
 
@@ -300,6 +330,12 @@ export interface TariffIn {
   active_from: Date | null;
   active_to: Date | null;
   last_updated: Date;
+  /**
+   * The VAT percentage of the tariff's country and the operator's registration
+   * there (services/tax engine.ocpiVatPercent); null = no VAT (omitted). Absent:
+   * an Indonesian tariff's effective PPN, as v1.6 published it.
+   */
+  vat?: number | null;
 }
 
 /**
@@ -313,7 +349,14 @@ export interface TariffIn {
  * CDR carries the authoritative total.
  */
 export function buildTariff(party: Party, t: TariffIn) {
-  const vat = effectiveVatPercent(t.tariff.ppnApplies);
+  const country = t.tariff.countryCode ?? 'ID';
+  const isId = country === 'ID';
+  const cur: CurrencyCode = currencyOr(t.tariff.currency);
+  const vatPct: number | null = t.vat !== undefined ? t.vat : isId ? effectiveVatPercent(t.tariff.ppnApplies) : null;
+  // OCPI prices are per unit EXCLUDING VAT, with `vat` the percentage (omitted = none).
+  const vatField = vatPct == null ? {} : { vat: vatPct };
+  // A tax-inclusive tariff (SG GST-inclusive display) publishes its rate net of the VAT.
+  const net = (rate: number) => (t.tariff.pricesIncludeTax && vatPct ? r4(rate / (1 + vatPct / 100)) : rate);
   const comps = t.tariff.components;
   const elements: Array<{ price_components: unknown[]; restrictions?: Record<string, unknown> }> = [];
   const el = (price_components: unknown[], restrictions: Record<string, unknown> = {}) =>
@@ -321,52 +364,66 @@ export function buildTariff(party: Party, t: TariffIn) {
 
   // Energy: block-specific first, then ANY; tiers as min/max kWh.
   const energy = comps.filter((c) => c.kind === 'energy');
-  const regulated = plnEnergyRate(t.tariff);
+  const regulated = profileFor(country).formulaEnergyRate(t.tariff);
   const rank = (c: TariffComponent) => (c.touBlock === 'ANY' && !c.timeFrom ? 1 : 0);
   const ordered = [...energy].sort((a, b) => rank(a) - rank(b) || (a.fromKwh ?? 0) - (b.fromKwh ?? 0));
   if (ordered.length === 0 && regulated != null) {
-    el([{ type: 'ENERGY', price: r4(regulated), vat, step_size: 1 }]);
+    el([{ type: 'ENERGY', price: r4(regulated), ...vatField, step_size: 1 }]);
   }
   for (const c of ordered) {
     const r = windowRestrictions(c);
     if ((c.fromKwh ?? 0) > 0) r.min_kwh = c.fromKwh;
     if (c.toKwh != null) r.max_kwh = c.toKwh;
     // A free tier (rate 0) is published as free; only a tier without a rate uses the PLN formula price.
-    el([{ type: 'ENERGY', price: r4(usesFormulaRate(c) ? (regulated ?? 0) : Number(c.rate)), vat, step_size: 1 }], r);
+    el([{ type: 'ENERGY', price: r4(net(usesFormulaRate(c) ? (regulated ?? 0) : Number(c.rate))), ...vatField, step_size: 1 }], r);
   }
 
   // Service + admin fee: one flat price, not charged below the minimum billable energy.
   const flat = comps.filter((c) => c.kind === 'session' || c.kind === 'admin').reduce((a, c) => a + c.rate, 0);
-  if (flat > 0) el([{ type: 'FLAT', price: flat, vat, step_size: 1 }], { min_kwh: r3(config.limits.minBillableWh / 1000) });
+  if (flat > 0) el([{ type: 'FLAT', price: net(flat), ...vatField, step_size: 1 }], { min_kwh: r3(config.limits.minBillableWh / 1000) });
 
   // Time from session start (per minute in PlugSure, per hour in OCPI).
   for (const c of comps.filter((x) => x.kind === 'time')) {
     const r: Record<string, unknown> = {};
     if ((c.fromMinutes ?? 0) > 0) r.min_duration = (c.fromMinutes ?? 0) * 60;
     if (c.toMinutes != null) r.max_duration = c.toMinutes * 60;
-    el([{ type: 'TIME', price: c.rate * 60, vat, step_size: 60 }], r);
+    el([{ type: 'TIME', price: net(c.rate * 60), ...vatField, step_size: 60 }], r);
   }
 
   // Idle fee: OCPI 2.2.1 has no restriction for "parking after a grace period",
   // so the grace and the cap are stated in the alt text.
   const idle = comps.filter((x) => x.kind === 'idle');
-  for (const c of idle) el([{ type: 'PARKING_TIME', price: c.rate * 60, vat, step_size: 60 }]);
+  for (const c of idle) el([{ type: 'PARKING_TIME', price: net(c.rate * 60), ...vatField, step_size: 60 }]);
 
-  const idleText = idle.map((c) => `idle fee Rp ${c.rate.toLocaleString('en-US')}/min after ${c.fromMinutes ?? 0} min${c.toMinutes != null ? `, charged for at most ${Math.max(0, c.toMinutes - (c.fromMinutes ?? 0))} min` : ''}`);
-  const idleTextId = idle.map((c) => `biaya parkir Rp ${c.rate.toLocaleString('id-ID')}/menit setelah ${c.fromMinutes ?? 0} menit${c.toMinutes != null ? `, maksimum ${Math.max(0, c.toMinutes - (c.fromMinutes ?? 0))} menit` : ''}`);
-  const taxEn = vat > 0 ? `Prices exclude PPN (${vat}% effective) and PBJT-TL (regional electricity tax, set per location).` : 'Prices exclude PBJT-TL (regional electricity tax, set per location). No PPN.';
-  const taxId = vat > 0 ? `Harga belum termasuk PPN (efektif ${vat}%) dan PBJT-TL (pajak daerah, sesuai lokasi).` : 'Harga belum termasuk PBJT-TL (pajak daerah, sesuai lokasi). Tanpa PPN.';
+  const cap = (s: string) => s[0]!.toUpperCase() + s.slice(1) + '.';
+  let alt: Array<{ language: string; text: string }>;
+  if (isId) {
+    const vat = vatPct ?? 0;
+    const idleText = idle.map((c) => `idle fee ${moneyText(c.rate, cur, 'en')}/min after ${c.fromMinutes ?? 0} min${c.toMinutes != null ? `, charged for at most ${Math.max(0, c.toMinutes - (c.fromMinutes ?? 0))} min` : ''}`);
+    const idleTextId = idle.map((c) => `biaya parkir ${moneyText(c.rate, cur, 'id')}/menit setelah ${c.fromMinutes ?? 0} menit${c.toMinutes != null ? `, maksimum ${Math.max(0, c.toMinutes - (c.fromMinutes ?? 0))} menit` : ''}`);
+    const taxEn = vat > 0 ? `Prices exclude PPN (${vat}% effective) and PBJT-TL (regional electricity tax, set per location).` : 'Prices exclude PBJT-TL (regional electricity tax, set per location). No PPN.';
+    const taxId = vat > 0 ? `Harga belum termasuk PPN (efektif ${vat}%) dan PBJT-TL (pajak daerah, sesuai lokasi).` : 'Harga belum termasuk PBJT-TL (pajak daerah, sesuai lokasi). Tanpa PPN.';
+    alt = [
+      { language: 'en', text: [taxEn, ...idleText.map(cap)].join(' ') },
+      { language: 'id', text: [taxId, ...idleTextId.map(cap)].join(' ') },
+    ];
+  } else {
+    // English only this phase (ms / zh later). The alt text quotes the price the driver pays.
+    const taxName = country === 'SG' ? 'GST' : 'service tax';
+    const idleText = idle.map((c) => `idle fee ${priceText(c.rate, cur)}/min after ${c.fromMinutes ?? 0} min${c.toMinutes != null ? `, charged for at most ${Math.max(0, c.toMinutes - (c.fromMinutes ?? 0))} min` : ''}`);
+    const taxEn = vatPct
+      ? `Prices exclude ${taxName} (${vatPct}%)${t.tariff.pricesIncludeTax ? `; the price at the charger includes it` : ''}.`
+      : 'No tax is charged.';
+    alt = [{ language: 'en', text: [taxEn, ...idleText.map(cap)].join(' ') }];
+  }
 
   return {
     country_code: party.country_code,
     party_id: party.party_id,
     id: t.tariff.id,
-    currency: 'IDR',
+    currency: cur,
     type: 'REGULAR',
-    tariff_alt_text: [
-      { language: 'en', text: [taxEn, ...idleText.map((s) => s[0]!.toUpperCase() + s.slice(1) + '.')].join(' ') },
-      { language: 'id', text: [taxId, ...idleTextId.map((s) => s[0]!.toUpperCase() + s.slice(1) + '.')].join(' ') },
-    ],
+    tariff_alt_text: alt,
     elements,
     ...(t.active_from ? { start_date_time: ocpiDateTime(t.active_from) } : {}),
     ...(t.active_to ? { end_date_time: ocpiDateTime(t.active_to) } : {}),
@@ -397,7 +454,9 @@ export interface SessionIn {
   connector_id: string;
   meter_id: string | null;
   /** Present once rated. */
-  cost?: { subtotal_idr: number; pbjt_idr: number; total_idr: number } | null;
+  cost?: { subtotal_minor: number; local_tax_minor: number; total_minor: number } | null;
+  /** The session's currency (frozen at start); absent = IDR. */
+  currency?: string | null;
   last_updated: Date;
 }
 
@@ -409,10 +468,15 @@ export const cdrToken = (t: TokenRef) => ({
   contract_id: t.contract_id,
 });
 
-/** Total cost as OCPI Price: excl_vat carries PBJT-TL unless configured otherwise. */
-export function priceOf(c: { subtotal_idr: number; pbjt_idr: number; total_idr: number }) {
-  const excl = Number(c.subtotal_idr) + (config.ocpi.pbjtInExclVat ? Number(c.pbjt_idr) : 0);
-  return { excl_vat: excl, incl_vat: Number(c.total_idr) };
+/**
+ * Total cost as OCPI Price, in MAJOR units of the currency (rupiah as before;
+ * ringgit / dollars with 2 decimals). excl_vat carries PBJT-TL unless configured
+ * otherwise (Indonesia; elsewhere there is no local tax).
+ */
+export function priceOf(c: { subtotal_minor: number; local_tax_minor: number; total_minor: number }, currency: string = LEGACY_CURRENCY) {
+  const cur = currencyOr(currency);
+  const excl = Number(c.subtotal_minor) + (config.ocpi.pbjtInExclVat ? Number(c.local_tax_minor) : 0);
+  return { excl_vat: toMajor(excl, cur), incl_vat: toMajor(Number(c.total_minor), cur) };
 }
 
 export function buildSession(party: Party, s: SessionIn, token: TokenRef) {
@@ -431,8 +495,8 @@ export function buildSession(party: Party, s: SessionIn, token: TokenRef) {
     evse_uid: s.evse_uid,
     connector_id: s.connector_id,
     ...(s.meter_id ? { meter_id: trunc(s.meter_id, 255) } : {}),
-    currency: 'IDR',
-    ...(s.cost ? { total_cost: priceOf(s.cost) } : {}),
+    currency: currencyOr(s.currency),
+    ...(s.cost ? { total_cost: priceOf(s.cost, currencyOr(s.currency)) } : {}),
     status: active ? 'ACTIVE' : 'COMPLETED',
     last_updated: ocpiDateTime(s.last_updated),
   };
@@ -441,10 +505,16 @@ export function buildSession(party: Party, s: SessionIn, token: TokenRef) {
 export interface CdrIn {
   id: string;
   issued_at: Date;
+  /** The CDR's currency; absent = IDR. */
+  currency?: string | null;
+  /** The lines were tax-inclusive (cdr.prices_include_tax): dimension costs are published net. */
+  prices_include_tax?: boolean;
+  /** VAT % for the embedded tariff (as buildTariff's TariffIn.vat). */
+  vat?: number | null;
   lines: CdrLine[];
-  subtotal_idr: number;
-  pbjt_idr: number;
-  total_idr: number;
+  subtotal_minor: number;
+  local_tax_minor: number;
+  total_minor: number;
   tariff: Tariff | null;
   session: SessionIn & { idle_minutes: number };
   site: SiteIn;
@@ -459,7 +529,15 @@ export function buildCdr(party: Party, c: CdrIn, token: TokenRef) {
   const totalH = Math.max(0, (end.getTime() - start.getTime()) / 3_600_000);
   const parkingH = Math.min(totalH, Math.max(0, Number(s.idle_minutes ?? 0)) / 60);
   const kwh = r3(Number(s.energy_wh) / 1000);
-  const sum = (kinds: string[]) => c.lines.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + Number(l.amountIdr), 0);
+  const cur = currencyOr(c.currency);
+  // Per-dimension costs excl. VAT, in major units. Tax-inclusive lines (SG) are
+  // scaled to net by the CDR's own net/gross ratio, so they add up to its excl_vat.
+  const gross = c.lines.reduce((a, l) => a + Number(l.amountMinor), 0);
+  const netShare = c.prices_include_tax && gross > 0 ? Number(c.subtotal_minor) / gross : 1;
+  const sum = (kinds: string[]) => {
+    const v = c.lines.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + Number(l.amountMinor), 0);
+    return toMajor(netShare === 1 ? v : Math.round(v * netShare), cur);
+  };
   const energyCost = sum(['energy']);
   const fixedCost = sum(['session', 'admin']);
   const timeCost = sum(['time']);
@@ -498,7 +576,7 @@ export function buildCdr(party: Party, c: CdrIn, token: TokenRef) {
       address: trunc(c.site.address, 45),
       city: cityOf(c.site),
       ...(c.site.postal_code ? { postal_code: trunc(c.site.postal_code, 10) } : {}),
-      country: 'IDN',
+      country: alpha3Of(c.site),
       coordinates: { latitude: (c.site.lat ?? 0).toFixed(6), longitude: (c.site.lon ?? 0).toFixed(6) },
       evse_uid: evseUid(c.evse.ocpp_identity, c.evse.evse_no),
       evse_id: emi3EvseId(party, c.evse.ocpp_identity, c.evse.evse_no),
@@ -508,10 +586,10 @@ export function buildCdr(party: Party, c: CdrIn, token: TokenRef) {
       connector_power_type: conn.power_type,
     },
     ...(s.meter_id ? { meter_id: trunc(s.meter_id, 255) } : {}),
-    currency: 'IDR',
-    ...(c.tariff ? { tariffs: [buildTariff(party, { tariff: c.tariff, active_from: null, active_to: null, last_updated: c.issued_at })] } : {}),
+    currency: cur,
+    ...(c.tariff ? { tariffs: [buildTariff(party, { tariff: c.tariff, active_from: null, active_to: null, last_updated: c.issued_at, ...(c.vat !== undefined ? { vat: c.vat } : {}) })] } : {}),
     charging_periods: periods,
-    total_cost: priceOf(c),
+    total_cost: priceOf(c, cur),
     ...(fixedCost ? { total_fixed_cost: { excl_vat: fixedCost } } : {}),
     total_energy: kwh,
     ...(energyCost ? { total_energy_cost: { excl_vat: energyCost } } : {}),

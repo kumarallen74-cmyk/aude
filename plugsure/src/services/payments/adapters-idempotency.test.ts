@@ -5,6 +5,8 @@ import { createHash, createSign, generateKeyPairSync } from 'node:crypto';
 import { MidtransProvider } from './midtrans.js';
 import { XenditProvider } from './xendit.js';
 import { SnapQrisProvider, minifyJson } from './snap-qris.js';
+import { StripeProvider } from './stripe.js';
+import { FakeStripe } from '../../../tools/testing/fake-stripe.js';
 
 /**
  * The acquirer adapters (no database): payment references derived from PlugSure's reference (so a request repeated
@@ -43,14 +45,14 @@ describe('references derived from PlugSure\'s reference (B)', () => {
     answers.set('/v2/pay/account/acc-1', enabledAccount);
     answers.set('POST /v2/charge', { status: 200, body: { status_code: '200', transaction_status: 'settlement', transaction_id: 'tx-1' } });
     const ref = 'postpay:11111111-2222-3333-4444-555555555555:1';
-    const a = await m().chargeWallet({ referenceId: ref, amountIdr: 30_000, channel: 'GOPAY', token: gopayToken, returnUrl: 'x', customerId: 'd' });
-    const b = await m().chargeWallet({ referenceId: ref, amountIdr: 30_000, channel: 'GOPAY', token: gopayToken, returnUrl: 'x', customerId: 'd' });
+    const a = await m().chargeWallet({ referenceId: ref, amountMinor: 30_000, channel: 'GOPAY', token: gopayToken, returnUrl: 'x', customerId: 'd' });
+    const b = await m().chargeWallet({ referenceId: ref, amountMinor: 30_000, channel: 'GOPAY', token: gopayToken, returnUrl: 'x', customerId: 'd' });
     const orders = seen.filter((s) => s.path === '/v2/charge').map((s) => JSON.parse(s.body).transaction_details.order_id);
     assert.equal(a.providerRef, m().orderRef(ref), 'the order id is known before the request');
     assert.deepEqual([b.providerRef, ...orders], [a.providerRef, a.providerRef, a.providerRef], 'a repeated request names the same order (Midtrans refuses it rather than charging twice)');
     assert.match(a.providerRef, /^ps-[a-f0-9]{24}$/);
     assert.notEqual(m().orderRef(`${ref}x`), a.providerRef);
-    const c = await m().chargeSavedCard({ referenceId: 'charge:abc', amountIdr: 10_000, token: 't', preauth: false, returnUrl: 'x', customerId: 'd' });
+    const c = await m().chargeSavedCard({ referenceId: 'charge:abc', amountMinor: 10_000, token: 't', preauth: false, returnUrl: 'x', customerId: 'd' });
     assert.equal(c.providerRef, m().orderRef('charge:abc'));
   });
 
@@ -59,16 +61,32 @@ describe('references derived from PlugSure\'s reference (B)', () => {
     answers.set('POST /payment_requests', { status: 200, body: { id: 'pr-1', status: 'SUCCEEDED' } });
     answers.set('POST /v3/payment_requests', { status: 200, body: { payment_request_id: 'pr-2', status: 'SUCCEEDED' } });
     const ref = 'postpay:aaaaaaaa-2222-3333-4444-555555555555:2';
-    const ovo = await x().chargeWallet({ referenceId: ref, amountIdr: 20_000, channel: 'OVO', token: 'pm-1', returnUrl: 'x', customerId: 'd' });
-    const again = await x().chargeWallet({ referenceId: ref, amountIdr: 20_000, channel: 'OVO', token: 'pm-1', returnUrl: 'x', customerId: 'd' });
+    const ovo = await x().chargeWallet({ referenceId: ref, amountMinor: 20_000, channel: 'OVO', token: 'pm-1', returnUrl: 'x', customerId: 'd' });
+    const again = await x().chargeWallet({ referenceId: ref, amountMinor: 20_000, channel: 'OVO', token: 'pm-1', returnUrl: 'x', customerId: 'd' });
     const reqs = seen.filter((s) => s.path === '/payment_requests');
     assert.equal(ovo.providerRef, x().orderRef(ref));
     assert.equal(again.providerRef, ovo.providerRef);
     assert.deepEqual(reqs.map((r) => [JSON.parse(r.body).reference_id, r.headers['idempotency-key']]), [[ovo.providerRef, ovo.providerRef], [ovo.providerRef, ovo.providerRef]],
       'the same idempotency key: Xendit answers a repeat with the first payment');
-    const gp = await x().chargeWallet({ referenceId: ref, amountIdr: 20_000, channel: 'GOPAY', token: 'pt-1', returnUrl: 'x', customerId: 'd' });
+    const gp = await x().chargeWallet({ referenceId: ref, amountMinor: 20_000, channel: 'GOPAY', token: 'pt-1', returnUrl: 'x', customerId: 'd' });
     const v3 = seen.find((s) => s.path === '/v3/payment_requests')!;
     assert.deepEqual([gp.providerRef, JSON.parse(v3.body).reference_id, v3.headers['idempotency-key']], [ovo.providerRef, ovo.providerRef, ovo.providerRef]);
+  });
+
+  test('Stripe: metadata.plugsure_ref and the Idempotency-Key derived from the reference, for checkouts and saved cards alike (WP3)', async () => {
+    const fake = await new FakeStripe({ secretKey: 'sk_test_idem1', webhookSecret: 'whsec_idem', country: 'SG' }).start();
+    try {
+      const s = new StripeProvider({ secretKey: 'sk_test_idem1', webhookSecret: 'whsec_idem', country: 'SG', baseUrl: fake.url, publicBaseUrl: 'https://x' });
+      const ref = 'charge:99999999-2222-3333-4444-555555555555';
+      const a = await s.createCheckout({ referenceId: ref, amountMinor: 1000, channel: 'CARD', returnUrl: 'https://x/r', currency: 'SGD' });
+      const b = await s.createCheckout({ referenceId: ref, amountMinor: 1000, channel: 'CARD', returnUrl: 'https://x/r', currency: 'SGD' });
+      const posts = fake.posts(/^\/v1\/payment_intents$/);
+      assert.equal(a.providerRef, s.orderRef(ref));
+      assert.deepEqual([b.providerRef, b.providerPaymentId], [a.providerRef, a.providerPaymentId], 'Stripe answers a repeat with the first PaymentIntent');
+      assert.deepEqual(posts.map((p) => [p.body.metadata.plugsure_ref, p.headers['idempotency-key']]), [[a.providerRef, `pi-${a.providerRef}`], [a.providerRef, `pi-${a.providerRef}`]]);
+      assert.equal(fake.intents.size, 1);
+      assert.match(a.providerRef, /^ps_[0-9a-f]{32}$/);
+    } finally { await fake.stop(); }
   });
 
   test('BI-SNAP: partnerReferenceNo derived from the reference (alphanumeric)', () => {
@@ -83,7 +101,7 @@ describe('Midtrans status lookups (B, C, D)', () => {
     reset();
     const st = async (body: unknown, status = 200) => { answers.set('/v2/ps-s/status', { status, body }); return m().paymentStatus('ps-s'); };
     assert.equal((await st({ status_code: '200', transaction_status: 'settlement', gross_amount: '30000.00', transaction_id: 't' }))?.status, 'captured');
-    assert.equal((await st({ status_code: '200', transaction_status: 'settlement', gross_amount: '30000.00' }))?.amountIdr, 30_000);
+    assert.equal((await st({ status_code: '200', transaction_status: 'settlement', gross_amount: '30000.00' }))?.amountMinor, 30_000);
     assert.equal((await st({ status_code: '200', transaction_status: 'capture', fraud_status: 'accept' }))?.status, 'captured');
     assert.equal((await st({ status_code: '201', transaction_status: 'pending' }))?.status, 'pending');
     assert.equal((await st({ status_code: '202', transaction_status: 'deny' }))?.status, 'failed');
@@ -97,14 +115,14 @@ describe('Midtrans status lookups (B, C, D)', () => {
     reset();
     answers.set('POST /v2/capture', { status: 200, body: { status_code: '412', status_message: 'Transaction status cannot be updated.' } });
     answers.set('/v2/ps-hold/status', { status: 200, body: { status_code: '200', transaction_status: 'capture', fraud_status: 'accept', gross_amount: '42300.00' } });
-    const ok = await m().captureHold({ providerRef: 'ps-hold', providerPaymentId: 'tx-h', amountIdr: 42_300, idempotencyKey: 'hold-capture-1' });
+    const ok = await m().captureHold({ providerRef: 'ps-hold', providerPaymentId: 'tx-h', amountMinor: 42_300, idempotencyKey: 'hold-capture-1' });
     assert.equal(ok.ok, true);
     answers.set('/v2/ps-hold/status', { status: 200, body: { status_code: '200', transaction_status: 'authorize', fraud_status: 'accept' } });
-    const no = await m().captureHold({ providerRef: 'ps-hold', providerPaymentId: 'tx-h', amountIdr: 42_300, idempotencyKey: 'hold-capture-1' });
+    const no = await m().captureHold({ providerRef: 'ps-hold', providerPaymentId: 'tx-h', amountMinor: 42_300, idempotencyKey: 'hold-capture-1' });
     assert.deepEqual({ ok: no.ok, expired: no.expired }, { ok: false, expired: undefined });
     answers.set('POST /v2/capture', { status: 200, body: { status_code: '407', status_message: 'Expired transaction' } });
     answers.set('/v2/ps-hold/status', { status: 200, body: { status_code: '407', transaction_status: 'expire' } });
-    assert.equal((await m().captureHold({ providerRef: 'ps-hold', providerPaymentId: 'tx-h', amountIdr: 1, idempotencyKey: 'k' })).expired, true, 'an expiry stays an expiry');
+    assert.equal((await m().captureHold({ providerRef: 'ps-hold', providerPaymentId: 'tx-h', amountMinor: 1, idempotencyKey: 'k' })).expired, true, 'an expiry stays an expiry');
   });
 
   test('refundStatus: the order lists the refund by our refund_key → refunded; not listed → null', async () => {
@@ -171,7 +189,7 @@ describe('BI-SNAP notifications (F)', () => {
     const raw = '{\n  "originalPartnerReferenceNo": "PSABC",\n  "latestTransactionStatus": "00",\n  "amount": { "value": "10000.00", "currency": "IDR" },\n  "additionalInfo": { "note": "Caf\\u00e9" }\n}';
     const sig = sign(minifyJson(raw), ts);
     const n = p.parseNotification(raw, { 'x-signature': sig, 'x-timestamp': ts }, path);
-    assert.deepEqual({ ref: n?.providerRef, paid: n?.paid, amount: n?.amountIdr }, { ref: 'PSABC', paid: true, amount: 10_000 },
+    assert.deepEqual({ ref: n?.providerRef, paid: n?.paid, amount: n?.amountMinor }, { ref: 'PSABC', paid: true, amount: 10_000 },
       'JSON.stringify(JSON.parse(raw)) rewrites \\u00e9, so the bank\'s signature did not verify before');
     // A signature over the re-serialised form (what the old code checked) is not the bank's.
     assert.equal(p.parseNotification(raw, { 'x-signature': sign(JSON.stringify(JSON.parse(raw)), ts), 'x-timestamp': ts }, path), null);

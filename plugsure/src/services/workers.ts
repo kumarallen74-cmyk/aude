@@ -4,7 +4,7 @@ import { many, query, pool } from '../db/pool.js';
 import { bus } from './events.js';
 import { runComplianceSweep, keyRotationSweep } from './compliance.js';
 import { runControlLoop } from './smartcharging.js';
-import { reconcileStuckSessions } from './sessions.js';
+import { reconcileStuckSessions, recoverUnsettledPayments, settlementRecoveryNotBefore } from './sessions.js';
 import { tick as firmwareTick } from './firmware.js';
 import { registerPrepaidEnforcement } from './payments/prepaid.js';
 import { registerOperatorLimits } from './operator-limits.js';
@@ -14,7 +14,7 @@ import { registerUptimeListeners, sweepOutages } from './uptime.js';
 import { registerWebhookListeners, deliverDue, pruneDeliveries } from './webhooks.js';
 import { persistAlert } from './alerts.js';
 import { runAlertRouting } from './alert-routing.js';
-import { registerRoamingListeners, deliverDue as deliverRoaming, syncAll as syncAllRoaming, pruneRoaming } from '../ocpi/push.js';
+import { registerRoamingListeners, deliverDue as deliverRoaming, syncAll as syncAllRoaming, pruneRoaming, authorityHeartbeat } from '../ocpi/push.js';
 import { importAll as importCpoNetworks } from '../ocpi/emsp.js';
 import { pullAllHubClients } from '../ocpi/hubclients.js';
 import { registerDriverPushListeners, deliverPush, prunePush, remindUnpaidSessions } from '../driver/notify.js';
@@ -22,6 +22,7 @@ import { liveActivityPass } from './live-activity.js';
 import { registerReservationListeners, sweepReservations } from '../driver/reservations.js';
 import { registerQueueListeners, sweepQueues } from '../driver/queue.js';
 import { sweepRoamingReservations } from '../driver/roaming.js';
+import { sweepRoamingHolds } from '../driver/roaming-pay.js';
 import { remindEndingPasses, renewPasses } from '../driver/membership.js';
 import { expirePoints } from './loyalty.js';
 import { renewExpiringCertificates } from '../pnc/service.js';
@@ -29,6 +30,11 @@ import { renewStationCertificates } from './charger-ca.js';
 import { setSandboxHandler } from '../ocpp/bridge.js';
 import { syncVirtualFleet, simulate, stopVirtualFleet, type SimulateEvent } from '../sandbox/fleet.js';
 import { runRetention } from './retention.js';
+import { config } from '../config.js';
+import { deliverHubDue, pruneHub } from '../hub/outbox.js';
+import { aliveChecks, resyncAllClientInfo } from '../hub/clientinfo.js';
+import { autoAccept, escalateOverdue, markOverdue, scheduleRuns } from '../hub/clearing/index.js';
+import { checkHubAlerts } from '../hub/alerts.js';
 
 /**
  * Background work, in ONE place.
@@ -41,7 +47,11 @@ import { runRetention } from './retention.js';
  *
  * They now run in the process that owns the charger sockets: the gateway in the
  * split deployment, the single process otherwise. RUN_WORKERS=false turns them
- * off (e.g. on a second gateway replica).
+ * off (for a process that must not run them, e.g. a one-off maintenance run).
+ * Run ONE gateway only: charger sockets live in the gateway's memory and the API
+ * reaches a single GATEWAY_INTERNAL_URL, so a second gateway replica — with or
+ * without workers — would show its chargers offline and refuse their commands
+ * (deploy/README.md).
  */
 
 /** Listeners that must exist wherever events are RAISED. */
@@ -74,9 +84,10 @@ export function registerCoreListeners(): void {
  * ONE RUNNER AT A TIME, platform-wide, for the workers that move money or send
  * something to a person.
  *
- * RUN_WORKERS defaults to true, so every gateway replica runs every worker,
- * and a pass that outlives its interval overlaps the next one in the same
- * process. None of these took a lock. Pass renewal captured a saved card
+ * RUN_WORKERS defaults to true, so every process started with the workers on
+ * runs every worker (one gateway is the supported topology, but an all-in-one
+ * left running beside it, or an overlapping restart, is a second runner), and a
+ * pass that outlives its interval overlaps the next one in the same process. None of these took a lock. Pass renewal captured a saved card
  * before inserting the row its unique index protects: two runners charged
  * the driver twice and the second charge was never recorded. Refunds, card
  * holds and reminders ran twice likewise. Each pass now takes a session-level
@@ -159,6 +170,13 @@ export function startWorkers(): () => void {
   const refunds = once('refunds', () => sweepUnusedPayments());
   // Card holds: release unused ones, retry captures and releases that failed.
   const holds = once('card-holds', () => sweepHolds());
+  // App drivers' roaming holds: start after authorisation, release unused or refused, the 4-day rule.
+  const roamingHolds = once('roaming-holds', () => sweepRoamingHolds());
+  // Payments of rated sessions left unsettled (a crash between the CDR and the capture / refund): settled now.
+  // A malformed SETTLEMENT_RECOVERY_NOT_BEFORE refuses here, at start-up, not on the first pass.
+  const notBefore = settlementRecoveryNotBefore();
+  if (notBefore) logger.info({ notBefore: notBefore.toISOString() }, 'settlement recovery ignores CDRs issued before SETTLEMENT_RECOVERY_NOT_BEFORE');
+  const settlement = once('settlement-recovery', () => recoverUnsettledPayments());
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -176,6 +194,7 @@ export function startWorkers(): () => void {
   const roaming = outbox('roaming', () => deliverRoaming());
   const roamingSync = once('roaming-sync', () => syncAllRoaming());
   const roamingPrune = once('roaming-prune', () => pruneRoaming());
+  const authority = once('ocpi-authority-heartbeat', () => authorityHeartbeat());
   // eMSP role: refresh CPO partners' networks (they also push changes as they happen).
   // Hubs: who is behind them (they also push changes as they happen).
   const roamingImport = once('roaming-import', async () => {
@@ -242,6 +261,7 @@ export function startWorkers(): () => void {
     every(roaming, 3_000, 'roaming'),
     every(roamingSync, 60_000, 'roaming-sync'),
     every(roamingPrune, 6 * 60 * 60_000, 'roaming-prune'),
+    every(authority, 5 * 60_000, 'ocpi-authority-heartbeat'),
     every(roamingImport, 6 * 60 * 60_000, 'roaming-import'),
     every(alertRouting, 5_000, 'alert-routing'),
     every(webhooks, 3_000, 'webhooks'),
@@ -253,8 +273,36 @@ export function startWorkers(): () => void {
     every(fota, 30_000, 'fota'),
     every(refunds, 5 * 60_000, 'refunds'),
     every(holds, 60_000, 'card-holds'),
+    every(roamingHolds, 60_000, 'roaming-holds'),
+    every(settlement, 5 * 60_000, 'settlement-recovery'),
     every(retention, 60 * 60_000, 'retention'),
   ];
+  // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.
+  if (config.hub.enabled) {
+    const hubOutbox = outbox('hub-outbox', () => deliverHubDue(50));
+    const hubAlive = once('hub-alive', () => aliveChecks());
+    const hubResync = once('hub-clientinfo-resync', () => resyncAllClientInfo());
+    const hubPrune = once('hub-prune', () => pruneHub());
+    // WP H2 clearing (§5.11): dispute windows → accepted, dispute deadlines, overdue payments, settlement drafts.
+    const hubAccept = once('hub-cdr-accept', () => autoAccept());
+    const hubDisputes = once('hub-dispute-escalate', () => escalateOverdue());
+    const hubOverdue = once('hub-payment-overdue', () => markOverdue());
+    const hubDrafts = once('hub-settlement-draft', () => scheduleRuns());
+    timers.push(
+      every(hubAccept, 15 * 60_000, 'hub-cdr-accept'),
+      every(hubDisputes, 60 * 60_000, 'hub-dispute-escalate'),
+      every(hubOverdue, 60 * 60_000, 'hub-payment-overdue'),
+      every(hubDrafts, 6 * 60 * 60_000, 'hub-settlement-draft'),
+    );
+    const hubAlerts = once('hub-alerts', () => checkHubAlerts());
+    timers.push(
+      every(hubOutbox, 5_000, 'hub-outbox'),
+      every(hubAlive, 60_000, 'hub-alive'),
+      every(hubResync, 6 * 60 * 60_000, 'hub-clientinfo-resync'),
+      every(hubPrune, 24 * 60 * 60_000, 'hub-prune'),
+      every(hubAlerts, 5 * 60_000, 'hub-alerts'),
+    );
+  }
   compliance();
   reconcile();
   refunds();

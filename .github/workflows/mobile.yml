@@ -1,0 +1,84 @@
+name: mobile
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["mobile/**", ".github/workflows/mobile.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/mobile.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  CI: "1"
+  # No EAS / Expo account needed here: everything below runs offline against the npm registry only.
+  EXPO_NO_TELEMETRY: "1"
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Typecheck, lint, unit + component tests. Every step is fatal.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: typecheck / lint / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npx eslint . --max-warnings 0
+      - name: Tests (Jest + React Native Testing Library, i18n completeness)
+        run: npx jest --ci
+
+  # ---------------------------------------------------------------------------
+  # Metro bundles for both native platforms (proves the JS bundles), per white-label variant.
+  # ---------------------------------------------------------------------------
+  export:
+    name: expo export (${{ matrix.platform }}, ${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, android]
+        variant: [plugsure, nusantara]
+    env:
+      APP_VARIANT: ${{ matrix.variant }}
+      APP_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - name: Resolve app config (validates the brand file and plugins)
+        run: npx expo config --type public > /dev/null
+      - name: Export ${{ matrix.platform }} bundle
+        run: npx expo export --platform ${{ matrix.platform }} --output-dir dist/${{ matrix.platform }}
+      - name: Bundle size budget (Hermes bytecode ≤ 6 MB, spec §10)
+        run: |
+          f=$(ls dist/${{ matrix.platform }}/_expo/static/js/${{ matrix.platform }}/*.hbc)
+          size=$(stat -c %s "$f")
+          echo "bundle: $size bytes"
+          test "$size" -le 6291456

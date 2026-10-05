@@ -1,7 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { COUNTRIES, isCountry, type CountryCode } from '../domain/country.js';
 import { one, many, query } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
+import { alertZone } from './org-timezone.js';
 import { seal, unseal } from './secrets.js';
 import {
   ALERT_KINDS, ruleMatches, inQuietHours, quietEndsAt, normaliseWhatsApp, isEmail,
@@ -64,9 +66,10 @@ async function orgRouting(orgId: string) {
           AND (secret IS NOT NULL OR (kind = 'email' AND COALESCE(config->>'username', '') = ''))`,
       [orgId],
     ),
-    dutyNow(orgId, config.alerts.timeZone),
+    alertZone(orgId).then((tz) => dutyNow(orgId, tz)),
   ]);
-  return { rules, contacts: new Map(contacts.map((c) => [c.id, c])), live: new Set(channels.map((c) => c.kind)), duty };
+  // Quiet hours and rotas in the organisation's zone (Indonesia: ALERT_TIMEZONE, as v1.6).
+  return { rules, contacts: new Map(contacts.map((c) => [c.id, c])), live: new Set(channels.map((c) => c.kind)), duty, tz: await alertZone(orgId) };
 }
 
 async function enqueue(orgId: string, alertId: string | null, ruleId: string | null, contactId: string | null, ch: Channel, dest: string, stage: Stage, at: Date) {
@@ -84,8 +87,8 @@ async function fanOut(a: AlertRow, stage: 'raised' | 'escalation', pick: (r: Rul
   let n = 0;
   for (const r of rules) {
     // Quiet hours hold non-critical messages until the window ends; critical always goes.
-    const at = a.severity !== 'critical' && r.quiet_start && r.quiet_end && inQuietHours(now, r.quiet_start, r.quiet_end, config.alerts.timeZone)
-      ? quietEndsAt(now, r.quiet_end, config.alerts.timeZone) : now;
+    const at = a.severity !== 'critical' && r.quiet_start && r.quiet_end && inQuietHours(now, r.quiet_start, r.quiet_end, ctx.tz)
+      ? quietEndsAt(now, r.quiet_end, ctx.tz) : now;
     for (const ch of r.channels) {
       if (!ctx.live.has(ch)) continue;
       for (const cid of pick(r)) {
@@ -269,7 +272,7 @@ async function sendOne(r: DueRow): Promise<void> {
     occurrences: r.occurrences ?? 1,
     orgName: r.org_name,
     consoleUrl: config.alerts.consoleUrl,
-    timeZone: config.alerts.timeZone,
+    timeZone: await alertZone(r.org_id),
   };
   const res = await deliver(r.channel, r.ch_config, await channelSecret(r.ch_secret), r.destination, m);
   if (res.ok) {
@@ -436,14 +439,15 @@ export async function saveChannel(orgId: string, kind: Channel, input: { enabled
 
 /** Send a test message now (not queued) and record it in the log. */
 export async function testChannel(orgId: string, kind: Channel, rawDestination: string) {
-  const dest = kind === 'email' ? (isEmail(rawDestination) ? rawDestination.trim() : null) : normaliseWhatsApp(rawDestination);
-  if (!dest) return { error: kind === 'email' ? 'Enter a valid e-mail address.' : `Enter a valid ${kind === 'sms' ? 'mobile' : 'WhatsApp'} number, e.g. 0812 3456 7890.` };
+  const home = await homeCountryOf(orgId);
+  const dest = kind === 'email' ? (isEmail(rawDestination) ? rawDestination.trim() : null) : normaliseWhatsApp(rawDestination, home);
+  if (!dest) return { error: kind === 'email' ? 'Enter a valid e-mail address.' : `Enter a valid ${kind === 'sms' ? 'mobile' : 'WhatsApp'} number, e.g. ${phoneHint(home, true)}.` };
   const ch = await one<{ config: any; secret: string | null }>(`SELECT config, secret FROM notification_channel WHERE org_id = $1 AND kind = $2`, [orgId, kind]);
   if (!ch) return { error: 'Save the channel settings first.' };
   const org = await one<{ name: string }>(`SELECT name FROM organisation WHERE id = $1`, [orgId]);
   const res = await deliver(kind, ch.config, await channelSecret(ch.secret), dest, {
     stage: 'test', severity: 'info', kind: 'test', message: '', siteName: null, raisedAt: new Date(),
-    orgName: org?.name ?? null, consoleUrl: config.alerts.consoleUrl, timeZone: config.alerts.timeZone,
+    orgName: org?.name ?? null, consoleUrl: config.alerts.consoleUrl, timeZone: await alertZone(orgId),
   });
   await query(
     `UPDATE notification_channel SET last_test_at = now(), last_test_ok = $3, last_error = $4 WHERE org_id = $1 AND kind = $2`,
@@ -459,27 +463,35 @@ export async function testChannel(orgId: string, kind: Channel, rawDestination: 
 
 // contacts
 
+/** The operator's home country: local phone numbers are read as its numbers. */
+async function homeCountryOf(orgId: string): Promise<CountryCode> {
+  const r = await one<{ c: string }>(`SELECT home_country_code AS c FROM organisation WHERE id = $1`, [orgId]);
+  return r && isCountry(r.c) ? r.c : 'ID';
+}
+/** "0812 3456 7890 or +62 812 3456 7890" for Indonesia (as before); the country's example elsewhere. */
+const phoneHint = (c: CountryCode, short = false) => (c === 'ID' ? (short ? '0812 3456 7890' : `0812 3456 7890 or ${COUNTRIES.ID.phoneExample}`) : COUNTRIES[c].phoneExample);
+
 export async function listContacts(orgId: string) {
   return many(`SELECT id, name, email, whatsapp, sms, active, created_at FROM alert_contact WHERE org_id = $1 ORDER BY name`, [orgId]);
 }
 
-function cleanContact(input: any): { error: string } | { name: string; email: string | null; whatsapp: string | null; sms: string | null; active: boolean } {
+function cleanContact(input: any, home: CountryCode = 'ID'): { error: string } | { name: string; email: string | null; whatsapp: string | null; sms: string | null; active: boolean } {
   const name = String(input?.name ?? '').trim().slice(0, 120);
   if (!name) return { error: 'Enter a name.' };
   const email = String(input?.email ?? '').trim() || null;
   if (email && !isEmail(email)) return { error: 'That e-mail address is not valid.' };
   const rawWa = String(input?.whatsapp ?? '').trim();
-  const whatsapp = rawWa ? normaliseWhatsApp(rawWa) : null;
-  if (rawWa && !whatsapp) return { error: 'That WhatsApp number is not valid. Use the full number, e.g. 0812 3456 7890 or +62 812 3456 7890.' };
+  const whatsapp = rawWa ? normaliseWhatsApp(rawWa, home) : null;
+  if (rawWa && !whatsapp) return { error: `That WhatsApp number is not valid. Use the full number, e.g. ${phoneHint(home, true)}.` };
   const rawSms = String(input?.sms ?? '').trim();
-  const sms = rawSms ? normaliseWhatsApp(rawSms) : null;
-  if (rawSms && !sms) return { error: 'That SMS number is not valid. Use the full number, e.g. 0812 3456 7890.' };
+  const sms = rawSms ? normaliseWhatsApp(rawSms, home) : null;
+  if (rawSms && !sms) return { error: `That SMS number is not valid. Use the full number, e.g. ${phoneHint(home, true)}.` };
   if (!email && !whatsapp && !sms) return { error: 'Enter an e-mail address, a WhatsApp number or an SMS number.' };
   return { name, email, whatsapp, sms, active: input?.active !== false };
 }
 
 export async function saveContact(orgId: string, id: string | null, input: any) {
-  const c = cleanContact(input);
+  const c = cleanContact(input, await homeCountryOf(orgId));
   if ('error' in c) return c;
   const row = id
     ? await one(`UPDATE alert_contact SET name = $3, email = $4, whatsapp = $5, sms = $6, active = $7, updated_at = now() WHERE id = $1 AND org_id = $2 RETURNING id, name, email, whatsapp, sms, active`, [id, orgId, c.name, c.email, c.whatsapp, c.sms, c.active])

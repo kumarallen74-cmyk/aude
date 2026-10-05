@@ -1,10 +1,25 @@
 import { config } from '../config.js';
 import { chargingClassForPowerW, type ChargingClass } from '../domain/spklu.js';
-import { computeTax, type TaxResult } from './tax.js';
+import { amountForRate, toMajor, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
+import { currencyOfCountry, type CountryCode } from '../domain/country.js';
+import { engineFor, indonesianTaxContext, type TaxContext, type TaxResult } from './tax/index.js';
+import { profileFor, priceText, amountText, type RegulatoryFlag } from './regulatory/index.js';
+import { usesFormulaRate } from './regulatory/common.js';
+
+export type { RegulatoryFlag } from './regulatory/index.js';
+export { usesFormulaRate } from './regulatory/common.js';
+export { plnEnergyRate, validateMultiplier, serviceFeeCeiling, regulatedEnergyCeiling } from './regulatory/index.js';
 
 /**
- * Indonesian layered tariff engine.
+ * Layered tariff engine (Indonesia first; Malaysia and Singapore through their
+ * regulatory profile and tax engine — docs/MULTI-COUNTRY-DESIGN.md §D3, §D4).
  *
+ * Rates are DECIMAL in major units of the tariff's currency (Rp/kWh, RM/kWh);
+ * every line amount is an integer in PlugSure minor units of that currency
+ * (amountForRate: IDR whole rupiah, exactly the v1.6 arithmetic; MYR sen; SGD
+ * cents). Country-specific rules live in services/regulatory/ and services/tax/.
+ *
+ * For Indonesia:
  * Two things make this different from a generic CSMS rating engine:
  *
  * 1. PLN tariffs are FORMULA-DRIVEN, not table-driven.
@@ -58,7 +73,14 @@ export interface TariffComponent {
 export interface Tariff {
   id: string;
   name: string;
-  currency: 'IDR';
+  currency: CurrencyCode;
+  /** The country whose regulation and tax apply (absent = ID, every pre-1.7 tariff). */
+  countryCode?: CountryCode;
+  /**
+   * Rates include the tax (SG: GST-inclusive consumer prices, IRAS). Absent =
+   * false, the Indonesian convention (prices before PPN).
+   */
+  pricesIncludeTax?: boolean;
   plnScheme?: 'curah' | 'layanan_khusus' | 'none';
   plnBaseRate?: number;
   plnMultiplier?: number;
@@ -78,12 +100,24 @@ export interface RatingContext {
   /** Connector nameplate power — determines the charging class and its ceiling. */
   connectorMaxPowerW: number;
   /** Per-municipality PBJT rate in basis points. */
-  pbjtRateBps: number;
+  localTaxRateBps: number;
   /** Minutes the vehicle stayed plugged in after charging completed. */
   idleMinutes?: number;
-  timezone?: string;
+  /** The site's IANA zone (time-of-use and day/time windows). Required: no Jakarta default. */
+  timezone: string;
   /** Membership benefits and promotions, applied after the caps and before tax. */
   adjustments?: PriceAdjustment[];
+  /**
+   * The session's currency (from the site). A tariff in another currency is a
+   * TARIFF_CURRENCY_MISMATCH violation. Absent = the tariff's own currency.
+   */
+  currency?: CurrencyCode;
+  /**
+   * How the session is taxed (services/tax: resolveTaxContext). Absent: an
+   * Indonesian tariff uses the ID engine exactly as v1.6 did; any other tariff
+   * must be given its context (fail closed — never taxed as Indonesian).
+   */
+  tax?: TaxContext;
 }
 
 export interface CdrLine {
@@ -92,7 +126,7 @@ export interface CdrLine {
   quantity: number;
   unit: string;
   unitRate: number;
-  amountIdr: number;
+  amountMinor: number;
   touBlock?: TouBlock;
   /** Set on a discount line: the membership or promotion it came from. */
   adjustment?: { source: 'subscription' | 'promotion' | 'loyalty' | 'v2x'; id: string; name: string };
@@ -107,186 +141,39 @@ export interface RatingResult {
   tariffSnapshot: Tariff;
 }
 
-export interface RegulatoryFlag {
-  code: string;
-  severity: 'info' | 'warning' | 'violation';
-  message: string;
-}
+// ---------------------------------------------------------------- validation
 
-// ---------------------------------------------------------------- PLN formula
+/** The country a tariff belongs to (absent = Indonesia). */
+export const tariffCountry = (t: Pick<Tariff, 'countryCode'>): CountryCode => t.countryCode ?? 'ID';
 
 /**
- * Is this energy component billed at the PLN formula rate? Only when it says
- * so (formulaRate) or carries no rate. Typed as number, a rate can still arrive
- * as null/undefined from JSON (the API, a stored tariff snapshot).
- */
-export function usesFormulaRate(c: Pick<TariffComponent, 'rate' | 'formulaRate'>): boolean {
-  return c.formulaRate === true || c.rate == null;
-}
-
-/** Resolve the regulated energy rate from the PLN multiplier formula. */
-export function plnEnergyRate(t: Pick<Tariff, 'plnScheme' | 'plnBaseRate' | 'plnMultiplier'>): number | null {
-  if (!t.plnScheme || t.plnScheme === 'none') return null;
-  const base =
-    t.plnBaseRate ??
-    (t.plnScheme === 'curah' ? config.regulatory.curahBase : config.regulatory.layananKhususBase);
-  const mult = t.plnMultiplier ?? 1;
-  return base * mult;
-}
-
-export function validateMultiplier(scheme: 'curah' | 'layanan_khusus', multiplier: number): RegulatoryFlag[] {
-  const flags: RegulatoryFlag[] = [];
-  const r = config.regulatory;
-  if (scheme === 'curah' && (multiplier < r.curahQMin || multiplier > r.curahQMax)) {
-    flags.push({
-      code: 'PLN_Q_OUT_OF_RANGE',
-      severity: 'violation',
-      message: `Curah multiplier Q=${multiplier} is outside the regulated range ${r.curahQMin}-${r.curahQMax}.`,
-    });
-  }
-  if (scheme === 'layanan_khusus' && (multiplier < 1 || multiplier > r.layananKhususNMax)) {
-    flags.push({
-      code: 'PLN_N_OUT_OF_RANGE',
-      severity: 'violation',
-      message: `Layanan khusus multiplier N=${multiplier} is outside the regulated range 1.0-${r.layananKhususNMax}. Values outside the range require Director-General approval.`,
-    });
-  }
-  return flags;
-}
-
-/** Service-fee ceiling per session for a charging class, or null when unregulated. */
-export function serviceFeeCeiling(cls: ChargingClass): number | null {
-  return config.regulatory.serviceFeeCeilingIdr[cls];
-}
-
-/**
- * The regulated ceiling on the per-kWh price, in IDR.
- *
- * `plnScheme` used to gate this: setting it to `'none'` removed the ceiling
- * entirely, and a tariff at Rp 10,000/kWh — four times the legal maximum —
- * saved and billed with no flag at all. But the scheme is a property of the
- * SUPPLY, not a field the tariff author gets to opt out of. A public SPKLU in
- * Indonesia sells under layanan khusus unless it is genuinely on curah, so an
- * unstated scheme resolves to layanan khusus rather than to "unregulated".
- */
-export function regulatedEnergyCeiling(t: Pick<Tariff, 'plnScheme' | 'plnBaseRate'>): number {
-  if (t.plnScheme === 'curah') {
-    return (t.plnBaseRate ?? config.regulatory.curahBase) * config.regulatory.curahQMax;
-  }
-  return (t.plnBaseRate ?? config.regulatory.layananKhususBase) * config.regulatory.layananKhususNMax;
-}
-
-/**
- * Validate a tariff against the regulatory ceilings. Call this at SAVE time so
- * an illegal tariff can never be assigned, rather than discovering it at billing.
+ * Validate a tariff at SAVE time so an illegal tariff can never be assigned,
+ * rather than discovering it at billing: the generic checks plus the regulatory
+ * profile of the tariff's country (services/regulatory/), then the
+ * country/currency consistency checks.
  */
 export function validateTariff(t: Tariff, connectorMaxPowerW: number): RegulatoryFlag[] {
-  const flags: RegulatoryFlag[] = [];
-  const cls = chargingClassForPowerW(connectorMaxPowerW);
-
-  if (t.plnScheme && t.plnScheme !== 'none' && t.plnMultiplier != null) {
-    flags.push(...validateMultiplier(t.plnScheme, t.plnMultiplier));
-  }
-
-  // Only an energy component may leave its rate out (the PLN formula rate);
-  // anything else without a price cannot be billed or stored.
-  for (const c of t.components) {
-    if (c.kind !== 'energy' && (c.rate == null || !Number.isFinite(Number(c.rate)))) {
-      flags.push({ code: 'RATE_MISSING', severity: 'violation', message: `The ${c.kind} component has no rate.` });
-    }
-  }
-
-  const ceiling = serviceFeeCeiling(cls);
-  if (ceiling != null) {
-    // The ceiling caps the charge for the charging SERVICE, not just the
-    // component that happens to be named "session". An "admin fee" levied on
-    // every session is the same charge under another name, and excluding it was
-    // a loophole wide enough to drive the whole fee through.
-    const serviceFees = t.components
-      .filter((c) => c.kind === 'session' || c.kind === 'admin')
-      .reduce((a, c) => a + c.rate, 0);
-    if (serviceFees > ceiling) {
-      flags.push({
-        code: 'SERVICE_FEE_CEILING_EXCEEDED',
-        severity: 'violation',
-        message:
-          `Service + admin fees total Rp ${fmt(serviceFees)}, above the Rp ${fmt(ceiling)} ceiling ` +
-          `for ${cls} charging (Kepmen ESDM 182.K/2023).`,
-      });
-    }
-  }
-
-  // Occupancy charges are commercially distinct from the biaya layanan, but they
-  // are per-minute and were unbounded: an abandoned vehicle on the shipped seed
-  // tariff accrued Rp 6,692,360. Require an explicit upper bound and check the
-  // worst case against the platform cap.
-  const idleCap = config.regulatory.idleFeeCapIdr;
-  for (const c of t.components) {
-    if (c.kind !== 'idle' && c.kind !== 'time') continue;
-    if (c.toMinutes == null) {
-      flags.push({
-        code: 'UNBOUNDED_TIME_FEE',
-        severity: 'violation',
-        message:
-          `The ${c.kind} component charges Rp ${fmt(c.rate)}/min with no to_minutes bound. ` +
-          `Set an upper bound so the worst-case charge is knowable before it is billed.`,
-      });
-      continue;
-    }
-    const worst = Math.max(0, c.toMinutes - (c.fromMinutes ?? 0)) * c.rate;
-    if (worst > idleCap) {
-      flags.push({
-        code: 'TIME_FEE_CAP_EXCEEDED',
-        severity: 'violation',
-        message:
-          `The ${c.kind} component tops out at Rp ${fmt(worst)} per session, above the ` +
-          `Rp ${fmt(idleCap)} platform cap. Lower the rate, narrow the window, or raise ` +
-          `IDLE_FEE_CAP_IDR deliberately.`,
-      });
-    }
-  }
-
-  // The regulated ceiling applies to the rate actually billed per kWh, which is
-  // the `energy` component — not to `base × multiplier`, which can only fail
-  // when the multiplier is already out of range and validateMultiplier has
-  // caught it. That made this check structurally unable to fire.
-  const maxEnergy = regulatedEnergyCeiling(t);
-  const formulaRate = plnEnergyRate(t) ?? 0;
-  const billed = t.components.filter((c) => c.kind === 'energy').map((c) => (usesFormulaRate(c) ? formulaRate : c.rate));
-  const worst = billed.length ? Math.max(...billed) : null;
-  if (worst != null && worst > maxEnergy + 0.001) {
+  const country = tariffCountry(t);
+  const flags = profileFor(country).validateTariff(t, connectorMaxPowerW);
+  const expected = currencyOfCountry(country);
+  if (t.currency && t.currency !== expected) {
     flags.push({
-      code: 'ENERGY_CEILING_EXCEEDED',
-      severity: 'violation',
-      message:
-        `Energy rate Rp ${fmt(worst)}/kWh exceeds the ` +
-        `${t.plnScheme === 'curah' ? 'curah' : 'layanan khusus'} ceiling of Rp ${fmt(maxEnergy)}/kWh ` +
-        `(${(worst / maxEnergy).toFixed(2)}×).` +
-        (t.plnScheme === 'none' || !t.plnScheme
-          ? ' A tariff with no declared PLN scheme is still bound by the layanan khusus ceiling — ' +
-            'the scheme is a property of the supply, not something a tariff opts out of.'
-          : ''),
+      code: 'TARIFF_CURRENCY_MISMATCH', severity: 'violation',
+      message: `A tariff for ${country} must be in ${expected}, not ${t.currency}.`,
     });
   }
-
-  /**
-   * Overlapping ToU coverage. A kWh in a block priced by BOTH a block-specific
-   * component and the ANY catch-all used to be billed twice; rating now lets the
-   * specific component win, but the tariff is still ambiguous as written and the
-   * operator should be told at save time rather than discovering it on an invoice.
-   */
-  const blocks = new Set(t.components.filter((c) => c.kind === 'energy').map((c) => c.touBlock));
-  if (blocks.has('ANY') && (blocks.has('WBP') || blocks.has('LWBP'))) {
+  if (country === 'ID' && t.pricesIncludeTax) {
     flags.push({
-      code: 'AMBIGUOUS_TOU_COVERAGE',
-      severity: 'warning',
-      message:
-        `Energy is priced both for a specific ToU block and by an ANY component. The ` +
-        `block-specific price applies and ANY covers only the remaining blocks; state both ` +
-        `blocks explicitly if that is not what you meant.`,
+      code: 'INCLUSIVE_PRICES_NOT_SUPPORTED', severity: 'violation',
+      message: 'Indonesian tariffs are priced before PPN and PBJT-TL; tax-inclusive prices are not supported.',
     });
   }
-
+  if (country !== 'ID' && t.ppnApplies === false) {
+    flags.push({
+      code: 'PPN_FLAG_NOT_APPLICABLE', severity: 'warning',
+      message: 'The PPN switch applies to Indonesian tariffs only; tax follows the organisation\'s registration in this country.',
+    });
+  }
   return flags;
 }
 
@@ -351,7 +238,7 @@ function localMoment(d: Date, tz: string): LocalMoment {
  * categories, and a future SPKLU differential is a plausible policy move.
  * Retrofitting ToU into a flat-rate engine is expensive; anticipating it is free.
  */
-export function touBlockAt(d: Date, tz = 'Asia/Jakarta'): 'WBP' | 'LWBP' {
+export function touBlockAt(d: Date, tz: string): 'WBP' | 'LWBP' {
   const m = localMoment(d, tz).minutes;
   return withinWindowMinutes(m, toMinutes(config.tou.wbpStart), toMinutes(config.tou.wbpEnd)) ? 'WBP' : 'LWBP';
 }
@@ -418,7 +305,9 @@ export function splitSession(
   endedAt: Date,
   energyWh: number,
   components: TariffComponent[],
-  tz = 'Asia/Jakarta',
+  tz: string,
+  /** WBP/LWBP blocks exist (Indonesia). Without them every moment is one block (LWBP). */
+  hasTou = true,
 ): SessionSplit {
   const tou: Record<'WBP' | 'LWBP', number> = { WBP: 0, LWBP: 0 };
   const perComponent = new Map<number, number>();
@@ -440,7 +329,7 @@ export function splitSession(
     const at = new Date(startedAt.getTime() + i * stepMs);
     const sliceMs = Math.min(stepMs, endedAt.getTime() - at.getTime());
     if (sliceMs <= 0) break;
-    const block = touBlockAt(at, tz);
+    const block = hasTou ? touBlockAt(at, tz) : 'LWBP';
     if (block === 'WBP') wbpMs += sliceMs;
     const applies: number[] = [];
     for (let ci = 0; ci < components.length; ci++) {
@@ -481,7 +370,7 @@ export function splitEnergyByTou(
   startedAt: Date,
   endedAt: Date,
   energyWh: number,
-  tz = 'Asia/Jakarta',
+  tz: string,
 ): Record<'WBP' | 'LWBP', number> {
   return splitSession(startedAt, endedAt, energyWh, [], tz).tou;
 }
@@ -489,10 +378,32 @@ export function splitEnergyByTou(
 // ---------------------------------------------------------------- rating
 
 export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
-  const tz = ctx.timezone ?? 'Asia/Jakarta';
+  const tz = ctx.timezone;
   const cls = chargingClassForPowerW(ctx.connectorMaxPowerW);
   const flags: RegulatoryFlag[] = [];
   const lines: CdrLine[] = [];
+  const country = tariffCountry(tariff);
+  const profile = profileFor(country);
+  // Lines are in the tariff's currency. A session in another currency must not
+  // be rated with it (no FX anywhere): flagged as a violation, so no CDR is issued.
+  const cur: CurrencyCode = tariff.currency ?? currencyOfCountry(country);
+  if (ctx.currency && ctx.currency !== cur) {
+    flags.push({
+      code: 'TARIFF_CURRENCY_MISMATCH', severity: 'violation',
+      message: `The session is in ${ctx.currency} but the tariff prices in ${cur}; assign a ${ctx.currency} tariff.`,
+    });
+  }
+  if (!ctx.tax && country !== 'ID') {
+    throw new Error(`rateSession: a ${country} tariff needs the session's tax context (services/tax resolveTaxContext)`);
+  }
+  const taxCtx = ctx.tax ?? indonesianTaxContext();
+  if (taxCtx.country !== country) {
+    flags.push({
+      code: 'TARIFF_COUNTRY_MISMATCH', severity: 'violation',
+      message: `The tariff is for ${country} but the session is in ${taxCtx.country}.`,
+    });
+  }
+  const line = (qty: number, rate: number) => amountForRate(qty, rate, cur);
 
   const durationMin = Math.max(0, (ctx.endedAt.getTime() - ctx.startedAt.getTime()) / 60_000);
   const totalKwh = ctx.energyWh / 1000;
@@ -505,7 +416,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
   // day/time window. Those window fields were previously stored, typed, exposed
   // in the API — and never read, so an operator's time-of-day price silently
   // did nothing.
-  const split = splitSession(ctx.startedAt, ctx.endedAt, ctx.energyWh, components, tz);
+  const split = splitSession(ctx.startedAt, ctx.endedAt, ctx.energyWh, components, tz, profile.hasTou);
   if (split.truncated) {
     flags.push({
       code: 'SPLIT_APPROXIMATED',
@@ -514,7 +425,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
     });
   }
 
-  const regulated = plnEnergyRate(tariff);
+  const regulated = profile.formulaEnergyRate(tariff);
   const energyIdx = components
     .map((c, i) => ({ c, i }))
     .filter(({ c }) => c.kind === 'energy');
@@ -523,7 +434,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
   if (energyIdx.length === 0) {
     if (regulated != null) {
       // No explicit component: bill the whole session at the regulated formula rate.
-      lines.push(energyLine('Energy', totalKwh, regulated, 'ANY'));
+      lines.push(energyLine('Energy', totalKwh, regulated, 'ANY', cur));
     } else if (ctx.energyWh > 0) {
       // Energy was delivered and nothing prices it. Free electricity is a
       // configuration accident, not a business decision.
@@ -613,7 +524,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
           flagOnce({
             code: 'NO_FORMULA_RATE',
             severity: 'warning',
-            message: 'An energy tier is priced at the PLN formula rate, but the tariff has no PLN scheme: it is billed at Rp 0.',
+            message: `An energy tier is priced at the PLN formula rate, but the tariff has no PLN scheme: it is billed at ${amountText(0, cur)}.`,
           });
         }
         return {
@@ -673,7 +584,9 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       }
     }
     for (const l of energyLines.values()) {
-      lines.push(energyLine(`Energy (${l.block})${l.band}`, l.kwh, l.rate, l.block));
+      // Without WBP/LWBP (outside Indonesia) there is one block, which the line does not name.
+      if (profile.hasTou) lines.push(energyLine(`Energy (${l.block})${l.band}`, l.kwh, l.rate, l.block, cur));
+      else lines.push(energyLine(`Energy${l.band}`, l.kwh, l.rate, 'ANY', cur));
     }
 
     // Every delivered kWh must be priced by something. A WBP-only tariff on an
@@ -706,18 +619,18 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
   // single component doing so — overlapping components, a stacked ToU price, a
   // tariff with `plnScheme: 'none'`. This checks the arithmetic mean the invoice
   // implies, which is the number a regulator would compute.
-  const billedEnergyIdr = lines
+  const billedEnergyMinor = lines
     .filter((l) => l.kind === 'energy')
-    .reduce((a, l) => a + l.amountIdr, 0);
-  const energyCeiling = regulatedEnergyCeiling(tariff);
-  if (totalKwh > 0.001) {
-    const effectiveRate = billedEnergyIdr / totalKwh;
+    .reduce((a, l) => a + l.amountMinor, 0);
+  const energyCeiling = profile.energyCeiling(tariff);
+  if (energyCeiling != null && totalKwh > 0.001) {
+    const effectiveRate = billedEnergyMinor / totalKwh;
     if (effectiveRate > energyCeiling + 0.5) {
       flags.push({
         code: 'ENERGY_CEILING_EXCEEDED',
         severity: 'violation',
         message:
-          `The invoice charges Rp ${fmt(effectiveRate)}/kWh against a Rp ${fmt(energyCeiling)}/kWh ` +
+          `The invoice charges ${priceText(effectiveRate, cur)}/kWh against a ${priceText(energyCeiling, cur)}/kWh ` +
           `ceiling (${(effectiveRate / energyCeiling).toFixed(2)}\u00d7).`,
       });
     }
@@ -740,7 +653,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       quantity: round3(billable),
       unit: 'min',
       unitRate: c.rate,
-      amountIdr: Math.round(billable * c.rate),
+      amountMinor: line(billable, c.rate),
       touBlock: c.touBlock,
     });
   }
@@ -757,7 +670,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       quantity: round3(billable),
       unit: 'min',
       unitRate: c.rate,
-      amountIdr: Math.round(billable * c.rate),
+      amountMinor: line(billable, c.rate),
     });
   }
 
@@ -789,11 +702,11 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
     sessionFeeTotal += c.rate;
     lines.push({
       kind: 'session',
-      description: 'Service fee (biaya layanan)',
+      description: country === 'ID' ? 'Service fee (biaya layanan)' : 'Service fee',
       quantity: 1,
       unit: 'session',
       unitRate: c.rate,
-      amountIdr: Math.round(c.rate),
+      amountMinor: line(1, c.rate),
     });
   }
   for (const c of components.filter((x) => x.kind === 'admin')) {
@@ -804,7 +717,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       quantity: 1,
       unit: 'session',
       unitRate: c.rate,
-      amountIdr: Math.round(c.rate),
+      amountMinor: line(1, c.rate),
     });
   }
 
@@ -816,13 +729,13 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
   // and the adjustment is visible and auditable rather than folded into another
   // line. A tariff that trips either of these is misconfigured and the session
   // is flagged for review; capping is the safety net, not the fix.
-  const ceiling = serviceFeeCeiling(cls);
+  const ceiling = profile.serviceFeeCeilingMinor(cls);
 
   // 1. Kepmen ESDM 182.K/2023 biaya layanan ceiling. `admin` is inside it: an
   //    admin fee charged on every session is the same charge under another name.
   const serviceLineTotal = lines
     .filter((l) => l.kind === 'session' || l.kind === 'admin')
-    .reduce((a, l) => a + l.amountIdr, 0);
+    .reduce((a, l) => a + l.amountMinor, 0);
   if (ceiling != null && serviceLineTotal > ceiling) {
     const excess = serviceLineTotal - ceiling;
     lines.push({
@@ -830,8 +743,8 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       description: `Service-fee cap adjustment (Kepmen ESDM 182.K/2023, ${cls})`,
       quantity: 1,
       unit: 'session',
-      unitRate: -excess,
-      amountIdr: -excess,
+      unitRate: -toMajor(excess, cur),
+      amountMinor: -excess,
     });
     flags.push({
       // WARNING, not violation, and the distinction is the whole point of the
@@ -843,17 +756,17 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       code: 'SERVICE_FEE_CEILING_EXCEEDED',
       severity: 'warning',
       message:
-        `Service + admin fees totalled Rp ${fmt(serviceLineTotal)}, above the Rp ${fmt(ceiling)} ` +
-        `ceiling for ${cls} charging. Capped; Rp ${fmt(excess)} was not billed. The assigned ` +
+        `Service + admin fees totalled ${amountText(serviceLineTotal, cur)}, above the ${amountText(ceiling, cur)} ` +
+        `ceiling for ${cls} charging. Capped; ${amountText(excess, cur)} was not billed. The assigned ` +
         `tariff is illegal as written and must be corrected.`,
     });
   }
 
   // 2. Occupancy cap. This is what turned a 60 kWh delivery into Rp 6,692,360.
-  const idleCap = config.regulatory.idleFeeCapIdr;
+  const idleCap = profile.idleFeeCapMinor(cur);
   const timeLineTotal = lines
     .filter((l) => l.kind === 'idle' || l.kind === 'time')
-    .reduce((a, l) => a + l.amountIdr, 0);
+    .reduce((a, l) => a + l.amountMinor, 0);
   if (timeLineTotal > idleCap) {
     const excess = timeLineTotal - idleCap;
     lines.push({
@@ -861,8 +774,8 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       description: 'Occupancy-fee cap adjustment',
       quantity: 1,
       unit: 'session',
-      unitRate: -excess,
-      amountIdr: -excess,
+      unitRate: -toMajor(excess, cur),
+      amountMinor: -excess,
     });
     flags.push({
       // Warning for the same reason as above: the invoice has been corrected, so
@@ -870,13 +783,11 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
       code: 'TIME_FEE_CAP_EXCEEDED',
       severity: 'warning',
       message:
-        `Idle/time charges totalled Rp ${fmt(timeLineTotal)} over ${round3(idle)} idle minutes, ` +
-        `above the Rp ${fmt(idleCap)} per-session cap. Capped; Rp ${fmt(excess)} was not billed.`,
+        `Idle/time charges totalled ${amountText(timeLineTotal, cur)} over ${round3(idle)} idle minutes, ` +
+        `above the ${amountText(idleCap, cur)} per-session cap. Capped; ${amountText(excess, cur)} was not billed.`,
     });
   }
-  if (tariff.plnScheme && tariff.plnScheme !== 'none' && tariff.plnMultiplier != null) {
-    flags.push(...validateMultiplier(tariff.plnScheme, tariff.plnMultiplier));
-  }
+  flags.push(...profile.ratingFlags(tariff));
   if (ctx.energyWh < 0) {
     flags.push({
       code: 'NEGATIVE_ENERGY',
@@ -888,17 +799,20 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
   // --- memberships and promotions -------------------------------------------
   // After the caps (a discount never makes a capped fee legal or illegal) and
   // before tax (PBJT-TL and PPN are levied on what the customer actually pays).
-  if (ctx.adjustments?.length) applyAdjustments(lines, ctx.adjustments, totalKwh);
+  if (ctx.adjustments?.length) applyAdjustments(lines, ctx.adjustments, totalKwh, cur);
 
-  const subtotalIdr = lines.reduce((a, l) => a + l.amountIdr, 0);
+  const subtotalMinor = lines.reduce((a, l) => a + l.amountMinor, 0);
   // PBJT is a tax on electricity, so it needs to know which part of the invoice
   // IS electricity. Passing the whole subtotal taxed the service fee too.
-  const energyIdr = lines.filter((l) => l.kind === 'energy').reduce((a, l) => a + l.amountIdr, 0);
-  const tax = computeTax({
-    subtotalIdr,
-    energyIdr,
-    pbjtRateBps: ctx.pbjtRateBps,
+  const energyMinor = lines.filter((l) => l.kind === 'energy').reduce((a, l) => a + l.amountMinor, 0);
+  // The engine of the session's country and registration (services/tax): ID is the
+  // v1.6 PPN/PBJT arithmetic unchanged; SG GST / MY service tax / none otherwise.
+  const tax = engineFor(taxCtx).computeSession({
+    subtotalMinor,
+    energyMinor,
+    localTaxRateBps: ctx.localTaxRateBps,
     ppnApplies: tariff.ppnApplies !== false,
+    pricesIncludeTax: tariff.pricesIncludeTax === true,
   });
 
   return { lines, chargingClass: cls, tax, flags, tariffSnapshot: structuredClone(tariff) };
@@ -932,7 +846,7 @@ export function rateSession(tariff: Tariff, ctx: RatingContext): RatingResult {
  */
 export function conservativeAllowanceWh(
   tariff: Tariff,
-  amountIdr: number,
+  amountMinor: number,
   ctx: Omit<RatingContext, 'energyWh' | 'idleMinutes'>,
   maxWh = 500_000,
 ): number {
@@ -944,13 +858,13 @@ export function conservativeAllowanceWh(
   // A window that lands squarely inside the peak block, so a WBP price applies
   // if the tariff has one. Same duration, so per-minute components are unchanged.
   const durationMs = ctx.endedAt.getTime() - ctx.startedAt.getTime();
-  const tz = ctx.timezone ?? 'Asia/Jakarta';
+  const tz = ctx.timezone;
   const peakStart = atLocalTime(ctx.startedAt, config.tou.wbpStart, tz);
   const peakCtx = { ...ctx, startedAt: peakStart, endedAt: new Date(peakStart.getTime() + durationMs) };
 
   const candidates = [
-    energyAllowanceWh(tariff, amountIdr, { ...ctx, idleMinutes: worstIdle }, maxWh),
-    energyAllowanceWh(tariff, amountIdr, { ...peakCtx, idleMinutes: worstIdle }, maxWh),
+    energyAllowanceWh(tariff, amountMinor, { ...ctx, idleMinutes: worstIdle }, maxWh),
+    energyAllowanceWh(tariff, amountMinor, { ...peakCtx, idleMinutes: worstIdle }, maxWh),
   ];
   return Math.min(...candidates);
 }
@@ -972,7 +886,7 @@ export function conservativeAllowanceWh(
  */
 export function driverAllowanceWh(
   tariff: Tariff,
-  amountIdr: number,
+  amountMinor: number,
   ctx: Omit<RatingContext, 'energyWh' | 'idleMinutes'>,
   maxWh = 500_000,
 ): number {
@@ -984,14 +898,14 @@ export function driverAllowanceWh(
   const idleBuffer = grace + 15;
 
   const durationMs = ctx.endedAt.getTime() - ctx.startedAt.getTime();
-  const tz = ctx.timezone ?? 'Asia/Jakarta';
+  const tz = ctx.timezone;
   const peakStart = atLocalTime(ctx.startedAt, config.tou.wbpStart, tz);
   const peakCtx = { ...ctx, startedAt: peakStart, endedAt: new Date(peakStart.getTime() + durationMs) };
 
   // Reserve the worse of "now" and "the peak block", each with the small buffer.
   return Math.min(
-    energyAllowanceWh(tariff, amountIdr, { ...ctx, idleMinutes: idleBuffer }, maxWh),
-    energyAllowanceWh(tariff, amountIdr, { ...peakCtx, idleMinutes: idleBuffer }, maxWh),
+    energyAllowanceWh(tariff, amountMinor, { ...ctx, idleMinutes: idleBuffer }, maxWh),
+    energyAllowanceWh(tariff, amountMinor, { ...peakCtx, idleMinutes: idleBuffer }, maxWh),
   );
 }
 
@@ -1010,18 +924,18 @@ function atLocalTime(ref: Date, hhmm: string, tz: string): Date {
 
 export function energyAllowanceWh(
   tariff: Tariff,
-  amountIdr: number,
+  amountMinor: number,
   ctx: Omit<RatingContext, 'energyWh'>,
   maxWh = 500_000,
 ): number {
   // If zero energy already costs more than was paid, no allowance exists.
   const floor = rateSession(tariff, { ...ctx, energyWh: 0 });
-  if (floor.tax.totalIdr > amountIdr) return 0;
+  if (floor.tax.totalMinor > amountMinor) return 0;
 
   // Expand the upper bound only as far as needed, so a cheap tariff is not
   // silently capped at the default ceiling.
   let hi = 1_000;
-  while (hi < maxWh && rateSession(tariff, { ...ctx, energyWh: hi }).tax.totalIdr <= amountIdr) {
+  while (hi < maxWh && rateSession(tariff, { ...ctx, energyWh: hi }).tax.totalMinor <= amountMinor) {
     hi *= 2;
   }
   hi = Math.min(hi, maxWh);
@@ -1030,7 +944,7 @@ export function energyAllowanceWh(
   for (let i = 0; i < 48; i++) {
     const mid = Math.floor((lo + hi) / 2);
     if (mid === lo) break;
-    if (rateSession(tariff, { ...ctx, energyWh: mid }).tax.totalIdr <= amountIdr) lo = mid;
+    if (rateSession(tariff, { ...ctx, energyWh: mid }).tax.totalMinor <= amountMinor) lo = mid;
     else hi = mid;
   }
   return lo;
@@ -1048,7 +962,7 @@ export interface PriceAdjustment {
   id: string;
   name: string;
   /** Member / promo price per kWh: energy is billed at this rate where it is lower. */
-  energyRateIdr?: number | null;
+  energyRate?: number | null;
   /** Basis points off the energy. */
   energyPercentOffBps?: number | null;
   /** kWh free, at the session's average energy price. */
@@ -1056,30 +970,30 @@ export interface PriceAdjustment {
   /** Service and admin fees waived. */
   waiveSessionFees?: boolean;
   /** Rupiah off: from the energy first, then from the fees. */
-  amountOffIdr?: number | null;
+  amountOffMinor?: number | null;
 }
 
-const sumOf = (lines: CdrLine[], kinds: ComponentKind[]) => lines.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.amountIdr, 0);
+const sumOf = (lines: CdrLine[], kinds: ComponentKind[]) => lines.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.amountMinor, 0);
 
 /**
  * Add each adjustment as negative lines of the kind it reduces (energy, or
  * service fee), so PBJT-TL still sees the true energy amount. Nothing goes
  * below zero. Mutates and returns `lines`.
  */
-export function applyAdjustments(lines: CdrLine[], adjustments: PriceAdjustment[], totalKwh: number): CdrLine[] {
+export function applyAdjustments(lines: CdrLine[], adjustments: PriceAdjustment[], totalKwh: number, cur: CurrencyCode = LEGACY_CURRENCY): CdrLine[] {
   for (const a of adjustments) {
     const tag = { source: a.source, id: a.id, name: a.name };
     const discount = (kind: ComponentKind, amount: number, what: string) => {
       const avail = sumOf(lines, kind === 'energy' ? ['energy'] : ['session', 'admin']);
       const x = Math.min(Math.round(amount), avail);
       if (x <= 0) return 0;
-      lines.push({ kind, description: `${a.name}: ${what}`, quantity: 1, unit: 'session', unitRate: -x, amountIdr: -x, adjustment: tag });
+      lines.push({ kind, description: `${a.name}: ${what}`, quantity: 1, unit: 'session', unitRate: -toMajor(x, cur), amountMinor: -x, adjustment: tag });
       return x;
     };
-    if (a.energyRateIdr != null && totalKwh > 0) {
+    if (a.energyRate != null && totalKwh > 0) {
       const energy = sumOf(lines, ['energy']);
-      const target = Math.round(totalKwh * a.energyRateIdr);
-      if (energy > target) discount('energy', energy - target, `energy at Rp ${fmt(a.energyRateIdr)}/kWh`);
+      const target = amountForRate(totalKwh, a.energyRate, cur);
+      if (energy > target) discount('energy', energy - target, `energy at ${priceText(a.energyRate, cur)}/kWh`);
     }
     if (a.freeKwh && totalKwh > 0) {
       const energy = sumOf(lines, ['energy']);
@@ -1090,21 +1004,21 @@ export function applyAdjustments(lines: CdrLine[], adjustments: PriceAdjustment[
       discount('energy', (sumOf(lines, ['energy']) * a.energyPercentOffBps) / 10_000, `${a.energyPercentOffBps / 100}% off energy`);
     }
     if (a.waiveSessionFees) discount('session', sumOf(lines, ['session', 'admin']), 'service fee waived');
-    if (a.amountOffIdr) {
-      const fromEnergy = discount('energy', a.amountOffIdr, `Rp ${fmt(a.amountOffIdr)} off`);
-      if (a.amountOffIdr - fromEnergy > 0) discount('session', a.amountOffIdr - fromEnergy, `Rp ${fmt(a.amountOffIdr)} off`);
+    if (a.amountOffMinor) {
+      const fromEnergy = discount('energy', a.amountOffMinor, `${amountText(a.amountOffMinor, cur)} off`);
+      if (a.amountOffMinor - fromEnergy > 0) discount('session', a.amountOffMinor - fromEnergy, `${amountText(a.amountOffMinor, cur)} off`);
     }
   }
   return lines;
 }
 
 /** What each adjustment took off, from the lines it produced. */
-export function adjustmentTotals(lines: CdrLine[]): Map<string, { source: 'subscription' | 'promotion' | 'loyalty' | 'v2x'; name: string; discountIdr: number }> {
-  const m = new Map<string, { source: 'subscription' | 'promotion' | 'loyalty' | 'v2x'; name: string; discountIdr: number }>();
+export function adjustmentTotals(lines: CdrLine[]): Map<string, { source: 'subscription' | 'promotion' | 'loyalty' | 'v2x'; name: string; discountMinor: number }> {
+  const m = new Map<string, { source: 'subscription' | 'promotion' | 'loyalty' | 'v2x'; name: string; discountMinor: number }>();
   for (const l of lines) {
     if (!l.adjustment) continue;
-    const e = m.get(l.adjustment.id) ?? { source: l.adjustment.source, name: l.adjustment.name, discountIdr: 0 };
-    e.discountIdr += -l.amountIdr;
+    const e = m.get(l.adjustment.id) ?? { source: l.adjustment.source, name: l.adjustment.name, discountMinor: 0 };
+    e.discountMinor += -l.amountMinor;
     m.set(l.adjustment.id, e);
   }
   return m;
@@ -1112,17 +1026,17 @@ export function adjustmentTotals(lines: CdrLine[]): Map<string, { source: 'subsc
 
 // ---------------------------------------------------------------- helpers
 
-function energyLine(description: string, kwh: number, rate: number, touBlock: TouBlock): CdrLine {
+function energyLine(description: string, kwh: number, rate: number, touBlock: TouBlock, cur: CurrencyCode): CdrLine {
   return {
     kind: 'energy',
     description,
     quantity: round3(kwh),
     unit: 'kWh',
     unitRate: rate,
-    amountIdr: Math.round(kwh * rate),
+    // IDR: Math.round(kwh * rate), the v1.6 arithmetic; MYR/SGD in sen/cents.
+    amountMinor: amountForRate(kwh, rate, cur),
     touBlock,
   };
 }
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
-const fmt = (n: number) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(n);

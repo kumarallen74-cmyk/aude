@@ -4,7 +4,7 @@ import { bus } from '../services/events.js';
 import { unseal } from '../services/secrets.js';
 import { contentHash, evseUid, ocpiDateTime, STATUS, type Party } from './mapping.js';
 import {
-  getParty, endpointUrl, renderLocations, renderTariffs, publishedTariffIds, renderSession, renderCdrForSession,
+  getParty, getParties, endpointUrl, renderLocations, renderTariffs, publishedTariffIds, renderSession, renderCdrForSession,
   type PartnerRow,
 } from './store.js';
 import { ocpiCall } from './client.js';
@@ -24,9 +24,9 @@ import { roamingCards, cardToken, type CardRow } from './emsp.js';
  * stored with the row.
  */
 
-const MAX_ATTEMPTS = 8;
+export const MAX_ATTEMPTS = 8;
 /** Seconds before retry N: 30 s, 2 min, 10 min, 30 min, 1 h, 3 h, 6 h. */
-const BACKOFF_S = [30, 120, 600, 1800, 3600, 10800, 21600];
+export const BACKOFF_S = [30, 120, 600, 1800, 3600, 10800, 21600];
 
 type Module = 'locations' | 'tariffs' | 'sessions' | 'cdrs' | 'commands' | 'tokens' | 'chargingprofiles';
 
@@ -56,7 +56,25 @@ export async function enqueuePush(e: Enqueue): Promise<void> {
 }
 
 /** Connected partners that receive this module (a partner without a receiver endpoint is skipped). */
+/**
+ * An `authority` partner (Singapore's LTA, docs/MULTI-COUNTRY-DESIGN.md SG-6 / D8)
+ * receives Locations and Tariffs of its own country only — and nothing else.
+ */
+const AUTHORITY_COUNTRY = 'SGP';
+export function authorityTakes(p: Pick<PartnerRow, 'kind'>, alpha3: string): boolean {
+  return p.kind !== 'authority' || alpha3 === AUTHORITY_COUNTRY;
+}
+
 async function receivers(orgId: string, module: Module) {
+  // Authorities take Locations and Tariffs only (never sessions, CDRs or tokens).
+  if (module !== 'locations' && module !== 'tariffs') {
+    return many<PartnerRow>(
+      `SELECT * FROM ocpi_partner
+        WHERE org_id = $1 AND state = 'connected' AND kind <> 'authority'
+          AND endpoints @> $2::jsonb`,
+      [orgId, JSON.stringify([{ identifier: module, role: 'RECEIVER' }])],
+    );
+  }
   return many<PartnerRow>(
     `SELECT * FROM ocpi_partner
       WHERE org_id = $1 AND state = 'connected'
@@ -130,7 +148,9 @@ export function registerRoamingListeners(): void {
  * chargers, tariff re-assignment — without hooking each one.
  */
 export async function syncOrg(orgId: string, opts: { forceAll?: boolean; partnerId?: string } = {}): Promise<{ locations: number; tariffs: number; tokens: number }> {
-  const party = await getParty(orgId);
+  // Every party of the operator: each location / tariff goes out under its country's party.
+  const parties = await getParties(orgId);
+  const party = parties[0];
   if (!party) return { locations: 0, tariffs: 0, tokens: 0 };
   const locPartners = (await receivers(orgId, 'locations')).filter((p) => !opts.partnerId || p.id === opts.partnerId);
   const tarPartners = (await receivers(orgId, 'tariffs')).filter((p) => !opts.partnerId || p.id === opts.partnerId);
@@ -148,7 +168,7 @@ export async function syncOrg(orgId: string, opts: { forceAll?: boolean; partner
   );
 
   let locations = 0;
-  const all = await renderLocations(orgId, party, { onlyPublished: false });
+  const all = await renderLocations(orgId, parties, { onlyPublished: false });
   for (const l of all) {
     const prev = states.get(`location:${l.siteId}`);
     const wasShared = prev && !prev.removed_at;
@@ -157,7 +177,7 @@ export async function syncOrg(orgId: string, opts: { forceAll?: boolean; partner
     const changed = !prev || prev.hash !== hash || (!l.published) !== !!prev.removed_at;
     if (!changed && !opts.forceAll) continue;
     if (changed) await setState('location', l.siteId, hash, !l.published);
-    for (const p of locPartners) {
+    for (const p of locPartners.filter((x) => authorityTakes(x, l.location.country))) {
       await enqueuePush({ orgId, partnerId: p.id, module: 'locations', action: 'put', objectKey: `location:${l.siteId}`,
         to: { country_code: p.country_code, party_id: p.party_id } });
     }
@@ -165,15 +185,15 @@ export async function syncOrg(orgId: string, opts: { forceAll?: boolean; partner
   }
 
   let tariffs = 0;
-  const ids = new Set(await publishedTariffIds(orgId, party));
-  const rendered = await renderTariffs(orgId, party, [...ids]);
+  const ids = new Set(await publishedTariffIds(orgId, parties));
+  const rendered = await renderTariffs(orgId, parties, [...ids]);
   for (const t of rendered) {
     const prev = states.get(`tariff:${t.id}`);
     const hash = contentHash(t.tariff);
     const changed = !prev || prev.hash !== hash || !!prev.removed_at;
     if (!changed && !opts.forceAll) continue;
     if (changed) await setState('tariff', t.id, hash, false);
-    for (const p of tarPartners) {
+    for (const p of tarPartners.filter((x) => authorityTakes(x, t.tariff.currency === 'SGD' ? 'SGP' : t.tariff.currency === 'MYR' ? 'MYS' : 'IDN'))) {
       await enqueuePush({ orgId, partnerId: p.id, module: 'tariffs', action: 'put', objectKey: `tariff:${t.id}`,
         to: { country_code: p.country_code, party_id: p.party_id } });
     }
@@ -212,6 +232,29 @@ export async function syncOrg(orgId: string, opts: { forceAll?: boolean; partner
   return { locations, tariffs, tokens };
 }
 
+/**
+ * Singapore's LTA wants dynamic data at least every 5 minutes (SG-6), whether or not
+ * a status changed: a full Location PUT of every published SG site to each connected
+ * `authority` partner. Runs from the workers (`ocpi-authority-heartbeat`).
+ */
+export async function authorityHeartbeat(): Promise<number> {
+  const partners = await many<PartnerRow>(
+    `SELECT * FROM ocpi_partner WHERE state = 'connected' AND kind = 'authority'
+        AND endpoints @> '[{"identifier":"locations","role":"RECEIVER"}]'::jsonb`);
+  let n = 0;
+  for (const p of partners) {
+    const sites = await many<{ id: string }>(
+      `SELECT id FROM site WHERE org_id = $1 AND country_code = 'SG' AND roaming_publish AND archived_at IS NULL AND billing_model <> 'private'`,
+      [p.org_id]);
+    for (const s of sites) {
+      await enqueuePush({ orgId: p.org_id, partnerId: p.id, module: 'locations', action: 'put', objectKey: `location:${s.id}`,
+        to: { country_code: p.country_code, party_id: p.party_id } });
+      n++;
+    }
+  }
+  return n;
+}
+
 export async function syncAll(): Promise<void> {
   const orgs = await many<{ org_id: string }>(`SELECT DISTINCT org_id FROM ocpi_partner WHERE state = 'connected'`);
   for (const o of orgs) await syncOrg(o.org_id).catch((e) => logger.warn({ orgId: o.org_id, err: (e as Error).message }, 'roaming sync failed'));
@@ -224,11 +267,20 @@ interface DueRow {
   url: string | null; body: unknown; to_country_code: string | null; to_party_id: string | null; attempts: number;
 }
 
-type Built = { method: 'PUT' | 'PATCH' | 'POST' | 'DELETE'; url: string; body?: unknown } | { skip: string };
+/**
+ * `from`: the party the object is published under (its country's), sent as OCPI-from-*: a hub routes the
+ * receiver's answer by it. Unset: the home party (tokens: our eMSP identity; command results).
+ */
+type Built = { method: 'PUT' | 'PATCH' | 'POST' | 'DELETE'; url: string; body?: unknown; from?: Party } | { skip: string };
+const partyOf = (o: { country_code: string; party_id: string }, parties: Party[]): Party | undefined =>
+  parties.find((p) => p.country_code === o.country_code && p.party_id === o.party_id);
 
 async function build(row: DueRow, p: PartnerRow, party: Party): Promise<Built> {
   const recv = endpointUrl(p, row.module, 'RECEIVER');
+  // The object's own party (its country's), in the receiver URL; `party` is the home party.
+  const ownOf = (o: { country_code: string; party_id: string }) => `${o.country_code}/${o.party_id}`;
   const own = `${party.country_code}/${party.party_id}`;
+  const parties = await getParties(row.org_id);
   const [kind, a, b] = row.object_key.split(':');
 
   // Command and charging-profile results go to the response_url the partner gave.
@@ -239,38 +291,40 @@ async function build(row: DueRow, p: PartnerRow, party: Party): Promise<Built> {
 
   if (row.module === 'locations') {
     if (kind === 'location') {
-      const [l] = await renderLocations(row.org_id, party, { siteId: a!, onlyPublished: false });
+      const [l] = await renderLocations(row.org_id, parties, { siteId: a!, onlyPublished: false });
       if (!l) return { skip: 'site no longer exists' };
-      return { method: 'PUT', url: `${recv}/${own}/${l.siteId}`, body: l.location };
+      if (!authorityTakes(p, l.location.country)) return { skip: 'not for this authority' };
+      return { method: 'PUT', url: `${recv}/${ownOf(l.location)}/${l.siteId}`, body: l.location, from: partyOf(l.location, parties) };
     }
     if (kind === 'evse') {
       const cp = await one<{ site_id: string; ocpp_identity: string }>(`SELECT site_id, ocpp_identity FROM charge_point WHERE id = $1`, [a]);
       if (!cp) return { skip: 'charger no longer exists' };
-      const [l] = await renderLocations(row.org_id, party, { siteId: cp.site_id });
+      const [l] = await renderLocations(row.org_id, parties, { siteId: cp.site_id });
       const uid = evseUid(cp.ocpp_identity, Number(b));
       const evse = l?.location.evses.find((e) => e.uid === uid);
       if (!l || !evse) return { skip: 'location or EVSE is not shared' };
-      return { method: 'PATCH', url: `${recv}/${own}/${l.siteId}/${uid}`, body: { status: evse.status, last_updated: ocpiDateTime(new Date()) } };
+      if (!authorityTakes(p, l.location.country)) return { skip: 'not for this authority' };
+      return { method: 'PATCH', url: `${recv}/${ownOf(l.location)}/${l.siteId}/${uid}`, body: { status: evse.status, last_updated: ocpiDateTime(new Date()) }, from: partyOf(l.location, parties) };
     }
   }
   if (row.module === 'tariffs' && kind === 'tariff') {
-    if (row.action === 'delete') return { method: 'DELETE', url: `${recv}/${own}/${a}` };
-    const [t] = await renderTariffs(row.org_id, party, [a!]);
+    const [t] = await renderTariffs(row.org_id, parties, [a!]);
+    if (row.action === 'delete') return { method: 'DELETE', url: `${recv}/${t ? ownOf(t.tariff) : own}/${a}`, ...(t ? { from: partyOf(t.tariff, parties) } : {}) };
     if (!t) return { skip: 'tariff no longer exists' };
-    return { method: 'PUT', url: `${recv}/${own}/${a}`, body: t.tariff };
+    return { method: 'PUT', url: `${recv}/${ownOf(t.tariff)}/${a}`, body: t.tariff, from: partyOf(t.tariff, parties) };
   }
   if (row.module === 'sessions' && kind === 'session') {
     const s = await renderSession(a!);
     if (!s) return { skip: 'session no longer exists' };
     if (row.action === 'patch') {
-      return { method: 'PATCH', url: `${recv}/${own}/${a}`, body: {
+      return { method: 'PATCH', url: `${recv}/${ownOf(s.session)}/${a}`, body: {
         kwh: s.session.kwh, status: s.session.status, ...(s.session.total_cost ? { total_cost: s.session.total_cost } : {}), last_updated: s.session.last_updated,
-      } };
+      }, from: partyOf(s.session, parties) };
     }
-    return { method: 'PUT', url: `${recv}/${own}/${a}`, body: s.session };
+    return { method: 'PUT', url: `${recv}/${ownOf(s.session)}/${a}`, body: s.session, from: partyOf(s.session, parties) };
   }
   if (row.module === 'tokens' && kind === 'token') {
-    const c = await one<CardRow>(`SELECT id, org_id, uid, status, valid_to, holder_name, fleet_name, energy_limit_wh, spend_limit_idr, roaming_shared, contract_id, updated_at
+    const c = await one<CardRow>(`SELECT id, org_id, uid, status, valid_to, holder_name, fleet_name, energy_limit_wh, spend_limit_minor, roaming_shared, contract_id, updated_at
                                     FROM token WHERE id = $1 AND org_id = $2 AND contract_id IS NOT NULL`, [a, row.org_id]);
     if (!c) return { skip: 'card no longer exists' };
     return { method: 'PUT', url: `${recv}/${own}/${encodeURIComponent(c.uid)}?type=RFID`, body: cardToken(party, c) };
@@ -278,7 +332,7 @@ async function build(row: DueRow, p: PartnerRow, party: Party): Promise<Built> {
   if (row.module === 'cdrs' && kind === 'session') {
     const c = await renderCdrForSession(a!);
     if (!c) return { skip: 'no CDR for this session yet' };
-    return { method: 'POST', url: recv, body: c.cdr };
+    return { method: 'POST', url: recv, body: c.cdr, from: partyOf(c.cdr, parties) };
   }
   return { skip: `unknown call ${row.module}/${row.action}` };
 }
@@ -341,7 +395,7 @@ async function attempt(d: DueRow): Promise<void> {
     return;
   }
   const r = await ocpiCall({
-    orgId: d.org_id, partnerId: p.id, method: b.method, url: b.url, token, body: b.body, from: party,
+    orgId: d.org_id, partnerId: p.id, method: b.method, url: b.url, token, body: b.body, from: b.from ?? party,
     to: { country_code: d.to_country_code, party_id: d.to_party_id },
   });
   if (r.ok) {

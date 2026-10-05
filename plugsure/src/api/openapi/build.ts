@@ -1,4 +1,5 @@
 import { TAGS, type Op, type Schema } from './types.js';
+import { legacyNamesFor } from '../legacy-money.js';
 import * as core from './catalogue/core.js';
 import * as roaming from './catalogue/roaming.js';
 import * as consoleA from './catalogue/console-a.js';
@@ -11,6 +12,9 @@ import * as onboardingCat from './catalogue/onboarding.js';
 import * as integrationsCat from './catalogue/integrations.js';
 import * as driverAppCat from './catalogue/driver-app.js';
 import * as consoleBrandCat from './catalogue/console-brand.js';
+import * as microsoftCat from './catalogue/microsoft.js';
+import * as hubCat from './catalogue/hub.js';
+import * as hubClearingCat from './catalogue/hub-clearing.js';
 
 /**
  * Builds the published OpenAPI 3.1 document from the catalogue.
@@ -19,7 +23,7 @@ import * as consoleBrandCat from './catalogue/console-brand.js';
  * when the committed file, the catalogue and the registered routes disagree.
  */
 
-const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
+const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
 
 export function allOps(): Op[] {
   return CATALOGUES.flatMap((c) => c.ops);
@@ -76,7 +80,7 @@ alerts and webhooks fire — and \`POST /v1/sandbox/chargers/{identity}/simulate
 4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.
 
 ## Conventions
-- Timestamps are ISO 8601 in UTC. Money is in rupiah (IDR). Energy is in Wh unless a field says kWh.
+- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.
 - Field names follow the resource they come from: database rows are \`snake_case\`, computed views are \`camelCase\`.
   New fields may be added to any response; ignore what you do not know.
 - Errors are JSON: \`{ "error": "human-readable reason" }\`, sometimes with a \`code\` or details. Validation problems are 400 or 422.
@@ -86,6 +90,19 @@ alerts and webhooks fire — and \`POST /v1/sandbox/chargers/{identity}/simulate
   429 with \`Retry-After\` and \`code: rate_limited\`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.
 - SDK: a generated TypeScript client (\`@plugsure/csms-sdk\`, no dependencies) is published with this document at \`/sdk/plugsure-csms-sdk.tgz\`.
 - Writes are audited with the key or user that made them.
+
+## Money
+Every amount is an integer in the **PlugSure minor unit of its currency**, named \`…Minor\` / \`…_minor\`, with the
+currency next to it (\`currency\`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.
+PlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): \`total_minor: 1234\`
+with \`currency: "SGD"\` is S$ 12.34. Rates per kWh or per minute are decimals in major units.
+Tax fields are named neutrally: \`taxMinor\` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),
+\`localTaxMinor\` (Indonesian PBJT-TL), \`taxBaseMinor\` (the tax base, DPP in Indonesia).
+
+**Deprecated names.** Until v1.7 amounts were named \`…Idr\` / \`…_idr\` (and \`ppnIdr\`, \`pbjtIdr\`, \`dppIdr\`, …).
+While an amount is in IDR every response and webhook still carries the old name next to the new one, with the same
+value (and the response has a \`Deprecation: true\` header); request bodies accept the old names. Amounts in other
+currencies have no \`…Idr\` name. The old names are marked \`deprecated\` in this document and go away in \`/v2\`.
 
 ## Webhooks
 Subscribe under **Govern → Webhooks** (\`POST /v1/webhooks\`). Each delivery is a POST with the envelope
@@ -129,14 +146,14 @@ const RATE_LIMIT_HEADERS = {
 const EVENT_DATA: Record<string, { summary: string; properties: Record<string, Schema>; required: string[] }> = {
   'session.started': { summary: 'A charging session started', required: ['sessionId', 'ocppIdentity', 'connectorId'], properties: { sessionId: { type: 'string', format: 'uuid' }, ocppIdentity: { type: 'string' }, connectorId: { type: 'integer' } } },
   'session.ended': { summary: 'A charging session ended', required: ['sessionId', 'energyWh', 'durationS'], properties: { sessionId: { type: 'string', format: 'uuid' }, energyWh: { type: 'number' }, durationS: { type: 'number' }, stopReason: { type: 'string' } } },
-  'cdr.created': { summary: 'A session was rated into a charge record (receipt)', required: ['cdrId', 'sessionId', 'totalIdr'], properties: { cdrId: { type: 'string', format: 'uuid' }, sessionId: { type: 'string', format: 'uuid' }, totalIdr: { type: 'number' } } },
+  'cdr.created': { summary: 'A session was rated into a charge record (receipt)', required: ['cdrId', 'sessionId', 'totalMinor', 'currency'], properties: { cdrId: { type: 'string', format: 'uuid' }, sessionId: { type: 'string', format: 'uuid' }, totalMinor: { type: 'number', description: 'In minor units of `currency` (IDR: whole rupiah).' }, currency: { type: 'string', enum: ['IDR', 'MYR', 'SGD'] } } },
   'charge_point.connected': { summary: 'A charger connected', required: ['ocppIdentity', 'version'], properties: { ocppIdentity: { type: 'string' }, version: { type: 'string', examples: ['ocpp1.6', 'ocpp2.0.1'] } } },
   'charge_point.disconnected': { summary: 'A charger disconnected', required: ['ocppIdentity'], properties: { ocppIdentity: { type: 'string' } } },
   'charge_point.booted': { summary: 'A charger sent BootNotification', required: ['ocppIdentity', 'vendor', 'model'], properties: { ocppIdentity: { type: 'string' }, vendor: { type: 'string' }, model: { type: 'string' }, firmware: { type: 'string' } } },
   'connector.status_changed': { summary: "A connector's status changed", required: ['ocppIdentity', 'evseId', 'connectorId', 'status'], properties: { ocppIdentity: { type: 'string' }, evseId: { type: 'integer' }, connectorId: { type: 'integer' }, status: { type: 'string', examples: ['Available', 'Preparing', 'Charging', 'Faulted'] }, errorCode: { type: 'string' } } },
   'alert.raised': { summary: 'An operational alert was raised', required: ['kind', 'severity', 'message'], properties: { kind: { type: 'string' }, severity: { type: 'string', examples: ['info', 'warning', 'critical'] }, message: { type: 'string' }, targetType: { type: 'string' }, targetId: { type: 'string' } } },
-  'refund.due': { summary: 'Money is owed back to a driver', required: ['paymentIntentId', 'amountIdr', 'reason'], properties: { paymentIntentId: { type: 'string', format: 'uuid' }, amountIdr: { type: 'number' }, reason: { type: 'string' } } },
-  'refund.completed': { summary: 'A refund was paid', required: ['paymentIntentId', 'amountIdr', 'method', 'reference'], properties: { paymentIntentId: { type: 'string', format: 'uuid' }, amountIdr: { type: 'number' }, method: { type: 'string', enum: ['provider', 'manual'] }, reference: { type: 'string' } } },
+  'refund.due': { summary: 'Money is owed back to a driver', required: ['paymentIntentId', 'amountMinor', 'currency', 'reason'], properties: { paymentIntentId: { type: 'string', format: 'uuid' }, amountMinor: { type: 'number' }, currency: { type: 'string', enum: ['IDR', 'MYR', 'SGD'] }, reason: { type: 'string' } } },
+  'refund.completed': { summary: 'A refund was paid', required: ['paymentIntentId', 'amountMinor', 'currency', 'method', 'reference'], properties: { paymentIntentId: { type: 'string', format: 'uuid' }, amountMinor: { type: 'number' }, currency: { type: 'string', enum: ['IDR', 'MYR', 'SGD'] }, method: { type: 'string', enum: ['provider', 'manual'] }, reference: { type: 'string' } } },
   'firmware.status': { summary: 'A charger reported firmware update progress', required: ['ocppIdentity', 'status'], properties: { ocppIdentity: { type: 'string' }, status: { type: 'string' }, jobId: { type: ['string', 'null'] } } },
 };
 
@@ -199,15 +216,19 @@ export function buildSpec(opts: BuildOptions): Record<string, any> {
     if (pathNames.length || op.body) errs.add(400);
     if (op.tag === 'Commands') errs.add(409);
     if (op.path === '/v1/auth/login') errs.delete(401);
+    // Hub operations exist only with HUB_ENABLED=true (off by default): otherwise every one answers 404 (api/hub-routes.ts).
+    const hubOnly = op.path.startsWith('/v1/hub/') || op.path === '/v1/roaming/hub' || op.path.startsWith('/v1/roaming/hub/');
+    if (hubOnly) errs.add(404);
     for (const s of [...errs].sort()) responses[String(s)] ??= { $ref: `#/components/responses/E${s}` };
 
     const permText = perms.length ? `\n\n**Permissions checked:** ${perms.map((x) => `\`${x}\``).join(', ')}.` : '';
+    const hubText = hubOnly ? '\n\nOnly on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.' : '';
     usedTags.add(op.tag);
     (paths[p] ??= {})[op.method.toLowerCase()] = {
       tags: [op.tag],
       summary: op.summary,
       operationId: operationId(op, taken),
-      ...(op.description || permText ? { description: `${op.description ?? ''}${permText}`.trim() } : {}),
+      ...(op.description || permText || hubText ? { description: `${op.description ?? ''}${hubText}${permText}`.trim() } : {}),
       ...(parameters.length ? { parameters } : {}),
       ...(op.body
         ? {
@@ -269,6 +290,18 @@ export function buildSpec(opts: BuildOptions): Record<string, any> {
     };
   }
 
+  // The v1.6 money names, documented as deprecated aliases (api/legacy-money.ts adds them to IDR amounts).
+  withLegacyMoneyAliases(schemas);
+  withLegacyMoneyAliases(paths);
+  withLegacyMoneyAliases(webhooks);
+  // A v1.6 client may still SEND the v1.6 name: a request body requires the amount under either name.
+  for (const item of Object.values(paths)) {
+    for (const op of Object.values(item)) {
+      const media = op?.requestBody?.content?.['application/json'];
+      if (media?.schema) media.schema = legacyNameSatisfiesRequired(media.schema, schemas);
+    }
+  }
+
   return {
     openapi: '3.1.0',
     info: {
@@ -293,4 +326,74 @@ export function buildSpec(opts: BuildOptions): Record<string, any> {
       responses,
     },
   };
+}
+
+/**
+ * A request body schema in which a required renamed amount may be sent under its v1.6 name instead
+ * (api/legacy-money.ts acceptLegacyMoneyKeys maps it): `required: [amountMinor]` becomes
+ * `anyOf: [{ required: [amountMinor] }, { required: [amountIdr] }]` (amountIdr: the legacy name). A component that needs this is
+ * inlined (copied), so the same component in responses keeps its `required`. Returns the schema to use.
+ */
+export function legacyNameSatisfiesRequired(schema: any, components: Record<string, any>, seen: Set<string> = new Set()): any {
+  const needs = (s: any, path: Set<string>): boolean => {
+    if (Array.isArray(s)) return s.some((x) => needs(x, path));
+    if (!s || typeof s !== 'object') return false;
+    if (typeof s.$ref === 'string') {
+      const name = s.$ref.replace('#/components/schemas/', '');
+      if (path.has(name) || !components[name]) return false;
+      return needs(components[name], new Set([...path, name]));
+    }
+    if (Array.isArray(s.required) && s.properties && s.required.some((k: string) => legacyNamesFor(k).some((l) => s.properties[l]))) return true;
+    return Object.values(s).some((v) => needs(v, path));
+  };
+  const rewrite = (s: any): any => {
+    if (Array.isArray(s)) return s.map(rewrite);
+    if (!s || typeof s !== 'object') return s;
+    if (typeof s.$ref === 'string') {
+      const name = s.$ref.replace('#/components/schemas/', '');
+      if (seen.has(name) || !components[name] || !needs(s, new Set())) return s;
+      seen.add(name);
+      const { $ref: _r, ...siblings } = s;
+      const inlined = rewrite(structuredClone(components[name]));
+      seen.delete(name);
+      return { ...inlined, ...Object.fromEntries(Object.entries(siblings).filter(([, v]) => v !== undefined)) };
+    }
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(s)) out[k] = k === 'properties' && v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, rewrite(pv)])) : rewrite(v);
+    if (Array.isArray(out.required) && out.properties) {
+      const either: any[] = [];
+      out.required = out.required.filter((k: string) => {
+        const legacy = legacyNamesFor(k).filter((l) => out.properties[l]);
+        if (!legacy.length) return true;
+        either.push({ anyOf: [{ required: [k] }, ...legacy.map((l) => ({ required: [l] }))] });
+        return false;
+      });
+      if (!out.required.length) delete out.required;
+      if (either.length) {
+        const all = [...(Array.isArray(out.allOf) ? out.allOf : []), ...(Array.isArray(out.anyOf) ? [{ anyOf: out.anyOf }] : []), ...either];
+        delete out.anyOf;
+        if (all.length === 1) out.anyOf = all[0].anyOf; else out.allOf = all;
+      }
+    }
+    return out;
+  };
+  return needs(schema, new Set()) ? rewrite(schema) : schema;
+}
+
+/** Next to every renamed money property, its v1.6 name as a deprecated alias. Mutates. */
+function withLegacyMoneyAliases(node: unknown): void {
+  if (Array.isArray(node)) { node.forEach(withLegacyMoneyAliases); return; }
+  if (!node || typeof node !== 'object') return;
+  const o = node as Record<string, any>;
+  if (o.properties && typeof o.properties === 'object' && !Array.isArray(o.properties)) {
+    const props = o.properties as Record<string, any>;
+    for (const key of Object.keys(props)) {
+      for (const legacy of legacyNamesFor(key)) {
+        if (props[legacy]) continue;
+        const { description: _d, ...rest } = props[key] ?? {};
+        props[legacy] = { ...rest, deprecated: true, description: `Deprecated: the v1.6 name of \`${key}\`, present while the amount is in IDR.` };
+      }
+    }
+  }
+  for (const v of Object.values(o)) withLegacyMoneyAliases(v);
 }

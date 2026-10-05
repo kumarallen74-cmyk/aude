@@ -1,4 +1,6 @@
 import { logger } from '../../logger.js';
+import type { CurrencyCode } from '../../domain/money.js';
+import { COUNTRIES } from '../../domain/country.js';
 import { guardedFetch, type GuardedResponse } from '../net-guard.js';
 
 /**
@@ -28,7 +30,9 @@ export type PaymentMode = 'prepurchase' | 'tokenized' | 'preauth' | 'postpaid';
 
 export interface CreateQrisChargeArgs {
   referenceId: string;
-  amountIdr: number;
+  amountMinor: number;
+  /** The payment's currency (absent = IDR). An adapter refuses a currency its account does not take. */
+  currency?: CurrencyCode;
   expiresInS?: number;
   description?: string;
 }
@@ -37,7 +41,7 @@ export interface QrisCharge {
   providerRef: string;
   /** EMVCo payload string to render as a QR at the charger or in the browser. */
   qrString: string;
-  amountIdr: number;
+  amountMinor: number;
   expiresAt: string;
   status: 'pending' | 'paid' | 'expired' | 'failed';
 }
@@ -46,7 +50,7 @@ export interface TokenizedChargeArgs {
   referenceId: string;
   /** Payment method id returned when the driver linked their wallet, once, at signup. */
   paymentMethodId: string;
-  amountIdr: number;
+  amountMinor: number;
   description?: string;
 }
 
@@ -54,18 +58,18 @@ export interface PreauthArgs {
   referenceId: string;
   cardTokenId: string;
   /** Conservative worst-case amount. Capture may be lower, never higher. */
-  amountIdr: number;
+  amountMinor: number;
 }
 
 export interface CaptureArgs {
   providerRef: string;
-  amountIdr: number;
+  amountMinor: number;
 }
 
 export interface PaymentResult {
   providerRef: string;
   status: 'pending' | 'authorised' | 'captured' | 'failed' | 'expired';
-  amountIdr: number;
+  amountMinor: number;
   raw?: unknown;
 }
 
@@ -75,16 +79,41 @@ export interface PaymentResult {
  * driver's OVO app for their phone number. CARD: the acquirer's hosted card
  * page with 3-D Secure; card numbers never reach PlugSure.
  */
-export type Channel = 'QRIS' | 'GOPAY' | 'SHOPEEPAY' | 'OVO' | 'DANA' | 'LINKAJA' | 'CARD';
-export const CHANNELS: Channel[] = ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD'];
+export type Channel = 'QRIS' | 'GOPAY' | 'SHOPEEPAY' | 'OVO' | 'DANA' | 'LINKAJA' | 'CARD' | 'PAYNOW' | 'FPX' | 'GRABPAY';
+export const CHANNELS: Channel[] = ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD', 'PAYNOW', 'FPX', 'GRABPAY'];
+/**
+ * Channels reserved for phase 2 (docs/MULTI-COUNTRY-DESIGN.md §D6): DuitNow QR, Touch 'n Go, Boost (MY), NETS (SG).
+ * Not offered by any adapter yet; named here so nothing else claims the codes.
+ */
+export const RESERVED_CHANNELS = ['DUITNOW', 'TNG', 'BOOST', 'NETS'] as const;
 export const CHANNEL_LABEL: Record<Channel, string> = {
   QRIS: 'QRIS', GOPAY: 'GoPay', SHOPEEPAY: 'ShopeePay', OVO: 'OVO', DANA: 'DANA', LINKAJA: 'LinkAja', CARD: 'Kartu kredit / debit',
+  PAYNOW: 'PayNow', FPX: 'FPX online banking', GRABPAY: 'GrabPay',
 };
-export const methodOf = (c: Channel): 'qris' | 'ewallet' | 'card' => (c === 'QRIS' ? 'qris' : c === 'CARD' ? 'card' : 'ewallet');
+/**
+ * The currencies a channel can take. CARD: any (the account's own). The Indonesian rails are rupiah only; PayNow is
+ * Singapore dollars, FPX ringgit, GrabPay either (each through the account of its country).
+ */
+const RUPIAH = [COUNTRIES.ID.currency] as const;
+export const CHANNEL_CURRENCIES: Record<Channel, readonly CurrencyCode[] | 'any'> = {
+  QRIS: RUPIAH, GOPAY: RUPIAH, SHOPEEPAY: RUPIAH, OVO: RUPIAH, DANA: RUPIAH, LINKAJA: RUPIAH, CARD: 'any',
+  PAYNOW: [COUNTRIES.SG.currency], FPX: [COUNTRIES.MY.currency], GRABPAY: [COUNTRIES.MY.currency, COUNTRIES.SG.currency],
+};
+export const channelTakes = (c: Channel, cur: CurrencyCode): boolean => {
+  const t = CHANNEL_CURRENCIES[c];
+  return t === 'any' || (t ?? []).includes(cur);
+};
+/**
+ * The payment_intent.method (and subscription_charge.via) of a channel: 'qris' (QRIS only: the Indonesian MDR rules key on
+ * it), 'qr' (another bank QR scheme: PayNow), 'bank' (online banking redirect: FPX), 'ewallet', 'card'.
+ */
+export type MethodKind = 'qris' | 'qr' | 'bank' | 'ewallet' | 'card';
+export const methodOf = (c: Channel): MethodKind =>
+  c === 'QRIS' ? 'qris' : c === 'CARD' ? 'card' : c === 'PAYNOW' ? 'qr' : c === 'FPX' ? 'bank' : 'ewallet';
 
 export interface CheckoutArgs {
   referenceId: string;
-  amountIdr: number;
+  amountMinor: number;
   channel: Exclude<Channel, 'QRIS'>;
   /** Where the acquirer sends the driver back after paying (the app's return page). */
   returnUrl: string;
@@ -98,6 +127,8 @@ export interface CheckoutArgs {
   saveCard?: boolean;
   /** The acquirer's customer reference (PlugSure's driver id; nothing personal). Needed to save a card. */
   customerId?: string;
+  /** The payment's currency (absent = IDR). An adapter refuses a currency its account does not take. */
+  currency?: CurrencyCode;
 }
 
 /** A saved card as the acquirer reports it: its token and what may be shown. Never the card number. */
@@ -112,13 +143,15 @@ export interface SavedCardInfo {
 
 export interface SavedCardChargeArgs {
   referenceId: string;
-  amountIdr: number;
+  amountMinor: number;
   /** The acquirer's token for the card. */
   token: string;
   preauth: boolean;
   returnUrl: string;
   customerId: string;
   description?: string;
+  /** The payment's currency (absent = IDR). */
+  currency?: CurrencyCode;
 }
 
 export interface SavedCardCharge {
@@ -144,7 +177,7 @@ export class WalletLinkEnded extends Error {
 export interface HoldArgs {
   providerRef: string;
   providerPaymentId?: string | null;
-  amountIdr: number;
+  amountMinor: number;
   idempotencyKey: string;
 }
 
@@ -159,9 +192,14 @@ export interface HoldResult {
 
 export interface Checkout {
   providerRef: string;
-  /** 'redirect': open checkoutUrl (the e-wallet app or the card page); 'push': the driver approves in their app. */
-  action: 'redirect' | 'push';
+  /**
+   * 'redirect': open checkoutUrl (the e-wallet app or the card page); 'push': the driver approves in their app;
+   * 'qr': show qrString (a bank QR scheme other than QRIS, e.g. PayNow), scanned with the driver's banking app.
+   */
+  action: 'redirect' | 'push' | 'qr';
   checkoutUrl: string | null;
+  /** action 'qr': the EMVCo payload to render. */
+  qrString?: string | null;
   expiresAt: string;
   providerPaymentId?: string;
 }
@@ -171,7 +209,7 @@ export interface RefundArgs {
   providerPaymentId?: string | null;
   channel?: string | null;
   providerRef: string;
-  amountIdr: number;
+  amountMinor: number;
   reason: string;
   /** Stable per refund, so a retried call cannot pay the driver twice. */
   idempotencyKey: string;
@@ -191,6 +229,12 @@ export interface PaymentProvider {
    * (registry.handleNotification). A new provider is held to that unless it opts out here.
    */
   readonly unverifiedAmounts?: boolean;
+  /**
+   * The currencies this account can take (docs/MULTI-COUNTRY-DESIGN.md §D6). Absent =
+   * ['IDR'] (Midtrans, Xendit and SNAP QRIS are Indonesian rails). A payment in any
+   * other currency is refused before the provider is called (PaymentsUnavailable).
+   */
+  currencies?(): CurrencyCode[];
   createQrisCharge(a: CreateQrisChargeArgs): Promise<QrisCharge>;
   chargeTokenized(a: TokenizedChargeArgs): Promise<PaymentResult>;
   authorizeCard(a: PreauthArgs): Promise<PaymentResult>;
@@ -232,12 +276,17 @@ export interface PaymentProvider {
   canRefund?(channel: string | null): boolean;
   /** Card holds and saved cards: what this acquirer adapter supports. */
   cardFeatures?(): { holds: boolean; savedCards: boolean };
+  /**
+   * The smallest (and, where the rail has one, largest) amount this acquirer takes through a channel, in PlugSure
+   * minor units of the currency. A payment outside it is refused before the acquirer is asked (registry.startPayment).
+   */
+  amountLimits?(channel: Channel, currency: CurrencyCode): { minMinor: number; maxMinor?: number };
   /** Pay with a saved card (its token), as a hold or a sale. May need 3-D Secure (checkoutUrl). */
   chargeSavedCard?(a: SavedCardChargeArgs): Promise<SavedCardCharge>;
   /** Capture a hold, up to the authorised amount; the rest is released. */
   captureHold?(a: HoldArgs): Promise<HoldResult>;
   /** Release a hold entirely (nothing is taken). */
-  releaseHold?(a: Omit<HoldArgs, 'amountIdr'>): Promise<HoldResult>;
+  releaseHold?(a: Omit<HoldArgs, 'amountMinor'>): Promise<HoldResult>;
   /** Forget a saved card at the acquirer, where it offers that. */
   deleteSavedCard?(token: string, customerId: string): Promise<void>;
   /** The e-wallets this acquirer can link for one-tap payments. */
@@ -279,7 +328,7 @@ export interface WalletLinkStatus {
 
 export interface WalletChargeArgs {
   referenceId: string;
-  amountIdr: number;
+  amountMinor: number;
   channel: Channel;
   token: string;
   returnUrl: string;
@@ -299,11 +348,16 @@ export interface PaymentNotification {
   paid: boolean;
   /** The provider's status word, for the log. */
   status: string;
-  amountIdr: number | null;
+  amountMinor: number | null;
   /** The provider's own id of the payment (needed by some refund APIs). */
   paymentId?: string;
   /** A card hold was authorised (the money is reserved, not yet taken). */
   authorised?: boolean;
+  /**
+   * The currency the acquirer reports for the payment (ISO 4217, upper case). Absent: the account's only currency (the
+   * Indonesian rails). A notification in another currency than the payment's is never booked (registry.applyNotification).
+   */
+  currency?: string;
   /** The card was saved at the acquirer (the driver asked): its token. */
   savedCard?: SavedCardInfo;
 }
@@ -374,23 +428,26 @@ export async function providerFetch(url: string, init: RequestInit & { timeoutMs
  * line item. Build it into the kWh tariff instead.
  */
 export function estimateQrisMdrIdr(
-  amountIdr: number,
+  amountMinor: number,
   opts: { category?: 'UMI' | 'UKE' | 'UME' | 'UBE' | 'SPBU'; onOrAfterOct2026?: boolean } = {},
 ): number {
   const category = opts.category ?? 'UKE';
   const zeroBandActive = opts.onOrAfterOct2026 ?? new Date() >= new Date('2026-10-01T00:00:00+07:00');
 
   if (category === 'UMI') {
-    return amountIdr <= 500_000 ? 0 : Math.round(amountIdr * 0.003);
+    return amountMinor <= 500_000 ? 0 : Math.round(amountMinor * 0.003);
   }
-  if (zeroBandActive && amountIdr <= 100_000) return 0;
+  if (zeroBandActive && amountMinor <= 100_000) return 0;
 
   // VERIFY with the PJP whether EV charging is assigned the SPBU category (0.4%)
   // or standard (0.7%). Globally EV charging has its own MCC 5552. The 0.3%
   // delta is material at scale.
   const rate = category === 'SPBU' ? 0.004 : 0.007;
-  return Math.round(amountIdr * rate);
+  return Math.round(amountMinor * rate);
 }
 
 /** Per-transaction QRIS ceiling, PADG 3/2025. Not Rp 20M — that figure is from a superseded 2022 announcement. */
 export const QRIS_MAX_TRANSACTION_IDR = 10_000_000;
+
+/** The currencies a provider takes (absent: IDR only). */
+export const currenciesOf = (p: Pick<PaymentProvider, 'currencies'>): CurrencyCode[] => p.currencies?.() ?? ['IDR'];

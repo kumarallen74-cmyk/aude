@@ -47,7 +47,7 @@ if (DB_OK) {
     await cleanup();
     ids.org = (await one<{ id: string }>(
       `INSERT INTO organisation (name, slug) VALUES ('Unpaid Reminder Test', $1) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
-    ids.site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Reminder Hub', 1000) RETURNING id`, [ids.org]))!.id;
+    ids.site = (await one<{ id: string }>(`INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Reminder Hub', 1000) RETURNING id`, [ids.org]))!.id;
     ids.cp = (await one<{ id: string }>(`INSERT INTO charge_point (site_id, ocpp_identity) VALUES ($1, $2) RETURNING id`, [ids.site, IDENT]))!.id;
     ids.evse = (await one<{ id: string }>(`INSERT INTO evse (charge_point_id, evse_id) VALUES ($1, 1) RETURNING id`, [ids.cp]))!.id;
     ids.conn = (await one<{ id: string }>(`INSERT INTO connector (evse_uuid, max_power_w) VALUES ($1, 60000) RETURNING id`, [ids.evse]))!.id;
@@ -58,11 +58,11 @@ if (DB_OK) {
        VALUES ($1, $2, $3, $4, $5, now() - interval '30 minutes', now() - interval '20 minutes') RETURNING id`,
       [ids.org, ids.site, ids.conn, ids.cp, `unpaid-reminder-${randomBytes(4).toString('hex')}`]))!.id;
     ids.intent = (await one<{ id: string }>(
-      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, hold_state, hold_capture_idr, hold_error, session_id)
+      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, hold_state, hold_capture_minor, hold_error, session_id)
        VALUES ($1, 'mock', 'ewallet', 'postpay', 'authorised', 50000, 'capture_failed', 21340, '202 Transaction is denied: insufficient balance', $2) RETURNING id`,
       [ids.org, ids.session]))!.id;
     ids.charge = (await one<{ id: string }>(
-      `INSERT INTO driver_charge (device_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_idr) VALUES ($1, $2, $3, $4, $5, 'prepaid', 50000) RETURNING id`,
+      `INSERT INTO driver_charge (device_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_minor) VALUES ($1, $2, $3, $4, $5, 'prepaid', 50000) RETURNING id`,
       [ids.device, ids.org, ids.conn, ids.token, ids.intent]))!.id;
     ids.sub = (await one<{ id: string }>(
       `INSERT INTO push_subscription (device_id, endpoint, p256dh, auth, lang) VALUES ($1, $2, 'p256dh-test', 'auth-test', 'id') RETURNING id`,
@@ -105,7 +105,7 @@ dbDescribe('reminders for unpaid sessions payable in the app', () => {
     await remindUnpaidSessions();
     assert.equal((await mine()).length, 0, 'not before 15 minutes');
     await endedAgo('2 days');
-    await query(`UPDATE payment_intent SET hold_state = 'captured', state = 'captured', amount_captured_idr = 21340 WHERE id = $1`, [ids.intent]);
+    await query(`UPDATE payment_intent SET hold_state = 'captured', state = 'captured', amount_captured_minor = 21340 WHERE id = $1`, [ids.intent]);
     await remindUnpaidSessions();
     assert.equal((await mine()).length, 0, 'paid: nothing to remind');
   });

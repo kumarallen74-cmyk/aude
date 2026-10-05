@@ -84,10 +84,10 @@ try {
   const tap = await simulate(V201, 'tap-card', { idTag: 'SANDBOX-RFID-0001', kwh: 1 });
   const done = await until(() => sessionsOf(V201), (l) => l.some((s: any) => s.ended_at), 45_000, 1000);
   const s1 = done.find((s: any) => s.ended_at);
-  const d1 = s1 ? (await until(() => sb('GET', `/v1/sessions/${s1.id}`), (r) => r.data?.signed_status != null && r.data?.total_idr != null, 10_000)).data : null;
+  const d1 = s1 ? (await until(() => sb('GET', `/v1/sessions/${s1.id}`), (r) => r.data?.signed_status != null && r.data?.total_minor != null, 10_000)).data : null;
   check('2.0.1: a tapped card charges 1 kWh through TransactionEvents (a string transaction id) and the session is billed',
-    tap.status === 200 && !!d1 && Math.abs(Number(d1.energy_wh) - 1000) <= 60 && typeof d1.ocpp_transaction_id === 'string' && !/^\d+$/.test(d1.ocpp_transaction_id) && d1.total_idr > 0,
-    { tap: tap.data, d: d1 && { e: d1.energy_wh, tx: d1.ocpp_transaction_id, t: d1.total_idr } });
+    tap.status === 200 && !!d1 && Math.abs(Number(d1.energy_wh) - 1000) <= 60 && typeof d1.ocpp_transaction_id === 'string' && !/^\d+$/.test(d1.ocpp_transaction_id) && d1.total_minor > 0,
+    { tap: tap.data, d: d1 && { e: d1.energy_wh, tx: d1.ocpp_transaction_id, t: d1.total_minor } });
   check('2.0.1: the meter\'s signed start and end readings (OCMF in signedMeterValue) verify against the registered key and match the bill',
     d1?.signed_status === 'verified' && Math.abs(Number(d1.signed_energy_wh) - Number(d1.energy_wh)) <= 2, { st: d1?.signed_status, d: d1?.signed_detail });
   const sd = d1 ? await sb('GET', `/v1/sessions/${d1.id}/signed-data`) : null;
@@ -117,7 +117,7 @@ try {
     { off: off.data, st: d3?.signed_status, on: on.data });
 
   // ─────────────────────────────────────────── 2.1: V2G with the fleet's consent (DC_BPT and AC_BPT)
-  const prog = await sb('PUT', `/v1/sites/${siteId}`, { v2xEnabled: true, v2xWindows: '00:00-00:00', v2xMinSocPercent: 20, v2xCreditIdrPerKwh: 2000, v2xAllowExport: true });
+  const prog = await sb('PUT', `/v1/sites/${siteId}`, { v2xEnabled: true, v2xWindows: '00:00-00:00', v2xMinSocPercent: 20, v2xCreditMinorPerKwh: 2000, v2xAllowExport: true });
   const fleets = await sb('GET', '/v1/fleet-accounts');
   const fleet = (fleets.data?.accounts ?? []).find((a: any) => /Sandbox Logistik/.test(a.name));
   const consent = await sb('PUT', `/v1/fleet-accounts/${fleet?.id}`, { v2xAllowed: true, v2xMinSocPercent: 30 });
@@ -141,11 +141,11 @@ try {
       ch?.dischargeW === expectW && ch.exportWh > (first?.exportWh ?? 0) + 600 && ch.socPercent < first?.socPercent, { first: [first?.exportWh, first?.socPercent, first?.dischargeW], now: [ch?.exportWh, ch?.socPercent, ch?.dischargeW, ch?.charging] });
     const tx = (await sb('GET', `/v1/sessions/${sid}`)).data?.ocpp_transaction_id;
     await sb('POST', `/v1/charge-points/${id}/remote-stop`, { transactionId: tx });
-    const billed = await until(() => sb('GET', `/v1/sessions/${sid}`), (r) => !!r.data?.ended_at && r.data?.total_idr != null, 30_000, 1000);
+    const billed = await until(() => sb('GET', `/v1/sessions/${sid}`), (r) => !!r.data?.ended_at && r.data?.total_minor != null, 30_000, 1000);
     const b = billed.data;
     check(`2.1 ${mode}: the session ends and is billed with the discharge credit (2000 IDR/kWh), its signed readings verified`,
-      !!b?.ended_at && b.v2x?.exportWh > 0 && b.v2x.creditIdr === Math.floor(b.v2x.exportWh * 2) && b.signed_status === 'verified',
-      { st: b?.signed_status, d: b?.signed_detail, t: b?.total_idr, e: b?.v2x?.exportWh, c: b?.v2x?.creditIdr });
+      !!b?.ended_at && b.v2x?.exportWh > 0 && b.v2x.creditMinor === Math.floor(b.v2x.exportWh * 2) && b.signed_status === 'verified',
+      { st: b?.signed_status, d: b?.signed_detail, t: b?.total_minor, e: b?.v2x?.exportWh, c: b?.v2x?.creditMinor });
   };
   await v2g(V21, 'DC_BPT', 11000);
   await v2g(V21AC, 'AC_BPT', 11000);

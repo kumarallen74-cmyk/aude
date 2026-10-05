@@ -22,24 +22,24 @@ import { canonicalJson } from './audit.js';
 describe('PPN (VAT)', () => {
   test('uses DPP nilai lain = 11/12 x price, not a flat 11%', () => {
     // The regulation's worked example: price 12,000,000 -> DPP 11,000,000 -> PPN 1,320,000
-    const r = computeTax({ subtotalIdr: 12_000_000, pbjtRateBps: 0 });
-    assert.equal(r.ppnDppIdr, 11_000_000);
-    assert.equal(r.ppnIdr, 1_320_000);
-    assert.equal(r.totalIdr, 13_320_000);
+    const r = computeTax({ subtotalMinor: 12_000_000, localTaxRateBps: 0 });
+    assert.equal(r.taxBaseMinor, 11_000_000);
+    assert.equal(r.taxMinor, 1_320_000);
+    assert.equal(r.totalMinor, 13_320_000);
   });
 
   test('effective rate is 11% even though the headline is 12%', () => {
     assert.equal(effectivePpnRateBps(), 1100);
-    const r = computeTax({ subtotalIdr: 1_000_000, pbjtRateBps: 0 });
-    assert.equal(r.ppnIdr, 110_000);
+    const r = computeTax({ subtotalMinor: 1_000_000, localTaxRateBps: 0 });
+    assert.equal(r.taxMinor, 110_000);
   });
 
   test('PBJT is applied before PPN and is capped at 10%', () => {
-    const r = computeTax({ subtotalIdr: 100_000, pbjtRateBps: 500 });
-    assert.equal(r.pbjtIdr, 5_000);
-    assert.equal(r.ppnDppIdr, Math.round((105_000 * 11) / 12));
-    const capped = computeTax({ subtotalIdr: 100_000, pbjtRateBps: 5_000 });
-    assert.equal(capped.pbjtRateBps, 1_000, 'PBJT above the 10% statutory cap is clamped');
+    const r = computeTax({ subtotalMinor: 100_000, localTaxRateBps: 500 });
+    assert.equal(r.localTaxMinor, 5_000);
+    assert.equal(r.taxBaseMinor, Math.round((105_000 * 11) / 12));
+    const capped = computeTax({ subtotalMinor: 100_000, localTaxRateBps: 5_000 });
+    assert.equal(capped.localTaxRateBps, 1_000, 'PBJT above the 10% statutory cap is clamped');
   });
 });
 
@@ -113,18 +113,18 @@ describe('session rating', () => {
       endedAt: new Date('2026-08-23T03:00:00Z'),
       energyWh: 20_000,
       connectorMaxPowerW: 60_000,
-      pbjtRateBps: 500,
+      localTaxRateBps: 500, timezone: 'Asia/Jakarta',
     });
     const energy = r.lines.find((l) => l.kind === 'energy')!;
-    assert.equal(energy.amountIdr, Math.round(20 * 2467.5)); // 49,350
-    assert.equal(r.tax.subtotalIdr, 49_350 + 25_000 + 4_000);
+    assert.equal(energy.amountMinor, Math.round(20 * 2467.5)); // 49,350
+    assert.equal(r.tax.subtotalMinor, 49_350 + 25_000 + 4_000);
     // PBJT is a tax on TENAGA LISTRIK, so its base is the energy line alone.
     // Levying it on the biaya layanan and the admin fee too overcharged every
     // invoice, and DPP, PPN and the faktur pajak all inherited the error.
-    assert.equal(r.tax.pbjtBaseIdr, 49_350);
-    assert.equal(r.tax.pbjtIdr, Math.round(49_350 * 0.05));
+    assert.equal(r.tax.localTaxBaseMinor, 49_350);
+    assert.equal(r.tax.localTaxMinor, Math.round(49_350 * 0.05));
     assert.equal(r.chargingClass, 'ultrafast');
-    assert.equal(r.tax.totalIdr, r.tax.subtotalIdr + r.tax.pbjtIdr + r.tax.ppnIdr);
+    assert.equal(r.tax.totalMinor, r.tax.subtotalMinor + r.tax.localTaxMinor + r.tax.taxMinor);
   });
 
   test('idle fee respects the grace period', () => {
@@ -133,18 +133,18 @@ describe('session rating', () => {
       endedAt: new Date('2026-08-23T03:00:00Z'),
       energyWh: 10_000,
       connectorMaxPowerW: 60_000,
-      pbjtRateBps: 0,
+      localTaxRateBps: 0, timezone: 'Asia/Jakarta',
     };
     const within = rateSession(tariff, { ...base, idleMinutes: 10 });
     assert.equal(within.lines.filter((l) => l.kind === 'idle').length, 0);
     const beyond = rateSession(tariff, { ...base, idleMinutes: 45 });
-    assert.equal(beyond.lines.find((l) => l.kind === 'idle')!.amountIdr, 30_000); // (45-15) x 1000
+    assert.equal(beyond.lines.find((l) => l.kind === 'idle')!.amountMinor, 30_000); // (45-15) x 1000
   });
 
   test('the tariff snapshot is frozen on the result so invoices reproduce exactly', () => {
     const r = rateSession(tariff, {
       startedAt: new Date(), endedAt: new Date(), energyWh: 1_000,
-      connectorMaxPowerW: 22_000, pbjtRateBps: 0,
+      connectorMaxPowerW: 22_000, localTaxRateBps: 0, timezone: 'Asia/Jakarta',
     });
     r.tariffSnapshot.components[0]!.rate = 99_999;
     assert.equal(tariff.components[0]!.rate, 2467.5, 'mutating the snapshot must not touch the source');
@@ -161,21 +161,21 @@ describe('QRIS pre-purchase inverse rating', () => {
       startedAt: new Date('2026-08-23T02:00:00Z'),
       endedAt: new Date('2026-08-23T03:00:00Z'),
       connectorMaxPowerW: 22_000,
-      pbjtRateBps: 0,
+      localTaxRateBps: 0, timezone: 'Asia/Jakarta',
     };
     const wh = energyAllowanceWh(tariff, 100_000, ctx);
     // Round-trip: rating that allowance must not exceed what the driver paid.
     const back = rateSession(tariff, { ...ctx, energyWh: wh });
-    assert.ok(back.tax.totalIdr <= 100_000, `${back.tax.totalIdr} exceeds the prepaid amount`);
-    assert.ok(back.tax.totalIdr > 99_000, 'allowance should be tight, not conservative');
+    assert.ok(back.tax.totalMinor <= 100_000, `${back.tax.totalMinor} exceeds the prepaid amount`);
+    assert.ok(back.tax.totalMinor > 99_000, 'allowance should be tight, not conservative');
   });
 });
 
 describe('time of use', () => {
   test('WBP window is classified in WIB, not UTC', () => {
     // 18:00 WIB = 11:00 UTC
-    assert.equal(touBlockAt(new Date('2026-08-23T11:00:00Z')), 'WBP');
-    assert.equal(touBlockAt(new Date('2026-08-23T02:00:00Z')), 'LWBP'); // 09:00 WIB
+    assert.equal(touBlockAt(new Date('2026-08-23T11:00:00Z'), 'Asia/Jakarta'), 'WBP');
+    assert.equal(touBlockAt(new Date('2026-08-23T02:00:00Z'), 'Asia/Jakarta'), 'LWBP'); // 09:00 WIB
   });
 
   test('energy splits across the WBP boundary', () => {
@@ -184,6 +184,7 @@ describe('time of use', () => {
       new Date('2026-08-23T09:00:00Z'),
       new Date('2026-08-23T11:00:00Z'),
       10_000,
+      'Asia/Jakarta',
     );
     assert.equal(split.WBP + split.LWBP, 10_000);
     assert.ok(Math.abs(split.WBP - 5_000) < 100);
@@ -344,17 +345,16 @@ describe('re-verification: caps are enforced, not merely observed', () => {
       endedAt: new Date('2026-08-01T14:00:00Z'),
       idleMinutes: 660, // eleven hours parked after the charge finished
       connectorMaxPowerW: fastConnectorW,
-      pbjtRateBps: 500,
-      timezone: 'Asia/Jakarta',
+      localTaxRateBps: 500, timezone: 'Asia/Jakarta',
     });
-    const idleTotal = r.lines.filter((l) => l.kind === 'idle').reduce((a, l) => a + l.amountIdr, 0);
+    const idleTotal = r.lines.filter((l) => l.kind === 'idle').reduce((a, l) => a + l.amountMinor, 0);
     assert.equal(idleTotal, 100_000, 'idle charges must be capped at the platform cap');
     // A WARNING, deliberately: the invoice has already been corrected by the cap
     // line, so it must still be issued. A violation blocked CDR creation, which
     // made the cap line unreachable and left the session permanently unbillable.
     assert.ok(r.flags.some((f) => f.code === 'TIME_FEE_CAP_EXCEEDED' && f.severity === 'warning'));
     // The invoice as a whole must now be plausible, not 32x the delivery.
-    assert.ok(r.tax.totalIdr < 400_000, `total was Rp ${r.tax.totalIdr}`);
+    assert.ok(r.tax.totalMinor < 400_000, `total was Rp ${r.tax.totalMinor}`);
   });
 
   test('an admin fee cannot be used to slip past the biaya layanan ceiling', () => {
@@ -373,12 +373,11 @@ describe('re-verification: caps are enforced, not merely observed', () => {
       startedAt: new Date('2026-08-01T02:00:00Z'),
       endedAt: new Date('2026-08-01T03:00:00Z'),
       connectorMaxPowerW: fastConnectorW,
-      pbjtRateBps: 0,
-      timezone: 'Asia/Jakarta',
+      localTaxRateBps: 0, timezone: 'Asia/Jakarta',
     });
     const fees = r.lines
       .filter((l) => l.kind === 'session' || l.kind === 'admin')
-      .reduce((a, l) => a + l.amountIdr, 0);
+      .reduce((a, l) => a + l.amountMinor, 0);
     assert.equal(fees, 25_000, 'service + admin must be capped at the ceiling');
   });
 
@@ -418,8 +417,7 @@ describe('re-verification: stepped energy pricing', () => {
     startedAt: new Date('2026-08-01T02:00:00Z'),
     endedAt: new Date('2026-08-01T03:00:00Z'),
     connectorMaxPowerW: 50_000,
-    pbjtRateBps: 0,
-    timezone: 'Asia/Jakarta',
+    localTaxRateBps: 0, timezone: 'Asia/Jakarta',
   };
 
   test('two tiers with no explicit upper bound do not double-bill the overlap', () => {
@@ -436,7 +434,7 @@ describe('re-verification: stepped energy pricing', () => {
     const r = rateSession(t, { ...ctx, energyWh: 80_000 });
     const energy = r.lines.filter((l) => l.kind === 'energy');
     // 50 kWh at 2,467.50 + 30 kWh at 2,000 = 123,375 + 60,000
-    assert.equal(energy.reduce((a, l) => a + l.amountIdr, 0), 183_375);
+    assert.equal(energy.reduce((a, l) => a + l.amountMinor, 0), 183_375);
     assert.equal(energy.reduce((a, l) => a + l.quantity, 0), 80, 'every kWh billed exactly once');
   });
 
@@ -459,7 +457,7 @@ describe('re-verification: stepped energy pricing', () => {
       components: [{ kind: 'energy', rate: 2_467.5, touBlock: 'ANY' }],
     };
     const r = rateSession(t, { ...ctx, energyWh: 80_000 });
-    assert.equal(r.lines.filter((l) => l.kind === 'energy').reduce((a, l) => a + l.amountIdr, 0), 197_400);
+    assert.equal(r.lines.filter((l) => l.kind === 'energy').reduce((a, l) => a + l.amountMinor, 0), 197_400);
   });
 });
 
@@ -470,8 +468,7 @@ describe('re-verification 3: each kWh is priced exactly once', () => {
     startedAt: new Date('2026-08-03T10:00:00Z'), // 17:00 WIB
     endedAt: new Date('2026-08-03T12:00:00Z'),   // 19:00 WIB
     connectorMaxPowerW: fastW,
-    pbjtRateBps: 0,
-    timezone: 'Asia/Jakarta',
+    localTaxRateBps: 0, timezone: 'Asia/Jakarta',
   };
 
   test('an ANY component and a WBP component do not both bill the same kWh', () => {
@@ -490,7 +487,7 @@ describe('re-verification 3: each kWh is priced exactly once', () => {
     const r = rateSession(t, { ...peakCtx, energyWh: 40_000 });
     const energy = r.lines.filter((l) => l.kind === 'energy');
     assert.equal(energy.reduce((a, l) => a + l.quantity, 0), 40, 'the invoice must match the meter');
-    assert.equal(energy.reduce((a, l) => a + l.amountIdr, 0), 98_700);
+    assert.equal(energy.reduce((a, l) => a + l.amountMinor, 0), 98_700);
     assert.ok(!r.flags.some((f) => f.code === 'DOUBLE_PRICED_ENERGY'));
   });
 
@@ -525,7 +522,7 @@ describe('re-verification 3: each kWh is priced exactly once', () => {
     const energy = r.lines.filter((l) => l.kind === 'energy');
     assert.equal(energy.length, 2);
     assert.equal(energy.reduce((a, l) => a + l.quantity, 0), 40);
-    assert.equal(energy.reduce((a, l) => a + l.amountIdr, 0), 20 * 1_800 + 20 * 2_467.5);
+    assert.equal(energy.reduce((a, l) => a + l.amountMinor, 0), 20 * 1_800 + 20 * 2_467.5);
   });
 
   test("plnScheme 'none' does not switch the energy ceiling off", () => {
@@ -575,8 +572,7 @@ describe('driver prepaid allowance (app top-ups)', () => {
     startedAt: new Date('2026-08-03T05:00:00Z'), // midday WIB, off-peak
     endedAt: new Date('2026-08-03T05:45:00Z'),
     connectorMaxPowerW: fastConnectorW,
-    pbjtRateBps: 500,
-    timezone: 'Asia/Jakarta',
+    localTaxRateBps: 500, timezone: 'Asia/Jakarta',
   };
 
   test('a modest top-up buys energy — not priced out by a worst-case idle reservation', () => {
@@ -608,10 +604,10 @@ describe('driver prepaid allowance (app top-ups)', () => {
 });
 
 describe('re-verification 4: tiers, windows and time are rated on the session, not the block', () => {
-  const ctx = { connectorMaxPowerW: 50_000, pbjtRateBps: 0, timezone: 'Asia/Jakarta' };
+  const ctx = { connectorMaxPowerW: 50_000, localTaxRateBps: 0, timezone: 'Asia/Jakarta' };
   const energyOf = (r: ReturnType<typeof rateSession>) => {
     const e = r.lines.filter((l) => l.kind === 'energy');
-    return { kwh: e.reduce((a, l) => a + l.quantity, 0), idr: e.reduce((a, l) => a + l.amountIdr, 0), lines: e };
+    return { kwh: e.reduce((a, l) => a + l.quantity, 0), idr: e.reduce((a, l) => a + l.amountMinor, 0), lines: e };
   };
   const stepped: Tariff = {
     id: 't', name: 'stepped', currency: 'IDR', plnScheme: 'none',

@@ -61,7 +61,7 @@ const cleanup: Array<() => Promise<unknown>> = [];
 const localHhmm = (d: Date) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
 const contract: string[] = [];
 let cc: (path: string, method: string, status: string, body: unknown) => void = () => {};
-const sumLines =(lines: any[], pred: (l: any) => boolean) => lines.filter(pred).reduce((a, l) => a + l.amountIdr, 0);
+const sumLines =(lines: any[], pred: (l: any) => boolean) => lines.filter(pred).reduce((a, l) => a + l.amountMinor, 0);
 
 try {
   if (!pg) throw new Error('set E2E_DATABASE_URL (the runtime role)');
@@ -86,10 +86,10 @@ try {
   // ================================================================ Part A — sandbox
   const acct = (await sb('GET', '/v1/fleet-accounts')).data.accounts.find((a: any) => a.name === 'Sandbox Logistik');
   const plan = await sb('POST', '/v1/subscription-plans', {
-    name: 'Armada Plus', monthlyFeeIdr: 150000, memberRateIdr: 2000, includedKwh: 1, waiveSessionFees: true, description: 'Fleet membership',
+    name: 'Armada Plus', monthlyFeeMinor: 150000, memberRate: 2000, includedKwh: 1, waiveSessionFees: true, description: 'Fleet membership',
   });
-  const badPlan = await sb('POST', '/v1/subscription-plans', { name: 'Bad', monthlyFeeIdr: 1000, energyDiscountPercent: 150 });
-  check('plans: created; an impossible discount refused (422)', plan.status === 201 && plan.data.member_rate_idr === 2000 && badPlan.status === 422, { plan: plan.data, bad: badPlan.data });
+  const badPlan = await sb('POST', '/v1/subscription-plans', { name: 'Bad', monthlyFeeMinor: 1000, energyDiscountPercent: 150 });
+  check('plans: created; an impossible discount refused (422)', plan.status === 201 && plan.data.member_rate === 2000 && badPlan.status === 422, { plan: plan.data, bad: badPlan.data });
   const member = await sb('POST', '/v1/subscriptions', { planId: plan.data.id, subscriberKind: 'fleet_account', fleetAccountId: acct.id, billing: 'invoice' });
   const twice = await sb('POST', '/v1/subscriptions', { planId: plan.data.id, subscriberKind: 'fleet_account', fleetAccountId: acct.id });
   const looseCard = await sb('POST', '/v1/subscriptions', { planId: plan.data.id, subscriberKind: 'card', cardUid: 'SANDBOX-RFID-0001', billing: 'invoice' });
@@ -107,7 +107,7 @@ try {
   const charge = async (connectorId: number, idTag: string, kwh: number) => {
     const before = new Set((await listDc()).map((s: any) => s.id));
     await until(() => sb('POST', `/v1/sandbox/chargers/${DC}/simulate`, { event: 'tap-card', connectorId, idTag, kwh }), (r) => r.status === 200, 30_000, 1500);
-    const s = await until(async () => (await listDc()).find((x: any) => !before.has(x.id) && x.ended_at && x.total_idr != null), (x) => !!x, 60_000, 1200);
+    const s = await until(async () => (await listDc()).find((x: any) => !before.has(x.id) && x.ended_at && x.total_minor != null), (x) => !!x, 60_000, 1200);
     if (!s) throw new Error(`no rated session for ${idTag}`);
     const detail = await sb('GET', `/v1/sessions/${s.id}`);
     cc('/v1/sessions/{id}', 'get', '200', detail.data);
@@ -126,9 +126,9 @@ try {
   check(`member session (${e1} kWh): energy at Rp 2,000/kWh, 1 kWh included, service fee waived, happy hour 10% on top`,
     memberLines.length === 3 && promoLines.length === 1 && sumLines(l1, (l) => l.kind === 'session' || l.kind === 'admin') === 0
       && Math.abs(energyNet - (afterMember - Math.round(afterMember * 0.1))) <= 3,
-    { lines: l1.map((l) => [l.kind, l.description, l.amountIdr]), expected: afterMember - Math.round(afterMember * 0.1) });
+    { lines: l1.map((l) => [l.kind, l.description, l.amountMinor]), expected: afterMember - Math.round(afterMember * 0.1) });
   check('member session: PBJT-TL is on the discounted energy, PPN on the discounted price',
-    s1.pbjt_idr === Math.round((energyNet * 1000) / 10000) && s1.subtotal_idr === l1.reduce((a, l) => a + l.amountIdr, 0), { pbjt: s1.pbjt_idr, energyNet, sub: s1.subtotal_idr });
+    s1.local_tax_minor === Math.round((energyNet * 1000) / 10000) && s1.subtotal_minor === l1.reduce((a, l) => a + l.amountMinor, 0), { pbjt: s1.local_tax_minor, energyNet, sub: s1.subtotal_minor });
   const use1 = (await pg.query(`SELECT used_kwh::float8 AS u FROM subscription_usage WHERE subscription_id = $1`, [member.data.id])).rows[0];
   check('member session: 1 kWh of the included allowance used', Math.abs((use1?.u ?? 0) - Math.min(1, e1)) < 0.001, use1);
 
@@ -138,7 +138,7 @@ try {
   const p2 = (s2.lines as any[]).filter((l) => l.adjustment?.source === 'promotion');
   check('non-member: the happy hour applies once; the second session pays full price (one per customer)',
     p2.length === 1 && !(s2.lines as any[]).some((l) => l.adjustment?.source === 'subscription') && !(s3.lines as any[]).some((l) => l.adjustment),
-    { s2: (s2.lines as any[]).map((l) => [l.description, l.amountIdr]), s3: (s3.lines as any[]).filter((l) => l.adjustment) });
+    { s2: (s2.lines as any[]).map((l) => [l.description, l.amountMinor]), s3: (s3.lines as any[]).filter((l) => l.adjustment) });
 
   // S4: member again — included kWh used up, the happy hour already used by this card.
   const s4 = await charge(1, 'SANDBOX-FLEET-0002', 1.5);
@@ -149,8 +149,8 @@ try {
   check('the tax receipt shows the membership and promotion lines', receipt.status === 200 && receipt.text.includes('Armada Plus') && receipt.text.includes('Happy hour'), receipt.status);
   const stats = await sb('GET', `/v1/promotions/${promo.data.id}`);
   cc('/v1/promotions/{id}', 'get', '200', stats.data);
-  cc('/v1/subscriptions', 'post', '201', member.data);  const discountGiven = [...l1, ...(s2.lines as any[])].filter((l) => l.adjustment?.source === 'promotion').reduce((a, l) => a - l.amountIdr, 0);
-  check('promotion statistics: 2 uses by 2 customers, and the discount given', stats.data.redemptions === 2 && stats.data.customers === 2 && Number(stats.data.discount_idr) === discountGiven, stats.data);
+  cc('/v1/subscriptions', 'post', '201', member.data);  const discountGiven = [...l1, ...(s2.lines as any[])].filter((l) => l.adjustment?.source === 'promotion').reduce((a, l) => a - l.amountMinor, 0);
+  check('promotion statistics: 2 uses by 2 customers, and the discount given', stats.data.redemptions === 2 && stats.data.customers === 2 && Number(stats.data.discount_minor) === discountGiven, stats.data);
 
   // Membership fee on the fleet invoice (last month) and in the e-Faktur file.
   await pg.query(`UPDATE cdr SET issued_at = ((date_trunc('month', now() AT TIME ZONE 'Asia/Jakarta') - interval '5 days') AT TIME ZONE 'Asia/Jakarta') WHERE org_id = $1`, [sandboxId]);
@@ -170,10 +170,10 @@ try {
   const fee = st.data.fees?.find((f: any) => f.subscriber === 'fleet account');
   const partFee = st.data.fees?.find((f: any) => /^card SANDBOX-FLEET-0002/.test(f.subscriber));
   check('fleet invoice: the membership fee with PPN (DPP 11/12, 12%) is on the month\'s statement',
-    st.data.fees?.length === 2 && fee?.feeIdr === 150000 && fee.dppIdr === 137500 && fee.ppnIdr === 16500 && st.data.totals.feesIdr === 166500 + cardTotal
-      && st.data.totals.totalIdr === st.data.totals.ownTotalIdr + st.data.totals.roamingIdr + 166500 + cardTotal, { fees: st.data.fees, t: st.data.totals });
+    st.data.fees?.length === 2 && fee?.feeMinor === 150000 && fee.taxBaseMinor === 137500 && fee.taxMinor === 16500 && st.data.totals.feesMinor === 166500 + cardTotal
+      && st.data.totals.totalMinor === st.data.totals.ownTotalMinor + st.data.totals.roamingMinor + 166500 + cardTotal, { fees: st.data.fees, t: st.data.totals });
   check(`fleet invoice: a membership in force part of the month is billed for its days (10 of ${daysPrev}: Rp ${cardFee})`,
-    partFee?.feeIdr === cardFee && partFee.days === 10 && partFee.daysInPeriod === daysPrev && new RegExp(`10 of ${daysPrev} days`).test(partFee.subscriber) && partFee.totalIdr === cardTotal, partFee);
+    partFee?.feeMinor === cardFee && partFee.days === 10 && partFee.daysInPeriod === daysPrev && new RegExp(`10 of ${daysPrev} days`).test(partFee.subscriber) && partFee.totalMinor === cardTotal, partFee);
   await sb('PUT', `/v1/fleet-accounts/${acct.id}`, { taxIdKind: 'TIN', taxId: '0012345678901000' });
   await sb('PUT', '/v1/fleet-billing/settings', {
     npwp: '0987654321098765', nitku: '0987654321098765000000', address: 'Jakarta',
@@ -183,11 +183,11 @@ try {
   const again = await sb('GET', `/v1/fleet-accounts/${acct.id}/statement?period=${prev}`);
   const xml = (await sb('GET', `/v1/fleet-billing/periods/${prev}/efaktur.xml`)).text;
   check('fleet invoice: issued with the fee; the fee is not billed twice; the e-Faktur file has a services line for it',
-    inv.status === 201 && inv.data.totals.feesIdr === 166500 + cardTotal && again.data.status === 'issued' && /Keanggotaan Armada Plus/.test(xml) && /<Opt>B<\/Opt>/.test(xml) && /<VAT>16500<\/VAT>/.test(xml),
+    inv.status === 201 && inv.data.totals.feesMinor === 166500 + cardTotal && again.data.status === 'issued' && /Keanggotaan Armada Plus/.test(xml) && /<Opt>B<\/Opt>/.test(xml) && /<VAT>16500<\/VAT>/.test(xml),
     { inv: inv.status, xml: xml.slice(0, 200) });
 
   // ================================================================ Part B — driver app (operator's tenant)
-  const appPlan = await ops('POST', '/v1/subscription-plans', { name: `E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 49000, energyDiscountPercent: 15, offeredInApp: true });
+  const appPlan = await ops('POST', '/v1/subscription-plans', { name: `E2E Pass ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 49000, energyDiscountPercent: 15, offeredInApp: true });
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${appPlan.data.id}`, { active: false, offeredInApp: false }));
   cleanup.push(async () => {
     for (const s of (await ops('GET', `/v1/subscriptions?planId=${appPlan.data.id}`)).data.subscriptions ?? []) if (s.status === 'active') await ops('POST', `/v1/subscriptions/${s.id}/cancel`);
@@ -199,16 +199,17 @@ try {
   const d = (method: string, path: string, body?: unknown) => http(method, '/d' + path, body, { authorization: `Bearer ${dev}` });
   const guestView = await d('GET', '/v1/memberships');
   check('app: plans offered in the app are listed; buying needs a phone sign-in',
-    guestView.data.signedIn === false && guestView.data.plans.some((p: any) => p.id === appPlan.data.id && p.totalIdr === 49000 + Math.round(Math.round(49000 * 11 / 12) * 0.12))
+    guestView.data.signedIn === false && guestView.data.plans.some((p: any) => p.id === appPlan.data.id && p.totalMinor === 49000 + Math.round(Math.round(49000 * 11 / 12) * 0.12))
       && (await d('POST', '/v1/memberships', { planId: appPlan.data.id })).status === 422, guestView.data.plans?.map((p: any) => p.name));
   const phone = `0815${Math.floor(10_000_000 + Math.random() * 89_999_999)}`;
   const otp = await d('POST', '/v1/otp/send', { phone });
   await d('POST', '/v1/otp/verify', { phone, code: otp.data.devCode });
-  const stations = (await http('GET', '/d/v1/stations')).data.stations as any[];
+  // Rupiah amounts: an Indonesian station (other suites may have added Malaysian/Singapore sites first).
+  const stations = ((await http('GET', '/d/v1/stations')).data.stations as any[]).filter((s) => (s.currency ?? 'IDR') === 'IDR');
   const conn = stations.flatMap((s) => s.connectors).find((c: any) => c.available || c.status === 'Available' || c.status === 'Offline')?.connectorId ?? stations[0].connectors[0].connectorId;
-  const q0 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 100000 });
-  const qBad = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 100000, promoCode: 'NOSUCHCODE' });
-  const qCode = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 100000, promoCode: code.toLowerCase() });
+  const q0 = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 100000 });
+  const qBad = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 100000, promoCode: 'NOSUCHCODE' });
+  const qCode = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 100000, promoCode: code.toLowerCase() });
   check('quote: an unknown code is explained; the valid code (any case) buys more energy for the same rupiah',
     q0.status === 200 && /tidak dikenal/.test(qBad.data.codeProblem ?? '') && qCode.data.promotion === 'E2E code offer' && qCode.data.allowanceWh > q0.data.allowanceWh * 1.2,
     { q0: q0.data, bad: qBad.data?.codeProblem, code: qCode.data });
@@ -219,9 +220,9 @@ try {
   const mine = view.data.memberships?.find((x: any) => x.planId === appPlan.data.id);
   const days = mine ? (new Date(mine.periodEnd).getTime() - Date.now()) / 86_400_000 : 0;
   check('pass: QRIS charge for fee + PPN, pending until paid, then active for 30 days',
-    buy.status === 200 && /^data:image\/svg/.test(buy.data.qr.qrImage) && buy.data.totalIdr === 49000 + buy.data.ppnIdr && pending.data.state === 'pending'
-      && paid.status === 200 && mine?.status === 'active' && days > 29.9 && days <= 30.01, { buy: buy.data?.totalIdr, mine, days });
-  const qMember = await d('POST', '/v1/charge/quote', { connectorId: conn, amountIdr: 100000 });
+    buy.status === 200 && /^data:image\/svg/.test(buy.data.qr.qrImage) && buy.data.totalMinor === 49000 + buy.data.taxMinor && pending.data.state === 'pending'
+      && paid.status === 200 && mine?.status === 'active' && days > 29.9 && days <= 30.01, { buy: buy.data?.totalMinor, mine, days });
+  const qMember = await d('POST', '/v1/charge/quote', { connectorId: conn, amountMinor: 100000 });
   check('quote as a member: the plan is named and the same rupiah buys more energy', qMember.data.membership === appPlan.data.name && qMember.data.allowanceWh > q0.data.allowanceWh, qMember.data);
   const renew = await d('POST', '/v1/memberships', { planId: appPlan.data.id });
   await d('POST', `/v1/memberships/charges/${renew.data.chargeId}/confirm-payment`);
@@ -229,11 +230,11 @@ try {
   const mine2 = view2.data.memberships?.find((x: any) => x.planId === appPlan.data.id);
   check('renewal: the next 30 days start when the current ones end (60 days in total)',
     Math.abs(new Date(renew.data.periodStart).getTime() - new Date(mine.periodEnd).getTime()) < 1000 && (new Date(mine2.periodEnd).getTime() - Date.now()) / 86_400_000 > 59.9, { renew: renew.data?.periodStart, end: mine2?.periodEnd });
-  const other = await ops('POST', '/v1/subscription-plans', { name: `E2E Other ${Date.now().toString().slice(-5)}`, monthlyFeeIdr: 10000, offeredInApp: true });
+  const other = await ops('POST', '/v1/subscription-plans', { name: `E2E Other ${Date.now().toString().slice(-5)}`, monthlyFeeMinor: 10000, offeredInApp: true });
   cleanup.push(() => ops('PUT', `/v1/subscription-plans/${other.data.id}`, { active: false, offeredInApp: false }));
   const quoteSwitch = (await d('GET', '/v1/memberships')).data.plans.find((p: any) => p.id === other.data.id)?.switch;
   check('another plan with the same operator: switching is quoted with the unused days credited (a cheaper plan: free, and it runs longer)',
-    !!quoteSwitch && quoteSwitch.creditIdr > 90_000 && quoteSwitch.payTotalIdr === 0 && quoteSwitch.days > 30, quoteSwitch);
+    !!quoteSwitch && quoteSwitch.creditMinor > 90_000 && quoteSwitch.payTotalMinor === 0 && quoteSwitch.days > 30, quoteSwitch);
   const members = await ops('GET', `/v1/subscriptions?planId=${appPlan.data.id}`);
   check('console: the app member is listed with QRIS billing', members.data.subscriptions?.[0]?.billing === 'qris' && members.data.subscriptions[0].status === 'active', members.data.subscriptions?.[0]);
   const appHtml = await http('GET', '/app/');

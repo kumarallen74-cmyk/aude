@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PlugSure white-label brand",
+  "description": "See brands/brand.ts for field documentation. Validated at build time by validateBrand().",
+  "type": "object",
+  "required": ["variant", "appName", "easSlug", "brandSlug", "scope", "scheme", "iosBundleId", "androidPackage", "linkHosts", "apiBase", "accentColor", "badgeColor", "defaultLocale", "features"],
+  "properties": {
+    "scope": { "enum": ["network", "operator"] },
+    "accentColor": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+    "badgeColor": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+    "defaultLocale": { "enum": ["en", "id", "ms", "zh"] },
+    "linkHosts": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+  }
+}

@@ -1,0 +1,15 @@
+# Weekly PlugSure base backup, Sunday 03:15 local time (after the nightly pg_dump at
+# 02:15). Persistent=true runs a missed one at the next boot. With BASEBACKUP_KEEP=4
+# the point-in-time recovery window is about four weeks. Install with
+# plugsure-basebackup.service (see the notes there).
+
+[Unit]
+Description=Weekly PlugSure base backup (PITR)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:15:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

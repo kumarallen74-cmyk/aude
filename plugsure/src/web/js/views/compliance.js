@@ -76,7 +76,7 @@ registerView('compliance', {
       const maxBps = state.meta?.regulatory?.pbjtMaxBps ?? 1000;
       box.innerHTML = list.map((s, i) => {
         const p = s.spkluParsed;
-        const bps = Number(s.pbjt_rate_bps ?? 0);
+        const bps = Number(s.local_tax_rate_bps ?? 0);
         const schemeMismatch = p && s.spklu_scheme && p.scheme !== s.spklu_scheme;
         return `<div class="card section">
           <header><h3>${esc(s.name)}</h3><div class="right chips">${sloTag(s.sloDaysRemaining)} ${s.municipalityMatchesSpklu === false ? muniTag(s) : ''}</div></header>

@@ -115,7 +115,7 @@ try {
   check('setup: signed in; Plug & Charge overview with the test PKI', login.status === 200 && ov0.data.pki?.mode === 'mock' && ov0.data.pki.problem === null, ov0.data);
   await ops('PUT', '/v1/pnc/settings', { enabled: false });
 
-  const site = await ops('POST', '/v1/sites', { name: 'PnC E2E Hub', address: 'Jl. Thamrin', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', pbjtRateBps: '1000' });
+  const site = await ops('POST', '/v1/sites', { name: 'PnC E2E Hub', address: 'Jl. Thamrin', kabupatenKotaCode: '3171', gridTariffGroup: 'L/TR', connectedKva: '197', powerFactor: '0.95', phases: '3', localTaxRateBps: '1000' });
   const tariff = await ops('POST', '/v1/tariffs', { name: 'PnC E2E DC', plnScheme: 'layanan_khusus', plnBaseRate: 1645, plnMultiplier: 1.5, pricingModel: 'flat', appliesToMaxPowerW: 60000, ppnApplies: true, components: [{ kind: 'energy', rate: 2400, touBlock: 'ANY' }] });
   await ops('PUT', `/v1/sites/${site.data.id}/tariff`, { tariffId: tariff.data.tariffId, currentType: 'DC' });
   const suffix = Date.now().toString().slice(-6);
@@ -230,9 +230,9 @@ try {
   const mv = (wh: number, ts: string) => [{ timestamp: ts, sampledValue: [{ value: wh, measurand: 'Energy.Active.Import.Register', unitOfMeasure: { unit: 'Wh' } }] }];
   const s0 = await st.call('TransactionEvent', { eventType: 'Started', timestamp: iso(-600), triggerReason: 'Authorized', seqNo: 0, transactionInfo: { transactionId: TX }, evse: { id: 1, connectorId: 1 }, idToken: { idToken: EMAID, type: 'eMAID' }, meterValue: mv(50_000, iso(-600)) });
   await st.call('TransactionEvent', { eventType: 'Ended', timestamp: iso(-10), triggerReason: 'EVDeparted', seqNo: 1, transactionInfo: { transactionId: TX, stoppedReason: 'EVDisconnected' }, evse: { id: 1, connectorId: 1 }, meterValue: mv(62_000, iso(-10)) });
-  const sess = await until(() => ops('GET', `/v1/sessions/search?identity=${ID2}&limit=5`), (r) => r.data.rows?.find((x: any) => x.ocpp_transaction_id === TX)?.total_idr != null, 20_000);
+  const sess = await until(() => ops('GET', `/v1/sessions/search?identity=${ID2}&limit=5`), (r) => r.data.rows?.find((x: any) => x.ocpp_transaction_id === TX)?.total_minor != null, 20_000);
   const srow = sess.data.rows?.find((x: any) => x.ocpp_transaction_id === TX);
-  check('session: started with the eMAID (with separators), rated, and the contract is the card on it', s0.idTokenInfo?.status === 'Accepted' && srow?.total_idr > 0 && Number(srow.energy_wh) === 12_000 && srow.id_tag === E, { s0, srow });
+  check('session: started with the eMAID (with separators), rated, and the contract is the card on it', s0.idTokenInfo?.status === 'Accepted' && srow?.total_minor > 0 && Number(srow.energy_wh) === 12_000 && srow.id_tag === E, { s0, srow });
   const period = (await ops('GET', '/v1/fleet-billing/periods/2000-01')).data.current;
   const stmt = await ops('GET', `/v1/fleet-accounts/${acct.id}/statement?period=${period}`);
   check('session: on the fleet account\'s monthly statement', stmt.data.totals?.sessions === 1, stmt.data.totals);
@@ -331,9 +331,9 @@ try {
       && sRow.data.chargers.find((c: any) => c.ocpp_identity === DC)?.cert_state === 'delivered' && simPnc?.enabled && simPnc.certificate?.subject.includes(DC) && simPnc.roots.length >= 2,
     { sEn: sEn.data, sInst: sInst.data, sReq: sReq.data, simPnc });
   const car = await sb('POST', `/v1/sandbox/chargers/${DC}/simulate`, { event: 'plug-and-charge', emaid: 'ID-SBX-C12345678', kwh: 2 });
-  const sSess = await until(async () => ((await sb('GET', `/v1/sessions?identity=${DC}`)).data ?? []).find?.((x: any) => x.total_idr != null), (x) => !!x, 60_000, 1500);
+  const sSess = await until(async () => ((await sb('GET', `/v1/sessions?identity=${DC}`)).data ?? []).find?.((x: any) => x.total_minor != null), (x) => !!x, 60_000, 1500);
   check('sandbox: a simulated Plug & Charge car is authorised (Accepted / certificate Accepted) and its session rated',
-    car.status === 200 && car.data.authorize?.idTokenInfo?.status === 'Accepted' && car.data.authorize.certificateStatus === 'Accepted' && sSess?.total_idr > 0, { car: car.data?.authorize ?? car.data, sSess });
+    car.status === 200 && car.data.authorize?.idTokenInfo?.status === 'Accepted' && car.data.authorize.certificateStatus === 'Accepted' && sSess?.total_minor > 0, { car: car.data?.authorize ?? car.data, sSess });
   const unreg = await sb('POST', `/v1/sandbox/chargers/${DC}/simulate`, { event: 'plug-and-charge', emaid: 'ID-SBX-C99999999' });
   check('sandbox: a car with an unregistered contract is refused (Invalid / ContractCancelled)', unreg.data.authorize?.idTokenInfo?.status === 'Invalid' && unreg.data.authorize.certificateStatus === 'ContractCancelled', unreg.data.authorize);
 

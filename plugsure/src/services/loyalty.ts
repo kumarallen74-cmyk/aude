@@ -1,5 +1,7 @@
 import type { PoolClient } from 'pg';
 import { one, many, query, tx } from '../db/pool.js';
+import { LEGACY_CURRENCY, CURRENCIES, moneyText, currencyOr } from '../domain/money.js';
+import { LOCALE_TAG } from '../domain/locale.js';
 import type { PriceAdjustment, CdrLine } from './tariff.js';
 
 /** A connection to run on: a transaction's client, or the context's default. */
@@ -10,11 +12,11 @@ const scoped: Runner = { query: (text: string, params?: unknown[]) => query(text
  * Loyalty points (Commercial → Promotions & plans → Loyalty), per operator.
  *
  *   Earning     a driver signed in to the app earns points on what each session
- *               costs them: `earn_per_1000_idr` points per Rp 1,000 of the receipt
+ *               costs them: `earn_per_1000_minor` points per Rp 1,000 of the receipt
  *               total (after any discount), rounded down.
  *   Spending    a driver who chose "use my points" has them taken off their next
  *               sessions automatically: at most `max_redeem_bps` of the energy and
- *               fees, in whole points worth `point_value_idr` each. Like a promotion,
+ *               fees, in whole points worth `point_value_minor` each. Like a promotion,
  *               the discount comes before PBJT-TL and PPN.
  *   Expiry      each earning expires `expiry_months` after it was earned; points are
  *               spent oldest first.
@@ -29,48 +31,51 @@ export class LoyaltyError extends Error {
 
 export interface LoyaltyProgram {
   enabled: boolean;
-  earnPer1000Idr: number;
-  pointValueIdr: number;
+  earnPer1000Minor: number;
+  pointValueMinor: number;
   maxRedeemBps: number;
   expiryMonths: number;
+  /** The currency points are worth an amount in (loyalty_program.currency; absent = IDR). */
+  currency?: string;
 }
 
-const DEFAULTS: LoyaltyProgram = { enabled: false, earnPer1000Idr: 1, pointValueIdr: 10, maxRedeemBps: 5000, expiryMonths: 12 };
+const DEFAULTS: LoyaltyProgram = { enabled: false, earnPer1000Minor: 1, pointValueMinor: 10, maxRedeemBps: 5000, expiryMonths: 12 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ─────────────────────────────────────────── arithmetic (pure)
 
-/** Points earned on a session that cost the driver `totalIdr`. */
-export function pointsEarned(totalIdr: number, p: Pick<LoyaltyProgram, 'earnPer1000Idr'>): number {
-  if (totalIdr <= 0 || p.earnPer1000Idr <= 0) return 0;
-  return Math.floor((totalIdr * p.earnPer1000Idr) / 1000);
+/** Points earned on a session that cost the driver `totalMinor`. */
+export function pointsEarned(totalMinor: number, p: Pick<LoyaltyProgram, 'earnPer1000Minor'>): number {
+  if (totalMinor <= 0 || p.earnPer1000Minor <= 0) return 0;
+  return Math.floor((totalMinor * p.earnPer1000Minor) / 1000);
 }
 
 /**
  * What points may pay on a session: whole points, worth at most `maxRedeemBps` of
- * the energy and fees that can be discounted (`discountableIdr`).
+ * the energy and fees that can be discounted (`discountableMinor`).
  */
-export function pointsToRedeem(balance: number, discountableIdr: number, p: Pick<LoyaltyProgram, 'pointValueIdr' | 'maxRedeemBps'>): { points: number; amountIdr: number } {
-  if (balance <= 0 || discountableIdr <= 0 || p.pointValueIdr <= 0 || p.maxRedeemBps <= 0) return { points: 0, amountIdr: 0 };
-  const cap = Math.floor((discountableIdr * p.maxRedeemBps) / 10_000);
-  const points = Math.min(balance, Math.floor(cap / p.pointValueIdr));
-  return { points, amountIdr: points * p.pointValueIdr };
+export function pointsToRedeem(balance: number, discountableMinor: number, p: Pick<LoyaltyProgram, 'pointValueMinor' | 'maxRedeemBps'>): { points: number; amountMinor: number } {
+  if (balance <= 0 || discountableMinor <= 0 || p.pointValueMinor <= 0 || p.maxRedeemBps <= 0) return { points: 0, amountMinor: 0 };
+  const cap = Math.floor((discountableMinor * p.maxRedeemBps) / 10_000);
+  const points = Math.min(balance, Math.floor(cap / p.pointValueMinor));
+  return { points, amountMinor: points * p.pointValueMinor };
 }
 
 /** The energy and fees a price adjustment can take off (what applyAdjustments may discount). */
-export const discountable = (lines: CdrLine[]) => lines.filter((l) => ['energy', 'session', 'admin'].includes(l.kind)).reduce((a, l) => a + l.amountIdr, 0);
+export const discountable = (lines: CdrLine[]) => lines.filter((l) => ['energy', 'session', 'admin'].includes(l.kind)).reduce((a, l) => a + l.amountMinor, 0);
 
 // ─────────────────────────────────────────── program (console)
 
 export async function getProgram(orgId: string, c: Runner = scoped): Promise<LoyaltyProgram> {
   const r = (await c.query<any>(`SELECT * FROM loyalty_program WHERE org_id = $1`, [orgId])).rows[0];
   return r
-    ? { enabled: r.enabled, earnPer1000Idr: r.earn_per_1000_idr, pointValueIdr: r.point_value_idr, maxRedeemBps: r.max_redeem_bps, expiryMonths: r.expiry_months }
+    ? { enabled: r.enabled, earnPer1000Minor: r.earn_per_1000_minor, pointValueMinor: r.point_value_minor, maxRedeemBps: r.max_redeem_bps, expiryMonths: r.expiry_months, currency: r.currency ?? LEGACY_CURRENCY }
     : { ...DEFAULTS };
 }
 
 export async function saveProgram(orgId: string, b: any, actor: string): Promise<LoyaltyProgram> {
   const cur = await getProgram(orgId);
+  const curOf = currencyOr(cur.currency);
   const int = (v: unknown, name: string, lo: number, hi: number, def: number) => {
     if (v === undefined) return def;
     const n = Number(v);
@@ -79,16 +84,16 @@ export async function saveProgram(orgId: string, b: any, actor: string): Promise
   };
   const next: LoyaltyProgram = {
     enabled: b.enabled === undefined ? cur.enabled : b.enabled === true,
-    earnPer1000Idr: int(b.earnPer1000Idr, 'Points per Rp 1,000', 0, 1000, cur.earnPer1000Idr),
-    pointValueIdr: int(b.pointValueIdr, 'The value of a point (Rp)', 1, 100_000, cur.pointValueIdr),
+    earnPer1000Minor: int(b.earnPer1000Minor, `Points per ${moneyText(1000, curOf, 'en')}`, 0, 1000, cur.earnPer1000Minor),
+    pointValueMinor: int(b.pointValueMinor, `The value of a point (${CURRENCIES[curOf].symbol})`, 1, 100_000, cur.pointValueMinor),
     maxRedeemBps: int(b.maxRedeemBps, 'The most points may pay (basis points)', 0, 10_000, cur.maxRedeemBps),
     expiryMonths: int(b.expiryMonths, 'Months before points expire', 1, 60, cur.expiryMonths),
   };
   await query(
-    `INSERT INTO loyalty_program (org_id, enabled, earn_per_1000_idr, point_value_idr, max_redeem_bps, expiry_months, updated_by, updated_at)
+    `INSERT INTO loyalty_program (org_id, enabled, earn_per_1000_minor, point_value_minor, max_redeem_bps, expiry_months, updated_by, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7, now())
-     ON CONFLICT (org_id) DO UPDATE SET enabled = $2, earn_per_1000_idr = $3, point_value_idr = $4, max_redeem_bps = $5, expiry_months = $6, updated_by = $7, updated_at = now()`,
-    [orgId, next.enabled, next.earnPer1000Idr, next.pointValueIdr, next.maxRedeemBps, next.expiryMonths, actor],
+     ON CONFLICT (org_id) DO UPDATE SET enabled = $2, earn_per_1000_minor = $3, point_value_minor = $4, max_redeem_bps = $5, expiry_months = $6, updated_by = $7, updated_at = now()`,
+    [orgId, next.enabled, next.earnPer1000Minor, next.pointValueMinor, next.maxRedeemBps, next.expiryMonths, actor],
   );
   return next;
 }
@@ -101,7 +106,7 @@ export async function programStats(orgId: string) {
             count(DISTINCT app_driver_id) FILTER (WHERE remaining > 0 AND (expires_at IS NULL OR expires_at > now()))::int AS members,
             COALESCE(sum(points) FILTER (WHERE kind = 'earn' AND created_at >= date_trunc('month', now())), 0)::bigint AS earned_month,
             COALESCE(-sum(points) FILTER (WHERE kind = 'redeem' AND created_at >= date_trunc('month', now())), 0)::bigint AS redeemed_month,
-            COALESCE(-sum(value_idr) FILTER (WHERE kind = 'redeem' AND created_at >= date_trunc('month', now())), 0)::bigint AS discount_month,
+            COALESCE(-sum(value_minor) FILTER (WHERE kind = 'redeem' AND created_at >= date_trunc('month', now())), 0)::bigint AS discount_month,
             COALESCE(-sum(points) FILTER (WHERE kind = 'expire' AND created_at >= date_trunc('month', now())), 0)::bigint AS expired_month
        FROM loyalty_entry WHERE org_id = $1`,
     [orgId],
@@ -109,8 +114,8 @@ export async function programStats(orgId: string) {
   const outstanding = Number(o?.outstanding ?? 0);
   return {
     program: p,
-    outstandingPoints: outstanding, liabilityIdr: outstanding * p.pointValueIdr, members: o?.members ?? 0,
-    thisMonth: { earned: Number(o?.earned_month ?? 0), redeemed: Number(o?.redeemed_month ?? 0), discountIdr: Number(o?.discount_month ?? 0), expired: Number(o?.expired_month ?? 0) },
+    outstandingPoints: outstanding, liabilityMinor: outstanding * p.pointValueMinor, members: o?.members ?? 0,
+    thisMonth: { earned: Number(o?.earned_month ?? 0), redeemed: Number(o?.redeemed_month ?? 0), discountMinor: Number(o?.discount_month ?? 0), expired: Number(o?.expired_month ?? 0) },
   };
 }
 
@@ -216,19 +221,21 @@ async function consume(orgId: string, appDriverId: string, points: number, c: Ru
  * The points a session may spend: the program is on, the driver chose to use
  * their points, and has some. Null otherwise (nothing to do).
  */
-export async function redemptionFor(orgId: string, appDriverId: string | null | undefined): Promise<{ program: LoyaltyProgram; balance: number } | null> {
+export async function redemptionFor(orgId: string, appDriverId: string | null | undefined, currency: string = LEGACY_CURRENCY): Promise<{ program: LoyaltyProgram; balance: number } | null> {
   if (!appDriverId) return null;
   const program = await getProgram(orgId);
   if (!program.enabled) return null;
+  // Points are worth an amount in the program's currency: never redeemed on a session in another (no FX).
+  if ((program.currency ?? LEGACY_CURRENCY) !== currency) return null;
   const m = await one<{ auto_redeem: boolean }>(`SELECT auto_redeem FROM loyalty_member WHERE org_id = $1 AND app_driver_id = $2`, [orgId, appDriverId]);
   if (!m?.auto_redeem) return null;
   const balance = await balanceOf(orgId, appDriverId);
   return balance > 0 ? { program, balance } : null;
 }
 
-/** The price adjustment for points worth `amountIdr` (taken off the energy, then the fees). */
-export const pointsAdjustment = (points: number, amountIdr: number): PriceAdjustment =>
-  ({ source: 'loyalty', id: 'loyalty', name: `${points.toLocaleString('id-ID')} points`, amountOffIdr: amountIdr });
+/** The price adjustment for points worth `amountMinor` (taken off the energy, then the fees). */
+export const pointsAdjustment = (points: number, amountMinor: number): PriceAdjustment =>
+  ({ source: 'loyalty', id: 'loyalty', name: `${points.toLocaleString(LOCALE_TAG.id)} points`, amountOffMinor: amountMinor });
 
 /**
  * With a CDR: spend the points the session used (oldest first) and credit the points
@@ -246,9 +253,10 @@ export async function recordLoyalty(
   orgId: string,
   sessionId: string,
   appDriverId: string | null | undefined,
-  totalIdr: number,
-  spent: { points: number; amountIdr: number } | null,
+  totalMinor: number,
+  spent: { points: number; amountMinor: number } | null,
   c: Runner,
+  currency: string = LEGACY_CURRENCY,
 ) {
   if (!appDriverId) return;
   const program = await getProgram(orgId, c);
@@ -259,11 +267,12 @@ export async function recordLoyalty(
     if (!done.rows[0]) {
       await consume(orgId, appDriverId, spent.points, c);
       await c.query(
-        `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, value_idr, session_id, note) VALUES ($1,$2,'redeem',$3,$4,$5,'Charging session')`,
-        [orgId, appDriverId, -spent.points, -spent.amountIdr, sessionId]);
+        `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, value_minor, session_id, note) VALUES ($1,$2,'redeem',$3,$4,$5,'Charging session')`,
+        [orgId, appDriverId, -spent.points, -spent.amountMinor, sessionId]);
     }
   }
-  const earned = program.enabled ? pointsEarned(totalIdr, program) : 0;
+  // Earned on what the session cost, in the program's currency only.
+  const earned = program.enabled && (program.currency ?? LEGACY_CURRENCY) === currency ? pointsEarned(totalMinor, program) : 0;
   if (earned > 0) {
     await c.query(
       `INSERT INTO loyalty_entry (org_id, app_driver_id, kind, points, remaining, session_id, note, expires_at)
@@ -299,7 +308,7 @@ export async function expirePoints(): Promise<number> {
 /** A driver's points at every operator with loyalty on (or where they still have points). */
 export async function driverLoyalty(appDriverId: string) {
   const orgs = await many<any>(
-    `SELECT o.id, o.name, p.enabled, p.earn_per_1000_idr, p.point_value_idr, p.max_redeem_bps, p.expiry_months, COALESCE(m.auto_redeem, false) AS auto_redeem
+    `SELECT o.id, o.name, p.enabled, p.earn_per_1000_minor, p.point_value_minor, p.max_redeem_bps, p.expiry_months, COALESCE(m.auto_redeem, false) AS auto_redeem
        FROM organisation o LEFT JOIN loyalty_program p ON p.org_id = o.id
        LEFT JOIN loyalty_member m ON m.org_id = o.id AND m.app_driver_id = $1
       WHERE o.sandbox_of_org_id IS NULL AND o.archived_at IS NULL
@@ -315,14 +324,14 @@ export async function driverLoyalty(appDriverId: string) {
         WHERE org_id = $1 AND app_driver_id = $2 AND remaining > 0 AND expires_at > now() AND expires_at <= now() + interval '30 days'`,
       [o.id, appDriverId]);
     const history = await many<any>(
-      `SELECT kind, points, value_idr, note, created_at, session_id FROM loyalty_entry WHERE org_id = $1 AND app_driver_id = $2 ORDER BY created_at DESC LIMIT 10`,
+      `SELECT kind, points, value_minor, note, created_at, session_id FROM loyalty_entry WHERE org_id = $1 AND app_driver_id = $2 ORDER BY created_at DESC LIMIT 10`,
       [o.id, appDriverId]);
     out.push({
       orgId: o.id, operator: o.name, enabled: !!o.enabled,
-      earnPer1000Idr: o.earn_per_1000_idr ?? 0, pointValueIdr: o.point_value_idr ?? 0, maxRedeemPercent: (o.max_redeem_bps ?? 0) / 100, expiryMonths: o.expiry_months ?? 12,
-      balance, valueIdr: balance * (o.point_value_idr ?? 0), autoRedeem: o.auto_redeem,
+      earnPer1000Minor: o.earn_per_1000_minor ?? 0, pointValueMinor: o.point_value_minor ?? 0, maxRedeemPercent: (o.max_redeem_bps ?? 0) / 100, expiryMonths: o.expiry_months ?? 12,
+      balance, valueMinor: balance * (o.point_value_minor ?? 0), autoRedeem: o.auto_redeem,
       expiringSoon: soon?.pts ? { points: soon.pts, at: soon.at } : null,
-      history: history.map((h) => ({ kind: h.kind, points: h.points, valueIdr: -Number(h.value_idr), note: h.note, at: h.created_at, sessionId: h.session_id })),
+      history: history.map((h) => ({ kind: h.kind, points: h.points, valueMinor: -Number(h.value_minor), note: h.note, at: h.created_at, sessionId: h.session_id })),
     });
   }
   return { operators: out };

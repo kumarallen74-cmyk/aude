@@ -73,13 +73,13 @@ if (DB_OK) {
       `INSERT INTO organisation (name, slug) VALUES ('Prepaid Claim Test', $1)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`, [SLUG]))!.id;
     const siteId = (await one<{ id: string }>(
-      `INSERT INTO site (org_id, name, pbjt_rate_bps) VALUES ($1, 'Prepaid Claim Hub', 1000) RETURNING id`, [orgId]))!.id;
+      `INSERT INTO site (org_id, name, local_tax_rate_bps) VALUES ($1, 'Prepaid Claim Hub', 1000) RETURNING id`, [orgId]))!.id;
     cpId = await addCp(siteId, IDENT, [1, 2]);
     cp2Id = await addCp(siteId, IDENT2, [1]);
     await query(`INSERT INTO token (org_id, kind, uid, status, valid_to) VALUES ($1, 'prepaid', $2, 'Accepted', now() + interval '30 minutes')`, [orgId, TAG]);
     // Paid by QRIS for connector 1 only.
     intentId = (await one<{ id: string }>(
-      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_idr, amount_captured_idr, allowance_wh,
+      `INSERT INTO payment_intent (org_id, provider, method, mode, state, amount_authorised_minor, amount_captured_minor, allowance_wh,
                                    connector_uuid, claim_id_tag, claim_token_minted, captured_at)
        VALUES ($1, 'test', 'qris', 'prepurchase', 'captured', 50000, 50000, 20000, $2, $3, true, now()) RETURNING id`,
       [orgId, conn[1], TAG]))!.id;

@@ -76,6 +76,16 @@ const MESSAGES = [
   'Berlaku 30 hari. Perpanjang sendiri, atau otomatis dengan kartu tersimpan atau e-wallet terhubung. Ganti paket kapan saja: sisa hari paket lama menjadi potongan. Harga member otomatis berlaku saat mengisi di operator tersebut.',
   'Poin', 'Poin dipakai', 'Poin diperoleh', '+123 poin', '1.250 poin', '300 poin kedaluwarsa 12 Okt', 'Pakai poin otomatis saat mengisi', 'Riwayat poin',
   '1 poin per Rp 1.000. 1 poin = Rp 10, paling banyak 50% biaya energi dan layanan, sebelum pajak.', 'Diperoleh · 28 Sep', 'Dipakai · 29 Sep',
+  // the refund note on the receipt (its status used to stay Indonesian)
+  'Dari S$ 20.00 dibayar, S$ 3.90 terpakai. Sedang diproses.', 'Dari Rp 100.000 dibayar, Rp 45.000 terpakai. Sudah dikembalikan.',
+  // the card note with holds on (methodPicker joins the two sentences; UI sweep v1.7.0 found it half translated)
+  'Kartu Anda hanya ditahan sebesar jumlah yang dipilih. Setelah selesai, yang ditagih hanya biaya pemakaian; sisanya langsung dilepas. Anda diarahkan ke halaman kartu yang aman (3-D Secure). Nomor kartu tidak disimpan PlugSure.',
+  // PayNow, FPX and GrabPay (Malaysia, Singapore; v1.7.0)
+  'Lanjutkan di aplikasi GrabPay', 'Setujui di aplikasi OVO', 'Lanjutkan ke FPX', 'Pembayaran PayNow', 'Pembayaran FPX', 'Pembayaran GrabPay', 'Pindai dengan aplikasi bank Anda', 'Perbankan online', 'PayNow · biaya reservasi', 'PayNow · sesi pengisian',
+  'QR berlaku sampai 14:30.', 'Petunjuk pembayaran', 'Pilih bank Anda di halaman yang aman',
+  'Tampilkan QR PayNow, lalu pindai dengan aplikasi bank Anda.', 'Pilih bank Anda di halaman pembayaran yang aman, lalu setujui di perbankan online Anda.',
+  'Bayar dari HP ini? Simpan QR, lalu pilih gambarnya dari galeri di aplikasi bank Anda.', 'Anda diarahkan ke aplikasi GrabPay untuk membayar.',
+  'Setelah membayar, kembali ke sini: charger mulai mengisi sesuai saldo Anda dan berhenti. Sisa saldo yang tidak terpakai dikembalikan ke rekening bank Anda.',
   // site queues
   'Antrean', 'Gabung antrean', 'Keluar antrean', 'Lihat antrean', 'Konektor apa saja', 'Anda dalam antrean', 'Anda masuk antrean.', 'Anda keluar dari antrean.',
   'Giliran Anda!', 'Lewati', 'Giliran dilewati.', 'Ke-3 dalam antrean', '12 menunggu', 'Waktu mulai: 5 menit', 'Antre paling lama sampai 14.30',
@@ -98,11 +108,30 @@ const MESSAGES = [
   'Pembayaran tidak selesai. Konektor tidak dipesan.', 'Charger menolak reservasi. Biaya reservasi dikembalikan.', 'Konektor ini baru saja dipesan orang lain. Biaya reservasi dikembalikan.',
   'Konektor sedang dipakai. Biaya reservasi dikembalikan.', 'Biaya reservasi dibayar dengan kartu tersimpan Anda.',
   'Ditagih langsung dari e-wallet Anda yang terhubung sebesar biaya reservasi, tanpa membuka aplikasinya.',
+  // fleet sign-in: one answer for every failure
+  'Organisasi, nomor kartu, atau PIN salah. Setelah 5 kali salah, kartu dikunci 15 menit. Jika masih gagal, hubungi admin armada Anda.',
+  // partner networks for app drivers: a card hold in the partner's currency
+  'Charger mitra. Sesi dibayar dengan kartu Anda sesuai tarif operator.', 'Sebelum mulai, kartu Anda ditahan RM 100.00.', 'Sebelum mulai, kartu Anda ditahan Rp 300.000.',
+  'Yang ditagih hanya tagihan operator; sisanya dilepas.', 'Kartu baru', 'Selesaikan penahanan di kartu Anda; charger mulai setelah itu.', 'Lanjutkan pembayaran',
+  'Ditahan di kartu S$ 80.00', 'Ditagih dari kartu RM 12.34', 'Dibayar dengan kartu Anda', 'Ditahan di kartu', 'Ditagih dari kartu',
+  'Menurut catatan tagihan operator. Sisa dana yang ditahan sudah dilepas.', 'Belum tersedia dengan metode pembayaran Anda.', 'Masuk untuk mengisi di jaringan mitra.',
+  'Operator menolak permintaan. Dana yang ditahan sudah dilepas.', 'Charger tidak dapat dimulai. Dana yang ditahan sudah dilepas.', 'Pembayaran tidak selesai. Tidak ada yang ditagih.',
+  'Batas biaya kartu armada Anda dalam IDR; charger ini menagih dalam SGD.',
+  // ringgit and Singapore dollar amounts, and other countries' tax
+  'Biaya sejauh ini RM 12.34 dari RM 50.00 dibayar', 'Termasuk pajak S$ 1.07', 'Hemat RM 4.20', 'Biaya reservasi S$ 2.18', 'Belum terbayar: S$ 1,234.50',
+  'Pajak', '(termasuk)', '(termasuk pajak)', 'Harga sudah termasuk pajak.', 'Pajak ditambahkan saat sesi selesai.',
 ];
 
 test('driver app English: each message is fully translated through DICT and PATTERNS in order', () => {
   const mixed = MESSAGES.map((m) => ({ m, out: tr(m) })).filter(({ m, out }) => out === m || INDONESIAN.test(out));
   assert.deepEqual(mixed, []);
+});
+
+test('driver app English: ringgit and Singapore dollar amounts come through as written', () => {
+  assert.equal(tr('Biaya sejauh ini RM 12.34 dari RM 50.00 dibayar'), 'Cost so far RM 12.34 of RM 50.00 paid');
+  assert.equal(tr('Termasuk pajak S$ 1,234.50'), 'Incl. tax S$ 1,234.50');
+  assert.equal(tr('Biaya sejauh ini Rp 23.415 dari Rp 50.000 dibayar'), 'Cost so far Rp 23.415 of Rp 50.000 paid');
+  assert.equal(tr('Sebelum mulai, kartu Anda ditahan S$ 80.00.'), 'Before starting, S$ 80.00 is held on your card.');
 });
 
 test('driver app English: counted sessions take the plural', () => {
@@ -112,4 +141,26 @@ test('driver app English: counted sessions take the plural', () => {
 test('driver app English: the catch-all word patterns come after every specific pattern', () => {
   const last = PATTERNS.slice(-3).map(([re]) => re.source);
   assert.deepEqual(last, ['\\bsesi\\b', 'Kartu ', '\\bBayar ']);
+});
+
+/**
+ * The app's language: the driver's own choice (stored), else an English device, else the
+ * operator's default language (data-default-lang: English in Malaysia and Singapore), else Indonesian.
+ */
+test('driver app language: stored choice, then device, then the operator default', () => {
+  const boot = html.slice(html.indexOf('var stored=null'), html.indexOf('try{ document.documentElement.lang = window.LANG'));
+  const pick = (stored: string | null, device: string, operator: string | null) => {
+    const window: { LANG?: string } = {};
+    const localStorage = { getItem: () => stored };
+    const navigator = { language: device };
+    const document = { documentElement: { getAttribute: (k: string) => (k === 'data-default-lang' ? operator : null) } };
+    new Function('window', 'localStorage', 'navigator', 'document', boot)(window, localStorage, navigator, document);
+    return window.LANG;
+  };
+  assert.equal(pick(null, 'id-ID', null), 'id', 'Indonesia: as before');
+  assert.equal(pick(null, 'en-US', null), 'en');
+  assert.equal(pick(null, 'ms-MY', 'en'), 'en', 'a Malaysian operator: English');
+  assert.equal(pick(null, 'id-ID', 'id'), 'id');
+  assert.equal(pick('id', 'en-SG', 'en'), 'id', 'the driver\'s choice wins');
+  assert.equal(pick('en', 'id-ID', 'id'), 'en');
 });
