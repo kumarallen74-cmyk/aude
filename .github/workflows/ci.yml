@@ -432,6 +432,12 @@ jobs:
       - name: Seed (owner)
         run: DATABASE_URL="$OWNER_DATABASE_URL" npm run seed
 
+      # The platform administrator the integrations suite (and field's §25) sign in as. Test-only password.
+      - name: Create the platform administrator (owner)
+        run: >-
+          DATABASE_URL="$OWNER_DATABASE_URL" npm run create-admin -- --email platform@plugsure.test --name Platform
+          --org-slug plugsure-platform --org-name "PlugSure Platform" --password 'Platform-Test-2026!' --platform-admin
+
       - name: Country-literal ratchet
         run: npm run check:country-literals
 
