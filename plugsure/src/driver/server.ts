@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { logger } from '../logger.js';
 import { registerDriverCors } from './cors.js';
+import { idempotent, registerIdempotency } from './idempotency.js';
 import { takeDevice, takeAnonymous } from './rate-limit.js';
 import { accountStillActive, withDriverLock } from './account-deletion.js';
 import { acquirerReturnUrl, appRedirect, appReturnSlug } from './app-return.js';
@@ -56,8 +57,9 @@ import { listCards, removeCard } from '../services/payments/cards.js';
 import { linkWallet, walletLinkStatus } from './wallets.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
 import { readFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import {
-  brandBySlug, brandForHost, brandForOrg, palette, renderIndex, manifestFor, renderServiceWorker, iconFile, assetLinks, appleAssociation, hostnameKnown, type Brand,
+  brandBySlug, brandForHost, brandForOrg, palette, renderIndex, manifestFor, renderServiceWorker, iconFile, assetLinks, appleAssociation, hostnameKnown, brandAppId, type Brand,
   networkBrand,
 } from '../services/brand.js';
 import { one, many } from '../db/pool.js';
@@ -67,12 +69,19 @@ import { driverLang, hasTranslatable, localizeBody } from './i18n.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+/** Every inline <script> of a rendered page gets the response's nonce (scripts with src= are 'self' anyway). */
+export function withScriptNonce(html: string, nonce: string): string {
+  return html.replace(/<script(?![^>]*\bsrc=)(?=[\s>])/g, `<script nonce="${nonce}"`);
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     driver?: DriverPrincipal;
     /** The white-label app this request is for (its web address, or X-Driver-Brand / ?brand= for a preview). */
     brand?: Brand | null;
     brandPreview?: boolean;
+    /** The driver app page's script nonce (api/csp.ts): set where the page is rendered, read by the CSP header. */
+    cspNonce?: string;
   }
 }
 
@@ -106,6 +115,8 @@ async function brandOf(req: FastifyRequest): Promise<{ brand: Brand | null; prev
 export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   // Browser builds of the native app on another origin (DRIVER_WEB_ORIGINS; off by default, /d/v1 only).
   registerDriverCors(app);
+  // Idempotency-Key answers are recorded as they are sent (v1.9.1).
+  registerIdempotency(app);
   // Serve the driver web app at /app. decorateReply:false — the operator console
   // already registered the sendFile decorator on the root static plugin.
   const webRoot = join(here, '../driver-web');
@@ -133,8 +144,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     const html = await webFile('index.html');
     const b = req.brand;
     const lang = b ? await one<{ l: string }>(`SELECT default_locale AS l FROM organisation WHERE id = $1`, [b.orgId]).catch(() => null) : null;
-    return reply.header('cache-control', 'no-cache').type('text/html; charset=utf-8')
-      .send(b ? renderIndex(html, b, { preview: !!req.brandPreview, defaultLang: lang?.l ?? null }) : html);
+    // A fresh nonce for every response, on every inline <script> of the page (the app, the brand's settings): the
+    // CSP allows those and nothing else inline (v1.9.1, api/csp.ts).
+    const nonce = randomBytes(18).toString('base64');
+    req.cspNonce = nonce;
+    return reply.header('cache-control', 'no-store').type('text/html; charset=utf-8')
+      .send(withScriptNonce(b ? renderIndex(html, b, { preview: !!req.brandPreview, defaultLang: lang?.l ?? null }) : html, nonce));
   };
   app.get('/app', async (req, reply) => reply.redirect('/app/' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''), 301));
   app.get('/app/', page);
@@ -234,6 +249,8 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   /**
    * Creating what would block an account deletion (a charge, a reservation, a queue place) runs under the driver's
    * lock, like the deletion itself (account-deletion.ts): a request that waited for a deletion finds no account.
+   * Every route that creates a payment (or a charge) is also `idempotent(…)` (v1.9.1, driver/idempotency.ts),
+   * outside the lock: a duplicate is answered from the stored result, or 409, without waiting for the lock.
    */
   const locked = (h: (req: FastifyRequest, reply: import('fastify').FastifyReply) => Promise<unknown>) =>
     async (req: FastifyRequest, reply: import('fastify').FastifyReply) => {
@@ -516,19 +533,19 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     return r;
   });
 
-  app.post('/d/v1/charge/prepaid', locked(async (req, reply) => {
+  app.post('/d/v1/charge/prepaid', idempotent(locked(async (req, reply) => {
     const b = (req.body ?? {}) as any;
     const r = await checkoutPrepaid(driver(req), String(b.connectorId ?? ''), Number(b.amountMinor), b.promoCode ? String(b.promoCode) : null, payOptions(req, b, 'charge'));
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  }));
+  })));
 
-  app.post('/d/v1/charge/fleet', locked(async (req, reply) => {
+  app.post('/d/v1/charge/fleet', idempotent(locked(async (req, reply) => {
     const b = (req.body ?? {}) as any;
     const r = await checkoutFleet(driver(req), String(b.connectorId ?? ''));
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  }));
+  })));
 
   app.post('/d/v1/charge/:id/confirm-payment', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -538,12 +555,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   });
 
   // Post-pay: pay an unpaid session now (charged again, or the e-wallet's confirmation link).
-  app.post('/d/v1/charge/:id/pay-now', async (req, reply) => {
+  app.post('/d/v1/charge/:id/pay-now', idempotent(async (req, reply) => {
     const { id } = req.params as { id: string };
     const r = await payPostpayNow(driver(req), id);
     if (!r.ok) return reply.status(409).send(r);
     return r;
-  });
+  }));
 
   // Unpaid sessions payable in the app, for the home screen's notice.
   app.get('/d/v1/unpaid', async (req) => ({ unpaid: await unpaidSessions(driver(req)) }));
@@ -551,12 +568,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   // An unpaid session (a card hold that expired, or post-pay whose e-wallet link ended): the driver pays
   // what it cost in the app, with any method the operator offers. /pay-expired is the earlier name.
   for (const name of ['pay-unpaid', 'pay-expired']) {
-    app.post(`/d/v1/charge/:id/${name}`, async (req, reply) => {
+    app.post(`/d/v1/charge/:id/${name}`, idempotent(async (req, reply) => {
       const { id } = req.params as { id: string };
       const r = await payUnpaid(driver(req), id, payOptions(req, (req.body ?? {}) as Record<string, unknown>, 'settle'));
       if (!r.ok) return reply.status(r.status).send({ ok: false, error: r.error, ...(r.code ? { code: r.code } : {}) });
       return r;
-    });
+    }));
     app.get(`/d/v1/charge/:id/${name}`, async (req, reply) => {
       const { id } = req.params as { id: string };
       const r = await unpaidStatus(driver(req), id);
@@ -680,11 +697,13 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     await unsubscribe(driver(req).deviceId, String(b.endpoint ?? ''));
     return { ok: true };
   });
-  // The white-label iOS app: native notifications through the brand's APNs key.
+  // The white-label iOS app: native notifications through the brand's APNs key. Every registration below may name
+  // the app build (`appId`: the brand's bundle id / package, or its `.preview` / `.dev` build; anything else is
+  // ignored): APNs is then addressed to that build's topic (v1.9.1).
   app.post('/d/v1/push/apns', async (req, reply) => {
     if (!req.brand) return reply.status(409).send({ ok: false, error: 'Notifikasi iOS hanya untuk aplikasi operator.' });
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const r = await subscribeApns(driver(req).deviceId, req.brand.orgId, b.token, String(b.lang ?? 'id'));
+    const r = await subscribeApns(driver(req).deviceId, req.brand.orgId, b.token, String(b.lang ?? 'id'), brandAppId(req.brand, b.appId, 'ios'));
     if (!r.ok) return reply.status(422).send(r);
     return r;
   });
@@ -693,12 +712,14 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   app.post('/d/v1/live-activities', async (req, reply) => {
     if (!req.brand) return reply.status(409).send({ ok: false, error: 'Live Activity hanya untuk aplikasi operator.' });
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const r = await registerActivity(driver(req).deviceId, req.brand.orgId, b.ref, b.token, { contentVersion: b.contentVersion === 2 ? 2 : 1 });
+    const r = await registerActivity(driver(req).deviceId, req.brand.orgId, b.ref, b.token,
+      { contentVersion: b.contentVersion === 2 ? 2 : 1, appId: brandAppId(req.brand, b.appId, 'ios') });
     return r.ok ? r : reply.status(422).send(r);
   });
   app.post('/d/v1/live-activities/start-token', async (req, reply) => {
     if (!req.brand) return reply.status(409).send({ ok: false, error: 'Live Activity hanya untuk aplikasi operator.' });
-    const r = await registerStartToken(driver(req).deviceId, req.brand.orgId, ((req.body ?? {}) as Record<string, unknown>).token);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const r = await registerStartToken(driver(req).deviceId, req.brand.orgId, b.token, brandAppId(req.brand, b.appId, 'ios'));
     return r.ok ? r : reply.status(422).send(r);
   });
   app.post('/d/v1/live-activities/ended', async (req) => {
@@ -709,7 +730,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   app.post('/d/v1/push/fcm', async (req, reply) => {
     if (!req.brand) return reply.status(409).send({ ok: false, error: 'Notifikasi Android hanya untuk aplikasi dengan merek.', code: 'no_brand' });
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const r = await subscribeFcm(driver(req).deviceId, req.brand.orgId, b.token, String(b.lang ?? 'id'));
+    const r = await subscribeFcm(driver(req).deviceId, req.brand.orgId, b.token, String(b.lang ?? 'id'), brandAppId(req.brand, b.appId, 'android'));
     if (!r.ok) return reply.status(422).send(r);
     return r;
   });
@@ -726,7 +747,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     const platform = b.platform === 'android' ? 'android' : b.platform === 'ios' ? 'ios' : null;
     if (!platform) return reply.status(422).send({ ok: false, error: 'platform harus ios atau android.' });
     const r = await registerActivity(driver(req).deviceId, req.brand.orgId, b.ref, b.token,
-      { transport: platform === 'android' ? 'fcm' : 'apns', contentVersion: b.contentVersion === 2 ? 2 : 1 });
+      { transport: platform === 'android' ? 'fcm' : 'apns', contentVersion: b.contentVersion === 2 ? 2 : 1, appId: brandAppId(req.brand, b.appId, platform) });
     return r.ok ? r : reply.status(422).send(r);
   });
   app.post('/d/v1/live-sessions/ended', async (req) => {
@@ -768,12 +789,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   // ───────────────────────────────────────────────────────── memberships (30-day passes: buy, renew, switch, auto-renew)
 
   app.get('/d/v1/memberships', async (req) => membershipOverview(driver(req)));
-  app.post('/d/v1/memberships', async (req, reply) => {
+  app.post('/d/v1/memberships', idempotent(async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const r = await buyPass(driver(req), String(b.planId ?? ''), { ...payOptions(req, b, 'pass'), autoRenew: b.autoRenew === true });
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  });
+  }));
   app.put('/d/v1/memberships/:id/auto-renew', async (req, reply) => {
     const { id } = req.params as { id: string };
     const r = await setAutoRenew(driver(req), id, (req.body ?? {}) as { enabled?: unknown; methodId?: unknown });
@@ -815,13 +836,13 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
 
   // The driver's live reservation: at a PlugSure charger (or a queue offer), and on a partner network.
   app.get('/d/v1/reservation', async (req) => ({ reservation: await currentReservation(driver(req)), partner: await currentRoamingReservation(driver(req)) }));
-  app.post('/d/v1/reservations', locked(async (req, reply) => {
+  app.post('/d/v1/reservations', idempotent(locked(async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     // A reservation fee is paid first (payment options as for a charge); free reservations hold at once.
     const r = await reserve(driver(req), String(b.connectorId ?? ''), payOptions(req, b, 'reservation'));
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  }));
+  })));
   // Paying a reservation fee: where it stands (the connector is held once paid), the mock payment, giving up.
   app.get('/d/v1/reservations/checkout/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -893,7 +914,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     return listRoamingStations(driver(req), Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : undefined, emspBrandOrg(req), { dedupe: !brandOrg(req) });
   });
 
-  app.post('/d/v1/roaming/charge', locked(async (req, reply) => {
+  app.post('/d/v1/roaming/charge', idempotent(locked(async (req, reply) => {
     const base = ocpiBase(req);
     if (!base) return noOcpiBase(reply);
     const b = (req.body ?? {}) as Record<string, unknown>;
@@ -909,10 +930,10 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     });
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  }));
+  })));
 
   // Reserving a partner operator's charger (OCPI RESERVE_NOW / CANCEL_RESERVATION).
-  app.post('/d/v1/roaming/reservations', locked(async (req, reply) => {
+  app.post('/d/v1/roaming/reservations', idempotent(locked(async (req, reply) => {
     const base = ocpiBase(req);
     if (!base) return noOcpiBase(reply);
     const b = (req.body ?? {}) as Record<string, unknown>;
@@ -923,7 +944,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     }, base);
     if (!r.ok) return reply.status(422).send(r);
     return r;
-  }));
+  })));
   app.get('/d/v1/roaming/reservations/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const r = await roamingReservation(driver(req), id);

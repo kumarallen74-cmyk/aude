@@ -14,7 +14,7 @@ const INDONESIAN = /\b(yang|dengan|sekarang|sudah|belum|tagihan|metode|lain|apli
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const SOURCES = [
   './charge.ts', './roaming.ts', './roaming-pay.ts', './reservations.ts', './membership.ts', './queue.ts', './identity.ts',
-  './wallets.ts', './favourites.ts', './stations.ts', './server.ts', './map.ts', './links.ts', './account-deletion.ts',
+  './wallets.ts', './favourites.ts', './stations.ts', './server.ts', './map.ts', './links.ts', './account-deletion.ts', './idempotency.ts',
   '../services/payments/registry.ts', '../services/payments/cards.ts', '../services/payments/provider.ts', '../services/loyalty.ts', '../services/benefits.ts',
 ];
 

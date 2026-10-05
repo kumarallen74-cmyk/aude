@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import { COUNTRIES } from './domain/country.js';
+import { normaliseMobile } from './domain/phone.js';
 
 /**
  * The PLATFORM's default zone (platform-wide statements, the platform operator's
@@ -57,6 +58,37 @@ export function hubEntity(raw: string | undefined): 'ID' | 'MY' | 'SG' {
   const v = (raw?.trim() || 'SG').toUpperCase();
   if (v !== 'ID' && v !== 'MY' && v !== 'SG') throw new Error('HUB_DEFAULT_ENTITY: ID, MY or SG');
   return v;
+}
+
+/**
+ * A code that is no secret at all: every digit the same, a run up or down (123456, 987654), or a short pattern
+ * repeated (121212, 123123). The App Review code is typed by a stranger at Apple or Google, so it must not be one
+ * a passer-by would try first.
+ */
+export function weakReviewCode(code: string): boolean {
+  const d = [...code].map(Number);
+  const step = (k: number) => d.every((x, i) => i === 0 || x === d[i - 1]! + k);
+  const period = (n: number) => d.every((x, i) => i < n || x === d[i - n]);
+  return step(0) || step(1) || step(-1) || period(2) || period(3);
+}
+
+/**
+ * DRIVER_REVIEW_PHONE + DRIVER_REVIEW_CODE (v1.9.1): the App Store / Google Play reviewer's sign-in. Sign-in is by SMS
+ * code and a reviewer cannot receive one, so a code requested for exactly this number is not sent: the fixed code is
+ * stored instead (driver/identity.ts deliverOtp), with every limit of a real code. Off unless BOTH are set; a number
+ * that does not normalise, or a code that is not six digits or is trivially weak, refuses to start. Remove both once
+ * the app is approved (deploy/DRIVER-APP-PILOT.md).
+ */
+export function reviewSignInFrom(phoneRaw: string | undefined, codeRaw: string | undefined): { phone: string; code: string } | null {
+  const phoneIn = (phoneRaw ?? '').trim();
+  const code = (codeRaw ?? '').trim();
+  if (!phoneIn && !code) return null;
+  if (!phoneIn || !code) throw new Error('DRIVER_REVIEW_PHONE and DRIVER_REVIEW_CODE: set both (App Review sign-in) or neither');
+  const phone = normaliseMobile(phoneIn);
+  if (!phone) throw new Error(`DRIVER_REVIEW_PHONE: "${phoneIn}" is not a mobile number the app accepts (an Indonesian, Malaysian or Singapore mobile)`);
+  if (!/^\d{6}$/.test(code)) throw new Error('DRIVER_REVIEW_CODE: exactly six digits');
+  if (weakReviewCode(code)) throw new Error('DRIVER_REVIEW_CODE: too easy to guess (same digit, a run such as 123456, or a repeated pattern); choose six random digits');
+  return { phone, code };
 }
 
 /** The release, from package.json (one level above both src/ and dist/). */
@@ -526,6 +558,8 @@ export const config = {
     ipRateLimitPerMin: num(process.env.DRIVER_IP_RATE_LIMIT_PER_MIN, 6000),
     /** Requests a minute per client address on /d/ WITHOUT a device token (browse, resolve, minting a token). */
     anonIpRateLimitPerMin: num(process.env.DRIVER_ANON_IP_RATE_LIMIT_PER_MIN, 600),
+    /** App Review sign-in (reviewSignInFrom): null unless DRIVER_REVIEW_PHONE and DRIVER_REVIEW_CODE are both set. */
+    review: reviewSignInFrom(process.env.DRIVER_REVIEW_PHONE, process.env.DRIVER_REVIEW_CODE),
   },
 
   /** Background workers (control loop, compliance sweep, FOTA scheduler). */

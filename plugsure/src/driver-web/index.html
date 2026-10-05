@@ -482,6 +482,8 @@ input{font-family:inherit}
 .helprow{display:flex;align-items:center;gap:10px;padding:10px 2px;color:var(--ink);text-decoration:none;font-weight:600;font-size:14px}
 .helprow+.helprow{border-top:1px solid var(--line)}
 .helprow svg{width:18px;height:18px;flex:none;color:var(--arus)}
+/* account deletion: what goes, what stays */
+.dellist{margin:0;padding-left:18px}.dellist li{margin:3px 0}
 </style>
 <script>
 "use strict";
@@ -552,6 +554,20 @@ input{font-family:inherit}
     'Masuk untuk menyimpan riwayat':'Sign in to save your history',
     'Pakai nomor HP agar riwayat tersimpan walau ganti perangkat. Anda tetap bisa mengisi tanpa akun.':'Use your phone number so your history follows you across devices. You can still charge without an account.',
     'Nomor HP':'Phone number','Keluar':'Sign out','Anda telah keluar.':'You’ve signed out.','Kirim kode':'Send code',
+    // account deletion (v1.9.1)
+    'Hapus akun':'Delete account','Hapus akun sekarang':'Delete account now','Akun Anda telah dihapus.':'Your account has been deleted.',
+    'Akun dihapus seketika setelah Anda memasukkan kode yang kami kirim ke nomor HP Anda. Ini tidak dapat dibatalkan.':'The account is deleted as soon as you enter the code we send to your phone number. This cannot be undone.',
+    'Yang dihapus':'What is deleted','Yang disimpan':'What is kept',
+    'Disimpan tanpa data pribadi, sesuai hukum pajak dan konsumen. Tidak ada yang bisa masuk ke akun ini lagi.':'Kept without personal data, as tax and consumer law require. Nobody can sign in to this account again.',
+    'E-mail':'E-mail','Nomor HP (diganti dengan sidik acak berkunci)':'Phone number (replaced by a keyed hash)',
+    'E-wallet terhubung':'Linked e-wallets','Keanggotaan poin (poin hangus)':'Loyalty membership (points are forfeited)',
+    'Perpanjangan otomatis langganan (paket yang sudah dibayar tetap berlaku sampai habis)':'Automatic pass renewal (a paid pass runs to its end)',
+    'Semua perangkat dikeluarkan dari akun':'Every device is signed out','Token notifikasi':'Notification tokens','Token Live Activity':'Live Activity tokens',
+    'Kode masuk yang belum dipakai':'Unused sign-in codes','Riwayat pengisian dan struk (hukum pajak: ID 10 tahun, MY 7, SG 5)':'Charges and receipts (tax law: ID 10 years, MY 7, SG 5)',
+    'Pembayaran dan pengembalian dana':'Payments and refunds','Faktur':'Invoices','Catatan tagihan jaringan mitra':'Partner network charge records','Catatan poin':'Points ledger',
+    'Akun belum dapat dihapus':'The account can’t be deleted yet','Ada sesi yang belum dibayar':'There are unpaid sessions','Ada pengisian yang sedang berlangsung':'A charge is in progress',
+    'Ada penahanan kartu yang belum selesai':'A card hold is not settled yet','Ada reservasi aktif':'You have an active reservation','Anda masih dalam antrean':'You are still in a queue',
+    'Selesaikan hal di atas, lalu hapus akun lagi.':'Settle the above, then delete the account again.','Masukkan kode 6 angka.':'Enter the 6-digit code.',
     'Kode verifikasi':'Verification code','Verifikasi':'Verify','Ganti nomor':'Change number','Berhasil masuk.':'Signed in successfully.',
     'Berhasil masuk sebagai armada.':'Signed in as fleet.','Kode organisasi':'Organization code','mis. nusantara-charge':'e.g. nusantara-charge',
     'Nomor kartu RFID':'RFID card number','Masuk armada':'Fleet sign-in','08xxxxxxxxxx':'08xxxxxxxxxx','••••••':'••••••',
@@ -930,6 +946,40 @@ async function api(path,opts={}){
   if(!r.ok){ const err=new Error((body&&(body.error||body.message))||('HTTP '+r.status)); err.status=r.status; err.body=body; throw err; }
   return body;
 }
+/**
+ * A POST that creates a payment (or a charge), with an Idempotency-Key (v1.9.1). One key per attempt: the same request
+ * sent again after a network error, a timeout, a 5xx or "still in progress" (409) reuses it, so the server answers with
+ * the first payment instead of taking a second; an answer (success, or a refusal such as a declined card) ends the
+ * attempt, and the next request gets a new key.
+ */
+const IDEM_KEYS=new Map();
+function newIdemKey(){ try{ if(crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  const b=new Uint8Array(16); crypto.getRandomValues(b); return Array.from(b,(x)=>x.toString(16).padStart(2,'0')).join(''); }
+async function moneyPost(path,body={}){
+  const json=JSON.stringify(body), sig=path+'\n'+json;
+  let key=IDEM_KEYS.get(sig); if(!key){ key=newIdemKey(); IDEM_KEYS.set(sig,key); }
+  try{ const r=await api(path,{method:'POST',body:json,headers:{'Idempotency-Key':key}}); IDEM_KEYS.delete(sig); return r; }
+  catch(e){ if(e.status&&e.status<500&&!(e.body&&e.body.code==='idempotency_in_progress')) IDEM_KEYS.delete(sig); throw e; }
+}
+/**
+ * What this browser keeps for the driver who used it (v1.9.1). Sign-out and account deletion revoke the device token on
+ * the server; everything per driver goes with it, so the next person on a shared browser starts as a new device and
+ * sees none of the previous driver's charges, payments or payment choices. Theme, language and list/map stay.
+ */
+const DRIVER_KEYS=['ps_device','ps_method','ps_pending','ps_link','ps_apns_token'];
+function forgetDriver(){
+  for(const k of DRIVER_KEYS){ try{ LS.removeItem(k); }catch(e){} }
+  DEVICE=null; IDEM_KEYS.clear(); liveStarted.clear();
+  state.me=null; state.favs=[]; state._checkout=null; state._con=null; state._rpay=null; state._spay=null; state._mpay=null; state._station=null;
+  side.roam=null;
+}
+/** Sign out: notifications off (while the token still works), the device revoked, a fresh device as on first open. */
+async function signOutHere(){
+  await disablePush().catch(()=>{});
+  try{ await api('/v1/signout',{method:'POST'}); }catch(e){ if(e.status!==401) throw e; }
+  forgetDriver();
+  await ensureDevice();
+}
 async function ensureDevice(){
   DEVICE=LS.getItem('ps_device');
   if(DEVICE){ try{ await api('/v1/me'); return; }catch(e){ if(e.status!==401) return; DEVICE=null; } }
@@ -938,9 +988,24 @@ async function ensureDevice(){
 }
 
 //────────────────────────────────────────────────────────── router
-const state={ view:'home', params:{}, me:null, poll:null };
-function go(view,params={}){
+const state={ view:'home', params:{}, me:null, poll:null, screen:0, cleanups:[] };
+/**
+ * Leaving a screen (v1.9.1): every go() and render(). Its poll stops, and what it registered with onLeave (listeners)
+ * is removed. In-app navigation does not change the hash, so listeners removed only on hashchange used to outlive their
+ * screen: a payment screen's tab-return check later paid / started on another screen, and a re-render (theme, language,
+ * wide layout) left the old live-session poll painting and rewiring Stop.
+ */
+function leaveScreen(){
   if(state.poll){clearInterval(state.poll);state.poll=null;}
+  const c=state.cleanups; state.cleanups=[]; state.screen++;
+  for(const f of c){ try{ f(); }catch(e){} }
+}
+/** Run `fn` when the current screen is left. */
+function onLeave(fn){ state.cleanups.push(fn); }
+/** A check for handlers that outlive an await: true while the screen that made it is still the one shown. */
+function screenAlive(){ const t=state.screen; return ()=>state.screen===t; }
+function go(view,params={}){
+  leaveScreen();
   // Wide layout: the station list is always in the side column, so the separate
   // Stations screen would only duplicate it; land on Home instead.
   if(view==='stations' && isWide()) view='home';
@@ -1427,6 +1492,7 @@ function wireTop(){
 }
 
 async function render(){
+  leaveScreen();
   const v=$('#view'); renderTabs(); renderSide();
   const fn=VIEWS[state.view]||VIEWS.home;
   try{ await fn(v); }catch(e){ v.innerHTML=topbar('Ada masalah','',{back:1})+`<div class="banner b-err">${svg(I.warn)}<div>${esc(e.message||'Gagal memuat.')}</div></div>`; }
@@ -1480,7 +1546,7 @@ async function loadUnpaid(slot){
     $('#payunpaidhome').onclick=async()=>{ haptic();
       // A partner network charge the card hold did not cover: paid here (it has no receipt of ours to pay from).
       if(u.kind==='roaming'){ const b=$('#payunpaidhome'); b.disabled=true;
-        try{ const r=await api('/v1/charge/'+u.chargeId+'/pay-unpaid',{method:'POST',body:'{}'});
+        try{ const r=await moneyPost('/v1/charge/'+u.chargeId+'/pay-unpaid',{});
           if(r.paid){ alertBanner('Pembayaran berhasil. Terima kasih.'); return go('home'); }
           state._spay={...r,chargeId:u.chargeId,kind:'roaming'}; rememberCheckout('spay',state._spay); go('spay',{_back:()=>go('home')}); }
         catch(e){ alertBanner(e.message); b.disabled=false; } return; }
@@ -1783,7 +1849,7 @@ VIEWS.rstation=async(v)=>{
   box.querySelectorAll('[data-rreserve]').forEach(b=>b.onclick=async()=>{
     haptic(); const e=s.evses[Number(b.dataset.rreserve)]; b.disabled=true; b.innerHTML='<span class="spinner"></span>';
     try{
-      const r=await api('/v1/roaming/reservations',{method:'POST',body:JSON.stringify({partnerId:s.partnerId,countryCode:s.countryCode,partyId:s.partyId,locationId:s.locationId,evseUid:e.uid})});
+      const r=await moneyPost('/v1/roaming/reservations',{partnerId:s.partnerId,countryCode:s.countryCode,partyId:s.partyId,locationId:s.locationId,evseUid:e.uid});
       // The operator took the request; the charger's own answer follows (usually within seconds).
       let res=r.reservation;
       for(let n=0;n<20&&res&&res.state==='requested';n++){ await new Promise(x=>setTimeout(x,1000)); try{ res=(await api('/v1/roaming/reservations/'+res.id)).reservation; }catch(err){ break; } }
@@ -1799,7 +1865,7 @@ VIEWS.rstation=async(v)=>{
   box.querySelectorAll('[data-rstart]').forEach(b=>b.onclick=async()=>{
     haptic(); const e=s.evses[Number(b.dataset.rstart)]; b.disabled=true; b.innerHTML='<span class="spinner"></span>';
     const card=(document.querySelector('input[name=rcard]:checked')||{}).value||'';
-    try{ const r=await api('/v1/roaming/charge',{method:'POST',body:JSON.stringify({partnerId:s.partnerId,countryCode:s.countryCode,partyId:s.partyId,locationId:s.locationId,evseUid:e.uid,connectorId:(e.connectors[0]||{}).id,...(card?{savedCardId:card}:{})})});
+    try{ const r=await moneyPost('/v1/roaming/charge',{partnerId:s.partnerId,countryCode:s.countryCode,partyId:s.partyId,locationId:s.locationId,evseUid:e.uid,connectorId:(e.connectors[0]||{}).id,...(card?{savedCardId:card}:{})});
       // A new card: the acquirer's card page places the hold, then the charge starts (the return page brings the driver back).
       if(r.payment&&r.payment.checkoutUrl&&r.payment.action!=='done'){ rememberCheckout('rsession',{chargeId:r.chargeId,payment:r.payment}); location.href=r.payment.checkoutUrl; return; }
       go('rsession',{chargeId:r.chargeId,_back:()=>go('home')});
@@ -1811,8 +1877,10 @@ VIEWS.rstation=async(v)=>{
 VIEWS.rsession=async(v)=>{
   v.className='view full';
   const id=state.params.chargeId;
+  const alive=screenAlive();
   v.innerHTML=topbar('Sesi di jaringan mitra','',{back:1})+`<div id="live"><div class="center-loading"><span class="spinner"></span></div></div>`;
   const paint=(s)=>{
+    if(!alive()||state.view!=='rsession'||state.params.chargeId!==id) return;
     const live=$('#live'); if(!live)return;
     useCur(s.currency||(s.hold&&s.hold.currency));
     const label={paying:'Menunggu pembayaran',starting:'Menghubungi charger…',rejected:'Tidak dapat dimulai',charging:'Sedang mengisi',finishing:'Menunggu tagihan operator…',billed:'Selesai'}[s.state]||s.state;
@@ -1869,6 +1937,7 @@ VIEWS.rsession=async(v)=>{
   };
   const tick=async()=>{ const s=await api('/v1/roaming/charge/'+id+'/status'); paint(s); return s; };
   const first=await tick();
+  if(!alive()) return;
   state.poll=setInterval(()=>tick().catch(()=>{}),4000);
   // The operator's bill can take a while; a notification brings the driver back to it.
   if(['paying','starting','charging','finishing'].includes(first.state)){ $('#live').insertAdjacentHTML('afterend','<div id="pushoffer"></div>'); offerPush($('#pushoffer')); }
@@ -2019,7 +2088,7 @@ VIEWS.connector=async(v)=>{
         if(!pick&&list.length+saved.length>1){ pick=methodPicker($('#rmethods'),list,{savedCards:po.savedCards,canSaveCard:po.canSaveCard,linkedWallets:po.linkedWallets,fee:true}); b.innerHTML=svg(I.hold)+' Bayar '+rp(fee.totalMinor); return; } }
       b.disabled=true; b.innerHTML='<span class="spinner"></span>';
       const m=po?(pick?pick.value():((po.paymentMethods||[])[0]?{method:po.paymentMethods[0].channel}:{})):{};
-      try{ const r=await api('/v1/reservations',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,...m})});
+      try{ const r=await moneyPost('/v1/reservations',{connectorId:c.connectorId,...m});
         if(r.reservation){ alertBanner('Konektor dipesan.'); return go('connector',{...state.params}); }
         state._rpay={...r,connectorId:c.connectorId}; rememberCheckout('rpay',state._rpay); go('rpay',{_back:()=>go('connector',{...state.params})}); }
       catch(e){ alertBanner(e.message); b.disabled=false; b.innerHTML=pick?svg(I.hold)+' Bayar '+rp(fee.totalMinor):label; } };
@@ -2049,21 +2118,28 @@ VIEWS.connector=async(v)=>{
     ${feeRows?`<div class="seclabel" style="margin-top:20px">Rincian biaya</div><div class="card">${feeRows}<div class="rc-line small muted" style="padding-top:6px">${c.countryCode&&c.countryCode!=='ID'?(c.pricesIncludeTax?'Harga sudah termasuk pajak.':'Pajak ditambahkan saat sesi selesai.'):'Harga sudah termasuk PBJT & PPN saat sesi selesai.'}</div></div>`:''}
     <button class="cta stickycta" id="pay" disabled>${svg(I.bolt)} Pilih jumlah dulu</button>`;
   let amount=0, quoteTimer=null;
+  // Quotes answer out of order: only the latest request's answer counts, and Pay stays disabled while a payment is
+  // being created — a late quote used to re-enable it and show a stale estimate (v1.9.1).
+  let quoteSeq=0, paying=false;
   const quote=$('#quote'), payBtn=$('#pay');
   let pick=null, lastQ=null;
   // Post-pay with a linked e-wallet: nothing is paid now, so the button starts the charge.
-  const payLabel=()=>{ if(!lastQ) return; const post=pick&&pick.postpay&&pick.postpay()&&amount<=(lastQ.postpayLimitIdr||0);
+  const payLabel=()=>{ if(!lastQ||paying) return; const post=pick&&pick.postpay&&pick.postpay()&&amount<=(lastQ.postpayLimitIdr||0);
     payBtn.innerHTML=svg(I.bolt)+(post?`<span class="cta-2l"><span>Mulai isi · bayar setelah selesai</span><small>batas ${rp(amount)} · ±${kwh(lastQ.allowanceKwh)} kWh</small></span>`:`<span class="cta-2l"><span>Bayar ${rp(amount)}</span><small>±${kwh(lastQ.allowanceKwh)} kWh</small></span>`); };
   const promoCode=()=>($('#promo')?.value||'').trim().toUpperCase();
   $('#promo').addEventListener('input',()=>{ if(amount) setAmount(amount); });
-  const setAmount=(a)=>{ amount=a;
+  const setAmount=(a)=>{ if(paying) return;
+    amount=a;
+    const seq=++quoteSeq;
     $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.toggle('sel',Number(ch.dataset.a)===a));
     if(quoteTimer)clearTimeout(quoteTimer);
     if(!a||a<(CUR===RUPIAH?1000:100)){ quote.style.display='none'; payBtn.disabled=true; payBtn.innerHTML=svg(I.bolt)+' Pilih jumlah dulu'; return; }
     quote.style.display='flex'; quote.innerHTML=`<div><div class="lbl">Menghitung…</div></div><span class="spinner" style="border-color:var(--line-2);border-top-color:var(--arus)"></span>`;
     payBtn.disabled=true;
     quoteTimer=setTimeout(async()=>{
+      const stale=()=>seq!==quoteSeq||paying;
       try{ const q=await api('/v1/charge/quote',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,amountMinor:a,promoCode:promoCode()||undefined})});
+        if(stale()) return;
         const perks=[q.membership?`Harga member: ${esc(q.membership)}`:'',q.promotion?`Promo: ${esc(q.promotion)}`:''].filter(Boolean).join(' · ');
         quote.innerHTML=`<div><div class="est">±${kwh(q.allowanceKwh)} kWh</div><div class="lbl">perkiraan energi untuk ${rp(a)}</div>${perks?`<div class="lbl perk">${perks}</div>`:''}${q.codeProblem?`<div class="lbl" style="color:var(--amber)">${esc(q.codeProblem)}</div>`:''}</div>${svg(I.bolt,'')}`;
         quote.querySelector('svg').style.cssText='width:30px;height:30px;color:var(--arus);opacity:.6';
@@ -2072,6 +2148,7 @@ VIEWS.connector=async(v)=>{
         lastQ=q; payBtn.disabled=false; payLabel();
         quote.scrollIntoView({block:'nearest',behavior:'smooth'});
       }catch(e){
+        if(stale()) return;
         const min=e.body&&e.body.minimumViableMinor;
         quote.innerHTML=`<div><div class="lbl" style="color:var(--amber)">${esc(e.message)}</div>${min?`<div class="lbl">Minimal sekitar ${rp(min)}.</div>`:''}</div>`;
         payBtn.disabled=true; payBtn.innerHTML=svg(I.bolt)+' Naikkan jumlah';
@@ -2083,21 +2160,21 @@ VIEWS.connector=async(v)=>{
     // Ringgit / Singapore dollars with cents (12.50); rupiah as before (whole rupiah, grouped as typed).
     if(CUR!==RUPIAH){ const raw=e.target.value.replace(/[^\d.]/g,''); const m=raw?toMinor(raw):0; setAmount(Number.isFinite(m)?m:0); $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.remove('sel')); return; }
     const raw=e.target.value.replace(/\D/g,''); e.target.value=raw?Number(raw).toLocaleString(ID_LOCALE):''; setAmount(Number(raw)); $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.remove('sel')); };
-  payBtn.onclick=async()=>{ if(!amount)return; payBtn.disabled=true; payBtn.innerHTML='<span class="spinner"></span>';
+  payBtn.onclick=async()=>{ if(!amount||paying)return; paying=true; quoteSeq++; payBtn.disabled=true; payBtn.innerHTML='<span class="spinner"></span>';
     try{ const m=pick?pick.value():{};
-      const r=await api('/v1/charge/prepaid',{method:'POST',body:JSON.stringify({connectorId:c.connectorId,amountMinor:amount,promoCode:promoCode()||undefined,...m})});
+      const r=await moneyPost('/v1/charge/prepaid',{connectorId:c.connectorId,amountMinor:amount,promoCode:promoCode()||undefined,...m});
       state._checkout=r; state._con=c;
       // A saved card that went through at once: straight to charging.
       if(r.payment&&r.payment.action==='done'){ return onPaid(r); }
       rememberCheckout('pay',r); go('pay',{chargeId:r.chargeId,_back:()=>go('connector',{connectorId:c.connectorId})});
-    }catch(e){ payBtn.disabled=false; payBtn.innerHTML=svg(I.bolt)+' Bayar '+rp(amount); alertBanner(e.message);
+    }catch(e){ paying=false; payBtn.disabled=false; payBtn.innerHTML=svg(I.bolt)+' Bayar '+rp(amount); alertBanner(e.message);
       // The linked e-wallet's link, or the saved card's token, has ended: rebuild the choices without it.
       if(e.body&&(e.body.code==='wallet_link_ended'||e.body.code==='saved_card_ended')){ pick=null; setAmount(amount); } }
   };
 };
 
 async function startFleet(connectorId){
-  try{ const r=await api('/v1/charge/fleet',{method:'POST',body:JSON.stringify({connectorId})});
+  try{ const r=await moneyPost('/v1/charge/fleet',{connectorId});
     const s=await api('/v1/charge/'+r.chargeId+'/start',{method:'POST'});
     go('session',{chargeId:r.chargeId,_back:()=>go('home'),justStarted:s});
   }catch(e){ alertBanner(e.message); }
@@ -2242,15 +2319,16 @@ function paintCheckout(v,co,o){
   // Same tab: an e-wallet deeplink opens its app; the acquirer returns to /app/paid.html, which resumes here.
   if($('#gocheckout')) $('#gocheckout').onclick=()=>{ haptic(); location.href=p.checkoutUrl; };
   let finished=false;
-  const finish=()=>{ if(finished) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); o.onPaid(); };
+  // Only this screen's payment, only once (a poll, the tab-return check and the demo button can all see it paid).
+  const alive=screenAlive();
+  const finish=()=>{ if(finished||!alive()) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); o.onPaid(); };
   if($('#paid')) $('#paid').onclick=async()=>{ $('#paid').innerHTML='<span class="spinner"></span>';
     try{ await api(o.confirmPath,{method:'POST'}); finish(); }catch(e){ alertBanner(e.message); $('#paid').textContent='Simulasikan pembayaran (demo)'; } };
-  const check=async()=>{ try{ if(state.view===o.view && await o.isPaid()) finish(); }catch(e){} };
+  const check=async()=>{ try{ if(alive() && !finished && await o.isPaid()) finish(); }catch(e){} };
   state.poll=setInterval(check,2500); check();
-  const onVisible=()=>{ if(document.visibilityState==='visible'&&state.view===o.view) check(); };
+  const onVisible=()=>{ if(document.visibilityState==='visible'&&alive()) check(); };
   document.addEventListener('visibilitychange',onVisible);
-  const stop=()=>{ if(state.view!==o.view){ document.removeEventListener('visibilitychange',onVisible); window.removeEventListener('hashchange',stop); } };
-  window.addEventListener('hashchange',stop);
+  onLeave(()=>document.removeEventListener('visibilitychange',onVisible));
 }
 
 //──────────── PAY
@@ -2295,22 +2373,27 @@ VIEWS.pay=async(v)=>{
   wait.innerHTML=`<div class="center-loading" style="padding:20px;gap:12px;flex-direction:column">
       <span class="spinner"></span><div class="muted small">Menunggu pembayaran…</div></div>
     ${co.demo!==false?'<button class="cta ghost" id="paid">Simulasikan pembayaran (demo)</button>':''}`;
+  // Paid: start the charge ONCE. A slow status answer can overlap the next poll or the tab-return check, and each
+  // used to call onPaid — /start twice. And only for this screen's checkout (v1.9.1).
+  const alive=screenAlive();
+  let finished=false;
+  const paid=()=>{ if(finished||!alive()||state._checkout!==co) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} onPaid(co); };
   if($('#paid')) $('#paid').onclick=async()=>{ $('#paid').innerHTML='<span class="spinner"></span>';
-    try{ await api('/v1/charge/'+co.chargeId+'/confirm-payment',{method:'POST'}); onPaid(co); }
+    try{ await api('/v1/charge/'+co.chargeId+'/confirm-payment',{method:'POST'}); paid(); }
     catch(e){ alertBanner(e.message); $('#paid').textContent='Simulasikan pembayaran (demo)'; }
   };
   // Auto-poll: once captured, proceed.
   const check=async()=>{
+    if(finished||!alive()) return;
     try{ const s=await api('/v1/charge/'+co.chargeId+'/status');
-      if(s.state!=='awaiting_payment' && state.view==='pay'){ onPaid(co); } }catch(e){}
+      if(s.state!=='awaiting_payment'){ paid(); } }catch(e){}
   };
   state.poll=setInterval(check,2500);
   // Returning from the bank app after paying from a saved QR: check at once
   // rather than waiting out a timer the phone throttled in the background.
-  const onVisible=()=>{ if(document.visibilityState==='visible' && state.view==='pay') check(); };
+  const onVisible=()=>{ if(document.visibilityState==='visible' && alive()) check(); };
   document.addEventListener('visibilitychange',onVisible);
-  const stopWatching=()=>{ if(state.view!=='pay'){ document.removeEventListener('visibilitychange',onVisible); window.removeEventListener('hashchange',stopWatching); } };
-  window.addEventListener('hashchange',stopWatching);
+  onLeave(()=>document.removeEventListener('visibilitychange',onVisible));
 };
 
 /**
@@ -2381,8 +2464,11 @@ function costNote(s){
 VIEWS.session=async(v)=>{
   v.className='view full';
   const id=state.params.chargeId;
+  const alive=screenAlive();
   v.innerHTML=topbar('Sesi pengisian','',{back:1})+`<div id="live"><div class="center-loading"><span class="spinner"></span></div></div>`;
   const paint=(s)=>{
+    // A late answer for a screen that was left (or re-rendered) paints nothing and wires nothing (v1.9.1).
+    if(!alive()||state.view!=='session'||state.params.chargeId!==id) return;
     const live=$('#live'); if(!live)return;
     useCur(s.currency);
     const isPrepaid=s.mode==='prepaid';
@@ -2461,6 +2547,7 @@ VIEWS.session=async(v)=>{
     }
   };
   const first=await tickSession(id,paint);
+  if(!alive()) return;
   state.poll=setInterval(()=>tickSession(id,paint).catch(()=>{}),4000);
   if(['awaiting_start','charging'].includes(first.state)){ $('#live').insertAdjacentHTML('afterend','<div id="pushoffer"></div>'); offerPush($('#pushoffer')); }
 };
@@ -2579,7 +2666,7 @@ VIEWS.receipt=async(v)=>{
   $('#done').onclick=()=>go('home');
   if($('#paynow')) $('#paynow').onclick=async()=>{ const b=$('#paynow'); b.disabled=true; b.innerHTML='<span class="spinner"></span>';
     if(set.postpay.checkoutUrl){ location.href=set.postpay.checkoutUrl; return; }
-    try{ const r=await api('/v1/charge/'+id+'/pay-now',{method:'POST'});
+    try{ const r=await moneyPost('/v1/charge/'+id+'/pay-now',{});
       if(r.checkoutUrl){ location.href=r.checkoutUrl; return; }
       haptic(); alertBanner('Pembayaran berhasil.'); go('receipt',{...state.params}); }
     catch(e){ alertBanner(e.message); b.disabled=false; b.textContent='Bayar sekarang'; } };
@@ -2592,7 +2679,7 @@ VIEWS.receipt=async(v)=>{
       // More than one way to pay: choose first.
       if(!pick&&list.length+saved.length>1){ pick=methodPicker($('#payunpaidbox'),list,{savedCards:po.savedCards,linkedWallets:po.linkedWallets,settle:true,avoid:set.hold&&set.hold.expired?null:set.postpay.channel}); b.textContent='Bayar '+rp(owed); return; }
       b.disabled=true; b.innerHTML='<span class="spinner"></span>';
-      try{ const r=await api('/v1/charge/'+id+'/pay-unpaid',{method:'POST',body:JSON.stringify(pick?pick.value():(list[0]?{method:list[0].channel}:{}))});
+      try{ const r=await moneyPost('/v1/charge/'+id+'/pay-unpaid',pick?pick.value():(list[0]?{method:list[0].channel}:{}));
         if(r.paid){ haptic(); alertBanner('Pembayaran berhasil. Terima kasih.'); return go('receipt',{...state.params}); }
         state._spay={...r,chargeId:id}; rememberCheckout('spay',state._spay); go('spay',{_back:()=>go('receipt',{chargeId:id,_back:()=>go('home')})}); }
       catch(e){ alertBanner(e.message); b.disabled=false; b.textContent='Bayar '+rp(owed);
@@ -2608,6 +2695,66 @@ VIEWS.receipt=async(v)=>{
       const url=URL.createObjectURL(new Blob([await res.text()],{type:'text/html'}));
       if(w) w.location.href=url; else location.href=url;
     }catch(e){ if(w) w.close(); alertBanner('Gagal memuat.'); }
+  };
+};
+
+//──────────── DELETE ACCOUNT (POST /d/v1/account/delete/start, then /d/v1/account/delete; driver/account-deletion.ts)
+const DEL_TEXT={name:'Nama',email:'E-mail',phone:'Nomor HP (diganti dengan sidik acak berkunci)',saved_cards:'Kartu tersimpan',linked_ewallets:'E-wallet terhubung',
+  favourites:'Favorit',loyalty_membership:'Keanggotaan poin (poin hangus)',pass_auto_renewal:'Perpanjangan otomatis langganan (paket yang sudah dibayar tetap berlaku sampai habis)',
+  devices_signed_out:'Semua perangkat dikeluarkan dari akun',push_tokens:'Token notifikasi',live_activity_tokens:'Token Live Activity',sign_in_codes:'Kode masuk yang belum dipakai',
+  charges_and_receipts:'Riwayat pengisian dan struk (hukum pajak: ID 10 tahun, MY 7, SG 5)',payments_and_refunds:'Pembayaran dan pengembalian dana',invoices:'Faktur',
+  partner_network_charge_records:'Catatan tagihan jaringan mitra',loyalty_ledger:'Catatan poin'};
+// The server's lists, as sent before the code is asked for (the answer to /start replaces them).
+const DEL_DELETED=['name','email','phone','saved_cards','linked_ewallets','favourites','loyalty_membership','pass_auto_renewal','devices_signed_out','push_tokens','live_activity_tokens','sign_in_codes'];
+const DEL_RETAINED=['charges_and_receipts','payments_and_refunds','invoices','partner_network_charge_records','loyalty_ledger'];
+const delItems=(keys)=>`<ul class="dellist">${keys.map((k)=>`<li>${esc(DEL_TEXT[String(k).split(/[ (]/)[0]]||k)}</li>`).join('')}</ul>`;
+/** What stops the deletion (409, or the answer to /start), with a way to each. */
+function delBlockersHtml(list){
+  if(!list||!list.length) return '';
+  const t={unpaid:'Ada sesi yang belum dibayar',active_session:'Ada pengisian yang sedang berlangsung',open_hold:'Ada penahanan kartu yang belum selesai',active_reservation:'Ada reservasi aktif',in_queue:'Anda masih dalam antrean'};
+  return `<div class="banner b-warn">${svg(I.warn)}<div><div><b>Akun belum dapat dihapus</b></div>${list.map((b)=>`<div style="margin-top:6px">${esc(t[b.code]||b.code)}</div>${
+    b.code==='unpaid'?(b.unpaid||[]).map((u)=>`<button class="cta ghost" data-delpay="${esc(u.chargeId)}" style="margin-top:6px;padding:9px 12px;font-size:13.5px">${esc(u.site||'')} · ${rp(u.owedMinor,u.currency)} · <span>Bayar</span></button>`).join('')
+    :b.code==='active_session'||b.code==='open_hold'?(b.chargeIds||[]).slice(0,3).map((id)=>`<button class="cta ghost" data-delsess="${esc(id)}" style="margin-top:6px;padding:9px 12px;font-size:13.5px">${svg(I.bolt)} <span>Lihat rincian</span></button>`).join(''):''}`).join('')}
+    <div style="margin-top:8px">Selesaikan hal di atas, lalu hapus akun lagi.</div></div></div>`;
+}
+VIEWS.delacct=async(v)=>{
+  v.className='view';
+  const me=state.me||await api('/v1/me').catch(()=>({})); state.me=me;
+  if(!me.account) return go('account');
+  const alive=screenAlive();
+  v.innerHTML=topbar('Hapus akun',me.account.phone,{back:1})+
+    `<div class="banner b-warn">${svg(I.warn)}<div>Akun dihapus seketika setelah Anda memasukkan kode yang kami kirim ke nomor HP Anda. Ini tidak dapat dibatalkan.</div></div>
+     <div class="seclabel">Yang dihapus</div><div class="card soft small" id="deldel">${delItems(DEL_DELETED)}</div>
+     <div class="seclabel">Yang disimpan</div><div class="card soft small"><div id="delret">${delItems(DEL_RETAINED)}</div>
+       <div class="muted" style="margin-top:6px">Disimpan tanpa data pribadi, sesuai hukum pajak dan konsumen. Tidak ada yang bisa masuk ke akun ini lagi.</div></div>
+     <div id="delblock"></div>
+     <div id="delbox"><button class="cta danger" id="delsend" style="margin-top:16px">Kirim kode</button></div>`;
+  const showBlockers=(list)=>{ const box=$('#delblock'); if(!box) return; box.innerHTML=delBlockersHtml(list);
+    box.querySelectorAll('[data-delpay]').forEach((b)=>b.onclick=()=>go('receipt',{chargeId:b.dataset.delpay,_back:()=>go('delacct',{_back:()=>go('account')})}));
+    box.querySelectorAll('[data-delsess]').forEach((b)=>b.onclick=()=>go('session',{chargeId:b.dataset.delsess,_back:()=>go('delacct',{_back:()=>go('account')})})); };
+  const paintCode=(r)=>{
+    $('#delbox').innerHTML=`<div class="banner b-info">${svg(I.info)}<div>Kode dikirim ke <b>${esc(r.phoneMasked||me.account.phone)}</b>.${r.devCode?` <span class="muted">(demo: ${esc(r.devCode)})</span>`:''}</div></div>
+      <div class="field"><label>Kode verifikasi</label><input id="delotp" class="otp-in" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" ${r.devCode?`value="${esc(r.devCode)}"`:''} /></div>
+      <button class="cta danger" id="delgo" style="margin-top:14px">Hapus akun sekarang</button>`;
+    $('#delgo').onclick=async()=>{ const code=$('#delotp').value.trim(); if(!/^\d{6}$/.test(code)) return alertBanner('Masukkan kode 6 angka.');
+      const b=$('#delgo'); b.disabled=true; b.innerHTML='<span class="spinner"></span>';
+      try{ await api('/v1/account/delete',{method:'POST',body:JSON.stringify({code})});
+        // The server revoked this device with the account: start again as a new one, like sign-out.
+        await disablePush().catch(()=>{});
+        forgetDriver(); await ensureDevice().catch(()=>{});
+        haptic(); alertBanner('Akun Anda telah dihapus.'); go('account');
+      }catch(e){ if(!alive()) return;
+        b.disabled=false; b.textContent='Hapus akun sekarang';
+        if(e.status===409&&e.body&&e.body.blockers){ showBlockers(e.body.blockers); $('#delblock').scrollIntoView({block:'nearest',behavior:'smooth'}); }
+        alertBanner(e.message); }
+    };
+  };
+  $('#delsend').onclick=async()=>{ const b=$('#delsend'); b.disabled=true; b.innerHTML='<span class="spinner"></span>';
+    try{ const r=await api('/v1/account/delete/start',{method:'POST',body:'{}'}); if(!alive()) return;
+      if(r.deleted) $('#deldel').innerHTML=delItems(r.deleted);
+      if(r.retained) $('#delret').innerHTML=delItems(r.retained);
+      showBlockers(r.blockers); paintCode(r);
+    }catch(e){ if(!alive()) return; b.disabled=false; b.textContent='Kirim kode'; alertBanner(e.message); }
   };
 };
 
@@ -2679,7 +2826,11 @@ VIEWS.account=async(v)=>{
   }
   if(me.account||me.fleet){
     const out=el('<button class="cta ghost" id="signout" style="margin-top:16px;color:var(--danger)">Keluar</button>');
-    body.appendChild(out); out.onclick=async()=>{ await api('/v1/signout',{method:'POST'}); state.me=null; alertBanner('Anda telah keluar.'); go('account'); };
+    body.appendChild(out); out.onclick=async()=>{ out.disabled=true;
+      try{ await signOutHere(); alertBanner('Anda telah keluar.'); go('account'); }catch(e){ out.disabled=false; alertBanner(e.message); } };
+    // Account deletion in the app (App Store 5.1.1(v), Google Play), v1.9.1.
+    if(me.account){ const del=el('<button class="cta ghost" id="delacct" style="margin-top:10px;color:var(--danger)">Hapus akun</button>');
+      body.appendChild(del); del.onclick=()=>{ haptic(); go('delacct',{_back:()=>go('account')}); }; }
     return;
   }
   // auth forms
@@ -2794,7 +2945,7 @@ async function paintMembership(row){
     const box=el(`<div style="margin-top:8px"><div class="small muted">Pilih kartu atau e-wallet untuk perpanjangan:</div>${list.map((k)=>`<button class="cta ghost" type="button" data-pickm="${esc(k.id)}" style="margin-top:6px">${mLabel(k)}</button>`).join('')}</div>`);
     b.replaceWith(box); box.querySelectorAll('[data-pickm]').forEach((x)=>x.onclick=()=>on(x.dataset.pickm)); });
   const buy=async(b,m)=>{ haptic(); const label=b.textContent; b.disabled=true; b.innerHTML='<span class="spinner"></span>';
-    try{ state._mpay=await api('/v1/memberships',{method:'POST',body:JSON.stringify({planId:b.dataset.buy,...(m||{})})});
+    try{ state._mpay=await moneyPost('/v1/memberships',{planId:b.dataset.buy,...(m||{})});
       if(state._mpay.paid||(state._mpay.payment&&state._mpay.payment.action==='done')){ haptic(); alertBanner(state._mpay.creditMinor&&!state._mpay.totalMinor?'Paket diganti. Berlaku sampai '+until(state._mpay.periodEnd)+'.':'Langganan aktif.'); return go('account'); }
       rememberCheckout('mpay',state._mpay); go('mpay',{_back:()=>go('account')}); }
     catch(e){ alertBanner(e.message); if(e.body&&(e.body.code==='wallet_link_ended'||e.body.code==='saved_card_ended')) return go('account'); b.disabled=false; b.textContent=label; } };
@@ -2841,7 +2992,8 @@ VIEWS.rpay=async(v)=>{
   const status=()=>api('/v1/reservations/checkout/'+id);
   const confirmPath='/v1/reservations/checkout/'+id+'/confirm-payment';
   let finished=false;
-  const done=async()=>{ if(finished) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); haptic();
+  const alive=screenAlive();
+  const done=async()=>{ if(finished||!alive()) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); haptic();
     let s=null; try{ s=await status(); }catch(e){}
     if(s&&s.state==='held') alertBanner('Konektor dipesan.');
     else if(s&&s.state==='failed') alertBanner((s.problem||'Charger menolak reservasi.')+' Biaya reservasi dikembalikan.');
@@ -2861,7 +3013,7 @@ VIEWS.rpay=async(v)=>{
   if($('#rpaid')) $('#rpaid').onclick=async()=>{ $('#rpaid').innerHTML='<span class="spinner"></span>';
     try{ await api(confirmPath,{method:'POST'}); }catch(e){ alertBanner(e.message); } done(); };
   $('#rcancelpay').onclick=async()=>{ haptic(); try{ await api('/v1/reservations/checkout/'+id+'/cancel',{method:'POST'}); }catch(e){} finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); back(); };
-  const check=async()=>{ try{ if(state.view==='rpay'&&await isPaid()) done(); }catch(e){} };
+  const check=async()=>{ try{ if(alive()&&!finished&&await isPaid()) done(); }catch(e){} };
   state.poll=setInterval(check,2500); check();
 };
 
@@ -2873,7 +3025,9 @@ VIEWS.spay=async(v)=>{
   const back=()=>co.kind==='roaming'?go('home'):go('receipt',{chargeId:co.chargeId,_back:()=>go('home')});
   const isPaid=async()=>{ const s=await api('/v1/charge/'+co.chargeId+'/pay-unpaid'); return s.paid===true; };
   const confirmPath='/v1/charge/'+co.chargeId+'/pay-unpaid/confirm-payment';
-  const done=()=>{ if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); haptic(); alertBanner('Pembayaran berhasil. Terima kasih.'); back(); };
+  const alive=screenAlive();
+  let finished=false;
+  const done=()=>{ if(finished||!alive()) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} forgetCheckout(); haptic(); alertBanner('Pembayaran berhasil. Terima kasih.'); back(); };
   if(co.payment&&co.payment.action!=='qr'){
     return paintCheckout(v,co,{amountMinor:co.amountMinor,note:'Sesi pengisian',view:'spay',title:'Bayar sesi pengisian',info:'Setelah membayar, kembali ke sini: struk sesi Anda diperbarui.',confirmPath,isPaid,onPaid:done});
   }
@@ -2889,13 +3043,12 @@ VIEWS.spay=async(v)=>{
     try{ if(await saveQrImage(co,'Sesi pengisian · belum terbayar')) $('#ssaveqr-hint').innerHTML='<b>QR tersimpan.</b> Buka aplikasi bank / e-wallet → Bayar / Scan QR → pilih gambar dari galeri. Kembali ke sini setelah membayar; struk diperbarui otomatis.'; }
     catch(e){ alertBanner('Gagal menyimpan QR. Coba tangkap layar (screenshot).'); } finally{ b.disabled=false; } };
   // Back from the bank app: check at once.
-  const onVisible=()=>{ if(document.visibilityState==='visible'&&state.view==='spay') check(); };
+  const onVisible=()=>{ if(document.visibilityState==='visible'&&alive()) check(); };
   document.addEventListener('visibilitychange',onVisible);
-  const stopWatching=()=>{ if(state.view!=='spay'){ document.removeEventListener('visibilitychange',onVisible); window.removeEventListener('hashchange',stopWatching); } };
-  window.addEventListener('hashchange',stopWatching);
+  onLeave(()=>document.removeEventListener('visibilitychange',onVisible));
   if($('#spaid')) $('#spaid').onclick=async()=>{ $('#spaid').innerHTML='<span class="spinner"></span>';
     try{ await api(confirmPath,{method:'POST'}); done(); }catch(e){ alertBanner(e.message); $('#spaid').textContent='Simulasikan pembayaran (demo)'; } };
-  const check=async()=>{ try{ if(state.view==='spay'&&await isPaid()) done(); }catch(e){} };
+  const check=async()=>{ try{ if(alive()&&!finished&&await isPaid()) done(); }catch(e){} };
   state.poll=setInterval(check,2500);
 };
 
@@ -2921,18 +3074,19 @@ VIEWS.mpay=async(v)=>{
      <div class="small muted" id="msaveqr-hint" style="text-align:center;margin-top:8px">${qrSaveHint(co)}</div>
      <div id="mwait" style="margin-top:18px"><div class="center-loading" style="padding:16px;gap:12px;flex-direction:column"><span class="spinner"></span><div class="muted small">Menunggu pembayaran…</div></div>
      ${co.demo!==false?'<button class="cta ghost" id="mpaid" type="button">Simulasikan pembayaran (demo)</button>':''}</div>`;
-  const done=()=>{ if(state.poll){clearInterval(state.poll);state.poll=null;} haptic();
+  const alive=screenAlive();
+  let finished=false;
+  const done=()=>{ if(finished||!alive()) return; finished=true; if(state.poll){clearInterval(state.poll);state.poll=null;} haptic();
     $('#mwait').innerHTML=`<div class="banner b-info">${svg(I.check)}<div><div><b>Langganan aktif.</b></div><div>Harga member berlaku sampai ${esc(until)}.</div></div></div><button class="cta" id="mdone" type="button">Selesai</button>`;
     $('#mdone').onclick=()=>go('account'); };
-  const check=async()=>{ try{ const s=await api('/v1/memberships/charges/'+co.chargeId); if(s.state==='paid') done(); }catch(e){} };
+  const check=async()=>{ if(finished||!alive()) return; try{ const s=await api('/v1/memberships/charges/'+co.chargeId); if(s.state==='paid') done(); }catch(e){} };
   // A phone cannot scan its own screen: save the QR and pick it from the gallery in the bank app.
   $('#msaveqr').onclick=async()=>{ const b=$('#msaveqr'); b.disabled=true;
     try{ if(await saveQrImage(co,co.plan+' · 30 hari')) $('#msaveqr-hint').innerHTML='<b>QR tersimpan.</b> Buka aplikasi bank / e-wallet → Bayar / Scan QR → pilih gambar dari galeri. Kembali ke sini setelah membayar; langganan aktif otomatis.'; }
     catch(e){ alertBanner('Gagal menyimpan QR. Coba tangkap layar (screenshot).'); } finally{ b.disabled=false; } };
-  const onVisible=()=>{ if(document.visibilityState==='visible'&&state.view==='mpay') check(); };
+  const onVisible=()=>{ if(document.visibilityState==='visible'&&alive()) check(); };
   document.addEventListener('visibilitychange',onVisible);
-  const stopWatching=()=>{ if(state.view!=='mpay'){ document.removeEventListener('visibilitychange',onVisible); window.removeEventListener('hashchange',stopWatching); } };
-  window.addEventListener('hashchange',stopWatching);
+  onLeave(()=>document.removeEventListener('visibilitychange',onVisible));
   if($('#mpaid')) $('#mpaid').onclick=async()=>{ $('#mpaid').innerHTML='<span class="spinner"></span>';
     try{ await api('/v1/memberships/charges/'+co.chargeId+'/confirm-payment',{method:'POST'}); done(); }
     catch(e){ alertBanner(e.message); $('#mpaid').textContent='Simulasikan pembayaran (demo)'; } };

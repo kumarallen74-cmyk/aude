@@ -82,3 +82,14 @@ test('a ringgit or Singapore-dollar session carries no cost: the installed widge
   assert.equal(contentOf({ ...snap(), currency: 'IDR', estimateIdr: 12345 }).estimateIdr, 12345);
   assert.equal(contentOf({ ...snap(), sessionState: 'rated', cdrTotalMinor: 30000 }).costIdr, 30000);
 });
+
+test('every Int of the iOS ContentState is a whole number (v1.9.1): socPercent, progressPct, costIdr, estimateIdr', () => {
+  const c = contentOf(snap({ socPercent: 41.6, progressPct: 33.4, cdrTotalMinor: 12345.6, currency: 'IDR' }), 2);
+  assert.deepEqual([c.socPercent, c.progressPct, c.costIdr], [42, 33, 12346]);
+  const e = contentOf(snap({ estimateIdr: 999.5, cdrTotalMinor: null, currency: 'IDR' }), 2);
+  assert.equal(e.estimateIdr, 1000);
+  for (const x of [c, e]) for (const k of ['energyWh', 'powerW', 'socPercent', 'progressPct', 'costIdr', 'estimateIdr', 'startedAt', 'endedAt'] as const) {
+    const v = (x as any)[k];
+    assert.ok(v == null || Number.isInteger(v), `${k}=${v}`);
+  }
+});

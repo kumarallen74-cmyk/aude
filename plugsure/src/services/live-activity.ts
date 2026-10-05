@@ -2,7 +2,7 @@ import { many, one, query } from '../db/pool.js';
 import { LEGACY_CURRENCY } from '../domain/money.js';
 import { countryOfCurrency } from '../domain/country.js';
 import { logger } from '../logger.js';
-import { sendToDevice, outcomeOf, type ApnsEnv } from './apns.js';
+import { sendToDevice, outcomeOf, forBuild, type ApnsEnv } from './apns.js';
 import { apnsCredentialsFor, markApnsRefused, brandForOrg, palette, isNetworkOrg, fcmCredentialsFor, markFcmRefused } from './brand.js';
 import { runningCost } from './sessions.js';
 import { sendFcm, outcomeOfFcm } from './fcm.js';
@@ -128,8 +128,10 @@ export function contentOf(s: Snapshot, version: 1 | 2 = 1): ContentState {
     energyWh: Math.round(s.energyWh),
     powerW: finished || s.powerW == null ? null : Math.round(s.powerW),
     socPercent: s.socPercent == null ? null : Math.round(s.socPercent),
-    progressPct: s.progressPct,
-    costIdr: money ? s.cdrTotalMinor : null,
+    // Every number the iOS ContentState decodes as Int is a whole number here (v1.9.1): a fractional cost or
+    // percentage would fail to decode and the widget would stop updating.
+    progressPct: s.progressPct == null ? null : Math.round(s.progressPct),
+    costIdr: money && s.cdrTotalMinor != null ? Math.round(s.cdrTotalMinor) : null,
     estimateIdr: !money || s.cdrTotalMinor != null || s.estimateIdr == null ? null : Math.round(s.estimateIdr),
     startedAt: Math.floor(s.startedAt.getTime() / 1000),
     endedAt: s.endedAt ? Math.floor(s.endedAt.getTime() / 1000) : null,
@@ -173,6 +175,8 @@ export interface RegisterOptions {
   transport?: 'apns' | 'fcm';
   /** 2: the app formats costs by `currency` (always 2 on Android). */
   contentVersion?: 1 | 2;
+  /** The app's `.preview` / `.dev` build id (brand.ts brandAppId; null: the store build): its APNs topic (v1.9.1). */
+  appId?: string | null;
 }
 
 /**
@@ -205,25 +209,26 @@ export async function registerActivity(deviceId: string, brandOrgId: string, ref
     `SELECT id FROM live_activity WHERE device_id = $1 AND state = 'active' AND transport = $5 AND (charge_id = $2 OR session_id = $3 OR roaming_charge_id = $4) LIMIT 1`,
     [deviceId, charge?.id ?? null, sessionId, roaming?.id ?? null, transport]);
   if (existing) {
-    await query(`UPDATE live_activity SET push_token = $2, content_version = $3 WHERE id = $1`, [existing.id, token, version]);
+    await query(`UPDATE live_activity SET push_token = $2, content_version = $3, app_id = $4 WHERE id = $1`, [existing.id, token, version, opts.appId ?? null]);
   } else {
     await query(
-      `INSERT INTO live_activity (device_id, brand_org_id, charge_id, session_id, roaming_charge_id, push_token, transport, content_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO live_activity (device_id, brand_org_id, charge_id, session_id, roaming_charge_id, push_token, transport, content_version, app_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (push_token) DO NOTHING`,
-      [deviceId, brandOrgId, charge?.id ?? null, sessionId, roaming?.id ?? null, token, transport, version]);
+      [deviceId, brandOrgId, charge?.id ?? null, sessionId, roaming?.id ?? null, token, transport, version, opts.appId ?? null]);
   }
   return { ok: true, kind: charge ? 'charge' : session ? 'session' : 'roaming' };
 }
 
-export async function registerStartToken(deviceId: string, brandOrgId: string, tokenRaw: unknown): Promise<{ ok: boolean; error?: string }> {
+export async function registerStartToken(deviceId: string, brandOrgId: string, tokenRaw: unknown, appId: string | null = null): Promise<{ ok: boolean; error?: string }> {
   const token = String(tokenRaw ?? '').trim().toLowerCase();
   if (!HEX.test(token)) return { ok: false, error: 'Token Live Activity tidak valid.' };
   if (!(await apnsCredentialsFor(brandOrgId))) return { ok: false, error: 'Notifikasi belum tersedia di aplikasi ini.' };
   await query(
-    `INSERT INTO live_activity_start_token (device_id, brand_org_id, token) VALUES ($1,$2,$3)
-     ON CONFLICT (device_id, brand_org_id) DO UPDATE SET token = EXCLUDED.token, apns_env = CASE WHEN live_activity_start_token.token = EXCLUDED.token THEN live_activity_start_token.apns_env END, updated_at = now()`,
-    [deviceId, brandOrgId, token]);
+    `INSERT INTO live_activity_start_token (device_id, brand_org_id, token, app_id) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (device_id, brand_org_id) DO UPDATE SET token = EXCLUDED.token, app_id = EXCLUDED.app_id,
+       apns_env = CASE WHEN live_activity_start_token.token = EXCLUDED.token THEN live_activity_start_token.apns_env END, updated_at = now()`,
+    [deviceId, brandOrgId, token, appId]);
   return { ok: true };
 }
 
@@ -279,17 +284,18 @@ async function sessionFor(a: { id: string; charge_id: string | null; session_id:
 type SendResult = { outcome: 'sent' | 'gone' | 'retry' | 'credentials' | 'failed'; env: ApnsEnv | null; status: number | null; error: string };
 
 /** A Live Activity update over APNs. */
-async function send(orgId: string, token: string, env: ApnsEnv | null, payload: Record<string, unknown>, priority: 5 | 10): Promise<SendResult | null> {
-  const r = await sendApns(orgId, token, env, payload, priority);
-  return r ? { outcome: outcomeOf(r), env: r.env, status: r.status, error: `${r.status ?? ''} ${r.reason ?? ''}`.trim() } : null;
+async function send(orgId: string, token: string, env: ApnsEnv | null, payload: Record<string, unknown>, priority: 5 | 10, appId: string | null): Promise<SendResult | null> {
+  const r = await sendApns(orgId, token, env, payload, priority, appId);
+  return r ? { outcome: outcomeOf(r, { buildTopic: !!appId }), env: r.env, status: r.status, error: `${r.status ?? ''} ${r.reason ?? ''}`.trim() } : null;
 }
 
-async function sendApns(orgId: string, token: string, env: ApnsEnv | null, payload: Record<string, unknown>, priority: 5 | 10) {
+/** `appId`: the build that registered the token (topic <appId>.push-type.liveactivity), null for the store build. */
+async function sendApns(orgId: string, token: string, env: ApnsEnv | null, payload: Record<string, unknown>, priority: 5 | 10, appId: string | null) {
   const creds = await apnsCredentialsFor(orgId);
   if (!creds) return null;
-  const go = (c: typeof creds) => sendToDevice(token, env, c, { title: '', body: '', liveActivity: payload, priority, ttlS: priority === 10 ? 600 : 120 });
+  const go = (c: typeof creds) => sendToDevice(token, env, forBuild(c, appId), { title: '', body: '', liveActivity: payload, priority, ttlS: priority === 10 ? 600 : 120 });
   let r = await go(creds);
-  if (outcomeOf(r) === 'credentials') {
+  if (outcomeOf(r, { buildTopic: !!appId }) === 'credentials') {
     // Marked only if these are still the brand's credentials; the cache is dropped either way.
     await markApnsRefused(orgId, `Apple refused the key while sending a Live Activity update (${r.reason}).`, creds);
     // The operator replaced the key within the cache window: send again at once with the new one.
@@ -305,8 +311,8 @@ export async function liveActivityPass(now = new Date()): Promise<{ started: num
 
   // Push-to-start: a charge under way for an iPhone with the brand's app and no activity for it yet.
   // 20 s' grace: the app, if open, starts its own and registers it first.
-  const starts = await many<{ session_id: string; device_id: string; brand_org_id: string; token: string; apns_env: ApnsEnv | null; charge_id: string | null; site: string; connector: string }>(
-    `SELECT cs.id AS session_id, st.device_id, st.brand_org_id, st.token, st.apns_env, dc.id AS charge_id, si.name AS site,
+  const starts = await many<{ session_id: string; device_id: string; brand_org_id: string; token: string; apns_env: ApnsEnv | null; app_id: string | null; charge_id: string | null; site: string; connector: string }>(
+    `SELECT cs.id AS session_id, st.device_id, st.brand_org_id, st.token, st.apns_env, st.app_id, dc.id AS charge_id, si.name AS site,
             c.current_type || ' ' || round(c.max_power_w / 1000.0) || ' kW' AS connector
        FROM charging_session cs
        JOIN site si ON si.id = cs.site_id
@@ -335,21 +341,21 @@ export async function liveActivityPass(now = new Date()): Promise<{ started: num
       attributes: { ref: s.charge_id ?? s.session_id, site: s.site, connector: s.connector, appName: b.appName, accentHex: palette(b.accentColor, b.badgeColor).dark.accent },
       alert: lang === 'en' ? { title: 'Charging started', body: s.site } : { title: 'Pengisian dimulai', body: s.site },
     });
-    const r = await sendApns(s.brand_org_id, s.token, s.apns_env, payload, 10);
+    const r = await sendApns(s.brand_org_id, s.token, s.apns_env, payload, 10, s.app_id);
     await query(`UPDATE live_activity_push_start SET status = $3 WHERE device_id = $1 AND session_id = $2`, [s.device_id, s.session_id, r?.status ?? null]);
-    if (r && outcomeOf(r) === 'sent') {
+    if (r && outcomeOf(r, { buildTopic: !!s.app_id }) === 'sent') {
       out.started++;
       if (r.env !== s.apns_env) await query(`UPDATE live_activity_start_token SET apns_env = $3 WHERE device_id = $1 AND brand_org_id = $2`, [s.device_id, s.brand_org_id, r.env]);
-    } else if (r && outcomeOf(r) === 'gone') {
+    } else if (r && outcomeOf(r, { buildTopic: !!s.app_id }) === 'gone') {
       await query(`DELETE FROM live_activity_start_token WHERE device_id = $1 AND brand_org_id = $2 AND token = $3`, [s.device_id, s.brand_org_id, s.token]);
     }
   }
 
   // Updates and ends.
   const active = await many<{ id: string; brand_org_id: string; charge_id: string | null; session_id: string | null; roaming_charge_id: string | null;
-    push_token: string; apns_env: ApnsEnv | null; transport: 'apns' | 'fcm'; content_version: number;
+    push_token: string; apns_env: ApnsEnv | null; transport: 'apns' | 'fcm'; content_version: number; app_id: string | null;
     last_content: ContentState | null; last_status: string | null; last_sent_at: Date | null }>(
-    `SELECT id, brand_org_id, charge_id, session_id, roaming_charge_id, push_token, apns_env, transport, content_version, last_content, last_status, last_sent_at
+    `SELECT id, brand_org_id, charge_id, session_id, roaming_charge_id, push_token, apns_env, transport, content_version, app_id, last_content, last_status, last_sent_at
        FROM live_activity WHERE state = 'active' AND created_at > $1::timestamptz - interval '24 hours' ORDER BY id LIMIT 500`, [now]);
   for (const a of active) {
     let snap: Snapshot | null = null;
@@ -370,7 +376,7 @@ export async function liveActivityPass(now = new Date()): Promise<{ started: num
     if (plan.action === 'none') continue;
     const r = a.transport === 'fcm'
       ? await sendFcmLive(a.brand_org_id, a.push_token, liveSessionMessage(plan.action, a.charge_id ?? a.roaming_charge_id ?? a.session_id!, a.roaming_charge_id ? 'roaming' : 'direct', plan.content, now.getTime(), title), plan.priority)
-      : await send(a.brand_org_id, a.push_token, a.apns_env, liveActivityPayload(plan.action, plan.content, now.getTime()), plan.priority);
+      : await send(a.brand_org_id, a.push_token, a.apns_env, liveActivityPayload(plan.action, plan.content, now.getTime()), plan.priority, a.app_id);
     if (!r) continue;
     const o = r.outcome;
     if (o === 'sent') {

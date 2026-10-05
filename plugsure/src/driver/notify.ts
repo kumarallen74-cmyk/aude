@@ -4,7 +4,7 @@ import { moneyText, currencyOr, LEGACY_CURRENCY, type CurrencyCode } from '../do
 import { logger } from '../logger.js';
 import { bus } from '../services/events.js';
 import { sendPush, endpointProblem } from '../services/webpush.js';
-import { sendToDevice, outcomeOf, type ApnsEnv } from '../services/apns.js';
+import { sendToDevice, outcomeOf, forBuild, type ApnsEnv } from '../services/apns.js';
 import { apnsCredentialsFor, markApnsRefused, brandForOrg, fcmCredentialsFor, markFcmRefused, isNetworkOrg } from '../services/brand.js';
 import { sendFcm, outcomeOfFcm, type FcmChannel } from '../services/fcm.js';
 import { chargeCardPath } from '../services/charge-card.js';
@@ -79,16 +79,18 @@ export async function subscribe(deviceId: string, s: any, lang: string): Promise
 
 /**
  * The iOS app's device token, for its brand's APNs key. The endpoint column
- * holds pns:<org>:<token> so the same token is one subscription.
+ * holds pns:<org>:<token> so the same token is one subscription. `appId`: the
+ * app's `.preview` / `.dev` bundle id (brand.ts brandAppId), its APNs topic; null
+ * for the store build (v1.9.1).
  */
-export async function subscribeApns(deviceId: string, brandOrgId: string, tokenRaw: unknown, lang: string): Promise<{ ok: boolean; error?: string }> {
+export async function subscribeApns(deviceId: string, brandOrgId: string, tokenRaw: unknown, lang: string, appId: string | null = null): Promise<{ ok: boolean; error?: string }> {
   const token = String(tokenRaw ?? '').trim().toLowerCase();
   if (!/^[0-9a-f]{64,200}$/.test(token)) return { ok: false, error: 'Token notifikasi iOS tidak valid.' };
   if (!(await apnsCredentialsFor(brandOrgId))) return { ok: false, error: 'Notifikasi belum tersedia di aplikasi ini.' };
   await query(
-    `INSERT INTO push_subscription (device_id, endpoint, kind, brand_org_id, lang) VALUES ($1, $2, 'apns', $3, $4)
-     ON CONFLICT (endpoint) DO UPDATE SET device_id = EXCLUDED.device_id, lang = EXCLUDED.lang, failures = 0`,
-    [deviceId, `apns:${brandOrgId}:${token}`, brandOrgId, lang === 'en' ? 'en' : 'id'],
+    `INSERT INTO push_subscription (device_id, endpoint, kind, brand_org_id, lang, app_id) VALUES ($1, $2, 'apns', $3, $4, $5)
+     ON CONFLICT (endpoint) DO UPDATE SET device_id = EXCLUDED.device_id, lang = EXCLUDED.lang, app_id = EXCLUDED.app_id, failures = 0`,
+    [deviceId, `apns:${brandOrgId}:${token}`, brandOrgId, lang === 'en' ? 'en' : 'id', appId],
   );
   await query(
     `DELETE FROM push_subscription WHERE device_id = $1 AND id NOT IN
@@ -109,14 +111,14 @@ const FCM_TOKEN = /^[A-Za-z0-9_:\-]{64,4096}$/;
  * The Android app's FCM registration token, for its brand's Firebase project. The endpoint column holds
  * fcm:<org>:<token>, so the same token is one subscription (re-registering moves it to this device).
  */
-export async function subscribeFcm(deviceId: string, brandOrgId: string, tokenRaw: unknown, lang: string): Promise<{ ok: boolean; error?: string }> {
+export async function subscribeFcm(deviceId: string, brandOrgId: string, tokenRaw: unknown, lang: string, appId: string | null = null): Promise<{ ok: boolean; error?: string }> {
   const token = String(tokenRaw ?? '').trim();
   if (!FCM_TOKEN.test(token)) return { ok: false, error: 'Token notifikasi Android tidak valid.' };
   if (!(await fcmCredentialsFor(brandOrgId))) return { ok: false, error: 'Notifikasi belum tersedia di aplikasi ini.' };
   await query(
-    `INSERT INTO push_subscription (device_id, endpoint, kind, brand_org_id, lang) VALUES ($1, $2, 'fcm', $3, $4)
-     ON CONFLICT (endpoint) DO UPDATE SET device_id = EXCLUDED.device_id, lang = EXCLUDED.lang, failures = 0`,
-    [deviceId, `fcm:${brandOrgId}:${token}`, brandOrgId, lang === 'en' ? 'en' : 'id'],
+    `INSERT INTO push_subscription (device_id, endpoint, kind, brand_org_id, lang, app_id) VALUES ($1, $2, 'fcm', $3, $4, $5)
+     ON CONFLICT (endpoint) DO UPDATE SET device_id = EXCLUDED.device_id, lang = EXCLUDED.lang, app_id = EXCLUDED.app_id, failures = 0`,
+    [deviceId, `fcm:${brandOrgId}:${token}`, brandOrgId, lang === 'en' ? 'en' : 'id', appId],
   );
   await query(
     `DELETE FROM push_subscription WHERE device_id = $1 AND id NOT IN
@@ -223,7 +225,7 @@ async function devicesForSession(sessionId: string) {
 const sessionUrl = (chargeId: string | null) => (chargeId ? `/app/#s/${chargeId}` : '/app/#history');
 const receiptUrl = (chargeId: string | null) => (chargeId ? `/app/#r/${chargeId}` : '/app/#history');
 
-async function onSessionStarted(sessionId: string) {
+export async function onSessionStarted(sessionId: string) {
   const d = await devicesForSession(sessionId);
   if (!d?.devices.length) return;
   await notifyDevices(d.devices, 'session.started', `session.started:${sessionId}`, {
@@ -233,6 +235,27 @@ async function onSessionStarted(sessionId: string) {
     // Stopping needs the charge started from the app (a fleet card's session is stopped at the charger).
     ...(d.chargeId ? { category: 'PS_SESSION' as const, actions: { stop: sessionUrl(d.chargeId) } } : {}),
   });
+  await queueLiveStart(d.devices, sessionId, d.chargeId, d.site, await connectorLabelOf(sessionId));
+}
+
+/**
+ * Android's "push to start" for a live session (v1.9.1). The visible `session.started` above is an FCM NOTIFICATION
+ * message: with the app in the background Android shows it without running the app's code, so a charge started
+ * outside the app (a fleet card at the charger, another phone, the web app) never registered the phone for the live
+ * session's updates. A DATA-ONLY message (no `notification` block, high priority) wakes the app's background handler,
+ * which registers its FCM token for the session (mobile src/native/liveSession.ts handleLiveSessionData: `type`
+ * 'session.started' and `ref`). `ref` is what /d/v1/live-sessions accepts: the charge, else the session.
+ */
+async function queueLiveStart(deviceIds: string[], sessionId: string, chargeId: string | null, site: string, connector: string | null): Promise<number> {
+  if (!deviceIds.length) return 0;
+  const r = await query(
+    `INSERT INTO push_message (subscription_id, kind, dedupe_key, payload)
+     SELECT s.id, 'session.started.live', $2, $3::jsonb FROM push_subscription s
+      WHERE s.device_id = ANY($1::uuid[]) AND s.kind = 'fcm'
+     ON CONFLICT (subscription_id, dedupe_key) DO NOTHING`,
+    [deviceIds, `session.started.live:${sessionId}`, JSON.stringify({ dataOnly: true, ref: chargeId ?? sessionId, url: sessionUrl(chargeId), site, connector })],
+  );
+  return r.rowCount ?? 0;
 }
 
 async function onSessionEnded(sessionId: string, energyWh: number) {
@@ -383,20 +406,20 @@ const BACKOFF_S = [30, 300, 1800];
 /** Worker pass: send what is due. */
 export async function deliverPush(limit = 50): Promise<number> {
   const due = await many<{ id: string; subscription_id: string; payload: any; attempts: number; endpoint: string; p256dh: string; auth: string; kind: string;
-    sub_kind: 'webpush' | 'apns' | 'fcm'; brand_org_id: string | null; apns_env: ApnsEnv | null; device_id: string }>(
+    sub_kind: 'webpush' | 'apns' | 'fcm'; brand_org_id: string | null; apns_env: ApnsEnv | null; device_id: string; app_id: string | null }>(
     `WITH picked AS (
        SELECT m.id FROM push_message m WHERE m.state = 'pending' AND m.next_attempt_at <= now()
         ORDER BY m.id LIMIT $1 FOR UPDATE SKIP LOCKED)
      UPDATE push_message m SET attempts = m.attempts + 1, next_attempt_at = now() + interval '2 minutes'
        FROM picked, push_subscription s
       WHERE m.id = picked.id AND s.id = m.subscription_id
-     RETURNING m.id, m.subscription_id, m.payload, m.attempts, m.kind, s.endpoint, s.p256dh, s.auth, s.kind AS sub_kind, s.brand_org_id, s.apns_env, s.device_id`,
+     RETURNING m.id, m.subscription_id, m.payload, m.attempts, m.kind, s.endpoint, s.p256dh, s.auth, s.kind AS sub_kind, s.brand_org_id, s.apns_env, s.device_id, s.app_id`,
     [limit],
   );
   await Promise.all(due.map(async (m) => {
     // Reminders are useless late; a finished charge is still worth knowing for a day.
     // Reservation and queue messages are only useful for minutes; the rest keep for a day.
-    const timely = m.kind.startsWith('reservation.') || m.kind.startsWith('queue.');
+    const timely = m.kind.startsWith('reservation.') || m.kind.startsWith('queue.') || m.kind === 'session.started.live';
     const ttlS = timely ? 600 : 86_400;
     if (m.sub_kind === 'apns') return deliverApns(m, ttlS, timely);
     if (m.sub_kind === 'fcm') return deliverFcm(m, ttlS, timely);
@@ -429,11 +452,13 @@ async function absoluteUrl(orgId: string, path: string): Promise<string> {
 
 /** One message to an iOS app through APNs. */
 async function deliverApns(
-  m: { id: string; kind: string; subscription_id: string; payload: any; attempts: number; endpoint: string; brand_org_id: string | null; apns_env: ApnsEnv | null; device_id: string },
+  m: { id: string; kind: string; subscription_id: string; payload: any; attempts: number; endpoint: string; brand_org_id: string | null; apns_env: ApnsEnv | null; device_id: string; app_id?: string | null },
   ttlS: number, timely: boolean,
 ): Promise<void> {
   const token = m.endpoint.split(':').pop()!;
-  const creds = m.brand_org_id ? await apnsCredentialsFor(m.brand_org_id) : null;
+  const brandCreds = m.brand_org_id ? await apnsCredentialsFor(m.brand_org_id) : null;
+  // To the build that registered the token (its .preview / .dev bundle id), else the store build (v1.9.1).
+  const creds = brandCreds ? forBuild(brandCreds, m.app_id) : null;
   if (!creds) {
     // The operator removed its key: nothing can reach this phone any more.
     await query(`UPDATE push_message SET state = 'failed', last_error = 'no APNs key' WHERE id = $1`, [m.id]);
@@ -456,7 +481,7 @@ async function deliverApns(
       ...(p.image ? { imageUrl: await absoluteUrl(m.brand_org_id!, String(p.image)) } : {}),
       ...(p.actions ? { data: { actions: p.actions } } : {}),
     });
-  const outcome = outcomeOf(r);
+  const outcome = outcomeOf(r, { buildTopic: !!m.app_id });
   const err = r.reason ? `APNs ${r.status ?? ''} ${r.reason}`.trim() : null;
   if (outcome === 'sent') {
     await query(`UPDATE push_message SET state = 'sent', sent_at = now(), last_status = $2, last_error = NULL WHERE id = $1`, [m.id, r.status]);
@@ -505,6 +530,31 @@ export function fcmMessageOf(kind: string, p: Record<string, any>, token: string
   };
 }
 
+/** "AC 22 kW", as the live session's own updates name the connector (live-activity.ts titleOf). */
+async function connectorLabelOf(sessionId: string): Promise<string | null> {
+  const r = await one<{ connector: string }>(
+    `SELECT c.current_type || ' ' || round(c.max_power_w / 1000.0) || ' kW' AS connector
+       FROM charging_session cs JOIN connector c ON c.id = cs.connector_uuid WHERE cs.id = $1`, [sessionId]);
+  return r?.connector ?? null;
+}
+
+/** The data-only "a live session started" message (queueLiveStart): no notification, so the app's handler runs. */
+export function fcmLiveStartOf(p: Record<string, any>, token: string, ttlS: number) {
+  const ref = String(p.ref ?? '');
+  return {
+    token,
+    // The app shows the Android live notification at once from `site` (+ `connector`), and opens `path` when tapped.
+    data: {
+      type: 'session.started', ref, url: String(p.url ?? ''), path: String(p.url ?? ''),
+      ...(p.site ? { site: String(p.site) } : {}), ...(p.connector ? { connector: String(p.connector) } : {}),
+    },
+    priority: 'high' as const,
+    ttlS,
+    // Not the visible notification's tag, nor the live updates' `ls-<ref>`: a start must not replace either.
+    collapseKey: `ls-start-${ref}`,
+  };
+}
+
 /** One message to an Android app through FCM. */
 async function deliverFcm(
   m: { id: string; kind: string; subscription_id: string; payload: any; attempts: number; endpoint: string; brand_org_id: string | null },
@@ -522,7 +572,9 @@ async function deliverFcm(
     await query(`UPDATE push_message SET state = 'sent', sent_at = now(), last_error = 'badge-only: not sent to Android' WHERE id = $1`, [m.id]);
     return;
   }
-  const r = await sendFcm(creds, fcmMessageOf(m.kind, p, token, ttlS, timely, p.image ? await absoluteUrl(m.brand_org_id!, String(p.image)) : null));
+  const r = await sendFcm(creds, p.dataOnly
+    ? fcmLiveStartOf(p, token, ttlS)
+    : fcmMessageOf(m.kind, p, token, ttlS, timely, p.image ? await absoluteUrl(m.brand_org_id!, String(p.image)) : null));
   const outcome = outcomeOfFcm(r);
   const err = r.errorCode ? `FCM ${r.status ?? ''} ${r.errorCode}${r.detail ? `: ${r.detail}` : ''}`.trim().slice(0, 500) : null;
   if (outcome === 'sent') {
@@ -547,3 +599,6 @@ export async function prunePush(): Promise<void> {
   // A subscription that has failed 20 times in a row and not worked for 30 days is dead.
   await query(`DELETE FROM push_subscription WHERE failures >= 20 AND COALESCE(last_success_at, created_at) < now() - interval '30 days'`);
 }
+
+/** For tests: one message through the APNs / FCM path, without the worker's pick of every due message. */
+export const _internal = { deliverApns, deliverFcm };

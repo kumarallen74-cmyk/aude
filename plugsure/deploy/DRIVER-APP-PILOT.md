@@ -276,3 +276,30 @@ driver hostname.
 - [ ] One full loop completed on an Android phone and an iPhone (expect the iOS scan fallback).
 - [ ] If public: IP allow-list on the Caddy block, and **not** dev-mode.
 ```
+
+---
+
+## 8. App Store / Google Play review: the reviewer's sign-in (v1.9.1)
+
+Sign-in is by SMS code, and the store reviewers (Apple App Review, Google Play review) cannot receive one. For the
+review only, give them a demo number whose code is fixed:
+
+```bash
+# in the API's environment (.env, the systemd unit's EnvironmentFile, or the container's env), then restart the API
+DRIVER_REVIEW_PHONE=+6281299990001     # a number you control or none at all; any spelling of a +62/+60/+65 mobile
+DRIVER_REVIEW_CODE=583920              # six random digits — 000000, 123456, 111111, 121212, runs… are refused
+```
+
+- A code requested for exactly that number is **not sent** to any provider: the fixed code is stored instead (hashed,
+  same 5-minute expiry, bound to the requesting device), so "Verify" works as for any driver. The account-deletion
+  code (in the app and on `/account/delete`) works the same way for that number.
+- Every rate limit still applies (one code a minute, per number / address / device / installation caps, wrong-code
+  budget). Each use writes a **warning** to the API log: `review sign-in code issued (DRIVER_REVIEW_PHONE)`, number
+  masked.
+- Both must be set, or neither. A number that does not normalise or a weak code **stops the API from starting**, with
+  the reason in the log.
+- Put the number and the code in the review notes (App Store Connect → App Review Information → Sign-in required;
+  Play Console → App content → App access), with a sandbox charger QR for the charging flow.
+
+**After approval, remove both variables and restart the API.** The number then signs in like any other (an SMS to a
+number nobody receives), and the fixed code no longer works. Re-add them only for the next review.

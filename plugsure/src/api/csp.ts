@@ -5,15 +5,27 @@
  * past the escaping (charger vendor strings, partner data and driver names all reach the console).
  * The console, the printable receipts, statements and invoices need nothing else.
  *
- * Two pages still carry inline script and keep 'unsafe-inline' until they are split up:
- *   - the driver app (/app, /app/…), which also injects each brand's settings inline;
- *   - the API reference (/api-docs.html).
+ * The driver app (/app, /app/…) keeps the driver's device token in localStorage, so an injected script there could
+ * take it. Its page is rendered per request (driver/server.ts) and its inline scripts — the app itself and each
+ * brand's settings — carry a fresh per-response nonce: script-src is 'self' 'nonce-…' there (v1.9.1; it was
+ * 'unsafe-inline'). The page has no on…= attributes (handlers are assigned in script). Every other /app file (the
+ * payment return page, the worker) runs from 'self' only.
+ *
+ * The API reference (/api-docs.html) is the one page left with inline script ('unsafe-inline').
  * White-label hosts serve only /app and /d/… (deploy/Caddyfile), so no other path needs it.
  */
 export function inlineScriptAllowed(url: string): boolean {
-  const path = url.split('?')[0]!;
-  return path === '/app' || path.startsWith('/app/') || path === '/api-docs.html';
+  return url.split('?')[0]! === '/api-docs.html';
 }
+
+/** The driver app's pages (where a nonce may be set). */
+export function isDriverAppPath(url: string): boolean {
+  const path = url.split('?')[0]!;
+  return path === '/app' || path.startsWith('/app/');
+}
+
+/** A nonce is base64 (RFC 7636 §4.1-ish): anything else is not put into the header. */
+const NONCE_RE = /^[A-Za-z0-9+/_-]{16,64}={0,2}$/;
 
 /**
  * Stripe's checkout page (/pay/stripe/<ref>/<payment intent>, services/payments/stripe-page.ts): the only page that loads
@@ -30,10 +42,13 @@ export function stripePagePolicy(): string {
   );
 }
 
-export function contentSecurityPolicy(url: string, tileOrigin: string, framable: boolean): string {
+/** `nonce`: the driver app page's per-response script nonce (driver/server.ts), honoured on /app paths only. */
+export function contentSecurityPolicy(url: string, tileOrigin: string, framable: boolean, nonce?: string | null): string {
   if (url.split('?')[0]!.startsWith(STRIPE_PAGE_PREFIX)) return stripePagePolicy();
+  const extra = inlineScriptAllowed(url) ? " 'unsafe-inline'"
+    : nonce && isDriverAppPath(url) && NONCE_RE.test(nonce) ? ` 'nonce-${nonce}'` : '';
   return (
-    `default-src 'self'; script-src 'self'${inlineScriptAllowed(url) ? " 'unsafe-inline'" : ''}; ` +
+    `default-src 'self'; script-src 'self'${extra}; ` +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com; " +
     // OpenStreetMap tiles for the site location picker, plus the driver app's

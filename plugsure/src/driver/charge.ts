@@ -790,14 +790,15 @@ function isPaidForStart(i: { state: string; mode: string; hold_state: string | n
 }
 
 /** Ask the charger to start. Prepaid must be paid first. */
-export async function startCharge(principal: DriverPrincipal, chargeId: string): Promise<{ ok: boolean; error?: string; status?: string; presentToken?: string }> {
+export async function startCharge(principal: DriverPrincipal, chargeId: string): Promise<{ ok: boolean; error?: string; code?: string; status?: string; presentToken?: string }> {
   const dc = await ownedCharge(principal, chargeId);
   if (!dc) return { ok: false, error: 'Transaksi tidak ditemukan.' };
 
   // Single-use: a charge that has already bound a session cannot be started again.
   // Reconciliation (liveStatus) stamps session_id once the charger opens the
   // transaction; a replayed start after that would spawn a second, unpaid session.
-  if (dc.session_id) return { ok: false, error: 'Sesi ini sudah dimulai.' };
+  // A stable code the apps match on (v1.9.1); status and text unchanged.
+  if (dc.session_id) return { ok: false, error: 'Sesi ini sudah dimulai.', code: 'already_started' };
 
   const claimTok = await one<{ uid: string; status: string }>(`SELECT uid, status FROM token WHERE id = $1`, [dc.token_id]);
 
