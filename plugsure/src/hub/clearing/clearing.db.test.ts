@@ -346,7 +346,9 @@ dbDescribe('settlement: three members, two currencies (hand-computed), idempoten
     assert.ok(inv[0].data.flags.includes('placeholder_entity'));
     assert.equal(sa.fee_invoice_id, inv[0].id);
     // Stamped: the run's CDRs, not the disputed one nor the next period's.
-    const stamped = (await many(`SELECT cdr_id FROM hub_cdr WHERE settlement_run_id = $1 ORDER BY cdr_id`, [runId])).map((r) => r.cdr_id.replace(`-${TAG}`, ''));
+    // Sorted here, not in SQL: under a linguistic collation (en_US.utf8, as on CI) '-' is ignored, so "M7-<tag>" and
+    // "M7C-<tag>" would order by the random tag.
+    const stamped = (await many(`SELECT cdr_id FROM hub_cdr WHERE settlement_run_id = $1`, [runId])).map((r) => r.cdr_id.replace(`-${TAG}`, '')).sort();
     assert.deepEqual(stamped, ['M1', 'M2', 'M3', 'M4', 'M5', 'M7', 'M7C']);
   });
 
