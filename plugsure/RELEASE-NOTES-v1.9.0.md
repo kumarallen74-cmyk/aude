@@ -21,6 +21,7 @@ For what the earlier releases changed, see the release notes v1.5.1–v1.8.0. Fo
 - **Now:**
   - The web form never shows what blocks a deletion. The owner learns it after the code proves the number is theirs (confirm answers 409 with the list).
   - The answer and the limits applied are identical whether or not the number has an account. Nothing is sent to a number without one.
+  - The code is sent in the background, so neither the time the answer takes nor a failure at the SMS or WhatsApp provider shows whether there is an account.
   - In the app, signed in, nothing changes.
 
 ### Before the pilot upgrade
@@ -45,15 +46,17 @@ For what the earlier releases changed, see the release notes v1.5.1–v1.8.0. Fo
   - minting device tokens.
 
   Requests without a token now get the ordinary 600 a minute per address (`DRIVER_ANON_IP_RATE_LIMIT_PER_MIN`). Requests with a token keep the NAT cap and their own per-device limit.
-- **`npm run mobility:setup` could turn an operator's own white-label app into the PlugSure app.** That app would then show every operator's chargers, and its store apps would stop finding their brand. It now refuses before writing anything, unless `MOBILITY_CONVERT_BRAND=1`. It also refuses `MOBILITY_JOIN_HUB` while the hub is off.
+- **`npm run mobility:setup` could turn an operator's own white-label app into the PlugSure app.** That app would then show every operator's chargers, and its store apps would stop finding their brand. It now refuses before writing anything, unless `MOBILITY_CONVERT_BRAND=1`. It also refuses `MOBILITY_JOIN_HUB` while the hub is off, before it creates the organisation.
 - **CI didn't test what the pilot runs.**
   - The end-to-end job ran only with every feature on. A new job, `end-to-end (pilot configuration)`, runs 30 suites with the hub, Microsoft sign-in and multi-country off. 18 of them weren't run by CI at all, among them the OCPI roaming suites (including the v1.7.1 hub-scoping fix), the driver app suites and the SDK suite.
   - Two suites that had gone stale because CI never ran them are fixed: `integrations`, which predated v1.5.1's intended payment and sign-in changes, and `sdk`, whose CI job now builds the SDK first.
   - The country-literal check failed on a deliberate v1.5 compatibility check.
+  - The CI rollback step ran `060_down` alone, which refuses on a 1.9 database (as it should), so it was red in 1.9.0-dev. It now runs the whole §7 chain and re-applies the migrations.
+  - The backup-script lint failed because the scripts had lost their executable bit.
 
 ### Payments
 
-- **A late card-hold authorisation is released, not ignored.** A hold whose start timed out was marked failed. If the acquirer authorised it after all, that notification was dropped as a duplicate and the driver's card stayed blocked. Now it is queued for release. This affects roaming holds and any hold that lapsed.
+- **A late card-hold authorisation is released, not ignored.** A hold whose start timed out was marked failed. If the acquirer authorised it after all, that notification was dropped as a duplicate and the driver's card stayed blocked. Now it is queued for release. This affects roaming holds and any hold that lapsed, whatever currency the acquirer reports.
 - **A payment voided as underpaid stays voided.** A later "paid" notification for the full amount would have marked it captured over the refund already queued for the short amount, so the second payment would never be paid back. Now:
   - it stays voided;
   - a critical alert is raised;
@@ -76,7 +79,7 @@ The Hub fixes matter only once `HUB_ENABLED=true`. The pilot keeps it off, and i
 - **Settlement: a payment the payee never confirms no longer settles a position.** Past the due date the position is overdue, with reminders to both sides, until the payee confirms. Before, a payer could silence reminders by recording a transfer that never happened.
 - **The routing log no longer stores members' callback URLs in clear.** These are response URLs and CDR locations, which are sealed at rest.
 - **An empty `HUB_CYCLE=` or `HUB_DEFAULT_ENTITY=` uses the default** instead of stopping a server that doesn't run the hub.
-- **A session or CDR at a site in a country where the operator has no roaming party** is left out of the page, and logged, instead of failing a partner's whole page with a 500.
+- **A session or CDR at a site in a country where the operator has no roaming party** is left out of the page and of its `X-Total-Count`, and logged, instead of failing a partner's whole page with a 500.
 
 ### Driver app server and mobile app
 
@@ -110,11 +113,12 @@ Follow `docs/UPGRADE-v1.5-to-v1.9.md`. From 1.9.0-dev, deploy and run `npm run m
   - 1,453 unit and database tests, all passing;
   - migrations 001–076 from an empty database;
   - a v1.5.0 database upgraded to 1.9.0.
-- **End-to-end, pilot configuration** (hub, Microsoft sign-in and multi-country off): all 30 suites in full mode as `plugsure_app`.
-- **End-to-end, everything on** (CI's configuration): all 37 suites, including the Hub, Hub clearing, Hub console, Microsoft sign-in, multi-country, Stripe and mobile API suites.
+- **End-to-end, pilot configuration** (hub, Microsoft sign-in and multi-country off): all 30 suites, in CI and locally in full mode as `plugsure_app`.
+- **End-to-end, everything on:** all 37 suites, 1,489 checks. That includes the Hub (88), Hub clearing (45), Hub console (75), Microsoft sign-in (27), multi-country (33), Stripe (35) and mobile API (28) suites.
 - **Rollback rehearsal on one database with real data:**
-  1. v1.5.0, with its own suites, including sessions, invoices, refunds and commercial plans;
-  2. upgraded to 1.9.0 and used;
-  3. rolled back with the documented chain;
-  4. v1.5.0's migrator and its own suites passed on it, including the field suite, which saves a commercial plan.
+  1. v1.5.0, with its own suites: 41 sessions, 38 CDRs, 50 payments, commercial plans and fleet invoices.
+  2. Upgraded to 1.9.0 and used (console, pricing and fleet billing suites).
+  3. Rolled back with the documented chain `075 → 074 → 073 → 072 → 060`; every step succeeded.
+  4. v1.5.0's migrator and seven of its own suites passed on it (433 checks), including the field suite, which saves a commercial plan.
+- **CI:** every job green (typecheck / test / migrate, deploy artefacts, docker image, end-to-end in the split deployment and in the pilot configuration, mobile).
 - **Mobile app:** typecheck, lint, 215 tests, and a production Android bundle.
