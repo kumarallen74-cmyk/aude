@@ -48,7 +48,6 @@ For what the earlier releases changed, see the release notes v1.5.1–v1.8.0. Fo
 - **`npm run mobility:setup` could turn an operator's own white-label app into the PlugSure app.** That app would then show every operator's chargers, and its store apps would stop finding their brand. It now refuses before writing anything, unless `MOBILITY_CONVERT_BRAND=1`. It also refuses `MOBILITY_JOIN_HUB` while the hub is off.
 - **CI didn't test what the pilot runs.**
   - The end-to-end job ran only with every feature on. A new job, `end-to-end (pilot configuration)`, runs 30 suites with the hub, Microsoft sign-in and multi-country off. 18 of them weren't run by CI at all, among them the OCPI roaming suites (including the v1.7.1 hub-scoping fix), the driver app suites and the SDK suite.
-  - A new `mobile app` job runs the app's typecheck, lint and tests, and builds a production Android bundle.
   - Two suites that had gone stale because CI never ran them are fixed: `integrations`, which predated v1.5.1's intended payment and sign-in changes, and `sdk`, whose CI job now builds the SDK first.
   - The country-literal check failed on a deliberate v1.5 compatibility check.
 
@@ -108,7 +107,7 @@ Follow `docs/UPGRADE-v1.5-to-v1.9.md`. From 1.9.0-dev, deploy and run `npm run m
 
 - **Server:**
   - typecheck clean;
-  - 1,455 unit and database tests, all passing;
+  - 1,453 unit and database tests, all passing;
   - migrations 001–076 from an empty database;
   - a v1.5.0 database upgraded to 1.9.0.
 - **End-to-end, pilot configuration** (hub, Microsoft sign-in and multi-country off): all 30 suites in full mode as `plugsure_app`.

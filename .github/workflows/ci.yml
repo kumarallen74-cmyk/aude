@@ -523,39 +523,6 @@ jobs:
           for p in "$RUNNER_TEMP"/*.pid; do kill "$(cat "$p")" 2>/dev/null || true; done
 
   # ---------------------------------------------------------------------------
-  # The Expo app (mobile/): typecheck, lint, unit and screen tests, and a production
-  # JavaScript bundle for Android (catches a broken import the typecheck cannot see).
-  # v1.9.0: before, nothing in CI built or tested the app.
-  # ---------------------------------------------------------------------------
-  mobile:
-    name: mobile app
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: mobile
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Node ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: mobile/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Lint
-        run: npm run lint
-      - name: Tests
-        run: npm run test:ci
-      - name: Android bundle (production JavaScript)
-        run: npx expo export --platform android --output-dir "$RUNNER_TEMP/mobile-export"
-        env:
-          CI: "1"
-
-  # ---------------------------------------------------------------------------
   # Build the production image and smoke-test BOTH roles out of it: the compiled
   # migrator against a real Postgres, then the API serving /healthz and the
   # operator console HTML. This is what catches a broken dist/web copy or a

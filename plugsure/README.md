@@ -13,7 +13,7 @@ codebase implements.
 v1.6.0, v1.7.0/1.7.1, v1.8.0 and the native-app driver API with the Expo app in `../mobile`) after an independent
 review: the account-deletion form no longer exposes an account's open charges to strangers, a rehearsed rollback to
 v1.5.0, least privilege restored (migration 076), the driver API's anonymous rate limit, Hub routing and settlement
-fixes, and CI for the pilot's configuration and the mobile app. Pilot upgrade: [`docs/UPGRADE-v1.5-to-v1.9.md`](docs/UPGRADE-v1.5-to-v1.9.md);
+fixes, and CI for the pilot's configuration. Pilot upgrade: [`docs/UPGRADE-v1.5-to-v1.9.md`](docs/UPGRADE-v1.5-to-v1.9.md);
 notes: [`RELEASE-NOTES-v1.9.0.md`](RELEASE-NOTES-v1.9.0.md).
 
 **v1.6.0 — Sign in with Microsoft (2 October 2026).** Operator staff can sign

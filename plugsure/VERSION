@@ -11,7 +11,7 @@ Status:    v1.9.0 = 1.9.0-dev + the review fixes: the public account-deletion fo
            anonymous driver-API requests limited per address; mobility:setup guards; late card holds released;
            voided payments never captured; API keys cannot reset two-step verification; Hub direct addressing,
            party claims and settlement fixed; Caddy routes the app's link pages; CI runs the pilot configuration
-           (30 suites, 18 newly wired) and the mobile app. Migration 076 (grants only).
+           (30 suites, 18 newly wired). Migration 076 (grants only).
 
 1.9.0-dev (2026-10-04):
            v1.8.0 + the P0 backend for the native PlugSure app (MOBILE-APP-SPEC §14 G1–G8, as built §15):
