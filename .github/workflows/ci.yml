@@ -141,7 +141,7 @@ jobs:
       # The 060 rollback the pilot upgrade relies on (RELEASE-NOTES-v1.7.0.md): on a scratch database
       # migrated with EVERY migration (061-070 included) and seeded in rupiah, db/rollback/060_down.sql
       # brings the *_idr columns back and removes its own schema_migration row; migrate re-applies 060.
-      - name: Rollback 060 and re-apply (scratch database)
+      - name: Rollback chain 075 → 060 and re-apply (scratch database)
         shell: bash
         env:
           SCRATCH_URL: postgresql://postgres:plugsure@127.0.0.1:5432/plugsure_rollback
@@ -150,8 +150,13 @@ jobs:
           psql "$DATABASE_URL" -qc "drop database if exists plugsure_rollback" -c "create database plugsure_rollback"
           DATABASE_URL="$SCRATCH_URL" npm run migrate
           DATABASE_URL="$SCRATCH_URL" npm run seed
-          psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -1 -qf db/rollback/060_down.sql
-          test "$(psql "$SCRATCH_URL" -tAc "select count(*) from schema_migration where name = '060_money_minor_rename.sql'")" -eq 0
+          # The seed's PlugSure Mobility has MY/SG parties, which 060_down refuses (as it should); the pilot has none.
+          psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -qc "DELETE FROM ocpi_party WHERE NOT is_home"
+          # The chain in deploy/README.md §7.
+          for f in 075 074 073 072 060; do
+            psql "$SCRATCH_URL" -v ON_ERROR_STOP=1 -1 -qf "db/rollback/${f}_down.sql"
+          done
+          test "$(psql "$SCRATCH_URL" -tAc "select count(*) from schema_migration where name in ('060_money_minor_rename.sql', '072_hub_core.sql', '075_mobile_app.sql')")" -eq 0
           test "$(psql "$SCRATCH_URL" -tAc "select count(*) from information_schema.columns where table_schema = 'public' and column_name like '%\_idr'")" -gt 0
           DATABASE_URL="$SCRATCH_URL" npm run migrate
           test "$(psql "$SCRATCH_URL" -tAc "select count(*) from information_schema.columns where table_schema = 'public' and column_name like '%\_idr'")" -eq 0
