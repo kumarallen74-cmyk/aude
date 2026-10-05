@@ -1,9 +1,9 @@
 import { createHmac } from 'node:crypto';
-import { many, one, tx, withAdvisoryLock } from '../db/pool.js';
-import { config } from '../config.js';
+import { many, one, outsideRequestScope, tx, withAdvisoryLock } from '../db/pool.js';
+import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { maskPhone } from '../integrations/otp.js';
-import { checkOtp, normalisePhone, sendOtp } from './identity.js';
+import { checkOtp, deliverOtp, normalisePhone, sendOtp } from './identity.js';
 import { unpaidSessions } from './charge.js';
 import { removeCard } from '../services/payments/cards.js';
 import type { DriverPrincipal } from './identity.js';
@@ -135,11 +135,25 @@ export async function startDeletion(p: DriverPrincipal, phoneRaw: string | null,
     if (!r.ok) return { ok: false as const, status: r.limited ? 429 : 400, error: r.error };
     return { ok: true as const, phoneMasked: maskPhone(phone), ...(r.devCode ? { devCode: r.devCode } : {}), blockers, deleted: DELETED, retained: RETAINED };
   }
-  // No account behind the number: every limit is still claimed, nothing is sent.
+  // Every limit is claimed whether or not the number has an account. The code itself is
+  // sent in the background, so neither the answer, its timing, nor a provider failure
+  // shows whether there is an account. Nothing is sent to a number without one.
+  // Development and test send in line, to hand the code back (devCode).
   const acc = await accountByPhone(phone);
-  const r = await sendOtp(phone, from.appName, { ip: from.ip, deviceId: p.deviceId }, { send: !!acc });
+  const r = await sendOtp(phone, from.appName, { ip: from.ip, deviceId: p.deviceId }, { send: false });
   if (!r.ok) return { ok: false as const, status: r.limited ? 429 : 400, error: r.error };
-  return { ok: true as const, phoneMasked: maskPhone(phone), ...(r.devCode ? { devCode: r.devCode } : {}), blockers: [] as Blocker[], deleted: DELETED, retained: RETAINED };
+  let devCode: string | undefined;
+  if (acc && isRelaxedEnv()) {
+    const d = await deliverOtp(phone, from.appName, p.deviceId);
+    if (d.ok) devCode = d.devCode;
+  } else if (acc) {
+    setImmediate(() => {
+      outsideRequestScope(() => deliverOtp(phone, from.appName, p.deviceId))
+        .then((d) => { if (!d.ok) logger.warn({ phone: maskPhone(phone) }, 'account deletion: code not sent'); })
+        .catch((err) => logger.error({ err, phone: maskPhone(phone) }, 'account deletion: code not sent'));
+    });
+  }
+  return { ok: true as const, phoneMasked: maskPhone(phone), ...(devCode ? { devCode } : {}), blockers: [] as Blocker[], deleted: DELETED, retained: RETAINED };
 }
 
 /** Step 2: confirm with the code, and delete. */

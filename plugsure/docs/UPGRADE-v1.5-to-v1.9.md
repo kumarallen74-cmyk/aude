@@ -69,7 +69,11 @@ Migrations 055–076 (056 and 064–069 are unused) apply in one `npm run migrat
 
 ## 4. After the window
 
-1. **Every administrator signs in and enrols two-step verification.** A lost phone is reset by another administrator (Users & Roles → Reset two-step verification; API keys cannot do this). For the last administrator, on the server: `npm run create-admin -- --email <admin> --org-slug <org> --reset-2fa`.
+1. **Every administrator signs in and enrols two-step verification.** A lost phone is reset by another administrator (Users & Roles → Reset two-step verification; API keys cannot do this). For the last administrator, on the server: `npm run create-admin -- --email <admin> --org-slug <org> --reset-2fa`. This is the whole create-admin command, so besides removing two-step verification and ending that administrator's sessions it also:
+   - sets a new one-time password, printed on the console, unless you pass `--password`;
+   - makes the account a super administrator of that organisation.
+
+   Hand the password over in person, and remove the role afterwards if they should not keep it.
 2. **Settlement recovery.**
    1. Run `npm run settlement:report`. It reads only and lists payments from before the upgrade that were never settled.
    2. Check each one against the Midtrans/Xendit dashboards and settle by hand any that operations already handled.

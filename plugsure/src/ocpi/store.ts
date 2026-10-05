@@ -480,6 +480,14 @@ const countryFilter = (n: number) => `AND ($${n}::text[] IS NULL OR (SELECT si.c
 const tokenPartyFilter = (n: number) =>
   `AND ($${n}::text IS NULL OR EXISTS (SELECT 1 FROM ocpi_token tk WHERE tk.id = cs.ocpi_token_id AND tk.country_code = $${n} AND tk.party_id = $${n + 1}))`;
 
+/**
+ * Only sites in a country this operator has a party for (or with no country, which the home party publishes): a
+ * session elsewhere cannot be published under any identity, so it is left out of the count as well as the page.
+ */
+const partyCountryFilter = (n: number) =>
+  `AND ((SELECT si.country_code FROM site si WHERE si.id = cs.site_id) IS NULL OR (SELECT si.country_code FROM site si WHERE si.id = cs.site_id) = ANY($${n}::text[]))`;
+const partyCountries = (parties: Party | Party[]) => (Array.isArray(parties) ? parties : [parties]).map((x) => x.country_code);
+
 /** Paging and scoping of a partner's pull of sessions or CDRs. */
 export interface PullScope {
   dateFrom: Date | null; dateTo: Date | null; offset: number; limit: number;
@@ -489,14 +497,14 @@ export interface PullScope {
 }
 
 export async function listSessions(orgId: string, partnerId: string, parties: Party | Party[], p: PullScope) {
-  // $1 org, $2 partner, $3/$4 dates, $5 countries, $6/$7 token party; the page adds $8/$9.
+  // $1 org, $2 partner, $3/$4 dates, $5 countries, $6/$7 token party, $8 party countries; the page adds $9/$10.
   const where = `WHERE cs.org_id = $1 AND cs.ocpi_partner_id = $2
      AND ($3::timestamptz IS NULL OR GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) >= $3)
      AND ($4::timestamptz IS NULL OR GREATEST(cs.started_at, cs.last_meter_at, cs.ended_at, cs.rated_at, d.issued_at) < $4)
-     ${countryFilter(5)} ${tokenPartyFilter(6)}`;
-  const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null];
+     ${countryFilter(5)} ${tokenPartyFilter(6)} ${partyCountryFilter(8)}`;
+  const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null, partyCountries(parties)];
   const total = await one<{ n: number }>(`SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`, args);
-  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY cs.started_at, cs.id OFFSET $8 LIMIT $9`, [...args, p.offset, p.limit]);
+  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY cs.started_at, cs.id OFFSET $9 LIMIT $10`, [...args, p.offset, p.limit]);
   // A session at a site whose country has no party of this operator cannot be published under any identity: it is
   // left out of the page (and logged) instead of failing the whole page with a 500 (v1.9.0).
   const items = [];
@@ -563,10 +571,10 @@ export async function renderCdrForSession(sessionId: string) {
 export async function listCdrs(orgId: string, partnerId: string, parties: Party | Party[], p: PullScope) {
   const where = `WHERE cs.org_id = $1 AND cs.ocpi_partner_id = $2 AND d.id IS NOT NULL
      AND ($3::timestamptz IS NULL OR d.issued_at >= $3) AND ($4::timestamptz IS NULL OR d.issued_at < $4)
-     ${countryFilter(5)} ${tokenPartyFilter(6)}`;
-  const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null];
+     ${countryFilter(5)} ${tokenPartyFilter(6)} ${partyCountryFilter(8)}`;
+  const args = [orgId, partnerId, p.dateFrom, p.dateTo, p.countries ?? null, p.tokenParty?.country_code ?? null, p.tokenParty?.party_id ?? null, partyCountries(parties)];
   const total = await one<{ n: number }>(`SELECT count(*)::int AS n FROM charging_session cs LEFT JOIN cdr d ON d.session_id = cs.id ${where}`, args);
-  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY d.issued_at, d.id OFFSET $8 LIMIT $9`, [...args, p.offset, p.limit]);
+  const rows = await many<SessionRowOut>(`${SESSION_SELECT} ${where} ORDER BY d.issued_at, d.id OFFSET $9 LIMIT $10`, [...args, p.offset, p.limit]);
   const items = [];
   for (const r of rows) {
     const c = await cdrFromRow(r, parties);

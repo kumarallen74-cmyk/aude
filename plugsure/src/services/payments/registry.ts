@@ -746,8 +746,10 @@ async function applyNotification(r: Resolved, n: Notification): Promise<{ outcom
       }
       return { outcome: 'wrong_account', orgId: intent.org_id, detail: { reason: foreign } };
     }
-    // Money in another currency than asked for is never booked (the amounts cannot even be compared).
-    if (n.currency && (n.paid || n.authorised) && n.currency.toUpperCase() !== (intent.currency ?? LEGACY_CURRENCY)) {
+    // Money in another currency than asked for is never booked (the amounts cannot even be compared). A hold
+    // authorised after the payment was given up is released below whatever its currency.
+    const lateHold = intent.mode === 'preauth' && n.authorised && (intent.state === 'failed' || intent.state === 'expired');
+    if (n.currency && (n.paid || n.authorised) && !lateHold && n.currency.toUpperCase() !== (intent.currency ?? LEGACY_CURRENCY)) {
       return currencyMismatch(r, intent, n, intent.mode === 'preauth' && n.authorised ? 'hold' : 'payment');
     }
     // The card the driver asked to save, once the acquirer has taken or held the payment.

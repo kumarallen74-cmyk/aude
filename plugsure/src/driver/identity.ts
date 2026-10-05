@@ -291,7 +291,19 @@ export async function sendOtp(
     return { ok: false, error: MSG_WAIT, limited: true };
   }
   if (opts.send === false) return { ok: true };
+  return deliverOtp(phone, appName, from.deviceId);
+}
 
+/**
+ * Make and send a code to an already-normalised number, after its limits were claimed
+ * (sendOtp). The account-deletion form calls it on its own, in the background, so its
+ * answer does not wait on the provider (v1.9.0).
+ */
+export async function deliverOtp(
+  phone: string,
+  appName?: string,
+  deviceId?: string,
+): Promise<{ ok: true; devCode?: string } | { ok: false; error: string }> {
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   // Sent by the provider configured in Govern → Integrations (WhatsApp / SMS, with
   // a fallback). The development provider shows the code in the app instead, and
@@ -305,7 +317,7 @@ export async function sendOtp(
   await query(
     `INSERT INTO driver_otp (phone, code_hash, expires_at, device_id)
      VALUES ($1, $2, now() + ($3 || ' milliseconds')::interval, $4)`,
-    [phone, sha256(code), OTP_TTL_MS, from.deviceId ?? null],
+    [phone, sha256(code), OTP_TTL_MS, deviceId ?? null],
   );
   logger.info({ phone: maskPhone(phone), channel: sent.channel }, 'driver OTP issued');
   if (sent.devCode && isRelaxedEnv()) return { ok: true, devCode: sent.devCode };

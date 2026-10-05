@@ -195,6 +195,9 @@ try {
     pre.status === 200 && pre.data.demo === false && /MIDTRANS/.test(pre.data.qr.qrString) && demoConfirm?.data?.ok === false && paidByHook?.status === 200 && preState?.state === 'captured',
     { pre: pre.data, demoConfirm: demoConfirm?.data, preState });
 
+  // A Midtrans payment still open when the operator switches to Xendit (settled below through the old URL).
+  const co3 = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 40_000 });
+
   // ================================================================ QRIS: Xendit
   const xe = await ops('PUT', '/v1/integrations/payments', { provider: 'xendit', settings: { baseUrl: FAKE }, secrets: { secretKey: 'xnd_development_E2E', callbackToken: 'xendit-callback-token-e2e' } });
   const coX = await ops('POST', '/v1/checkout/qris', { ocppIdentity: ID, connectorId: 1, amountMinor: 20_000 });
@@ -210,8 +213,12 @@ try {
   const xState = await intentState(refX);
   check('Xendit: a dynamic QR from Xendit; a callback with the wrong token refused, with the verification token captured',
     xe.status === 200 && coX.data.provider === 'xendit' && /XENDIT/.test(coX.data.qr.qrString) && wrongTok.status === 401 && rightTok.status === 200 && xState.state === 'captured', { wrongTok: wrongTok.status, xState });
-  const midHookAfterSwitch = await raw(hookPath, note(co2.data.qr.providerRef, '40000.00'));
-  check('the old Midtrans URL still settles payments it took (each payment remembers its account)', midHookAfterSwitch.status === 200 && (await intentState(co2.data.qr.providerRef)).state === 'captured');
+  const midHookAfterSwitch = await raw(hookPath, note(co3.data.qr.providerRef, '40000.00'));
+  // v1.9.0: the underpaid payment voided above stays voided when a full "paid" follows (its refund is already queued).
+  const afterVoid = await raw(hookPath, note(co2.data.qr.providerRef, '40000.00'));
+  check('the old Midtrans URL still settles payments it took (each payment remembers its account); a voided payment stays voided',
+    midHookAfterSwitch.status === 200 && (await intentState(co3.data.qr.providerRef)).state === 'captured'
+      && afterVoid.status === 200 && (await intentState(co2.data.qr.providerRef)).state === 'voided');
 
   // ================================================================ sign-in codes
   const wa = await pa('PUT', '/v1/integrations/otp', { provider: 'whatsapp_cloud', settings: { phoneNumberId: '1098765', templateName: 'plugsure_otp', language: 'id', copyCodeButton: true, baseUrl: FAKE }, secrets: { accessToken: 'EAAG-e2e-token' } });

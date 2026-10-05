@@ -845,18 +845,27 @@ would fail. Choose one of these:
    for v1.9.0: a v1.5.0 database with real data was upgraded, used, rolled back this way, and v1.5.0's own
    end-to-end suites then passed on it.
 
+   On systemd (Path B):
+
    ```bash
-   sudo systemctl stop plugsure-api plugsure-gateway            # Docker: docker compose stop api gateway
+   set -e   # stop at the first failing step: a guard that refuses must not be followed by the next script
+   sudo systemctl stop plugsure-api plugsure-gateway
    OWNER_URL=$(sudo sed -n 's/^DATABASE_URL=//p' /etc/plugsure/migrate.env)
    # Keep the account-deletion record (075_down drops it): the store and the regulator may ask for it.
-   sudo -u plugsure psql "$OWNER_URL" -c "\copy app_driver_deletion TO '/var/backups/plugsure/app_driver_deletion.csv' CSV HEADER"
+   sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -c "\copy app_driver_deletion TO '/var/backups/plugsure/app_driver_deletion.csv' CSV HEADER"
    for f in 075 074 073 072 060; do
-     sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -1 -f /opt/plugsure/db/rollback/${f}_down.sql || break
+     sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -1 -f /opt/plugsure/db/rollback/${f}_down.sql
    done
    # A password-only session still waiting for its two-step code: v1.5 does not know the flag and would treat
    # it as fully signed in.
-   sudo -u plugsure psql "$OWNER_URL" -c "DELETE FROM auth_session WHERE mfa_pending"
+   sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -c "DELETE FROM auth_session WHERE mfa_pending"
    ```
+
+   On Docker (Path A), the image does not ship `db/rollback/`: run the same steps from a checkout of the v1.9.0
+   tag on the host, as the database owner, against the published Postgres port (`PG_HOST_PORT`), after
+   `docker compose stop api gateway`. Replace `/opt/plugsure/db/rollback/` with the checkout's `db/rollback/`.
+   If a step fails, fix what it names and run the chain again from that script: each down script runs in one
+   transaction and the ones before it have already been applied.
 
    Then deploy v1.5.0 (commands below; on systemd install v1.5.0's unit files too) and start it. The other
    1.9 migrations (055, 058, 059, 061–063, 070, 071, 076) only add columns, tables and grants that v1.5.0
