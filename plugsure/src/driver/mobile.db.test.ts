@@ -320,7 +320,7 @@ dbDescribe('account deletion (G4)', () => {
     const keys = [`otp-phone:${phone}`, `otp-verify:${phone}:dev-1`, `otp-phone:${longer}`, `otp-verify:${longer}:dev-2`];
     for (const k of keys) await query(`INSERT INTO driver_auth_limit (key, hits) VALUES ($1, 3) ON CONFLICT (key) DO UPDATE SET hits = 3`, [k]);
     await anonymise(acc, phone, 'app');
-    const left = (await many<{ key: string }>(`SELECT key FROM driver_auth_limit WHERE key = ANY($1::text[]) ORDER BY key`, [keys])).map((r) => r.key);
+    const left = (await many<{ key: string }>(`SELECT key FROM driver_auth_limit WHERE key = ANY($1::text[])`, [keys])).map((r) => r.key).sort();
     assert.deepEqual(left, [`otp-phone:${longer}`, `otp-verify:${longer}:dev-2`].sort());
     await query(`DELETE FROM driver_auth_limit WHERE key = ANY($1::text[])`, [keys]);
   });
