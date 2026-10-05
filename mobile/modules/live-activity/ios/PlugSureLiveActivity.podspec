@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.author         = 'PlugSure'
   s.homepage       = 'https://plugsure.asia'
   s.license        = { :type => 'Proprietary' }
-  s.platforms      = { :ios => '16.2' }
+  s.platforms      = { :ios => '16.4' }
   s.source         = { :git => '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'

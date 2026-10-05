@@ -82,7 +82,8 @@
     "export:web": "expo export --platform web --output-dir dist/web",
     "assets": "node scripts/generate-assets.mjs",
     "screenshots": "node scripts/screenshots.mjs",
-    "doctor": "expo-doctor"
+    "doctor": "expo-doctor",
+    "verify:prebuild": "node plugins/verify-prebuild.js"
   },
   "private": true,
   "jest": {

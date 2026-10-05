@@ -82,3 +82,43 @@ jobs:
           size=$(stat -c %s "$f")
           echo "bundle: $size bytes"
           test "$size" -le 6291456
+
+  # ---------------------------------------------------------------------------
+  # Native projects: `expo prebuild` for iOS and Android (production config, dummy secrets) in a throw-away copy,
+  # then plugins/verify-prebuild.js asserts what the config plugins promise (widget extension Info.plist + versions,
+  # iOS ≥ 16.4 everywhere, no background modes / App Group / Face ID, Android permissions, LocationTaskService
+  # removed, App Links). No Xcode / Android SDK here: compiling the projects (Swift, Kotlin, pods, Gradle) needs
+  # macOS / Android SDK runners or EAS Build — recommended as a separate, slower job.
+  # ---------------------------------------------------------------------------
+  prebuild:
+    name: expo prebuild + native config checks (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [plugsure, nusantara]
+    env:
+      APP_VARIANT: ${{ matrix.variant }}
+      APP_ENV: production
+      API_BASE_URL: https://api.example.com
+      APPLE_TEAM_ID: ABCDE12345
+      GOOGLE_MAPS_ANDROID_KEY: dummy-maps-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - name: Prebuild ios + android in a temporary copy
+        run: |
+          dest="$RUNNER_TEMP/prebuild/mobile"
+          mkdir -p "$dest"
+          tar --exclude=./node_modules --exclude=./ios --exclude=./android --exclude=./dist -cf - . | tar -xf - -C "$dest"
+          ln -s "$PWD/node_modules" "$dest/node_modules"
+          (cd "$dest" && npx expo prebuild --no-install --clean)
+      - name: Verify the generated native projects
+        run: node plugins/verify-prebuild.js "$RUNNER_TEMP/prebuild/mobile"
