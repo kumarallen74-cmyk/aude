@@ -1,7 +1,7 @@
 import { normaliseMobile } from '../domain/phone.js';
 import type { CountryCode } from '../domain/country.js';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { one, query } from '../db/pool.js';
+import { one, query, tx } from '../db/pool.js';
 import { config, isRelaxedEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { hashPassword, verifyPassword } from '../services/users.js';
@@ -304,6 +304,15 @@ export async function deliverOtp(
   appName?: string,
   deviceId?: string,
 ): Promise<{ ok: true; devCode?: string } | { ok: false; error: string }> {
+  // The App Review number (DRIVER_REVIEW_PHONE / _CODE, v1.9.1): nothing is sent; its fixed code is stored like any
+  // other (hashed, same expiry, bound to this device), after the same limits. Every path that sends a code comes
+  // through here: sign-in and both account-deletion forms.
+  const review = config.driverApp.review;
+  if (review && phone === review.phone) {
+    await storeOtp(phone, review.code, deviceId);
+    logger.warn({ phone: maskPhone(phone) }, 'review sign-in code issued (DRIVER_REVIEW_PHONE): remove DRIVER_REVIEW_* once the app is approved');
+    return { ok: true };
+  }
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   // Sent by the provider configured in Govern → Integrations (WhatsApp / SMS, with
   // a fallback). The development provider shows the code in the app instead, and
@@ -313,15 +322,19 @@ export async function deliverOtp(
     logger.error({ phone: maskPhone(phone), err: sent.error }, 'driver sign-in code not sent');
     return { ok: false, error: sent.notConfigured ? 'Masuk dengan nomor HP belum tersedia. Hubungi operator.' : 'Kode tidak dapat dikirim. Coba lagi sebentar lagi.' };
   }
-  // Bound to the requesting device: only it can verify this code (see verifyKeyOf).
+  await storeOtp(phone, code, deviceId);
+  logger.info({ phone: maskPhone(phone), channel: sent.channel }, 'driver OTP issued');
+  if (sent.devCode && isRelaxedEnv()) return { ok: true, devCode: sent.devCode };
+  return { ok: true };
+}
+
+/** Bound to the requesting device: only it can verify this code (see verifyKeyOf). */
+async function storeOtp(phone: string, code: string, deviceId: string | undefined): Promise<void> {
   await query(
     `INSERT INTO driver_otp (phone, code_hash, expires_at, device_id)
      VALUES ($1, $2, now() + ($3 || ' milliseconds')::interval, $4)`,
     [phone, sha256(code), OTP_TTL_MS, deviceId ?? null],
   );
-  logger.info({ phone: maskPhone(phone), channel: sent.channel }, 'driver OTP issued');
-  if (sent.devCode && isRelaxedEnv()) return { ok: true, devCode: sent.devCode };
-  return { ok: true };
 }
 
 /**
@@ -577,12 +590,27 @@ async function pinMatches(pin: string, stored: string): Promise<boolean> {
   return safeEqualHex(stored, sha256(pin));
 }
 
-/** Clear account and fleet bindings from a device (sign out). */
+/**
+ * Sign out: the device token is REVOKED (v1.9.1), not just detached from the account.
+ *
+ * Charges, receipts, reservations and favourites made on a device belong to that device token (charge.ts
+ * ownedCharge, history): sign-out used to clear the account only, so the next person on a shared browser saw — and
+ * could stop or pay — the previous driver's charges. Now the token's hash is replaced by one nobody holds (as account
+ * deletion does), so the next request with it gets 401 `no_device` and the app issues a fresh device. The account's
+ * own charges stay linked to the account (driver_charge.app_driver_id) and show again after signing in anywhere.
+ * The device's push subscriptions and live-activity / live-session tokens go too: nothing more is sent to it.
+ */
 export async function signOutDevice(deviceId: string): Promise<void> {
-  await query(
-    `UPDATE driver_device SET app_driver_id = NULL, fleet_token_id = NULL WHERE id = $1`,
-    [deviceId],
-  );
+  await tx(async (c) => {
+    await c.query(`DELETE FROM push_subscription WHERE device_id = $1`, [deviceId]);
+    await c.query(`DELETE FROM live_activity WHERE device_id = $1`, [deviceId]);
+    await c.query(`DELETE FROM live_activity_start_token WHERE device_id = $1`, [deviceId]);
+    await c.query(
+      `UPDATE driver_device SET app_driver_id = NULL, fleet_token_id = NULL, device_hash = 'revoked:' || encode(gen_random_bytes(24), 'hex')
+        WHERE id = $1`,
+      [deviceId],
+    );
+  });
 }
 
 export const _internal = { sha256 };

@@ -4,6 +4,8 @@ import { ApiError } from '@/api/http';
 import type { Me } from '@/api/types';
 import { createStore, useStore } from '@/lib/store';
 import { secret, kv, KEYS } from '@/lib/storage';
+import { setActiveCharge } from './activeCharge';
+import { setPendingCheckout } from './checkout';
 import { qk, queryClient } from './queryClient';
 
 /**
@@ -72,14 +74,17 @@ export function useSignedIn(): boolean {
   return !!me.data?.account || !!me.data?.fleet;
 }
 
-/** §15.8: after account deletion the old device token is revoked — discard it and start again as a new guest. */
-export async function resetDevice(): Promise<void> {
+/** Forget the charge being followed and the payment in progress — memory and storage (both belong to the old token). */
+function clearLocalCharge() {
+  setActiveCharge(null); // and its start record
+  setPendingCheckout(null);
+}
+
+/** Drop the device token and issue a new guest one (offline: issued at the next authenticated call). */
+async function replaceDevice(): Promise<void> {
   runtime.token = null;
   authStore.set({ token: null });
   await secret.remove(KEYS.deviceToken);
-  // The deleted account's local traces go too (v1.9.0): its active charge, pending checkout and push token.
-  await Promise.all([kv.remove(KEYS.activeCharge), kv.remove(KEYS.pendingCheckout), kv.remove(KEYS.pushToken)]);
-  queryClient.clear();
   try {
     await issue();
   } catch (e) {
@@ -87,11 +92,27 @@ export async function resetDevice(): Promise<void> {
   }
 }
 
+/** §15.8: after account deletion the old device token is revoked — discard it and start again as a new guest. */
+export async function resetDevice(): Promise<void> {
+  // The deleted account's local traces go too (v1.9.0): its active charge, pending checkout and push token.
+  clearLocalCharge();
+  await kv.remove(KEYS.pushToken);
+  queryClient.clear();
+  await replaceDevice();
+}
+
+/**
+ * Sign out. The server revokes this device token, so the app continues as a new guest with a fresh one. Offline (or
+ * any failure but "already signed out") throws: the driver is told, and nothing pretends the sign-out happened.
+ */
 export async function signOut(): Promise<void> {
   try {
     await api.identity.signOut();
   } catch (e) {
-    if (!(e instanceof ApiError)) throw e;
+    // 401 (no_device): the token is already revoked — signed out.
+    if (!(e instanceof ApiError && e.kind === 'auth')) throw e;
   }
-  await queryClient.invalidateQueries();
+  clearLocalCharge();
+  await replaceDevice();
+  await queryClient.resetQueries();
 }

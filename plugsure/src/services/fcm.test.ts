@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { parseServiceAccount, tokenUriFor, GOOGLE_TOKEN_URI, assertionFor, fcmPayload, outcomeOfFcm, sendFcm, checkFcmCredentials, FCM_SCOPE, type FcmCredentials } from './fcm.js';
-import { fcmMessageOf, fcmChannelOf } from '../driver/notify.js';
+import { fcmMessageOf, fcmChannelOf, fcmLiveStartOf } from '../driver/notify.js';
 
 /**
  * FCM HTTP v1 (services/fcm.ts): the service account file, the OAuth assertion Google verifies, the message body,
@@ -158,6 +158,20 @@ describe('FCM HTTP v1', () => {
     assert.equal(m.priority, 'high');
     assert.equal(m.channelId, 'charging');
     assert.equal(fcmMessageOf('cdr.created', { title: 't', body: 'b', url: '/app/#history' }, 'tok', 86_400, false, null).priority, 'normal');
+  });
+});
+
+describe('Android live session start (v1.9.1)', () => {
+  test('data-only: no notification block, high priority, the keys the app reads, its own collapse key', () => {
+    const id = '0f0e0d0c-0b0a-4908-8706-050403020100';
+    const m = fcmLiveStartOf({ dataOnly: true, ref: id, url: `/app/#s/${id}`, site: 'Mall', connector: 'AC 22 kW' }, 'tok', 600);
+    const body = fcmPayload(m) as any;
+    assert.equal(body.message.notification, undefined);
+    assert.equal(body.message.android.notification, undefined);
+    assert.deepEqual(body.message.data, { type: 'session.started', ref: id, url: `/app/#s/${id}`, path: `/app/#s/${id}`, site: 'Mall', connector: 'AC 22 kW' });
+    assert.equal(body.message.android.priority, 'HIGH');
+    assert.equal(body.message.android.collapse_key, `ls-start-${id}`);
+    assert.equal(body.message.android.ttl, '600s');
   });
 });
 

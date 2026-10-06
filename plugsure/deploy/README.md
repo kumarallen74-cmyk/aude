@@ -853,7 +853,7 @@ would fail. Choose one of these:
    OWNER_URL=$(sudo sed -n 's/^DATABASE_URL=//p' /etc/plugsure/migrate.env)
    # Keep the account-deletion record (075_down drops it): the store and the regulator may ask for it.
    sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -c "\copy app_driver_deletion TO '/var/backups/plugsure/app_driver_deletion.csv' CSV HEADER"
-   for f in 075 074 073 072 060; do
+   for f in 077 075 074 073 072 060; do
      sudo -u plugsure psql "$OWNER_URL" -v ON_ERROR_STOP=1 -1 -f /opt/plugsure/db/rollback/${f}_down.sql
    done
    # A password-only session still waiting for its two-step code: v1.5 does not know the flag and would treat

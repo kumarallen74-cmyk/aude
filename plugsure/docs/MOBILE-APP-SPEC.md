@@ -967,7 +967,7 @@ reference; the console routes above are in `src/web/openapi.json` and the SDK.
 | Location | Foreground only; purpose strings | §11.3 |
 | Background | No background location; push-driven updates | — |
 | Store listing | Screenshots per locale (en, id, ms, zh), App Preview video of the 60-s guest flow | — |
-| Reviewer access | Demo account + demo charger (sandbox chargers exist on OCPP 2.0.1/2.1) | Provide review notes with a sandbox QR |
+| Reviewer access | Demo account + demo charger (sandbox chargers exist on OCPP 2.0.1/2.1) | Provide review notes with a sandbox QR; the demo number signs in with a fixed code while `DRIVER_REVIEW_PHONE` / `DRIVER_REVIEW_CODE` are set (v1.9.1, deploy/DRIVER-APP-PILOT.md §8) — remove them after approval |
 
 ## 17. White-label build configuration
 

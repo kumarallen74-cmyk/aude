@@ -152,7 +152,9 @@ const brand = (over: Partial<Brand> = {}): Brand => ({
 describe('app-site association (G6)', () => {
   test('the network brand hands /c, /s, /r, /paid and /app to the app; an operator\'s brand keeps /app only', () => {
     const net = appleAssociation(brand()) as any;
-    assert.deepEqual(net.applinks.details[0].appIDs, ['ABCDE12345.asia.plugsure.app']);
+    // The store build and its preview / development builds (v1.9.1).
+    assert.deepEqual(net.applinks.details[0].appIDs, ['ABCDE12345.asia.plugsure.app', 'ABCDE12345.asia.plugsure.app.preview', 'ABCDE12345.asia.plugsure.app.dev']);
+    assert.deepEqual(net.webcredentials.apps, net.applinks.details[0].appIDs);
     assert.deepEqual(net.applinks.details[0].components.map((c: any) => c['/']), NETWORK_LINK_PATHS.map((p) => p.path));
     const op = appleAssociation(brand({ scope: 'operator' })) as any;
     assert.deepEqual(op.applinks.details[0].components, [{ '/': '/app/*', comment: 'The driver app' }]);

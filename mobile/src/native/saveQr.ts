@@ -3,8 +3,9 @@ import { Platform } from 'react-native';
 /**
  * "Save QR" (spec §6.5): many wallets can only pay a QRIS / PayNow code from the gallery when the driver pays on the
  * same phone. The backend sends the code as a PNG data URI (`qr.qrPng`); it is written to the cache and added to the
- * photo library with WRITE-ONLY access (iOS "Add Photos Only", NSPhotoLibraryAddUsageDescription; Android 10+ needs
- * no permission to add to MediaStore). The screen shows a rationale before the system prompt (`needsRationale`).
+ * photo library with WRITE-ONLY access (iOS "Add Photos Only", NSPhotoLibraryAddUsageDescription; Android 11+ needs
+ * no permission to add to MediaStore, Android 8–10 WRITE_EXTERNAL_STORAGE — plugins/withSaveQrPermission.js). The
+ * screen shows a rationale before the system prompt (`needsRationale`).
  */
 export type SaveQrResult = 'saved' | 'denied' | 'unsupported' | 'error';
 

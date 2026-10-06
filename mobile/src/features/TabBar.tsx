@@ -7,6 +7,7 @@ import { haptic } from '@/components/Button';
 import { Icon, type IconName } from '@/components/Icon';
 import { Text } from '@/components/Text';
 import { useActiveCharge } from '@/state/activeCharge';
+import { pendingHref, usePendingCheckout } from '@/state/checkout';
 import { radius, space, useTheme } from '@/theme';
 
 const TABS: Record<string, { icon: IconName; label: string }> = {
@@ -21,6 +22,9 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const active = useActiveCharge();
+  // A payment left open (the app was closed on the bank's page, or killed after paying): resume it — the payment
+  // screen polls, and starts the charge once the payment is confirmed.
+  const pending = usePendingCheckout();
   const routes = state.routes.filter((r) => TABS[r.name]);
   const left = routes.slice(0, 1);
   const right = routes.slice(1);
@@ -66,6 +70,20 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
           <View style={[styles.pulse, { backgroundColor: c.on }]} />
           <Text variant="footnote" color={c.on} style={{ flex: 1, fontFamily: 'PlusJakartaSans_700Bold' }} numberOfLines={1}>
             {t('pill.charging', { site: active.siteName })}
+          </Text>
+          <Icon name="chevron" size={18} color={c.on} />
+        </Pressable>
+      ) : pending ? (
+        <Pressable
+          testID="payment-pill"
+          accessibilityRole="button"
+          accessibilityLabel={t('pill.paymentA11y', { site: pending.siteName })}
+          onPress={() => router.push(pendingHref(pending) as never)}
+          style={[styles.pill, shadow(2), { backgroundColor: c.fill }]}
+        >
+          <Icon name="card" size={18} color={c.on} />
+          <Text variant="footnote" color={c.on} style={{ flex: 1, fontFamily: 'PlusJakartaSans_700Bold' }} numberOfLines={1}>
+            {t('pill.payment', { site: pending.siteName })}
           </Text>
           <Icon name="chevron" size={18} color={c.on} />
         </Pressable>

@@ -500,13 +500,32 @@ export function renderServiceWorker(js: string, b: Brand): string {
     .split('PlugSure').join(b.appName);
 }
 
-/** Digital Asset Links: the Android app may open this web address full-screen (Trusted Web Activity). */
+/**
+ * The app ids of a brand's native app builds (v1.9.1): the store build, and the preview and development builds that
+ * install beside it as `<id>.preview` / `<id>.dev` (mobile/app.config.ts). They share the brand's signing key / team,
+ * so links and notifications must reach all three.
+ */
+export const APP_ID_SUFFIXES: readonly string[] = Object.freeze(['', '.preview', '.dev']);
+export const appIdsOf = (base: string): string[] => APP_ID_SUFFIXES.map((s) => base + s);
+
+/**
+ * The app id a native app says it is (`appId` in a push / live-activity registration), if it is one of this brand's
+ * builds for that platform; null for the store build itself, or anything else (the brand's own id is used then).
+ */
+export function brandAppId(b: Brand | null | undefined, raw: unknown, platform: 'ios' | 'android'): string | null {
+  const base = platform === 'ios' ? b?.iosBundleId : b?.androidPackage;
+  if (!base || typeof raw !== 'string') return null;
+  const v = raw.trim();
+  return v !== base && appIdsOf(base).includes(v) ? v : null;
+}
+
+/** Digital Asset Links: the Android app (and its preview and development builds) may open this web address. */
 export function assetLinks(b: Brand | null): unknown[] {
   if (!b?.androidPackage || !b.androidCertSha256.length) return [];
-  return [{
+  return appIdsOf(b.androidPackage).map((pkg) => ({
     relation: ['delegate_permission/common.handle_all_urls'],
-    target: { namespace: 'android_app', package_name: b.androidPackage, sha256_cert_fingerprints: b.androidCertSha256 },
-  }];
+    target: { namespace: 'android_app', package_name: pkg, sha256_cert_fingerprints: b.androidCertSha256 },
+  }));
 }
 
 /**
@@ -525,11 +544,12 @@ export const NETWORK_LINK_PATHS: ReadonlyArray<{ path: string; comment: string }
 /** Apple app-site association: links to this address open the iOS app. */
 export function appleAssociation(b: Brand | null): Record<string, unknown> {
   if (!b?.iosBundleId || !b.iosTeamId) return { applinks: { details: [] } };
-  const appId = `${b.iosTeamId}.${b.iosBundleId}`;
+  // The store build first, then its preview and development builds (v1.9.1).
+  const appIds = appIdsOf(b.iosBundleId).map((id) => `${b.iosTeamId}.${id}`);
   const components = b.scope === 'network'
     ? NETWORK_LINK_PATHS.map((x) => ({ '/': x.path, comment: x.comment }))
     : [{ '/': '/app/*', comment: 'The driver app' }];
-  return { applinks: { details: [{ appIDs: [appId], components }] }, webcredentials: { apps: [appId] } };
+  return { applinks: { details: [{ appIDs: appIds, components }] }, webcredentials: { apps: appIds } };
 }
 
 // ─────────────────────────────────────────────── readiness

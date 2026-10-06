@@ -211,13 +211,24 @@ export function sendOnce(env: ApnsEnv, deviceToken: string, c: ApnsCredentials, 
 /** What a result means for the subscription and the message. */
 export type Outcome = 'sent' | 'gone' | 'retry' | 'credentials' | 'failed';
 
-export function outcomeOf(r: ApnsResult): Outcome {
+export function outcomeOf(r: ApnsResult, opts: { buildTopic?: boolean } = {}): Outcome {
   if (r.status === 200) return 'sent';
   if (r.status === 410 || r.reason === 'Unregistered' || r.reason === 'BadDeviceToken' || r.reason === 'DeviceTokenNotForTopic') return 'gone';
   if (r.status === 403 && /ProviderToken|MissingProviderToken|InvalidProviderToken|ExpiredProviderToken/.test(r.reason ?? '')) return 'credentials';
-  if (r.reason === 'TopicDisallowed' || r.reason === 'BadTopic') return 'credentials';
+  // A preview / development build's topic refused (not registered with the key's team): that build's problem, not the
+  // brand's key — never marked as refused credentials in the console.
+  if (r.reason === 'TopicDisallowed' || r.reason === 'BadTopic') return opts.buildTopic ? 'failed' : 'credentials';
   if (r.status === null || r.status === 429 || r.status >= 500 || r.reason === 'TooManyProviderTokenUpdates') return 'retry';
   return 'failed';
+}
+
+/**
+ * The brand's credentials addressed to one build of its app (v1.9.1): `appId` is the `.preview` / `.dev` bundle id the
+ * app registered with (brand.ts brandAppId), null for the store build. A development build's token sent to the store
+ * bundle id got DeviceTokenNotForTopic, and was deleted as gone.
+ */
+export function forBuild(c: ApnsCredentials, appId: string | null | undefined): ApnsCredentials {
+  return appId && appId !== c.topic ? { ...c, topic: appId } : c;
 }
 
 /**

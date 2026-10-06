@@ -4,7 +4,8 @@
  *   APP_VARIANT   brand file in ./brands (default: plugsure)
  *   APP_ENV       development | preview | production (default: development) — set by eas.json profiles
  *   API_BASE_URL  overrides the brand's API host (staging, a local backend, or `mock` for the built-in demo data)
- *   EAS_PROJECT_ID, APPLE_TEAM_ID, GOOGLE_MAPS_ANDROID_KEY, GOOGLE_SERVICES_JSON (EAS file secret path)
+ *   EAS_PROJECT_ID, APPLE_TEAM_ID, GOOGLE_MAPS_ANDROID_KEY, GOOGLE_SERVICES_JSON (EAS file secret path) — all four are
+ *                 REQUIRED for a production EAS build (EAS_BUILD=true); CI's `expo export` runs without them
  *   EXPO_PUBLIC_SENTRY_DSN (+ SENTRY_ORG / SENTRY_PROJECT / SENTRY_AUTH_TOKEN for source maps): crash reporting, off when unset
  *   EXPO_PUBLIC_GOOGLE_PLACES_KEY: place search through Google Places (off when unset: station search only)
  *
@@ -41,22 +42,46 @@ if (appEnv === 'production') {
 }
 const easProjectId = process.env.EAS_PROJECT_ID?.trim() || brand.easProjectId;
 const appleTeamId = process.env.APPLE_TEAM_ID?.trim() || brand.appleTeamId || undefined;
+const googleMapsAndroidKey = process.env.GOOGLE_MAPS_ANDROID_KEY?.trim() || '';
 
 // Firebase (Android FCM tokens). EAS: upload as a file secret and point GOOGLE_SERVICES_JSON at it.
 const googleServicesFile =
-  process.env.GOOGLE_SERVICES_JSON ??
+  process.env.GOOGLE_SERVICES_JSON?.trim() ||
   (fs.existsSync(path.join(__dirname, `brands/${variant}/google-services.json`)) ? `./brands/${variant}/google-services.json` : undefined);
+
+// A store build that would install but not work: no map (react-native-maps crashes without the key), no push (no
+// Firebase config), no OTA updates / EAS project, unsigned widget extension. Checked on real EAS builds only
+// (EAS_BUILD=true): CI's `expo export` resolves this config with APP_ENV=production but without these secrets.
+if (appEnv === 'production' && process.env.EAS_BUILD === 'true') {
+  const platform = process.env.EAS_BUILD_PLATFORM; // 'ios' | 'android' on EAS
+  const missing = [
+    !easProjectId && 'EAS_PROJECT_ID (or brands/<variant>.json easProjectId)',
+    platform !== 'android' && !appleTeamId && 'APPLE_TEAM_ID (or brands/<variant>.json appleTeamId)',
+    platform !== 'ios' && !googleMapsAndroidKey && 'GOOGLE_MAPS_ANDROID_KEY',
+    platform !== 'ios' && !googleServicesFile && 'GOOGLE_SERVICES_JSON (EAS file env var) or brands/<variant>/google-services.json',
+  ].filter(Boolean);
+  if (missing.length) throw new Error(`APP_ENV=production EAS build: missing ${missing.join(', ')}`);
+}
 // iOS only needs GoogleService-Info.plist if Firebase SDKs are added; push uses APNs device tokens directly.
 const googleServicesPlist =
   process.env.GOOGLE_SERVICES_PLIST ??
   (fs.existsSync(path.join(__dirname, `brands/${variant}/GoogleService-Info.plist`)) ? `./brands/${variant}/GoogleService-Info.plist` : undefined);
 
-const LINK_PATHS = ['/c/', '/s/', '/r/', '/paid', '/app'];
+// Android App Links: exactly /paid (payment return) and the /app/ web-app tree; /c/ /s/ /r/ share links.
+const LINK_DATA: ({ path: string } | { pathPrefix: string })[] = [
+  { pathPrefix: '/c/' },
+  { pathPrefix: '/s/' },
+  { pathPrefix: '/r/' },
+  { path: '/paid' },
+  { pathPrefix: '/app/' },
+];
 
 const strings = {
   location: `${brand.appName} uses your location to show chargers near you. It is not stored.`,
   camera: 'To scan the QR code on the charger.',
-  faceId: `Unlock ${brand.appName} and confirm payment-method changes.`,
+  // expo-location's iOS module links CoreMotion (heading / activity APIs): App Review needs an accurate string even
+  // though the app never asks for motion data.
+  motion: `${brand.appName} does not use motion or fitness data; this permission is never requested.`,
   savePhotos: `${brand.appName} saves the payment QR code to your photos so you can pay with a wallet app on this phone.`,
 };
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN?.trim() || '';
@@ -77,8 +102,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     bundleIdentifier: brand.iosBundleId + idSuffix,
     appleTeamId,
-    supportsTablet: true,
-    deploymentTarget: '16.2',
+    // iPhone-only for the first release (no tablet layouts yet).
+    supportsTablet: false,
+    // Expo SDK 57 pods require iOS 16.4 (ExpoModulesCore.podspec); keep plugins/withLiveActivity and the
+    // modules/live-activity podspec in step.
+    deploymentTarget: '16.4',
     associatedDomains: brand.linkHosts.map((h) => `applinks:${h}`),
     googleServicesFile: googleServicesPlist,
     infoPlist: {
@@ -110,6 +138,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         { NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePurchaseHistory', NSPrivacyCollectedDataTypeLinked: true, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] },
         { NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID', NSPrivacyCollectedDataTypeLinked: true, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] },
         { NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeCrashData', NSPrivacyCollectedDataTypeLinked: false, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] },
+        // Rating comments and problem reports (src/api/feedback.ts) — free text and photos tied to the account.
+        { NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeOtherUserContent', NSPrivacyCollectedDataTypeLinked: true, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] },
+        { NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeCustomerSupport', NSPrivacyCollectedDataTypeLinked: true, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] },
       ],
     },
   },
@@ -137,7 +168,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'android.permission.ACCESS_BACKGROUND_LOCATION',
       'android.permission.READ_EXTERNAL_STORAGE',
       'android.permission.SYSTEM_ALERT_WINDOW',
-      // "Save QR" only adds an image (write-only: no permission on Android 10+); the app never reads the gallery
+      // "Save QR" only adds an image (write-only: no permission on Android 11+, WRITE_EXTERNAL_STORAGE up to API 29); the app never reads the gallery
       // (Google Play's photo and video permissions policy).
       'android.permission.READ_MEDIA_IMAGES',
       'android.permission.READ_MEDIA_VIDEO',
@@ -150,7 +181,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         action: 'VIEW',
         autoVerify: true,
         category: ['BROWSABLE', 'DEFAULT'],
-        data: brand.linkHosts.flatMap((host) => LINK_PATHS.map((pathPrefix) => ({ scheme: 'https', host, pathPrefix }))),
+        data: brand.linkHosts.flatMap((host) => LINK_DATA.map((p) => ({ scheme: 'https', host, ...p }))),
       },
     ],
   },
@@ -184,15 +215,20 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         locationAlwaysPermission: false,
         isIosBackgroundLocationEnabled: false,
         isAndroidBackgroundLocationEnabled: false,
+        isAndroidForegroundServiceEnabled: false,
+        motionUsagePermission: strings.motion,
       },
     ],
     [
       'expo-notifications',
-      { icon: asset('notification-icon.png'), color: brand.accentColor, defaultChannel: 'charging', enableBackgroundRemoteNotifications: true },
+      // No iOS background push: iOS never handles data-only pushes in JS (the background task is Android-only) and
+      // Live Activity updates go to ActivityKit directly. plugins/withIosBackgroundModes drops the modes.
+      { icon: asset('notification-icon.png'), color: brand.accentColor, defaultChannel: 'charging', enableBackgroundRemoteNotifications: false },
     ],
-    ['expo-secure-store', { faceIDPermission: strings.faceId, configureAndroidBackup: false }],
+    // No biometric unlock in the app (no requireAuthentication / LocalAuthentication): no NSFaceIDUsageDescription.
+    ['expo-secure-store', { faceIDPermission: false, configureAndroidBackup: false }],
     ['expo-build-properties', { android: { compileSdkVersion: 36, targetSdkVersion: 36, minSdkVersion: 26 } }],
-    ['react-native-maps', { androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_ANDROID_KEY ?? '' }],
+    ['react-native-maps', { androidGoogleMapsApiKey: googleMapsAndroidKey }],
     'expo-localization',
     'expo-web-browser',
     [
@@ -207,9 +243,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
     // Crash reporting only when a DSN is configured (off otherwise: no SDK init, no upload step).
     ...(sentryDsn ? [['@sentry/react-native/expo', { organization: process.env.SENTRY_ORG, project: process.env.SENTRY_PROJECT, url: process.env.SENTRY_URL }] as [string, object]] : []),
-    ['./plugins/withLiveActivity', { enabled: brand.features.liveActivities, appGroup: `group.${brand.iosBundleId}` }],
-    ['./plugins/withAndroidLiveSession', { channelId: 'live-session' }],
+    ['./plugins/withLiveActivity', { enabled: brand.features.liveActivities }],
+    './plugins/withAndroidLiveSession',
     './plugins/withSaveQrPermission',
+    './plugins/withIosBackgroundModes',
   ],
   experiments: { typedRoutes: true },
   extra: {

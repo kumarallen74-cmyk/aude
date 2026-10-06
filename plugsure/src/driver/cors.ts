@@ -38,7 +38,7 @@ export function parseWebOrigins(raw: string | undefined, env: string = config.en
 export function corsHeadersFor(path: string, origin: string | undefined, allowed: readonly string[], preflight: boolean): Record<string, string> | null {
   if (!origin || !allowed.length || !path.startsWith('/d/v1/')) return null;
   if (!allowed.includes(origin.toLowerCase())) return null;
-  const h: Record<string, string> = { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-expose-headers': 'ETag, Retry-After, Deprecation' };
+  const h: Record<string, string> = { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-expose-headers': 'ETag, Retry-After, Deprecation, Idempotent-Replayed' };
   if (preflight) {
     h['access-control-allow-methods'] = METHODS;
     h['access-control-allow-headers'] = DRIVER_CORS_HEADERS.join(', ');

@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Http2Server } from 'node:http2';
 import { generateKeyPairSync, verify, type KeyObject } from 'node:crypto';
-import { providerToken, p8Problem, outcomeOf, apnsPayload, sendToDevice, checkCredentials, closeApns, forgetProviderToken } from './apns.js';
+import { providerToken, p8Problem, outcomeOf, apnsPayload, sendToDevice, checkCredentials, closeApns, forgetProviderToken, forBuild } from './apns.js';
 
 const key = () => {
   const k = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -125,5 +125,30 @@ test('sending: headers and body as Apple wants them; an Xcode (development) toke
     closeApns();
     prod.server.close();
     dev.server.close();
+  }
+});
+
+test('a preview / development build (v1.9.1): its own topic for alerts and Live Activities; a refused build topic is not the brand\'s key', async () => {
+  const k = key();
+  const tok = 'c'.repeat(64);
+  const prod = fakeApns(k.pub, { [tok]: 200 });
+  process.env.APNS_URL_PRODUCTION = `http://127.0.0.1:${await prod.listen()}`;
+  try {
+    const c = creds(k.p8);
+    assert.equal(forBuild(c, null), c);
+    assert.equal(forBuild(c, c.topic), c);
+    const dev = forBuild(c, 'id.nusacharge.app.dev');
+    assert.deepEqual({ ...dev, p8: '' }, { ...c, p8: '', topic: 'id.nusacharge.app.dev' });
+    await sendToDevice(tok, 'production', dev, { title: 't', body: 'b' });
+    await sendToDevice(tok, 'production', dev, { title: '', body: '', liveActivity: { aps: { event: 'update' } } });
+    assert.deepEqual(prod.seen.map((x) => x.headers['apns-topic']), ['id.nusacharge.app.dev', 'id.nusacharge.app.dev.push-type.liveactivity']);
+    const r = (reason: string) => ({ status: 400, reason, apnsId: null, env: 'production' as const });
+    assert.equal(outcomeOf(r('TopicDisallowed')), 'credentials');
+    assert.equal(outcomeOf(r('TopicDisallowed'), { buildTopic: true }), 'failed');
+    assert.equal(outcomeOf(r('DeviceTokenNotForTopic'), { buildTopic: true }), 'gone');
+  } finally {
+    delete process.env.APNS_URL_PRODUCTION;
+    closeApns();
+    prod.server.close();
   }
 });

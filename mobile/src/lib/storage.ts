@@ -68,6 +68,7 @@ export const KEYS = {
   lastRegion: 'ps.map.lastRegion',
   stationsCache: 'ps.cache.stations',
   activeCharge: 'ps.activeCharge',
+  lastStart: 'ps.lastStart',
   capabilities: 'ps.capabilities',
   pendingCheckout: 'ps.pendingCheckout',
   pushToken: 'ps.pushToken',

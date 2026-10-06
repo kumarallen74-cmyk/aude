@@ -117,8 +117,10 @@ What the owner needs:
 - **Expo account** + organisation; `npx eas-cli@latest login`; `npx eas-cli init` once per variant → put the project
   id in `brands/<variant>.json` (`easProjectId`) or `EAS_PROJECT_ID`.
 - **Apple Developer Program** account; **Team ID** (`appleTeamId` / `APPLE_TEAM_ID`); App Store Connect app record
-  (its id → `eas.json` `submit.production.ios.ascAppId`). EAS creates certificates / profiles on the first build.
-  Capabilities used: Push Notifications, Associated Domains (`applinks:<linkHost>`), App Groups (Live Activity).
+  (its id → `eas.json` `submit.production.ios.ascAppId`). EAS creates certificates / profiles on the first build,
+  for the app **and** the `ChargingWidgets` extension (`<bundleId>.ChargingWidgets`, declared to EAS by
+  `plugins/withLiveActivity.js` in `extra.eas.build.experimental.ios.appExtensions`).
+  Capabilities used: Push Notifications, Associated Domains (`applinks:<linkHost>`). No App Group.
   An **APNs key (.p8)** is uploaded to the PlugSure console per brand (the backend sends push, not Expo).
 - **Google Play Console** app; a service-account JSON with release rights → `secrets/play-service-account.json`
   (git-ignored) for `eas submit`; first upload of an AAB is manual in the console.
@@ -128,9 +130,18 @@ What the owner needs:
   Firebase **service account** to send FCM HTTP v1 (§15.6; uploaded in PlugSure Mobility's console). `GoogleService-Info.plist` is **not** needed on iOS
   (APNs device tokens go straight to the backend) unless Firebase SDKs (Crashlytics, Analytics) are added.
 - **Universal links / app links**: the link domain (`go.plugsure.asia`) must serve `apple-app-site-association`
-  (appID `<TeamID>.asia.plugsure.hub`, paths `/c/*`, `/s/*`, `/r/*`, `/paid*`, `/app/*`) and
+  (appID `<TeamID>.asia.plugsure.hub`, paths `/c/*`, `/s/*`, `/r/*`, `/paid`, `/app/*`) and
   `/.well-known/assetlinks.json` with the Play app-signing SHA-256 (§15.5).
 - Android Google Maps key restricted to the package + signing SHA-1 (`GOOGLE_MAPS_ANDROID_KEY`).
+
+**Production EAS builds refuse to start without** (checked in `app.config.ts` only when `EAS_BUILD=true`, so CI's
+`expo export` still runs without secrets): `EAS_PROJECT_ID` / `easProjectId`; on iOS `APPLE_TEAM_ID` / `appleTeamId`;
+on Android `GOOGLE_MAPS_ANDROID_KEY` and `GOOGLE_SERVICES_JSON` (or `brands/<variant>/google-services.json`).
+
+**`eas submit` placeholders**: `eas.json` `submit.production` / `submit.production-nusantara` hold
+`REPLACE_WITH_*` values for `ascAppId` / `appleTeamId` on purpose. Replace them with the real App Store Connect app id
+and Team ID (per brand) before the first submit — never run `eas submit` while any `REPLACE_WITH_` remains
+(`grep REPLACE_WITH_ eas.json` must print nothing); the Play service-account JSONs live in git-ignored `secrets/`.
 
 ```bash
 npx eas-cli build --profile development --platform all          # dev client (internal distribution)
@@ -139,11 +150,19 @@ npx eas-cli build --profile production --platform all           # store builds (
 npx eas-cli submit --profile production --platform ios          # → TestFlight
 npx eas-cli submit --profile production --platform android      # → Play internal track (draft)
 APP_VARIANT=nusantara npx eas-cli build --profile production-nusantara --platform all
+APP_VARIANT=nusantara npx eas-cli submit --profile production-nusantara --platform all
 ```
 
-Targets: iOS 16.2+ (Live Activities), Android 8.0+ (minSdk 26), compile / target SDK 36 (Play requirement from
-31 Aug 2026), edge-to-edge and predictive back on. iOS privacy manifest (`PrivacyInfo.xcprivacy`) is generated from
-`ios.privacyManifests` in `app.config.ts`.
+Targets: iOS 16.4+ (Expo SDK 57's minimum; Live Activities need 16.2), **iPhone only** (`supportsTablet: false` for
+the first release), Android 8.0+ (minSdk 26), compile / target SDK 36 (Play requirement from 31 Aug 2026),
+edge-to-edge and predictive back on. iOS privacy manifest (`PrivacyInfo.xcprivacy`) is generated from
+`ios.privacyManifests` in `app.config.ts`. iOS declares **no `UIBackgroundModes`** (`plugins/withIosBackgroundModes.js`
+removes the `fetch` / `remote-notification` that expo-task-manager / expo-notifications add): iOS gets visible APNs
+alerts only, and Live Activity updates go to ActivityKit, not the app. No `NSFaceIDUsageDescription` (no biometric
+feature); `NSMotionUsageDescription` (linked by expo-location) carries an accurate string.
+
+Native config check without Xcode / Android SDK (also in CI, job `prebuild`): prebuild a copy and run
+`npm run verify:prebuild -- <copy dir>` (`plugins/verify-prebuild.js`).
 
 ### OTA updates (EAS Update)
 
@@ -164,22 +183,31 @@ OTA only for JS / assets — native changes, new permissions or store-reviewable
 
 - JS side: `src/native/liveSession.ts`. iOS content state **version 2** (`costIdr` / `estimateIdr` in minor units of
   `currency`, always present); the activity's update token goes to `POST /d/v1/live-sessions {platform:'ios', ref,
-  token, contentVersion: 2}`. Native bridge: `modules/live-activity` (Swift, autolinked).
-- Widget extension: `plugins/withLiveActivity.js` sets `NSSupportsLiveActivities`, the App Group, copies the widget
-  sources to `ios/ChargingWidgets/` and **registers the `ChargingWidgets` app-extension target** with
-  `withXcodeProject` (Sources / Frameworks: WidgetKit, SwiftUI / Resources phases, bundle id `<app id>.ChargingWidgets`,
-  iOS 16.2, entitlements with the App Group, "Embed Foundation Extensions" in the app target, target dependency;
-  idempotent). Verified by `expo prebuild` + reading the generated `project.pbxproj`; **not compiled here** (no Xcode).
-  On the first EAS build, EAS creates the extension's provisioning profile; the App Group must exist in the Apple
-  account (`group.<bundleId>`).
+  token, contentVersion: 2}`; all content-state numbers are integers (Swift `Int`). Native bridge:
+  `modules/live-activity` (Swift, autolinked): token events carry the activity's `ref` (no race with `start`),
+  `start` reuses a running activity of the same ref and `list` lets JS adopt the ones that survived an app kill.
+- Widget extension: `plugins/withLiveActivity.js` sets `NSSupportsLiveActivities`, copies the widget sources and a
+  complete `Info.plist` (CFBundle* keys, `XPC!`, versions from `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`)
+  to `ios/ChargingWidgets/` and **registers the `ChargingWidgets` app-extension target** with `withXcodeProject`
+  (Sources / Frameworks: WidgetKit, SwiftUI / Resources phases, bundle id `<app id>.ChargingWidgets`, iOS 16.4, the
+  app's version + build number, "Embed Foundation Extensions" in the app target, target dependency; idempotent). It
+  also declares the extension to EAS (`extra.eas.build.experimental.ios.appExtensions`) so EAS creates its
+  provisioning profile and, with remote app versions, writes the same build number into both Info.plists. No App
+  Group / entitlements (nothing reads shared storage). Verified by `expo prebuild` + `plugins/verify-prebuild.js`;
+  **not compiled here** (no Xcode).
 - Android: `modules/live-update` (Kotlin, autolinked) posts one ongoing notification per charge — on Android 16
-  `Notification.ProgressStyle` with a status-bar chip (`shortCriticalText`) and `setRequestPromotedOngoing`
-  (`POST_PROMOTED_NOTIFICATIONS` declared by `plugins/withAndroidLiveSession.js`), before 16 a standard progress
-  notification. It is fed by the session screen and by FCM `live_session` data messages (foreground listener +
-  `expo-task-manager` background task, `src/native/backgroundTasks.ts`); the FCM token is registered per charge with
-  `POST /d/v1/live-sessions {platform:'android', ref, token}`, also on a `session.started` push. Without the module
-  (Expo Go) a sticky expo-notifications notification is used. The JS side is unit-tested; the Kotlin is **not compiled
-  here** (no Android SDK) — the first EAS Android build compiles it.
+  `Notification.ProgressStyle` with a status-bar chip (`shortCriticalText`) and the promoted-ongoing request (the
+  `android.requestPromotedOngoing` extra: the `setRequestPromotedOngoing` setter is API 36.1, we compile against 36;
+  `POST_PROMOTED_NOTIFICATIONS` declared by `plugins/withAndroidLiveSession.js`), before 16 a standard progress
+  notification. It is fed by the session screen and by FCM data messages (foreground listener + `expo-task-manager`
+  background task, `src/native/backgroundTasks.ts`): `live_session` updates, and the data-only `session.started`
+  (a charge started outside the app: the notification goes up and the FCM token is registered per charge with
+  `POST /d/v1/live-sessions {platform:'android', ref, token}`). The final message (`ongoing:'0'`) leaves a
+  dismissible "finished ✓" notification that the system removes at `dismissAt`. Data-only messages never show as
+  notifications in the foreground. expo-location's unused `LocationTaskService` (location foreground service) is
+  removed from the merged manifest. Without the module (Expo Go) a sticky expo-notifications notification is used.
+  The JS side is unit-tested; the Kotlin is **not compiled here** (no Android SDK) — the first EAS Android build
+  compiles it.
 
 ## Quality gates
 
@@ -213,23 +241,27 @@ EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:9600 npx expo export --platform web --
 cd ../plugsure && npx tsx ../mobile/scripts/real-backend.mts /tmp/real-shots
 ```
 
-CI: `.github/workflows/mobile.yml` runs typecheck, lint, tests and `expo export` for iOS and Android per variant.
+CI: `.github/workflows/mobile.yml` runs typecheck, lint, tests, `expo export` for iOS and Android per variant, and
+`expo prebuild` (both platforms, per variant, dummy secrets) + `plugins/verify-prebuild.js`. Compiling the native
+projects (Xcode / Gradle) is not in CI — recommended as a macOS + Android SDK job or a scheduled EAS build.
 
 ## Store listing checklist
 
-- **Screenshots**: iPhone 6.9" (1320 × 2868) and 6.5" (1284 × 2778); iPad 13" (2064 × 2752) because
-  `supportsTablet` is on; Android phone (1080 × 1920 min, 16:9 or 9:16) and 7"/10" tablets. Per locale (en, id;
+- **Screenshots**: iPhone 6.9" (1320 × 2868) and 6.5" (1284 × 2778); no iPad screenshots (`supportsTablet: false`,
+  iPhone only); Android phone (1080 × 1920 min, 16:9 or 9:16) and 7"/10" tablets. Per locale (en, id;
   ms, zh-Hans when enabled). App Preview video of the 60-s guest QRIS flow (spec J1).
-- **Apple App Privacy labels** (match `PrivacyInfo.xcprivacy`): phone number, name, purchase history, device ID —
-  linked, app functionality; precise location — not linked (sent as lat/lon for distance only, [VERIFY] server logs);
+- **Apple App Privacy labels** (match `PrivacyInfo.xcprivacy`): phone number, name, purchase history, device ID,
+  other user content (rating comments, problem reports) and customer support (problem reports) — linked, app
+  functionality; precise location — not linked (sent as lat/lon for distance only, [VERIFY] server logs);
   crash data — not linked. No tracking → no ATT prompt.
 - **Google Play Data safety**: same data types; encrypted in transit; deletion: in-app + web URL
   (`brands/<variant>.json` `links.deleteAccount` → the server's `/account/delete` web form, §15.8).
 - **Account deletion**: Account → Delete account (App Store 5.1.1(v)): a code to the account's number, immediate
   deletion; refused while money is owed or a charge / hold / reservation / queue place is open (shown with actions).
-- **Save QR**: iOS asks "Add Photos Only" (`NSPhotoLibraryAddUsageDescription`, after an in-app rationale); Android 10+
-  needs no permission to add an image (write-only); Android 8–9 ask for `WRITE_EXTERNAL_STORAGE`, declared with
-  `maxSdkVersion="28"` (`plugins/withSaveQrPermission.js`). The `READ_MEDIA_*` permissions are blocked — nothing to
+- **Save QR**: iOS asks "Add Photos Only" (`NSPhotoLibraryAddUsageDescription`, after an in-app rationale); Android
+  11+ needs no permission to add an image (write-only MediaStore); Android 8–10 ask for `WRITE_EXTERNAL_STORAGE`
+  (expo-media-library uses the legacy storage path below API 30, with `requestLegacyExternalStorage` on 10), declared
+  with `maxSdkVersion="29"` (`plugins/withSaveQrPermission.js`). The `READ_MEDIA_*` permissions are blocked — nothing to
   declare in Play's photo and video permissions form.
 - **Android backup**: `allowBackup=false` — the device token, cached stations and a pending checkout belong to this
   phone; the account lives on the server (sign in again on a new phone).
@@ -250,8 +282,8 @@ CI: `.github/workflows/mobile.yml` runs typecheck, lint, tests and `expo export`
 | G7 map, paging | `GET /d/v1/map?bbox=w,s,e,n&zoom&near&limit&cursor&cluster=0&connector=CCS2,TYPE2&minKw&dc&available&network&startable`; `GET /d/v1/stations?bbox&near&limit&cursor` → `{stations,total,nextCursor}` | `stations.ts`, `features/mapViewport.ts` |
 | G5 dedupe | the server leaves out partner locations of hosted operators; the app no longer de-duplicates | `lib/stationModel.ts` |
 | G6 links | `GET /d/v1/links/resolve?url=` → connector / partner_evse / site / charge / receipt / partner_receipt / payment_return; 404 `other_operator` shown as such | `links.ts`, `app/c/[code].tsx`, `lib/deeplink.ts` |
-| G2 push | `POST /d/v1/push/fcm {token, lang}` (Android), `/push/apns {token, lang}` (iOS), `/remove`; 409 `no_brand` → "needs brand"; re-registered at launch and on resume | `push.ts`, `native/notifications.ts` |
-| G3 live sessions | `POST /d/v1/live-sessions {platform, ref, token, contentVersion?: 2}`, `/live-sessions/ended {ref}`; FCM `live_session` data messages | `push.ts`, `native/liveSession.ts` |
+| G2 push | `POST /d/v1/push/fcm {token, lang, appId}` (Android), `/push/apns {token, lang, appId}` (iOS; `appId` = the build's bundle id, the APNs topic for `.dev` / `.preview`, `native/appId.ts`), `/remove`; 409 `no_brand` → "needs brand"; re-registered at launch, on resume and when the token rotates (`addPushTokenListener`) | `push.ts`, `native/notifications.ts` |
+| G3 live sessions | `POST /d/v1/live-sessions {platform, ref, token, contentVersion?: 2, appId}`, `/live-sessions/ended {ref}`; FCM `live_session` and data-only `session.started` messages | `push.ts`, `native/liveSession.ts` |
 | G4 deletion | `POST /d/v1/account/delete/start {}` → `{phoneMasked, blockers, deleted, retained, devCode?}`; `POST /d/v1/account/delete {code}` → deleted, or 409 with `blockers` (Pay / Stop / Activity actions); afterwards a new device token | `account.ts`, `app/delete-account.tsx`, `state/auth.ts` |
 | Unpaid sessions | `POST /d/v1/charge/:id/pay-unpaid` (any method the operator offers), `GET …/pay-unpaid` until paid | `charge.ts`, `features/UnpaidPay.tsx` |
 | Reservations | `POST /d/v1/reservations {connectorId, …payment}` → held, or a fee `checkout` paid like a charge (`GET /reservations/checkout/:id`, `/confirm-payment` sandbox, `/cancel`) | `reservations.ts`, `features/checkoutFlow.ts` |

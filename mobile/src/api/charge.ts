@@ -52,8 +52,8 @@ export const chargeApi = (http: Http) => ({
     http.get<HistoryPage>('/v1/history', { query: { cursor: cursor ?? undefined, limit: 20, currency: currency ?? undefined } }),
 
   unpaid: () => http.get<{ unpaid: UnpaidItem[] }>('/v1/unpaid').then((r) => r.unpaid),
-  payUnpaid: (chargeId: string, pay: PayRequest) =>
-    http.post<CheckoutResult & { paid?: boolean; amountMinor?: number }>(`/v1/charge/${seg(chargeId)}/pay-unpaid`, pay, { idempotencyKey: newIdempotencyKey() }),
+  payUnpaid: (chargeId: string, pay: PayRequest, idempotencyKey = newIdempotencyKey()) =>
+    http.post<CheckoutResult & { paid?: boolean; amountMinor?: number }>(`/v1/charge/${seg(chargeId)}/pay-unpaid`, pay, { idempotencyKey }),
   unpaidStatus: (chargeId: string) => http.get<{ kind: string; owedMinor: number; paid: boolean }>(`/v1/charge/${seg(chargeId)}/pay-unpaid`),
   /** Sandbox acquirer only: the settlement payment for an unpaid session is paid. */
   confirmUnpaidPayment: (chargeId: string) => http.post<{ ok: boolean }>(`/v1/charge/${seg(chargeId)}/pay-unpaid/confirm-payment`),

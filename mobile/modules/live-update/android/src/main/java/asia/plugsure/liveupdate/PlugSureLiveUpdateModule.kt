@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import expo.modules.kotlin.modules.Module
@@ -25,13 +26,22 @@ class LiveUpdatePayload : Record {
   @Field var indeterminate: Boolean = false
   @Field var ongoing: Boolean = true
   @Field var url: String = ""
+  /** Auto-dismiss after this many milliseconds (the final "finished" state; null or <= 0 = never). */
+  @Field var timeoutAfterMs: Double? = null
 }
 
 /**
  * One ongoing notification per charge (`ref`): on Android 16 (API 36) a Live Update — `Notification.ProgressStyle`
- * with a status-bar chip (`shortCriticalText`) and `requestPromotedOngoing` (needs POST_PROMOTED_NOTIFICATIONS,
+ * with a status-bar chip (`shortCriticalText`) and the promoted-ongoing request (needs POST_PROMOTED_NOTIFICATIONS,
  * added by plugins/withAndroidLiveSession); before Android 16 a standard progress notification. Tapping opens the
  * session screen (`url`, the app's scheme). Channel `live-session` (low importance: no sound on every update).
+ *
+ * API levels: everything inside `SDK_INT >= 36` is API 36.0 (Notification.ProgressStyle and its Segment /
+ * setStyledByProgress / setProgressSegments / setProgress / setProgressIndeterminate, Builder.setShortCriticalText).
+ * Builder.setRequestPromotedOngoing() only exists from API 36.1 (and compileSdk is 36), so the request is made with
+ * its extra ("android.requestPromotedOngoing", = Notification.EXTRA_REQUEST_PROMOTED_ONGOING) — the same thing the
+ * setter does, and harmless where the system ignores it. The final state (`ongoing = false`) is shown dismissible
+ * and removed after `timeoutAfterMs` (Builder.setTimeoutAfter, API 26).
  */
 class PlugSureLiveUpdateModule : Module() {
   private val context: Context
@@ -76,6 +86,8 @@ class PlugSureLiveUpdateModule : Module() {
     return PendingIntent.getActivity(context, url.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }
 
+  private fun timeoutMs(p: LiveUpdatePayload): Long? = p.timeoutAfterMs?.takeIf { it > 0 }?.toLong()
+
   private fun show(ref: String, p: LiveUpdatePayload) {
     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
@@ -96,9 +108,11 @@ class PlugSureLiveUpdateModule : Module() {
         .setOngoing(p.ongoing)
         .setOnlyAlertOnce(true)
         .setCategory(Notification.CATEGORY_PROGRESS)
-        .setRequestPromotedOngoing(p.ongoing)
+        .setAutoCancel(!p.ongoing)
+        .addExtras(Bundle().apply { putBoolean(EXTRA_REQUEST_PROMOTED_ONGOING, p.ongoing) })
         .apply { p.shortText?.let { setShortCriticalText(it) } }
         .apply { contentIntent(p.url)?.let { setContentIntent(it) } }
+        .apply { timeoutMs(p)?.let { setTimeoutAfter(it) } }
         .build()
     } else {
       NotificationCompat.Builder(context, CHANNEL)
@@ -110,7 +124,9 @@ class PlugSureLiveUpdateModule : Module() {
         .setOnlyAlertOnce(true)
         .setCategory(NotificationCompat.CATEGORY_PROGRESS)
         .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setAutoCancel(!p.ongoing)
         .apply { contentIntent(p.url)?.let { setContentIntent(it) } }
+        .apply { timeoutMs(p)?.let { setTimeoutAfter(it) } }
         .build()
     }
     try {
@@ -124,5 +140,7 @@ class PlugSureLiveUpdateModule : Module() {
     const val CHANNEL = "live-session"
     const val TAG = "plugsure-live"
     const val BASE_ID = 0x5100000
+    /** Notification.EXTRA_REQUEST_PROMOTED_ONGOING (read by Android 16+; the setter needs API 36.1). */
+    const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
   }
 }

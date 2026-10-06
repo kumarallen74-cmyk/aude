@@ -186,6 +186,10 @@ export const EN: Readonly<Record<string, string>> = Object.freeze({
   'bbox harus berupa barat,selatan,timur,utara.': 'bbox must be west,south,east,north.',
   'Area peta terlalu luas untuk zoom ini.': 'The map area is too large for this zoom level.',
   'Terlalu banyak permintaan. Coba lagi sebentar lagi.': 'Too many requests. Try again in a moment.',
+  // Idempotency-Key (driver/idempotency.ts, v1.9.1)
+  'Idempotency-Key harus 8–128 karakter A–Z, a–z, 0–9, _ atau -.': 'Idempotency-Key must be 8–128 characters A–Z, a–z, 0–9, _ or -.',
+  'Permintaan yang sama masih diproses. Coba lagi sebentar lagi.': 'The same request is still being processed. Try again in a moment.',
+  'Idempotency-Key ini sudah dipakai untuk permintaan lain.': 'This Idempotency-Key was already used for another request.',
   'cursor tidak valid.': 'The cursor is not valid.',
   'zoom harus antara 0 dan 22.': 'zoom must be between 0 and 22.',
   'platform harus ios atau android.': 'platform must be ios or android.',

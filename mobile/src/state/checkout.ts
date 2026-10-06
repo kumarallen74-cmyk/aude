@@ -25,4 +25,10 @@ export function setPendingCheckout(p: PendingCheckout | null) {
   else void kv.remove(KEYS.pendingCheckout);
 }
 
+/** The payment screen that resumes this checkout (its id: the charge, or the reservation checkout). */
+export function pendingHref(p: PendingCheckout): `/pay/${PendingCheckout['kind']}/${string}` {
+  const id = p.kind === 'unpaid' ? p.chargeId : p.kind === 'reservation' ? p.result.checkout.id : (p.result.chargeId ?? '');
+  return `/pay/${p.kind}/${id}`;
+}
+
 export const usePendingCheckout = () => useStore(checkoutStore, (s) => s.pending);

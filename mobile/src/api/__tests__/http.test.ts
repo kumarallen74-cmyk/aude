@@ -1,6 +1,7 @@
 import { isUnsupported, resetCapabilities } from '../capabilities';
 import { createApi } from '../client';
 import { ApiError, Http, seg } from '../http';
+import { appIdBody } from '@/native/appId';
 
 type Call = { url: string; init: RequestInit };
 function fakeFetch(responder: (url: string, init: RequestInit) => Response | Promise<Response>) {
@@ -127,7 +128,8 @@ describe('§15 contract', () => {
     const { f, calls } = fakeFetch(() => json(200, { ok: true }));
     expect(await make(f).push.registerFcm('tok', 'id')).toBe('registered');
     expect(calls[0]!.url).toContain('/d/v1/push/fcm');
-    expect(bodyOf(calls[0]!)).toEqual({ token: 'tok', lang: 'id' });
+    // `appId` (this build's bundle id / package) picks the APNs topic for .dev / .preview builds.
+    expect(bodyOf(calls[0]!)).toEqual({ token: 'tok', lang: 'id', ...appIdBody() });
     const { f: nb } = fakeFetch(() => json(409, { error: 'no brand', code: 'no_brand' }));
     expect(await make(nb).push.registerApns('abc', 'id')).toBe('needs_brand');
   });
@@ -135,8 +137,8 @@ describe('§15 contract', () => {
     const { f, calls } = fakeFetch(() => json(200, { ok: true, kind: 'charge' }));
     await make(f).push.registerLiveSession('ios', 'ref1', 'hex');
     await make(f).push.registerLiveSession('android', 'ref1', 'fcm');
-    expect(bodyOf(calls[0]!)).toEqual({ platform: 'ios', ref: 'ref1', token: 'hex', contentVersion: 2 });
-    expect(bodyOf(calls[1]!)).toEqual({ platform: 'android', ref: 'ref1', token: 'fcm' });
+    expect(bodyOf(calls[0]!)).toEqual({ platform: 'ios', ref: 'ref1', token: 'hex', contentVersion: 2, ...appIdBody() });
+    expect(bodyOf(calls[1]!)).toEqual({ platform: 'android', ref: 'ref1', token: 'fcm', ...appIdBody() });
   });
   it('map: bbox w,s,e,n, zoom, filters and cluster=0', async () => {
     const { f, calls } = fakeFetch(() => json(200, { zoom: 12, bbox: [0, 0, 0, 0], clusters: [], stations: [], total: 0, unclustered: 0, nextCursor: null, partners: null }));

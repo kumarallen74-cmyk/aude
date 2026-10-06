@@ -53,6 +53,11 @@
         "track": "internal",
         "releaseStatus": "draft"
       }
+    },
+    "production-nusantara": {
+      "extends": "production",
+      "ios": { "ascAppId": "REPLACE_WITH_NUSANTARA_APP_STORE_CONNECT_APP_ID" },
+      "android": { "serviceAccountKeyPath": "./secrets/play-service-account-nusantara.json" }
     }
   }
 }

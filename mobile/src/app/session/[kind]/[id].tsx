@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Banner } from '@/components/Banner';
@@ -13,12 +13,13 @@ import { Skeleton } from '@/components/Skeleton';
 import { Sparkline } from '@/components/Sparkline';
 import { Text } from '@/components/Text';
 import { brand } from '@/config';
-import { consumeLastStart } from '@/features/checkoutFlow';
+import { requestStart, startAcknowledged, startInFlight } from '@/features/checkoutFlow';
 import { useLiveSession } from '@/features/liveSession';
 import { formatClock, formatDuration, formatKw, formatKwh, formatNumber } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
 import { canStop, startSteps, TERMINAL, type SessionKind } from '@/lib/sessionMachine';
 import { registerForPush } from '@/native/notifications';
+import { useStartRecord } from '@/state/activeCharge';
 import { settingsStore, useSettings } from '@/state/settings';
 import { radius, space, useTheme } from '@/theme';
 
@@ -28,10 +29,13 @@ export default function SessionScreen() {
   const lang = i18n.language;
   const { c } = useTheme();
   const { width } = useWindowDimensions();
-  const { st, stop } = useLiveSession(kind === 'roaming' ? 'roaming' : 'charge', id!);
+  const { st, stop, refresh } = useLiveSession(kind === 'roaming' ? 'roaming' : 'charge', id!);
   const [confirmStop, setConfirmStop] = useState(false);
   const [problemSheet, setProblemSheet] = useState(false);
-  const [startInfo] = useState(() => consumeLastStart());
+  // The last start answer for this charge (start token, or why it failed) — persisted, so it survives a restart.
+  const startInfo = useStartRecord(kind === 'roaming' ? undefined : id);
+  const [restarting, setRestarting] = useState(false);
+  const autoStarted = useRef(false);
   const pushPrompted = useSettings((s) => s.pushPrompted);
   const [now, setNow] = useState(() => Date.now());
   const s = st.snapshot;
@@ -46,14 +50,37 @@ export default function SessionScreen() {
     if (st.phase === 'charging') haptic('success');
   }, [st.phase]);
 
+  // A paid hosted charge only starts when the app asks (the server never starts one by itself). If the app was killed
+  // after paying, or the start after payment failed / timed out, nothing acknowledged it in this run: ask once here.
+  // The server refuses a second start once the session is bound, which counts as started.
+  const hostedStart = kind !== 'roaming' && st.phase === 'starting';
+  const startAgain = async () => {
+    if (!id) return;
+    setRestarting(true);
+    try {
+      await requestStart(id);
+      await refresh();
+    } finally {
+      setRestarting(false);
+    }
+  };
+  useEffect(() => {
+    if (!hostedStart || !id || autoStarted.current || startAcknowledged(id) || startInFlight(id)) return;
+    autoStarted.current = true;
+    void startAgain();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostedStart, id]);
+  const startFailed = hostedStart && startInfo != null && !startInfo.ok;
+
   const elapsedS = s?.startedAt ? Math.max(0, (now - new Date(s.startedAt).getTime()) / 1000) : 0;
   const ringValue = s?.socPercent != null ? s.socPercent / 100 : s?.progressPct != null ? s.progressPct / 100 : null;
   const cur = s?.currency ?? 'IDR';
   const terminal = TERMINAL.has(st.phase);
   const steps = useMemo(() => startSteps(st), [st]);
 
-  const title =
-    st.phase === 'charging' ? t('session.charging') : st.phase === 'starting' ? t('session.starting') : st.phase === 'paying' ? t('session.paying') : st.phase === 'finishing' ? t('session.finishing') : st.phase === 'completed' ? t('session.completed') : st.phase === 'failed' ? t('session.failed') : st.phase === 'refunding' ? t('session.refunding') : st.phase === 'refunded' ? t('session.refunded') : st.phase === 'released' ? t('session.released') : t('session.checking');
+  const title = st.missing
+    ? t('session.notFoundTitle')
+    : st.phase === 'charging' ? t('session.charging') : st.phase === 'starting' ? t('session.starting') : st.phase === 'paying' ? t('session.paying') : st.phase === 'finishing' ? t('session.finishing') : st.phase === 'completed' ? t('session.completed') : st.phase === 'failed' ? t('session.failed') : st.phase === 'refunding' ? t('session.refunding') : st.phase === 'refunded' ? t('session.refunded') : st.phase === 'released' ? t('session.released') : t('session.checking');
 
   const operatorPhone = brand.support.phone;
 
@@ -76,15 +103,16 @@ export default function SessionScreen() {
             />
             <Button label={t('session.problem')} variant="ghost" size="md" icon="flag" onPress={() => setProblemSheet(true)} />
           </View>
-        ) : terminal ? (
+        ) : terminal || st.missing ? (
           <View style={{ gap: space.sm }}>
             {s?.receiptRef ? <Button label={t('session.viewReceipt')} icon="receipt" onPress={() => router.push(`/receipt/${kind}/${s.receiptRef}`)} testID="view-receipt" /> : null}
             {st.phase === 'completed' && brand.features.ratings ? <Button label={t('session.rate')} variant="secondary" icon="star" onPress={() => router.push(`/rate/${kind}/${id}`)} testID="rate" /> : null}
             <Button label={t('session.done')} variant="ghost" onPress={() => router.replace('/')} />
           </View>
-        ) : st.phase === 'starting' && st.startTimedOut ? (
+        ) : st.phase === 'starting' && (st.startTimedOut || startFailed) ? (
           <View style={{ gap: space.sm }}>
-            <Button label={t('session.cancelStart')} variant="secondary" onPress={() => router.replace('/')} />
+            {hostedStart ? <Button label={t('session.startAgain')} icon="refresh" loading={restarting} onPress={() => void startAgain()} testID="start-again" /> : null}
+            <Button label={t('session.cancelStart')} variant={hostedStart ? 'ghost' : 'secondary'} onPress={() => router.replace('/')} />
           </View>
         ) : undefined
       }
@@ -101,7 +129,11 @@ export default function SessionScreen() {
 
       {st.connection === 'reconnecting' ? <Banner tone="warning" icon="offline" title={t('session.reconnecting')} body={st.phase === 'charging' ? t('session.reconnectingBody') : undefined} testID="reconnecting" /> : null}
 
-      {!s ? (
+      {st.missing ? (
+        <Card style={{ gap: space.md }} testID="session-missing">
+          <Text>{t('session.notFoundBody')}</Text>
+        </Card>
+      ) : !s ? (
         <View style={{ alignItems: 'center', gap: space.lg }}>
           <Skeleton width={220} height={220} r={110} />
           <Skeleton width="60%" height={20} />
@@ -127,7 +159,9 @@ export default function SessionScreen() {
           </Card>
           <Banner tone="accent" icon="plug" title={t('session.plugIn')} body={kind === 'roaming' ? t('session.roamingWait', { operator: s.operator ?? '' }) : t('session.plugInBody')} />
           {startInfo?.presentToken ? <Banner tone="info" icon="card" title={t('session.presentToken', { token: startInfo.presentToken })} /> : null}
-          {st.startTimedOut ? (
+          {startFailed ? (
+            <Banner tone="danger" icon="alert" title={t('session.startFailedTitle')} body={startInfo?.error || t('session.startFailedBody')} testID="start-failed" />
+          ) : st.startTimedOut ? (
             <Banner tone="warning" icon="clock" title={t('session.slowTitle')} body={t('session.slowBody')} testID="start-timeout" />
           ) : null}
         </View>

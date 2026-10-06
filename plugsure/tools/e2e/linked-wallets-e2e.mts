@@ -286,7 +286,10 @@ try {
 
   // ================================================================ app
   const app = await fetch(`${API}/app/`).then((r) => r.text());
-  const paid = await fetch(`${API}/app/paid.html`).then((r) => r.text());
+  // v1.9.1: the return page's script lives in paid.js (the driver pages allow no inline script).
+  const paidHtml = await fetch(`${API}/app/paid.html`).then((r) => r.text());
+  const paidJs = await fetch(`${API}/app/paid.js`);
+  const paid = paidHtml.includes('src="paid.js"') && paidJs.ok ? await paidJs.text() : '';
   check('the app links e-wallets from the payment picker and lists them with the cards; the return page hands links back to the app',
     app.includes('function startWalletLink') && app.includes('Terhubung · 1 ketuk') && app.includes('Putuskan') && paid.includes("q.get('for')!=='link'"));
   check('contract: live responses match the published schemas', contract.length === 0, contract);

@@ -6,7 +6,8 @@ import type { HostedState, HostedStatus, RoamingState, RoamingStatus } from '@/a
  *   - never leave "starting" without an exit: after the start timeout (hosted 45 s, roaming 90 s) the UI says so
  *     and offers next steps while it keeps asking the server, which resolves the hold / refund;
  *   - Stop is always available while charging, also offline (queued; the charger can be stopped physically);
- *   - a lost connection freezes the figures with "Reconnecting…" instead of guessing.
+ *   - a lost connection freezes the figures with "Reconnecting…" instead of guessing;
+ *   - a session the server does not know (404) is an end state, not a lost connection: polling stops.
  */
 export type SessionKind = 'charge' | 'roaming';
 export type Phase = 'paying' | 'starting' | 'charging' | 'finishing' | 'completed' | 'failed' | 'refunding' | 'refunded' | 'released' | 'unknown';
@@ -53,18 +54,21 @@ export interface SessionState {
   lastUpdate: number | null;
   /** Energy samples for the power sparkline (last 30). */
   powerHistory: number[];
+  /** The server does not know this session (404): nothing more to follow. */
+  missing: boolean;
 }
 
 export type SessionEvent =
   | { type: 'snapshot'; status: HostedStatus | RoamingStatus; at: number }
   | { type: 'poll_failed'; at: number }
+  | { type: 'not_found'; at: number }
   | { type: 'tick'; at: number }
   | { type: 'stop_requested'; at: number }
   | { type: 'stop_sent'; at: number }
   | { type: 'stop_failed'; message: string; at: number };
 
 export function initialSession(kind: SessionKind, id: string, at: number): SessionState {
-  return { kind, id, phase: 'unknown', since: at, snapshot: null, startTimedOut: false, stop: 'idle', stopError: null, connection: 'online', failures: 0, lastUpdate: null, powerHistory: [] };
+  return { kind, id, phase: 'unknown', since: at, snapshot: null, startTimedOut: false, stop: 'idle', stopError: null, connection: 'online', failures: 0, lastUpdate: null, powerHistory: [], missing: false };
 }
 
 export function hostedPhase(s: HostedState): Phase {
@@ -182,13 +186,17 @@ export function reduceSession(st: SessionState, ev: SessionEvent): SessionState 
         failures: 0,
         lastUpdate: ev.at,
         powerHistory,
+        missing: false,
       };
     }
     case 'poll_failed': {
       const failures = st.failures + 1;
       return { ...st, failures, connection: failures >= OFFLINE_AFTER_FAILURES ? 'reconnecting' : st.connection };
     }
+    case 'not_found':
+      return { ...st, missing: true, connection: 'online', failures: 0, startTimedOut: false };
     case 'tick': {
+      if (st.missing) return st;
       if (st.phase === 'starting' && !st.startTimedOut && ev.at - st.since >= START_TIMEOUT_MS[st.kind]) return { ...st, startTimedOut: true };
       return st;
     }
@@ -210,7 +218,7 @@ export function canStop(st: SessionState): boolean {
 
 /** How often to poll status (ms), or null to stop polling (terminal, or backgrounded: push takes over). */
 export function pollInterval(st: SessionState, foreground: boolean): number | null {
-  if (TERMINAL.has(st.phase)) return null;
+  if (TERMINAL.has(st.phase) || st.missing) return null;
   if (!foreground) return null;
   if (st.connection === 'reconnecting') return 8_000;
   switch (st.phase) {

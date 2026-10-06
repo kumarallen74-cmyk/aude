@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { decodePng, encodePng, resize, onBackground, type Rgba } from './png.js';
 import { buildZip, readZip } from './zip.js';
 import {
-  validateBrand, palette, contrast, DARK_SURFACES, LIGHT_SURFACES, renderIndex, manifestFor, renderServiceWorker, assetLinks, appleAssociation,
+  validateBrand, palette, contrast, DARK_SURFACES, LIGHT_SURFACES, renderIndex, manifestFor, renderServiceWorker, assetLinks, appleAssociation, brandAppId,
   normaliseFingerprint, buildKit, checkIcon, slugFrom, BrandError, type Brand,
 } from './brand.js';
 import { OTP_TEXT } from '../integrations/otp.js';
@@ -144,7 +144,10 @@ test('manifest, push worker and store association files for a brand', () => {
   assert.doesNotThrow(() => new Function(sw));
   assert.deepEqual((assetLinks(b)[0] as any).target, { namespace: 'android_app', package_name: 'id.nusacharge.app', sha256_cert_fingerprints: b.androidCertSha256 });
   assert.deepEqual(assetLinks(brand({ androidCertSha256: [] })), []);
-  assert.deepEqual((appleAssociation(b) as any).applinks.details[0].appIDs, ['ABCDE12345.id.nusacharge.app']);
+  assert.deepEqual((appleAssociation(b) as any).applinks.details[0].appIDs,
+    ['ABCDE12345.id.nusacharge.app', 'ABCDE12345.id.nusacharge.app.preview', 'ABCDE12345.id.nusacharge.app.dev']);
+  assert.deepEqual(assetLinks(b).map((x: any) => x.target.package_name), ['id.nusacharge.app', 'id.nusacharge.app.preview', 'id.nusacharge.app.dev']);
+  assert.ok(assetLinks(b).every((x: any) => x.target.sha256_cert_fingerprints === b.androidCertSha256), 'the same fingerprints for every build');
   assert.equal(OTP_TEXT('123456', 'NusaCharge').startsWith('Kode masuk NusaCharge: 123456.'), true);
   assert.equal(OTP_TEXT('123456').startsWith('Kode masuk PlugSure: 123456.'), true);
 });
@@ -191,4 +194,16 @@ test('build kit: Android (Bubblewrap), iOS (Capacitor) and store texts, with ico
   assert.match(files.get('ios/Info.plist.additions.xml')!.toString(), /NSSupportsLiveActivities/);
   const draft = await buildKit(brand({ status: 'draft', hostname: null, hasIcon: false, androidPackage: null, privacyUrl: null }));
   assert.equal(draft.warnings.length, 6);
+});
+
+test('the app builds a brand accepts (v1.9.1): its id, .preview and .dev, per platform; anything else is the store build', () => {
+  const b = brand({ iosBundleId: 'id.nusacharge.ios', androidPackage: 'id.nusacharge.app' });
+  assert.equal(brandAppId(b, 'id.nusacharge.ios.dev', 'ios'), 'id.nusacharge.ios.dev');
+  assert.equal(brandAppId(b, 'id.nusacharge.ios.preview', 'ios'), 'id.nusacharge.ios.preview');
+  assert.equal(brandAppId(b, 'id.nusacharge.ios', 'ios'), null, 'the store build: the brand\'s own id');
+  assert.equal(brandAppId(b, 'id.nusacharge.app.dev', 'ios'), null, 'the Android package on iOS');
+  assert.equal(brandAppId(b, 'id.nusacharge.app.dev', 'android'), 'id.nusacharge.app.dev');
+  for (const v of ['com.evil.app', 'id.nusacharge.ios.staging', 'id.nusacharge.ios.dev.x', '', 42, null]) assert.equal(brandAppId(b, v, 'ios'), null, String(v));
+  assert.equal(brandAppId(brand({ iosBundleId: null }), 'x.dev', 'ios'), null);
+  assert.equal(brandAppId(null, 'x.dev', 'ios'), null);
 });

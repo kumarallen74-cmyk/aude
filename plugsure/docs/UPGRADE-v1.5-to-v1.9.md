@@ -13,7 +13,7 @@ What changes for the pilot when everything new stays off:
 | **Docker Compose network** (v1.5.1) | It moves to `plugsure-net`. Check `API_TRUSTED_PROXIES`. |
 | Hub, Microsoft sign-in, Malaysia/Singapore, Stripe, the mobile app backend | Off unless switched on (§ Later). |
 
-Migrations 055–076 (056 and 064–069 are unused) apply in one `npm run migrate`, in well under a second on pilot-sized data.
+Migrations 055–077 (056 and 064–069 are unused) apply in one `npm run migrate`, in well under a second on pilot-sized data.
 
 ## 1. Before the window (a day or more ahead)
 
@@ -60,7 +60,7 @@ Migrations 055–076 (056 and 064–069 are unused) apply in one `npm run migrat
    - **systemd:** `sudo systemctl start plugsure-migrate`, then `journalctl -u plugsure-migrate -n 50`.
    - **Docker:** the `migrate` service.
 
-   It applies 055 → 076.
+   It applies 055 → 077.
 5. Run `npx tsx tools/multicountry/rerate-compare.mts` against production from the checkout. It must report **zero differences**. Otherwise roll back (§5).
 6. Start the gateway, then the API. Watch:
    - chargers reconnecting and their offline queues replaying;
@@ -97,7 +97,7 @@ Migrations 055–076 (056 and 064–069 are unused) apply in one `npm run migrat
 - **Later, keeping what happened on v1.9.0:**
   1. Stop both processes.
   2. Export `app_driver_deletion`.
-  3. Run `075_down`, `074_down`, `073_down`, `072_down` and `060_down` from `db/rollback/`.
+  3. Run `077_down`, `075_down`, `074_down`, `073_down`, `072_down` and `060_down` from `db/rollback/`.
   4. `DELETE FROM auth_session WHERE mfa_pending`.
   5. Deploy v1.5.0 with its own unit files.
 

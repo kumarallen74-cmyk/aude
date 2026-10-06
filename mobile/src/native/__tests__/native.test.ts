@@ -15,6 +15,7 @@ jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(async () => 'live-session'),
   dismissNotificationAsync: jest.fn(async () => {}),
   setNotificationHandler: jest.fn(),
+  addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
 }));
 
 const mockPush = { registerApns: jest.fn(), registerFcm: jest.fn(), removeApns: jest.fn(), removeFcm: jest.fn(), registerLiveSession: jest.fn(async () => 'registered'), liveSessionEnded: jest.fn(async () => {}) };
@@ -80,6 +81,51 @@ describe('push registration — native tokens, backend owns delivery', () => {
     const live = N.setNotificationChannelAsync.mock.calls.find((c: unknown[]) => c[0] === 'live-session')[1];
     expect(live).toMatchObject({ importance: 4, enableVibrate: false });
   });
+  it('a rotated device token is re-registered at once (with the listener installed once)', async () => {
+    setOS('android');
+    const N = require('expo-notifications');
+    N.getPermissionsAsync.mockResolvedValue({ granted: true });
+    N.getDevicePushTokenAsync.mockResolvedValue({ type: 'android', data: 'fcm-1' });
+    mockPush.registerFcm.mockResolvedValue('registered');
+    let mod: typeof import('../notifications') | undefined;
+    jest.isolateModules(() => {
+      mod = require('../notifications');
+    });
+    await mod!.registerForPush('en');
+    await mod!.registerForPush('en');
+    expect(N.addPushTokenListener).toHaveBeenCalledTimes(1);
+    const onToken = N.addPushTokenListener.mock.calls[0][0];
+    onToken({ type: 'android', data: 'fcm-1' }); // unchanged → nothing
+    onToken({ type: 'android', data: 'fcm-2' });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockPush.registerFcm).toHaveBeenCalledTimes(3);
+    expect(mockPush.registerFcm).toHaveBeenLastCalledWith('fcm-2', 'en');
+  });
+  it('foreground: data-only and live-session messages are never shown; alerts are', () => {
+    const { foregroundPresentation } = require('../notifications');
+    const n = (content: Record<string, unknown>, identifier = 'x') => ({ request: { identifier, content } });
+    const silent = { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
+    expect(foregroundPresentation(n({ title: null, body: null, data: { type: 'live_session', ref: 'c1' } }))).toEqual(silent);
+    expect(foregroundPresentation(n({ title: '', body: '', data: {} }))).toEqual(silent);
+    expect(foregroundPresentation(n({ title: 'Charging started', body: 'x', data: { type: 'session.started', ref: 'c1' } }))).toEqual(silent);
+    expect(foregroundPresentation(n({ title: 'Receipt', body: 'Rp 10.000', data: { url: '/activity' } }))).toMatchObject({ shouldShowBanner: true, shouldShowList: true });
+    expect(foregroundPresentation(n({ title: 'Charging', body: '1 kWh', data: {} }, 'live-session'))).toMatchObject({ shouldShowBanner: false, shouldShowList: true });
+  });
+  it('appId: the build\'s own bundle id / package for push registrations', () => {
+    jest.doMock('expo-application', () => ({ applicationId: 'asia.plugsure.hub.preview' }));
+    let mod: typeof import('../appId') | undefined;
+    jest.isolateModules(() => {
+      mod = require('../appId');
+    });
+    expect(mod!.appIdBody()).toEqual({ appId: 'asia.plugsure.hub.preview' });
+    jest.doMock('expo-application', () => ({ applicationId: null }));
+    jest.isolateModules(() => {
+      mod = require('../appId');
+    });
+    expect(mod!.appIdBody()).toEqual({});
+    jest.dontMock('expo-application');
+  });
   it('reads the deep link a tapped notification carries', () => {
     const { urlFromNotification } = require('../notifications');
     expect(urlFromNotification({ request: { content: { data: { url: 'https://go.plugsure.asia/r/charge/x' } } } })).toBe('https://go.plugsure.asia/r/charge/x');
@@ -97,6 +143,12 @@ describe('live session on the lock screen', () => {
     const fin = contentState({ ...snapshot, currency: 'IDR', costFinal: true, costMinor: 98640 }, true);
     expect(fin).toMatchObject({ status: 'finished', costIdr: 98640, estimateIdr: null, currency: 'IDR' });
     expect(typeof fin.endedAt).toBe('number');
+  });
+  it('iOS content state: every number is an integer (Swift Int fields)', () => {
+    const { contentState } = require('../liveSession');
+    const st = contentState({ ...snapshot, socPercent: 41.5, progressPct: 33.3333, costMinor: 1534.4 }, false);
+    expect(st).toMatchObject({ socPercent: 42, progressPct: 33, estimateIdr: 1534 });
+    for (const v of Object.values(st)) if (typeof v === 'number') expect(Number.isInteger(v)).toBe(true);
   });
   it('Android payload: SoC drives the progress bar and the status-bar chip; unknown → indeterminate', () => {
     const { liveUpdatePayload } = require('../liveSession');
@@ -143,7 +195,13 @@ describe('live session on the lock screen', () => {
     expect(N.scheduleNotificationAsync).not.toHaveBeenCalled();
     expect(mod!.liveUpdatesAvailable()).toBe(true);
     await mod!.showLiveSession('c2', 'charge', snapshot, labels, true);
-    expect(native.end).toHaveBeenCalledWith('c2');
+    // The finished state stays (dismissible) for 30 min instead of vanishing.
+    expect(native.show).toHaveBeenLastCalledWith('c2', expect.objectContaining({ ongoing: false, indeterminate: false, timeoutAfterMs: 1800000 }));
+    expect(native.end).not.toHaveBeenCalled();
+    // A past session opened later (nothing of ours on screen): no "finished" notification out of nowhere.
+    await mod!.showLiveSession('old', 'charge', snapshot, labels, true);
+    expect(native.end).toHaveBeenCalledWith('old');
+    expect(native.show).not.toHaveBeenCalledWith('old', expect.anything());
     jest.dontMock('expo');
   });
   it('FCM live_session data messages (all strings, empty = unknown) drive the ongoing notification', () => {
@@ -159,8 +217,14 @@ describe('live session on the lock screen', () => {
     expect(native.show).toHaveBeenCalledWith('c3', {
       title: 'Summarecon Mall Bekasi', text: expect.stringMatching(/^6\.00 kWh · 45 kW · Rp\s?18,250$/), shortText: '44%', progress: 44, progressMax: 100, indeterminate: false, ongoing: true, url: 'plugsure://session/charge/c3',
     });
-    mod!.handleLiveSessionData({ ...msg, event: 'end', status: 'finished', ongoing: '0' });
-    expect(native.end).toHaveBeenCalledWith('c3');
+    const dismissAt = String(Math.floor(Date.now() / 1000) + 600);
+    mod!.handleLiveSessionData({ ...msg, event: 'end', status: 'finished', ongoing: '0', dismissAt, socPercent: '80.6' });
+    const last = native.show.mock.calls.at(-1);
+    expect(last[0]).toBe('c3');
+    expect(last[1]).toMatchObject({ title: '✓ Summarecon Mall Bekasi', ongoing: false, shortText: '81%' });
+    expect(last[1].timeoutAfterMs).toBeGreaterThan(590000);
+    expect(last[1].timeoutAfterMs).toBeLessThanOrEqual(600000);
+    expect(native.end).not.toHaveBeenCalled();
     expect(mod!.handleLiveSessionData({ type: 'session.ended', ref: 'c3' })).toBe(false);
     jest.dontMock('expo');
   });
@@ -173,15 +237,28 @@ describe('live session on the lock screen', () => {
       mod = require('../liveSession');
     });
     expect(mod!.handleLiveSessionData({ type: 'session.started', ref: 'c4' })).toBe(true);
-    await new Promise((r) => setTimeout(r, 0));
+    await mod!.liveRegistrationSettled();
     expect(mockPush.registerLiveSession).toHaveBeenCalledWith('android', 'c4', 'fcm-token');
+  });
+  it('data-only session.started (charge started outside the app) puts the ongoing notification up at once', async () => {
+    setOS('android');
+    const storage = require('@/lib/storage');
+    await storage.kv.set(storage.KEYS.pushToken, { platform: 'android', token: 'fcm-token' });
+    const native = { isSupported: () => true, isProgressStyle: () => true, show: jest.fn(), end: jest.fn() };
+    jest.doMock('expo', () => ({ requireOptionalNativeModule: (name: string) => (name === 'PlugSureLiveUpdate' ? native : null) }));
+    const mod = loadLive('android');
+    expect(mod.handleLiveSessionData({ type: 'session.started', ref: 'c5', site: 'Marina Link', connector: 'DC 150 kW', path: 'direct' })).toBe(true);
+    expect(native.show).toHaveBeenCalledWith('c5', expect.objectContaining({ title: 'Marina Link', text: 'DC 150 kW', indeterminate: true, ongoing: true, url: 'plugsure://session/charge/c5' }));
+    await mod.liveRegistrationSettled();
+    expect(mockPush.registerLiveSession).toHaveBeenCalledWith('android', 'c5', 'fcm-token');
+    jest.dontMock('expo');
   });
   it('iOS: starts, updates and ends the Live Activity through the native module; tokens registered as v2', async () => {
     setOS('ios');
-    let emit: ((e: { activityId: string; token: string }) => void) | null = null;
+    let emit: ((e: { activityId: string; ref?: string; token: string }) => void) | null = null;
     const native = {
       isSupported: jest.fn(() => true), start: jest.fn(async () => 'act-1'), update: jest.fn(async () => {}), end: jest.fn(async () => {}),
-      addListener: jest.fn((_: string, fn: (e: { activityId: string; token: string }) => void) => ((emit = fn), { remove: jest.fn() })),
+      addListener: jest.fn((_: string, fn: (e: { activityId: string; ref?: string; token: string }) => void) => ((emit = fn), { remove: jest.fn() })),
     };
     jest.doMock('expo', () => ({ requireOptionalNativeModule: (name: string) => (name === 'PlugSureLiveActivity' ? native : null) }));
     let mod: typeof import('../liveSession') | undefined;
@@ -200,6 +277,44 @@ describe('live session on the lock screen', () => {
     expect(native.end).toHaveBeenCalledWith('act-1', expect.objectContaining({ status: 'finished' }), 1800);
     expect(mockPush.liveSessionEnded).toHaveBeenCalledWith('c9');
     stop();
+    jest.dontMock('expo');
+  });
+  it('iOS: a token that arrives before start() resolves is registered by its ref', async () => {
+    setOS('ios');
+    let emit: ((e: { activityId: string; ref?: string; token: string }) => void) | null = null;
+    const native = {
+      isSupported: () => true,
+      start: jest.fn(async () => {
+        emit!({ activityId: 'act-2', ref: 'c10', token: 'early-token' });
+        return 'act-2';
+      }),
+      update: jest.fn(async () => {}), end: jest.fn(async () => {}), list: jest.fn(async () => []),
+      addListener: jest.fn((_: string, fn: (e: { activityId: string; ref?: string; token: string }) => void) => ((emit = fn), { remove: jest.fn() })),
+    };
+    jest.doMock('expo', () => ({ requireOptionalNativeModule: (name: string) => (name === 'PlugSureLiveActivity' ? native : null) }));
+    const mod = loadLive('ios');
+    const stop = mod.watchLiveActivityTokens();
+    await mod.showLiveSession('c10', 'charge', snapshot, { title: 't', body: 'b', appName: 'PlugSure', accentHex: '#2fd6a7' });
+    expect(mockPush.registerLiveSession).toHaveBeenCalledWith('ios', 'c10', 'early-token');
+    stop();
+    jest.dontMock('expo');
+  });
+  it('iOS: activities still running after a relaunch are adopted (updated / ended, never started twice)', async () => {
+    setOS('ios');
+    const native = {
+      isSupported: () => true, start: jest.fn(async () => 'new'), update: jest.fn(async () => {}), end: jest.fn(async () => {}),
+      list: jest.fn(async () => [{ id: 'act-old', ref: 'c11' }]),
+      addListener: jest.fn(() => ({ remove: jest.fn() })),
+    };
+    jest.doMock('expo', () => ({ requireOptionalNativeModule: (name: string) => (name === 'PlugSureLiveActivity' ? native : null) }));
+    const mod = loadLive('ios');
+    await mod.adoptRunningActivities();
+    const labels = { title: 't', body: 'b', appName: 'PlugSure', accentHex: '#2fd6a7' };
+    await mod.showLiveSession('c11', 'charge', snapshot, labels);
+    expect(native.start).not.toHaveBeenCalled();
+    expect(native.update).toHaveBeenCalledWith('act-old', expect.any(Object), 180);
+    await mod.showLiveSession('c11', 'charge', snapshot, labels, true);
+    expect(native.end).toHaveBeenCalledWith('act-old', expect.objectContaining({ status: 'finished' }), 1800);
     jest.dontMock('expo');
   });
 });

@@ -18,7 +18,9 @@
   },
   "pill": {
     "charging": "Charging · {{site}}",
-    "a11y": "Charging session at {{site}}. Open session."
+    "a11y": "Charging session at {{site}}. Open session.",
+    "payment": "Payment in progress · {{site}}",
+    "paymentA11y": "Payment in progress at {{site}}. Resume the payment."
   },
   "onboarding": {
     "skip": "Skip",
@@ -348,7 +350,12 @@
     "costTax": "tax {{amount}}",
     "costIdle": "idle {{amount}}",
     "costDiscount": "discount −{{amount}}",
-    "costHint": "Fixed fees and tax are included from the start; unused prepaid money is refunded."
+    "costHint": "Fixed fees and tax are included from the start; unused prepaid money is refunded.",
+    "startAgain": "Try starting again",
+    "startFailedTitle": "The charger hasn't started yet",
+    "startFailedBody": "We couldn't ask the charger to start. Try again, or start at the charger. If it does not start, the money is released or refunded automatically.",
+    "notFoundTitle": "Session not found",
+    "notFoundBody": "This session isn't on this device's account (any more). Your past charges are in Activity."
   },
   "push": {
     "prePromptTitle": "Know when charging finishes",
@@ -467,7 +474,8 @@
     "privacy": "Privacy policy",
     "signOut": "Sign out",
     "delete": "Delete account",
-    "poweredBy": "Powered by PlugSure Hub"
+    "poweredBy": "Powered by PlugSure Hub",
+    "signOutFailed": "Couldn't sign out"
   },
   "settings": {
     "language": "Language",
@@ -674,6 +682,10 @@
     },
     "business": {
       "title": "That didn't work"
+    },
+    "inProgress": {
+      "title": "Still processing",
+      "body": "Your request is still being processed. Please wait a moment and try again — you won't be charged twice."
     }
   },
   "update": {

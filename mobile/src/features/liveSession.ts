@@ -8,7 +8,7 @@ import { formatKwh } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
 import { initialSession, pollInterval, reduceSession, TERMINAL, type SessionKind } from '@/lib/sessionMachine';
 import { showLiveSession } from '@/native/liveSession';
-import { setActiveCharge } from '@/state/activeCharge';
+import { activeChargeStore, setActiveCharge } from '@/state/activeCharge';
 import { colors } from '@/theme/tokens';
 
 /**
@@ -31,8 +31,10 @@ export function useLiveSession(kind: SessionKind, id: string) {
       const status = kind === 'roaming' ? await api.roaming.status(id) : await api.charge.status(id);
       dispatch({ type: 'snapshot', status, at: Date.now() });
     } catch (e) {
+      // Unknown to the server (another account's, or long gone): an end state, not "Reconnecting…" forever.
       if (e instanceof ApiError && e.kind === 'not_found') {
-        dispatch({ type: 'poll_failed', at: Date.now() });
+        dispatch({ type: 'not_found', at: Date.now() });
+        if (activeChargeStore.get().current?.id === id) setActiveCharge(null);
         return;
       }
       dispatch({ type: 'poll_failed', at: Date.now() });
@@ -42,6 +44,7 @@ export function useLiveSession(kind: SessionKind, id: string) {
   // Poll loop: the interval follows the phase; a returning app polls at once.
   const interval = pollInterval(st, foreground);
   useEffect(() => {
+    if (st.missing) return;
     if (st.lastUpdate == null || foreground) void poll();
     if (interval == null) return;
     const h = setInterval(() => void poll(), interval);

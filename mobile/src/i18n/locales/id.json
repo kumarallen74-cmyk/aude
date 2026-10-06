@@ -18,7 +18,9 @@
   },
   "pill": {
     "charging": "Mengisi · {{site}}",
-    "a11y": "Sesi pengisian di {{site}}. Buka sesi."
+    "a11y": "Sesi pengisian di {{site}}. Buka sesi.",
+    "payment": "Pembayaran berlangsung · {{site}}",
+    "paymentA11y": "Pembayaran berlangsung di {{site}}. Lanjutkan pembayaran."
   },
   "onboarding": {
     "skip": "Lewati",
@@ -346,7 +348,12 @@
     "costTax": "pajak {{amount}}",
     "costIdle": "parkir {{amount}}",
     "costDiscount": "diskon −{{amount}}",
-    "costHint": "Biaya tetap dan pajak sudah termasuk sejak awal; sisa saldo prabayar dikembalikan."
+    "costHint": "Biaya tetap dan pajak sudah termasuk sejak awal; sisa saldo prabayar dikembalikan.",
+    "startAgain": "Coba mulai lagi",
+    "startFailedTitle": "Charger belum mulai",
+    "startFailedBody": "Kami tidak dapat meminta charger untuk mulai. Coba lagi, atau mulai dari charger. Jika tidak mulai, dana dilepas atau dikembalikan otomatis.",
+    "notFoundTitle": "Sesi tidak ditemukan",
+    "notFoundBody": "Sesi ini tidak (lagi) ada di akun perangkat ini. Pengisian sebelumnya ada di Aktivitas."
   },
   "push": {
     "prePromptTitle": "Tahu saat pengisian selesai",
@@ -465,7 +472,8 @@
     "privacy": "Kebijakan privasi",
     "signOut": "Keluar",
     "delete": "Hapus akun",
-    "poweredBy": "Didukung PlugSure Hub"
+    "poweredBy": "Didukung PlugSure Hub",
+    "signOutFailed": "Gagal keluar"
   },
   "settings": {
     "language": "Bahasa",
@@ -672,6 +680,10 @@
     },
     "business": {
       "title": "Tidak berhasil"
+    },
+    "inProgress": {
+      "title": "Masih diproses",
+      "body": "Permintaan Anda masih diproses. Tunggu sebentar lalu coba lagi — Anda tidak akan ditagih dua kali."
     }
   },
   "update": {

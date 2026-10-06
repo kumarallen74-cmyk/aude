@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { AttemptKey } from '@/api/idempotency';
 import type { PaymentSetup } from '@/api/types';
 import { Banner } from '@/components/Banner';
 import { Button } from '@/components/Button';
@@ -32,7 +33,16 @@ export function UnpaidPay({ chargeId, siteName, owedMinor, currency, options }: 
   const picks = useMemo(() => unpaidPicks(options ?? { paymentMethods: [], savedCards: [], linkedWallets: [] }, t), [options, t]);
   const [key, setKey] = useState<string | null>(null);
   const pick = picks.find((p) => p.key === key) ?? picks.find((p) => p.channel === DEFAULT_METHOD[currency]) ?? picks[0] ?? null;
-  const pay = useMutation({ mutationFn: () => payUnpaidSession({ chargeId, siteName, pay: pick?.pay ?? {} }) });
+  // One key per attempt: a retry after a lost answer never takes the payment twice ([§14 G12]).
+  const [payKey] = useState(() => new AttemptKey());
+  const pay = useMutation({
+    mutationFn: () => {
+      const body = pick?.pay ?? {};
+      return payUnpaidSession({ chargeId, siteName, pay: body, idempotencyKey: payKey.for({ chargeId, body }) });
+    },
+    onSuccess: () => payKey.settle(),
+    onError: (e) => payKey.settle(e),
+  });
   const amount = formatMoney(owedMinor, currency, i18n.language);
   return (
     <Card style={{ gap: space.md }} testID="unpaid-pay">

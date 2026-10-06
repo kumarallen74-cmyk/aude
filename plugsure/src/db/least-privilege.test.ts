@@ -25,11 +25,12 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     `SELECT table_name AS t, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
        FROM information_schema.role_table_grants
       WHERE grantee = 'plugsure_app' AND table_name = ANY($1::text[]) GROUP BY 1 ORDER BY 1`,
-    [['app_driver_deletion', 'audit_head', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event']]);
+    [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
     audit_log: 'INSERT,SELECT',
+    driver_idempotency: 'DELETE,INSERT,SELECT,UPDATE',
     country: 'SELECT',
     currency_unit: 'SELECT',
     oidc_login_tx: 'DELETE,INSERT,SELECT',

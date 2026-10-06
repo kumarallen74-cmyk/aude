@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
+import { ApiError, newIdempotencyKey } from '@/api/http';
 import type { HistoryItem } from '@/api/types';
 import { Banner } from '@/components/Banner';
 import { Button } from '@/components/Button';
@@ -23,6 +24,20 @@ import { useActiveCharge } from '@/state/activeCharge';
 import { authStore, useMe } from '@/state/auth';
 import { qk } from '@/state/queryClient';
 import { radius, space, useTheme } from '@/theme';
+
+/**
+ * One idempotency key per roaming charge being settled: a second tap, or a retry after a timeout, repeats the same
+ * request instead of opening a second payment. Dropped after success or a refusal (a new attempt).
+ */
+const roamingPayKeys = new Map<string, string>();
+function payRoamingUnpaid(chargeId: string, site: string) {
+  const key = roamingPayKeys.get(chargeId) ?? newIdempotencyKey();
+  roamingPayKeys.set(chargeId, key);
+  return payUnpaidSession({ chargeId, siteName: site, pay: {}, idempotencyKey: key }).then(
+    (r) => { roamingPayKeys.delete(chargeId); return r; },
+    (e: unknown) => { if (e instanceof ApiError && e.kind === 'business') roamingPayKeys.delete(chargeId); throw e; },
+  );
+}
 
 function stateTone(state: string): 'success' | 'info' | 'warning' | 'muted' {
   if (state === 'rated' || state === 'ended' || state === 'settled') return 'success';
@@ -98,7 +113,7 @@ export default function ActivityScreen() {
           body={u.site}
           action={t('activity.payNow')}
           // A partner network shortfall has no receipt of ours to pay from: paid here; hosted sessions from their receipt.
-          onPress={() => (u.kind === 'roaming' ? void payUnpaidSession({ chargeId: u.chargeId, siteName: u.site, pay: {} }).catch(() => router.push(`/receipt/roaming/${u.chargeId}`)) : router.push(`/receipt/charge/${u.chargeId}`))}
+          onPress={() => (u.kind === 'roaming' ? void payRoamingUnpaid(u.chargeId, u.site).catch(() => router.push(`/receipt/roaming/${u.chargeId}`)) : router.push(`/receipt/charge/${u.chargeId}`))}
           testID={`unpaid-${u.chargeId}`}
         />
       ))}

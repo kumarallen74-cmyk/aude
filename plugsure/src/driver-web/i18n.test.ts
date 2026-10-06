@@ -120,6 +120,15 @@ const MESSAGES = [
   // ringgit and Singapore dollar amounts, and other countries' tax
   'Biaya sejauh ini RM 12.34 dari RM 50.00 dibayar', 'Termasuk pajak S$ 1.07', 'Hemat RM 4.20', 'Biaya reservasi S$ 2.18', 'Belum terbayar: S$ 1,234.50',
   'Pajak', '(termasuk)', '(termasuk pajak)', 'Harga sudah termasuk pajak.', 'Pajak ditambahkan saat sesi selesai.',
+  // account deletion in the app (v1.9.1)
+  'Hapus akun', 'Hapus akun sekarang', 'Akun Anda telah dihapus.', 'Yang dihapus', 'Yang disimpan',
+  'Akun dihapus seketika setelah Anda memasukkan kode yang kami kirim ke nomor HP Anda. Ini tidak dapat dibatalkan.',
+  'Disimpan tanpa data pribadi, sesuai hukum pajak dan konsumen. Tidak ada yang bisa masuk ke akun ini lagi.',
+  'Nama', 'Nomor HP (diganti dengan sidik acak berkunci)', 'Kartu tersimpan', 'E-wallet terhubung', 'Favorit', 'Keanggotaan poin (poin hangus)',
+  'Perpanjangan otomatis langganan (paket yang sudah dibayar tetap berlaku sampai habis)', 'Semua perangkat dikeluarkan dari akun', 'Token notifikasi',
+  'Token Live Activity', 'Kode masuk yang belum dipakai', 'Riwayat pengisian dan struk (hukum pajak: ID 10 tahun, MY 7, SG 5)', 'Pembayaran dan pengembalian dana',
+  'Faktur', 'Catatan tagihan jaringan mitra', 'Catatan poin', 'Akun belum dapat dihapus', 'Ada sesi yang belum dibayar', 'Ada pengisian yang sedang berlangsung',
+  'Ada penahanan kartu yang belum selesai', 'Ada reservasi aktif', 'Anda masih dalam antrean', 'Selesaikan hal di atas, lalu hapus akun lagi.', 'Masukkan kode 6 angka.',
 ];
 
 test('driver app English: each message is fully translated through DICT and PATTERNS in order', () => {

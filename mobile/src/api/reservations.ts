@@ -9,8 +9,8 @@ import type { PayRequest, QueueEntryView, ReservationView, ReserveResult, SiteQu
  */
 export const reservationsApi = (http: Http) => ({
   current: () => http.get<{ reservation: ReservationView | null; partner: unknown | null }>('/v1/reservation'),
-  reserve: (connectorId: string, pay: PayRequest = {}) =>
-    http.post<ReserveResult>('/v1/reservations', { connectorId, ...pay }, { idempotencyKey: newIdempotencyKey() }),
+  reserve: (connectorId: string, pay: PayRequest = {}, idempotencyKey = newIdempotencyKey()) =>
+    http.post<ReserveResult>('/v1/reservations', { connectorId, ...pay }, { idempotencyKey }),
   checkoutStatus: (id: string) =>
     http.get<{ id: string; state: 'pending' | 'held' | 'failed' | 'expired' | 'cancelled' | string; problem: string | null; totalMinor: number; reservation: ReservationView | null }>(
       `/v1/reservations/checkout/${seg(id)}`,

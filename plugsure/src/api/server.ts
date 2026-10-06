@@ -189,7 +189,7 @@ export async function buildApi(): Promise<FastifyInstance> {
     const framable = req.url.startsWith('/app/');
     reply.header('X-Frame-Options', framable ? 'SAMEORIGIN' : 'DENY');
     reply.header('Referrer-Policy', 'no-referrer');
-    reply.header('Content-Security-Policy', contentSecurityPolicy(req.url, TILE_ORIGIN, framable));
+    reply.header('Content-Security-Policy', contentSecurityPolicy(req.url, TILE_ORIGIN, framable, req.cspNonce));
     return payload;
   });
 

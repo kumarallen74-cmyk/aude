@@ -172,13 +172,13 @@ describe('notification data.url → allow-listed app routes only', () => {
 });
 
 describe('config plugins', () => {
-  it('Save QR on Android 8–9: WRITE_EXTERNAL_STORAGE limited to API 28, replacing an unlimited or blocked one', () => {
+  it('Save QR on Android 8–10: WRITE_EXTERNAL_STORAGE limited to API 29, replacing an unlimited or blocked one', () => {
      
-    const { setWriteUpTo28 } = require('../../../plugins/withSaveQrPermission.js');
-    const m = setWriteUpTo28({ manifest: { $: {}, 'uses-permission': [{ $: { 'android:name': 'android.permission.WRITE_EXTERNAL_STORAGE', 'tools:node': 'remove' } }, { $: { 'android:name': 'android.permission.CAMERA' } }] } });
+    const { setWriteMaxSdk } = require('../../../plugins/withSaveQrPermission.js');
+    const m = setWriteMaxSdk({ manifest: { $: {}, 'uses-permission': [{ $: { 'android:name': 'android.permission.WRITE_EXTERNAL_STORAGE', 'tools:node': 'remove' } }, { $: { 'android:name': 'android.permission.CAMERA' } }] } });
     expect(m.manifest['uses-permission']).toEqual([
       { $: { 'android:name': 'android.permission.CAMERA' } },
-      { $: { 'android:name': 'android.permission.WRITE_EXTERNAL_STORAGE', 'android:maxSdkVersion': '28', 'tools:replace': 'android:maxSdkVersion' } },
+      { $: { 'android:name': 'android.permission.WRITE_EXTERNAL_STORAGE', 'android:maxSdkVersion': '29', 'tools:replace': 'android:maxSdkVersion' } },
     ]);
     expect(m.manifest.$['xmlns:tools']).toBe('http://schemas.android.com/tools');
   });
