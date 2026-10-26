@@ -128,7 +128,7 @@ describe('push registration — native tokens, backend owns delivery', () => {
   });
   it('reads the deep link a tapped notification carries', () => {
     const { urlFromNotification } = require('../notifications');
-    expect(urlFromNotification({ request: { content: { data: { url: 'https://go.plugsure.asia/r/charge/x' } } } })).toBe('https://go.plugsure.asia/r/charge/x');
+    expect(urlFromNotification({ request: { content: { data: { url: 'https://app.plugsure.co.id/r/charge/x' } } } })).toBe('https://app.plugsure.co.id/r/charge/x');
     expect(urlFromNotification({ request: { content: { data: {} } } })).toBeNull();
   });
 });

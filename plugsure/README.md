@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.9.1 (5 October 2026), the current release:** v1.9.0 plus the driver-app review fixes (idempotent payments, a paid charge always started, sign-out revokes the device, App Review sign-in, iOS/Android store-build fixes, web-app account deletion and payment-screen fixes; migration 077). Notes: [`RELEASE-NOTES-v1.9.1.md`](RELEASE-NOTES-v1.9.1.md).
+**v1.9.2 (26 October 2026), the current release:** v1.9.1 with the PlugSure app on its live host `app.plugsure.co.id` (API and links; website and policies on plugsure.com). Notes: [`RELEASE-NOTES-v1.9.2.md`](RELEASE-NOTES-v1.9.2.md).
+
+**v1.9.1 (5 October 2026):** v1.9.0 plus the driver-app review fixes (idempotent payments, a paid charge always started, sign-out revokes the device, App Review sign-in, iOS/Android store-build fixes, web-app account deletion and payment-screen fixes; migration 077). Notes: [`RELEASE-NOTES-v1.9.1.md`](RELEASE-NOTES-v1.9.1.md).
 
 **v1.9.0 — the reviewed release of the v1.6–1.9 work (5 October 2026).** 1.9.0-dev (v1.5.1,
 v1.6.0, v1.7.0/1.7.1, v1.8.0 and the native-app driver API with the Expo app in `../mobile`) after an independent

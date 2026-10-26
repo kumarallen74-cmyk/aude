@@ -4,7 +4,7 @@
 //   PLUGSURE_APP_ORG_ID           adopt an existing organisation instead of creating `plugsure-mobility`
 //   MOBILITY_HOME_COUNTRY         ID (default) | MY | SG
 //   MOBILITY_PARTIES              OCPI parties, home first (default ID*PSM,MY*PSM,SG*PSM)
-//   MOBILITY_LINK_HOST            the link domain, e.g. go.plugsure.asia (serves AASA / assetlinks and /c/<code>)
+//   MOBILITY_LINK_HOST            the link domain, e.g. app.plugsure.co.id (serves AASA / assetlinks and /c/<code>)
 //   MOBILITY_IOS_BUNDLE_ID        MOBILITY_IOS_TEAM_ID        (apple-app-site-association, APNs topic)
 //   MOBILITY_ANDROID_PACKAGE      MOBILITY_ANDROID_CERT_SHA256 (comma-separated; Play App Signing + upload key)
 //   MOBILITY_PRIVACY_URL  MOBILITY_TERMS_URL  MOBILITY_SUPPORT_EMAIL
@@ -15,7 +15,7 @@
 //
 //     npm run mobility:setup
 // Then give the organisation a console administrator:
-//     npm run create-admin -- --email mobility-admin@plugsure.asia --org-slug plugsure-mobility
+//     npm run create-admin -- --email mobility-admin@plugsure.com --org-slug plugsure-mobility
 // and in its console: payment integrations per country, roaming hold amounts, hub agreements.
 import { setupMobility, mobilityOptionsFromEnv } from '../../src/services/mobility.js';
 import { pool } from '../../src/db/pool.js';

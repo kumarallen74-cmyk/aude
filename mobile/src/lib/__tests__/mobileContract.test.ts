@@ -124,11 +124,11 @@ describe('crash reporting scrubbing', () => {
   });
   it('URLs lose query strings everywhere: exception values, breadcrumbs (fetch / navigation), messages', () => {
     const e = scrubEvent({
-      exception: { values: [{ type: 'ApiError', value: 'GET https://api.plugsure.asia/d/v1/links/resolve?url=plugsure://c/X&token=psd_abc failed for +6281234567890' }] },
+      exception: { values: [{ type: 'ApiError', value: 'GET https://app.plugsure.co.id/d/v1/links/resolve?url=plugsure://c/X&token=psd_abc failed for +6281234567890' }] },
       breadcrumbs: [{ data: { url: 'https://api/d/v1/charge/x/status?lang=id', method: 'GET' } }, { data: { from: '/sign-in?phone=0812', to: '/paid?for=charge&status=ok' } }],
       message: 'opened plugsure://paid?for=charge&code=123456',
     });
-    expect(e.exception!.values![0]!.value).toBe('GET https://api.plugsure.asia/d/v1/links/resolve failed for [phone]');
+    expect(e.exception!.values![0]!.value).toBe('GET https://app.plugsure.co.id/d/v1/links/resolve failed for [phone]');
     expect(e.breadcrumbs).toEqual([{ data: { url: 'https://api/d/v1/charge/x/status', method: 'GET' }, message: undefined }, { data: { from: '/sign-in', to: '/paid' }, message: undefined }]);
     expect(e.message).toBe('opened plugsure://paid');
     expect(scrubBreadcrumb({ message: 'psd_secretToken123 at /c/ABC?x=1' }).message).toBe('psd_[redacted] at /c/ABC');
@@ -161,7 +161,7 @@ describe('notification data.url → allow-listed app routes only', () => {
   it.each([
     [`/app/#s/${id}`, `/session/charge/${id}`],
     [`/app/#r/${id}`, `/receipt/charge/${id}`],
-    [`https://go.plugsure.asia/r/charge/${id}`, `/receipt/charge/${id}`],
+    [`https://app.plugsure.co.id/r/charge/${id}`, `/receipt/charge/${id}`],
     [`/session/roaming/${id}`, `/session/roaming/${id}`],
     ['/activity', '/activity'],
     ['/c/AUTEL-DC60-SMB-002:1', '/c/AUTEL-DC60-SMB-002:1'],

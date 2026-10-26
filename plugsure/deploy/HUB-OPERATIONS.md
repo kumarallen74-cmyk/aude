@@ -21,7 +21,7 @@ shows no Hub menu and `/v1/hub/*` answers 404. Turning it on changes nothing for
 | Variable | Default | Meaning |
 |---|---|---|
 | `HUB_ENABLED` | `false` | Mounts the hub surface `/hub/ocpi/*`, the platform API `/v1/hub/*`, the tenant card and the hub workers. |
-| `HUB_PUBLIC_URL` | `OCPI_PUBLIC_URL` | Public origin of the hub, its **own host**: `https://hub.plugsure.asia`. Members' versions URL is `<this>/hub/ocpi/versions`. |
+| `HUB_PUBLIC_URL` | `OCPI_PUBLIC_URL` | Public origin of the hub, its **own host**: `https://hub.plugsure.co.id`. Members' versions URL is `<this>/hub/ocpi/versions`. |
 | `HUB_PARTIES` | `ID*PSH,MY*PSH,SG*PSH` | The hub's own parties (role HUB), one per country. The process refuses to start when malformed. Choose once: members store them. |
 | `HUB_BUSINESS_NAME`, `HUB_WEBSITE` | `PlugSure Hub`, empty | The business details in the hub's credentials. |
 | `HUB_SELF_JOIN` | `false` | Tenants may join the hub themselves (Roaming → PlugSure Hub → Join). Off: a platform admin joins them. |
@@ -38,16 +38,16 @@ Restart both services after a change: `systemctl restart plugsure-api plugsure-g
 
 ### 1.2 DNS and TLS
 
-1. Create `hub.plugsure.asia` (A/AAAA, or a CNAME to the API host) **[OWNER: final hostname]**. Use a hostname of
+1. Create `hub.plugsure.co.id` (A/AAAA, or a CNAME to the API host) **[OWNER: final hostname]**. Use a hostname of
    its own: the hub's base URL must differ from the tenants' `OCPI_PUBLIC_URL`, and members must never be handed
    the console or tenant OCPI hostnames.
 2. Add the hub site block to Caddy (`deploy/Caddyfile`, block `hub.example.id`): it serves `/hub/ocpi/*` only,
    proxies to the API on `127.0.0.1:9200`, and answers 404 for everything else. Replace the hostname, then
    `caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy`. The certificate is issued on reload
    (DNS must already point here).
-3. Set `HUB_PUBLIC_URL=https://hub.plugsure.asia` and restart.
-4. Check from outside: `curl -sS https://hub.plugsure.asia/hub/ocpi/versions` → HTTP 401 (a token is required: the
-   surface is up). `https://hub.plugsure.asia/` → 404.
+3. Set `HUB_PUBLIC_URL=https://hub.plugsure.co.id` and restart.
+4. Check from outside: `curl -sS https://hub.plugsure.co.id/hub/ocpi/versions` → HTTP 401 (a token is required: the
+   surface is up). `https://hub.plugsure.co.id/` → 404.
 
 ### 1.3 Migration
 

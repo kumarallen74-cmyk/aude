@@ -14,9 +14,9 @@
   "iosBundleId": "asia.plugsure.hub",
   "androidPackage": "asia.plugsure.hub",
   "linkHosts": [
-    "go.plugsure.asia"
+    "app.plugsure.co.id"
   ],
-  "apiBase": "https://api.plugsure.asia",
+  "apiBase": "https://app.plugsure.co.id",
   "accentColor": "#2fd6a7",
   "badgeColor": "#0a1417",
   "defaultLocale": "en",
@@ -36,15 +36,15 @@
     "longitudeDelta": 0.16
   },
   "support": {
-    "phone": "+6221500000",
-    "whatsapp": "+6281100000000",
-    "email": "help@plugsure.asia"
+    "phone": "+628113555570",
+    "whatsapp": "+628113555570",
+    "email": "hello@railsure.co.id"
   },
   "links": {
-    "terms": "https://plugsure.asia/legal/terms",
-    "privacy": "https://plugsure.asia/legal/privacy",
-    "deleteAccount": "https://go.plugsure.asia/account/delete",
-    "help": "https://plugsure.asia/help"
+    "terms": "https://plugsure.com/terms.html",
+    "privacy": "https://plugsure.com/privacy.html",
+    "deleteAccount": "https://app.plugsure.co.id/account/delete",
+    "help": "https://plugsure.com"
   },
   "store": {
     "appStoreId": "",

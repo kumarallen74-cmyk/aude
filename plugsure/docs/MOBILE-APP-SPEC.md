@@ -223,7 +223,7 @@ Consequences the app must model:
 | **Operator support agent** (secondary) | Gets a call "it won't start" | Session / hub trace id from the driver | Ticket resolved without asking for screenshots |
 
 ### J1 — first charge as guest in under 60 s (hosted charger)
-1. Driver scans the sticker QR with the **camera app** → universal link `https://go.plugsure.asia/c/<code>` opens the
+1. Driver scans the sticker QR with the **camera app** → universal link `https://app.plugsure.co.id/c/<code>` opens the
    app (installed) or an App Clip / Instant App **[L]** / the PWA (not installed) **(t ≈ 3 s)**.
 2. App boots cold (≤ 2.0 s budget), silently obtains a device token (`POST /d/v1/device`) in parallel with
    `GET /d/v1/resolve?code=` **(t ≈ 5 s)**.
@@ -555,7 +555,7 @@ Home-screen widget: favourite station availability; Lock-screen: current session
 ## 13. Deep links, analytics, crash reporting
 
 ### 13.1 Deep links / universal links
-- Domain **`go.plugsure.asia`** **[OWNER]** dedicated to links (not the API host), serving
+- Domain **`app.plugsure.co.id`** **[OWNER]** dedicated to links (not the API host), serving
   `apple-app-site-association` and `assetlinks.json` for the PlugSure app ([BACKEND] G6: today these are only
   generated per white-label brand, components `/app/*`).
 - Paths: `/c/<code>` charger QR (new stickers), `/app/*` (existing PWA links and QR stickers using `?code=`/`#c/`),
@@ -597,7 +597,7 @@ below where they differ (e.g. the map is `GET /d/v1/map` plus a paged `GET /d/v1
 | G8 | P0 | **App version gate + remote config.** | `GET /d/v1/app/config?platform=ios|android&version=1.0.3&build=42` → `{minSupported, latest, storeUrl, force:boolean, maintenance:{active, message}, features:{applePay, routePlanner, …}, links:{terms, privacy, support}}`; values per brand from console. |
 | G9 | P1 | **Reliability score, ratings, problem reports.** | Table `connector_reliability_daily` (starts requested/accepted/failed, sessions 0 kWh, faults minutes) from OCPP + roaming command results; `reliability: {score:0-100, label, basis:'30d', lastSuccessAt}` on station/connector views. `POST /d/v1/charge/:id/rating {stars:1-5, reasons:[…], comment}` (and `/roaming/charge/:id/rating`); `POST /d/v1/reports {connectorId|partnerRef, category:'broken'|'blocked'|'payment'|'cable'|'other', comment, photoUploadId?}` → operator alert (existing alert routing) and, for partners, a support ticket to the CPO (OCPI has no module — email/console) ; `GET /d/v1/stations/:id/reports?days=7`. |
 | G10 | P1 | **Native payments.** Card flow is a hosted Stripe page; no Apple/Google Pay. | `POST /d/v1/payments/stripe/payment-sheet {connectorId|roamingRef, amountMinor, mode:'hold'|'charge', saveCard}` → `{paymentIntentClientSecret, customerId, ephemeralKey, publishableKey, merchantCountry}` (Stripe RN PaymentSheet, Apple Pay/Google Pay enabled); then existing `confirm-payment`. Midtrans/Xendit: keep redirect/QR (Snap in-app browser); `[VERIFY]` Xendit/Midtrans RN SDK maturity before native. |
-| G11 | P1 | **Return URL for native apps.** `returnUrl` is always `…/app/paid.html`. | Accept `returnUrl` from an allow-list per brand (`https://go.plugsure.asia/paid`, custom scheme `plugsure://paid`), else default. |
+| G11 | P1 | **Return URL for native apps.** `returnUrl` is always `…/app/paid.html`. | Accept `returnUrl` from an allow-list per brand (`https://app.plugsure.co.id/paid`, custom scheme `plugsure://paid`), else default. |
 | G12 | P1 | **Idempotency** on payment/charge creation. | `Idempotency-Key` header on `charge/prepaid`, `roaming/charge`, `reservations`, `memberships`, `wallets`, stored 24 h per device. |
 | G13 | P1 | **Abuse controls** for public endpoints. | Optional App Attest / Play Integrity token on `POST /d/v1/device` and `/otp/send` (`X-Attest`), risk-scored, not blocking at first. |
 | G14 | P1 | **History paging and per-currency totals.** | `GET /d/v1/history?cursor=&limit=20&currency=` → `{charges, nextCursor, totals:[{currency,totalMinor,kwh}]}`. |
@@ -669,7 +669,7 @@ Tested by `tools/e2e/mobile-api-e2e.mts` (CI step "e2e — mobile app driver API
   "features": { "roaming": true, "reservations": true, "queue": true, "memberships": true, "favourites": true,
                 "liveActivities": true, "accountDeletion": true, "applePay": false, "googlePay": false, "routePlanner": false },
   "links": { "terms": "https://…/terms", "privacy": "https://…/privacy", "support": "mailto:help@…", "faq": null, "status": null,
-             "accountDeletion": "https://go.plugsure.asia/account/delete" },
+             "accountDeletion": "https://app.plugsure.co.id/account/delete" },
   "brand": { "slug": "plugsure", "name": "PlugSure", "shortName": "PlugSure", "supportEmail": "help@…", "supportPhone": null,
              "privacyUrl": "https://…", "termsUrl": "https://…", "accent": "#2fd6a7", "scope": "network" },
   "languages": { "server": ["id", "en"], "fallback": { "ms": "en", "zh": "en" } },
@@ -774,13 +774,13 @@ or a partner **EVSE id** such as `MY*ABC*E123`, matched ignoring `*`).
 ```
 404 `{"code":"not_found"}` (unknown) or `{"code":"other_operator"}` (an operator's app scanning another operator's charger).
 
-**Link domain** (the network brand's `hostname`, e.g. `go.plugsure.asia` [OWNER]; served once the brand is live):
+**Link domain** (the network brand's `hostname`, e.g. `app.plugsure.co.id` [OWNER]; served once the brand is live):
 - `GET /.well-known/apple-app-site-association` → `{"applinks":{"details":[{"appIDs":["<TeamID>.<bundle id>"],"components":[{"/":"/c/*"},{"/":"/s/*"},{"/":"/r/*"},{"/":"/paid*"},{"/":"/app/*"}]}]},"webcredentials":{"apps":["<TeamID>.<bundle id>"]}}`
   (operator brands: `/app/*` only, as before).
 - `GET /.well-known/assetlinks.json` → `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"asia.plugsure.app","sha256_cert_fingerprints":["AB:CD:…"]}}]`.
 - Web fallbacks (app not installed; 302): `/c/<code>` → `/app/#c/<code>`; `/s/<siteId>` → `/app/#home`;
   `/r/charge/<id>` → `/app/#r/<id>`; `/r/partner/<cdrId>` → `/app/#rr/<cdrId>`; `/paid?…` → `/app/paid.html?…`.
-- New QR stickers: `https://go.plugsure.asia/c/<IDENTITY>:<connectorNo>`. Old stickers keep working via the resolver.
+- New QR stickers: `https://app.plugsure.co.id/c/<IDENTITY>:<connectorNo>`. Old stickers keep working via the resolver.
 
 ### 15.6 Push notifications (G1, G2)
 
@@ -800,7 +800,7 @@ Firebase project) is deleted.
 `onMessageReceived` gets it in the foreground):
 ```json
 { "message": { "token": "…",
-  "notification": { "title": "Charging finished", "body": "Mall · 12.5 kWh charged", "image": "https://go.plugsure.asia/d/n/charge/<id>.png?…" },
+  "notification": { "title": "Charging finished", "body": "Mall · 12.5 kWh charged", "image": "https://app.plugsure.co.id/d/n/charge/<id>.png?…" },
   "data": { "type": "session.ended", "url": "/app/#s/<chargeId>", "ref": "<chargeId>", "tag": "s-<sessionId>", "category": "PS_RECEIPT",
             "actions": "{\"receipt\":\"/app/#r/<chargeId>\"}", "urgent": "1" },
   "android": { "priority": "HIGH", "ttl": "86400s", "notification": { "channel_id": "charging", "tag": "s-<sessionId>", "image": "…" } } } }
@@ -902,7 +902,7 @@ reference; the console routes above are in `src/web/openapi.json` and the SDK.
   the APNs topic; an **APNs auth key (.p8)** with its Key ID; Associated Domains entitlement `applinks:<link domain>`.
 - **Android App Links:** the **SHA-256 fingerprints** of the Play App Signing key and the upload key
   (`MOBILITY_ANDROID_CERT_SHA256`, comma-separated).
-- **Link domain** (`go.plugsure.asia` [OWNER]) pointed at the API (Caddy on-demand TLS answers for brand hostnames),
+- **Link domain** (`app.plugsure.co.id` [OWNER]) pointed at the API (Caddy on-demand TLS answers for brand hostnames),
   the app icon, and `MOBILITY_LIVE=1`.
 - OCPI party ids, PlugSure Mobility's acquirer integrations per country and roaming hold amounts (console), hub
   membership (`MOBILITY_JOIN_HUB=1`) and agreements with CPOs; legal review of the retention periods (§15.8).

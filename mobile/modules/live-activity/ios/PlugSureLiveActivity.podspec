@@ -3,7 +3,7 @@ Pod::Spec.new do |s|
   s.version        = '0.1.0'
   s.summary        = 'ActivityKit bridge for the PlugSure charging Live Activity'
   s.author         = 'PlugSure'
-  s.homepage       = 'https://plugsure.asia'
+  s.homepage       = 'https://plugsure.com'
   s.license        = { :type => 'Proprietary' }
   s.platforms      = { :ios => '16.4' }
   s.source         = { :git => '' }

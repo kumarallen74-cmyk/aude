@@ -7,7 +7,7 @@ describe('extractChargerCode (scanner — same rules as the PWA)', () => {
     ['AK-SNY-01:1', 'AK-SNY-01:1'],
     ['  AK-SNY-01/2 ', 'AK-SNY-01/2'],
     ['01.JKT.20.3171.001', '01.JKT.20.3171.001'],
-    ['https://go.plugsure.asia/c/AK-SNY-01:1', 'AK-SNY-01:1'],
+    ['https://app.plugsure.co.id/c/AK-SNY-01:1', 'AK-SNY-01:1'],
     ['https://ops.example.com/app/?code=CHG-77', 'CHG-77'],
     ['https://ops.example.com/app/?c=CHG-78', 'CHG-78'],
     ['https://ops.example.com/app/#c/CHG-79', 'CHG-79'],
@@ -17,23 +17,23 @@ describe('extractChargerCode (scanner — same rules as the PWA)', () => {
     ['plugsure://c/AK-SNY-01:1', 'AK-SNY-01:1'],
   ])('%s → %s', (raw, code) => expect(extractChargerCode(raw)).toBe(code));
 
-  it.each(['', '   ', 'https://go.plugsure.asia/app/', 'https://x/app/index.html', 'DROP TABLE; <script>', 'x'.repeat(81)])('refuses %p', (raw) =>
+  it.each(['', '   ', 'https://app.plugsure.co.id/app/', 'https://x/app/index.html', 'DROP TABLE; <script>', 'x'.repeat(81)])('refuses %p', (raw) =>
     expect(extractChargerCode(raw)).toBeNull(),
   );
 });
 
 describe('parseLink (universal links, app links, custom scheme, push URLs)', () => {
   it('charger links', () => {
-    expect(parseLink('https://go.plugsure.asia/c/AK-1:2')).toEqual({ type: 'charger', code: 'AK-1:2' });
+    expect(parseLink('https://app.plugsure.co.id/c/AK-1:2')).toEqual({ type: 'charger', code: 'AK-1:2' });
     expect(parseLink('plugsure://c/AK-1')).toEqual({ type: 'charger', code: 'AK-1' });
     expect(parseLink('https://app.nusantaracharge.id/app/?code=NC-9')).toEqual({ type: 'charger', code: 'NC-9' });
     expect(parseLink('https://app.nusantaracharge.id/app/#c/NC-10')).toEqual({ type: 'charger', code: 'NC-10' });
   });
   it('station, receipt, session, partner', () => {
-    expect(parseLink(`https://go.plugsure.asia/s/${U}`)).toEqual({ type: 'station', siteId: U });
-    expect(parseLink(`https://go.plugsure.asia/r/roaming/${U}`)).toEqual({ type: 'receipt', kind: 'roaming', id: U });
+    expect(parseLink(`https://app.plugsure.co.id/s/${U}`)).toEqual({ type: 'station', siteId: U });
+    expect(parseLink(`https://app.plugsure.co.id/r/roaming/${U}`)).toEqual({ type: 'receipt', kind: 'roaming', id: U });
     expect(parseLink(`plugsure://session/charge/${U}`)).toEqual({ type: 'session', kind: 'charge', id: U });
-    expect(parseLink(`https://go.plugsure.asia/p/${U}/SG/LCE/LOC-SG-11`)).toEqual({ type: 'partner', partnerId: U, countryCode: 'SG', partyId: 'LCE', locationId: 'LOC-SG-11' });
+    expect(parseLink(`https://app.plugsure.co.id/p/${U}/SG/LCE/LOC-SG-11`)).toEqual({ type: 'partner', partnerId: U, countryCode: 'SG', partyId: 'LCE', locationId: 'LOC-SG-11' });
   });
   it('PWA push hashes keep working', () => {
     expect(parseLink(`https://x/app/#s/${U}`)).toEqual({ type: 'session', kind: 'charge', id: U });
@@ -45,7 +45,7 @@ describe('parseLink (universal links, app links, custom scheme, push URLs)', () 
   it('payment returns (today /app/paid.html, with [§14 G11] /paid and the custom scheme)', () => {
     expect(parseLink('https://ops.example/app/paid.html?for=charge&status=success')).toEqual({ type: 'paid', for: 'charge', status: 'success' });
     expect(parseLink('plugsure://paid?for=roaming&redirect_status=failed')).toEqual({ type: 'paid', for: 'roaming', status: 'failed' });
-    expect(parseLink('https://go.plugsure.asia/paid?transaction_status=deny')).toEqual({ type: 'paid', for: null, status: 'deny' });
+    expect(parseLink('https://app.plugsure.co.id/paid?transaction_status=deny')).toEqual({ type: 'paid', for: null, status: 'deny' });
   });
   it('a failed / cancelled return is recognised, linking an e-wallet is not judged by the return', () => {
     expect(paymentReturnFailed({ type: 'paid', for: 'charge', status: 'expire' })).toBe(true);

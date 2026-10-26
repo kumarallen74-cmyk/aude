@@ -13,7 +13,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
-      "env": { "APP_ENV": "development", "API_BASE_URL": "https://staging-api.plugsure.asia" },
+      "env": { "APP_ENV": "development", "API_BASE_URL": "https://staging.plugsure.co.id" },
       "ios": { "simulator": false, "resourceClass": "m-medium" },
       "android": { "buildType": "apk" }
     },
@@ -25,7 +25,7 @@
       "extends": "base",
       "distribution": "internal",
       "channel": "preview",
-      "env": { "APP_ENV": "preview", "API_BASE_URL": "https://staging-api.plugsure.asia" },
+      "env": { "APP_ENV": "preview", "API_BASE_URL": "https://staging.plugsure.co.id" },
       "android": { "buildType": "apk" }
     },
     "production": {

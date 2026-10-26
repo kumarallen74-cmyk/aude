@@ -108,11 +108,13 @@ Append this block to `/etc/caddy/Caddyfile` (it mirrors the OCPP block's
 
 ```caddy
 # =============================================================================
-# Driver app — the ONLY other internet-exposed surface. Serves /app and /d only.
+# Driver app — the ONLY other internet-exposed surface. Serves the web app (/app), the driver API (/d) and,
+# when this host is also the PlugSure app's link domain (MOBILITY_LINK_HOST, e.g. app.plugsure.co.id), the link
+# pages: universal links / App Links files, QR and share links, the payment return and account deletion (v1.9.2).
 # The operator console (/) and admin API (/v1/*) are NOT routed here.
 # =============================================================================
 app.example.id {
-	@driver path /app /app/* /d /d/*
+	@driver path /app /app/* /d /d/* /.well-known/apple-app-site-association /.well-known/assetlinks.json /c/* /s/* /r/* /paid /account/delete
 	handle @driver {
 		reverse_proxy 127.0.0.1:9200 {
 			# Truthful, unspoofable forwarding metadata (same rationale as the OCPP block)

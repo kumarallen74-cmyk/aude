@@ -1,11 +1,11 @@
 /** The API base a release can talk to: an OTA update must never ship the demo backend or a LAN / http host. */
 import { resolveApiBase } from '@/config';
 
-const brandApi = 'https://api.plugsure.asia';
+const brandApi = 'https://app.plugsure.co.id';
 
 describe('resolveApiBase', () => {
   it('development / preview: the override, then the build extra, then the brand (mock and http allowed)', () => {
-    expect(resolveApiBase({ envApi: 'mock', extraApi: 'https://staging.plugsure.asia', brandApi, dev: true })).toBe('mock');
+    expect(resolveApiBase({ envApi: 'mock', extraApi: 'https://staging.plugsure.co.id', brandApi, dev: true })).toBe('mock');
     expect(resolveApiBase({ envApi: 'http://192.168.1.10:9200/', brandApi, dev: true })).toBe('http://192.168.1.10:9200');
     expect(resolveApiBase({ extraApi: 'http://10.0.0.2:9200', brandApi, dev: false, channel: 'preview', appEnv: 'preview' })).toBe('http://10.0.0.2:9200');
     expect(resolveApiBase({ brandApi, dev: false, channel: null, appEnv: 'development' })).toBe(brandApi);

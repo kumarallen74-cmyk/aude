@@ -29,7 +29,7 @@ export interface MobilityOptions {
   homeCountry?: CountryCode;
   /** OCPI parties, home first: ['ID*PSM', 'MY*PSM', 'SG*PSM']. */
   parties?: string[];
-  /** The link domain (universal links / App Links), e.g. go.plugsure.asia. */
+  /** The link domain (universal links / App Links), e.g. app.plugsure.co.id. */
   linkHost?: string | null;
   iosBundleId?: string | null;
   iosTeamId?: string | null;

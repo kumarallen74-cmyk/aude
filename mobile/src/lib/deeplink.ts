@@ -2,11 +2,11 @@ import { brand } from '@/config';
 /**
  * Deep links, universal links / app links and scanned QR payloads (spec §6.11, §13.1).
  *
- *   https://go.plugsure.asia/c/<code>         charger QR (new stickers)
+ *   https://app.plugsure.co.id/c/<code>         charger QR (new stickers)
  *   https://<any>/app/?code=<code> | ?c= | #c/<code>   existing PWA stickers — must keep working
- *   https://go.plugsure.asia/s/<siteId>       station share
- *   https://go.plugsure.asia/r/<kind>/<id>    receipt
- *   https://go.plugsure.asia/paid?for=…       payment return (acquirer → app)
+ *   https://app.plugsure.co.id/s/<siteId>       station share
+ *   https://app.plugsure.co.id/r/<kind>/<id>    receipt
+ *   https://app.plugsure.co.id/paid?for=…       payment return (acquirer → app)
  *   plugsure://<same paths>                   custom scheme (white-label: the brand's scheme)
  *   PWA push hashes: #s/<chargeId>, #r/<chargeId>, #rr/<cdrId>, #home, #history, #account, #paid
  *   raw codes: connector UUID, IDENTITY:n, IDENTITY/n, bare identity, SPKLU id

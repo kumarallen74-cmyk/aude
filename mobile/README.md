@@ -129,7 +129,7 @@ What the owner needs:
   (`eas env:create --type file --name GOOGLE_SERVICES_JSON --value ./google-services.json`). The server needs the
   Firebase **service account** to send FCM HTTP v1 (§15.6; uploaded in PlugSure Mobility's console). `GoogleService-Info.plist` is **not** needed on iOS
   (APNs device tokens go straight to the backend) unless Firebase SDKs (Crashlytics, Analytics) are added.
-- **Universal links / app links**: the link domain (`go.plugsure.asia`) must serve `apple-app-site-association`
+- **Universal links / app links**: the link domain (`app.plugsure.co.id`) must serve `apple-app-site-association`
   (appID `<TeamID>.asia.plugsure.hub`, paths `/c/*`, `/s/*`, `/r/*`, `/paid`, `/app/*`) and
   `/.well-known/assetlinks.json` with the Play app-signing SHA-256 (§15.5).
 - Android Google Maps key restricted to the package + signing SHA-1 (`GOOGLE_MAPS_ANDROID_KEY`).
