@@ -860,7 +860,9 @@ export class VirtualChargePoint extends EventEmitter {
       }
 
       case 'RemoteStartTransaction': {
-        if (this.txId != null) return { status: 'Rejected' };
+        // A charger busy with a session — including one still being authorised, before it has a transaction id — refuses
+        // another start, as a real one does (two concurrent runs on one simulator overwrote each other's state).
+        if (this.txId != null || this.inSession) return { status: 'Rejected' };
         const connectorId = Number(p.connectorId ?? 1);
         const idTag = String(p.idTag ?? this.opts.idTag);
         if (this.faults.has(connectorId)) return { status: 'Rejected' };
@@ -1343,6 +1345,20 @@ export class VirtualChargePoint extends EventEmitter {
    * be sent is queued with its real occurrence time and replayed on reconnect.
    */
   async runSession(opts: { connectorId?: number; idTag?: string; kwh?: number; remote?: boolean; contract?: { emaid: string; hashData: unknown[] }; soc?: number; bidirectional?: boolean } = {}): Promise<{
+    transactionId: number | null;
+    deliveredWh: number;
+    queued: number;
+  }> {
+    try {
+      return await this.runSessionInner(opts);
+    } catch (e) {
+      // A session that failed part-way leaves the charger free again (RemoteStartTransaction refuses while inSession).
+      this.inSession = false;
+      throw e;
+    }
+  }
+
+  private async runSessionInner(opts: { connectorId?: number; idTag?: string; kwh?: number; remote?: boolean; contract?: { emaid: string; hashData: unknown[] }; soc?: number; bidirectional?: boolean }): Promise<{
     transactionId: number | null;
     deliveredWh: number;
     queued: number;
