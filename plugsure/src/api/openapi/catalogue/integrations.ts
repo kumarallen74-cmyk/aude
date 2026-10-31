@@ -1,7 +1,7 @@
 import { type Op, type Schema, ref, arrayOf, nullable } from '../types.js';
 
 const T = 'Integrations' as const;
-const KIND = { kind: 'Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude).' };
+const KIND = { kind: 'Integration: payments (the acquirer: QRIS, e-wallets, cards), payments_fallback (Duitku, when the acquirer does not answer), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude).' };
 const DT = { type: 'string', format: 'date-time' };
 
 const configured: Schema = {
@@ -31,7 +31,7 @@ export const schemas: Record<string, Schema> = {
   IntegrationKind: {
     type: 'object', required: ['kind', 'label', 'scope', 'providers', 'editable'],
     properties: {
-      kind: { type: 'string', enum: ['payments', 'otp', 'otp_fallback', 'pnc_pki', 'map_tiles', 'ai_support'] },
+      kind: { type: 'string', enum: ['payments', 'payments_fallback', 'otp', 'otp_fallback', 'pnc_pki', 'map_tiles', 'ai_support'] },
       label: { type: 'string' }, description: { type: 'string' },
       scope: { type: 'string', enum: ['org', 'platform'], description: 'org: each operator may connect its own account (falls back to the platform\'s); platform: one for the deployment.' },
       providers: arrayOf({

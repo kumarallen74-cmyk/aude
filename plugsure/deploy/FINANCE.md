@@ -10,6 +10,10 @@ money for each Xendit payments account:
 
 All of it is matched against PlugSure's own payments.
 
+From v1.13.0 the **Duitku fallback account** appears too. Its ledger is built
+from PlugSure's Duitku payments, with Duitku's fee and an estimated
+settlement date ([DUITKU.md](DUITKU.md#finance)).
+
 ## Who sees what
 
 | Account | Seen by |

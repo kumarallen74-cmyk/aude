@@ -65,6 +65,7 @@ function fromEnv(kind: Kind): Resolved | null {
     case 'otp':
       return isProd() ? null : { ...base, provider: 'dev', settings: {}, secrets: {}, source: 'default' };
     case 'otp_fallback':
+    case 'payments_fallback':
       return null;
     case 'pnc_pki': {
       const mode = config.pnc.pki === 'mock' && isProd() ? 'none' : config.pnc.pki;
@@ -114,7 +115,7 @@ export async function resolve(kind: Kind, orgId: string | null = null, country: 
 export async function byWebhookKey(key: string, hook: 'payments' | 'whatsapp' = 'payments'): Promise<Resolved | null> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(key)) return null;
   const r = await outsideRequestScope(() => one<Row>(hook === 'payments'
-    ? `SELECT * FROM integration WHERE webhook_key = $1 AND kind = 'payments'`
+    ? `SELECT * FROM integration WHERE webhook_key = $1 AND kind IN ('payments', 'payments_fallback')`
     : `SELECT * FROM integration WHERE webhook_key = $1 AND kind IN ('otp', 'otp_fallback') AND provider = 'whatsapp_cloud' AND archived_at IS NULL`, [key]));
   return r ? fromRow(r) : null;
 }
@@ -354,7 +355,7 @@ function stripeChecks(cc: string | null, settings: Record<string, unknown>, secr
 export async function remove(kind: Kind, orgId: string | null, country: string = 'ID'): Promise<boolean> {
   // A QRIS account is archived (its payments keep their notifications and refunds); others are deleted.
   const r = await outsideRequestScope(() => query(
-    kind === 'payments'
+    kind === 'payments' || kind === 'payments_fallback'
       ? `UPDATE integration SET archived_at = now(), enabled = false WHERE kind = $1 AND org_id IS NOT DISTINCT FROM $2::uuid AND archived_at IS NULL
            AND COALESCE(country_code, 'ID') = $3`
       : `DELETE FROM integration WHERE kind = $1 AND org_id IS NOT DISTINCT FROM $2::uuid AND archived_at IS NULL AND $3::text IS NOT NULL`,

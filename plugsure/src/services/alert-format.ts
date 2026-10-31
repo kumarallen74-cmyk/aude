@@ -40,6 +40,8 @@ export const ALERT_KINDS: Record<string, string> = {
   'platform.whatsapp_support': 'WhatsApp customer waiting for staff',
   // (v1.12.0) Finance: the gateway's ledger against PlugSure (services/finance.ts).
   'finance.reconciliation': 'Payments differ from the gateway',
+  // (v1.13.0) The main acquirer did not answer; payments went to the fallback account (payments/registry.ts).
+  'payment.acquirer_fallback': 'Payments moved to the fallback acquirer',
 };
 
 export const titleOf = (kind: string) =>

@@ -21,7 +21,8 @@ export const schemas: Record<string, Schema> = {
     type: 'object', required: ['id', 'provider', 'label'],
     properties: {
       id: { type: 'string', format: 'uuid' }, orgId: nullable('string', { description: 'Null: the platform\'s own account (it takes the payments of every operator without one).' }),
-      orgName: nullable('string'), provider: { type: 'string', enum: ['xendit'] }, environment: nullable('string'),
+      orgName: nullable('string'), provider: { type: 'string', enum: ['xendit', 'duitku'] }, environment: nullable('string'),
+      fallback: { type: 'boolean', description: '(v1.13.0) The fallback account (Duitku): its ledger is built from PlugSure\'s payments with the fee Duitku reports, settlement estimated from Duitku\'s schedule.' },
       archived: { type: 'boolean', description: 'Replaced by another account; kept while its money settles.' }, testMode: { type: 'boolean' }, label: { type: 'string' },
     },
   },

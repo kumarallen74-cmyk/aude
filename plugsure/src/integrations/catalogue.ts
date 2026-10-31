@@ -4,7 +4,7 @@
  * it. Fields of type 'secret' are sealed at rest and never returned.
  */
 
-export type Kind = 'payments' | 'otp' | 'otp_fallback' | 'pnc_pki' | 'map_tiles' | 'ai_support';
+export type Kind = 'payments' | 'payments_fallback' | 'otp' | 'otp_fallback' | 'pnc_pki' | 'map_tiles' | 'ai_support';
 
 export interface Field {
   key: string;
@@ -149,6 +149,39 @@ export const CATALOGUE: KindDef[] = [
         id: 'mock', label: 'Sandbox (no real money)', devOnly: true,
         description: 'Built-in test acquirer: QR codes that pay nothing, and a test checkout page for the e-wallets and cards; payments are confirmed with the demo button. Not available in production.',
         fields: [methodsField(['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD', 'PAYNOW', 'FPX', 'GRABPAY'], ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA', 'CARD', 'PAYNOW', 'FPX', 'GRABPAY']), walletField('GoPay, OVO, DANA, ShopeePay and LinkAja'), ...postpayFields, ...cardFields()],
+      },
+    ],
+  },
+  {
+    // (v1.13.0) Used for a new charging payment when the main acquirer does not answer (payments/registry.ts).
+    kind: 'payments_fallback',
+    label: 'Payments — fallback (when Xendit does not answer)',
+    description: 'A second acquirer for drivers\' charging payments, used only when the main one (Xendit) fails to answer: the driver gets a QRIS code or e-wallet / card page from this one instead, and charges as usual. QRIS, DANA, ShopeePay, LinkAja and cards; OVO, card holds, saved cards and linked e-wallets stay with the main acquirer. Refunds of its payments are made by bank transfer from the Refunds page.',
+    scope: 'org',
+    providers: [
+      {
+        id: 'duitku', label: 'Duitku', webhook: true, docs: 'https://docs.duitku.com/api/en/',
+        description: 'API v2 (inquiry): QRIS shown in the app, DANA, ShopeePay, LinkAja and cards on Duitku\'s payment page. Payments are confirmed by Duitku\'s signed callback to the URL shown after saving (PlugSure sends it with each payment). With Duitku\'s Disbursement (Transfer Online) credentials, Finance also shows the balance.',
+        fields: [
+          envField(),
+          { key: 'merchantCode', label: 'Merchant code', type: 'text', required: true, placeholder: 'D1234', help: 'Duitku dashboard → Project → the project\'s merchant code.' },
+          { key: 'apiKey', label: 'API key (merchant key)', type: 'secret', required: true },
+          methodsField(['QRIS', 'DANA', 'SHOPEEPAY', 'LINKAJA', 'CARD']),
+          {
+            key: 'qrisMethod', label: 'QRIS method on the account', type: 'select', default: 'SP',
+            options: [{ value: 'SP', label: 'SP — QRIS (ShopeePay)' }, { value: 'NQ', label: 'NQ — QRIS (Nobu)' }],
+            help: 'The QRIS payment method Duitku activated on your project (Test shows whether it is there).',
+          },
+          {
+            key: 'signature', label: 'Signature scheme', type: 'select', default: 'md5', advanced: true,
+            options: [{ value: 'md5', label: 'MD5 with the API key (Duitku SDK)' }, { value: 'hmac', label: 'HMAC-SHA256 keyed with the API key' }],
+            help: 'Ask Duitku which one your project uses; Test checks it.',
+          },
+          { key: 'disbursementUserId', label: 'Disbursement user ID', type: 'text', advanced: true, help: 'Optional. Duitku Disbursement (Transfer Online): the balance in Finance.' },
+          { key: 'disbursementEmail', label: 'Disbursement e-mail', type: 'text', advanced: true },
+          { key: 'disbursementSecretKey', label: 'Disbursement secret key', type: 'secret', advanced: true },
+          { ...baseUrl, help: 'Default https://sandbox.duitku.com (sandbox) or https://passport.duitku.com (production).' },
+        ],
       },
     ],
   },

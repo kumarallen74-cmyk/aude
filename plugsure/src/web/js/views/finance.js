@@ -2,7 +2,8 @@ import { $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, 
 import { formatMoney, LEGACY_CURRENCY } from '../money.js';
 
 /**
- * Finance — the payment gateway's side of the money (v1.12.0), per gateway account (Xendit).
+ * Finance — the payment gateway's side of the money (v1.12.0), per gateway account: Xendit, and (v1.13.0) the
+ * Duitku fallback account, whose ledger PlugSure builds from its own payments (Duitku has no ledger API).
  *
  *   Overview        collected, fees (with VAT), refunds, net; receivable (not yet settled) and when; the balance at
  *                   the gateway; refunds due; a daily chart; by channel; open reconciliation differences
@@ -18,7 +19,7 @@ import { formatMoney, LEGACY_CURRENCY } from '../money.js';
  */
 
 /**
- * The gateway's amounts (rupiah, Xendit's unit): gateway fees and VAT have cents, shown as two decimals (never one).
+ * The gateway's amounts (rupiah, the gateways' unit): gateway fees and VAT have cents, shown as two decimals (never one).
  * Written the way the console writes rupiah (formatMoney, Indonesian separators).
  */
 const rp = (n) => {
@@ -115,18 +116,20 @@ registerView('finance', {
       { id: 'payables', label: 'Payables' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
     ];
     root.innerHTML = pageHead('Finance',
-      'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from Xendit every 15 minutes; reconciled every 6 hours.',
+      'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
       '') + '<div data-body><div class="empty-state"><span class="spinner"></span></div></div>';
     const bodyAll = $('[data-body]', root);
     let accounts;
     try { accounts = (await api('/v1/finance/accounts')).accounts; } catch (e) { bodyAll.innerHTML = callout('crit', esc(e.message)); return; }
     if (!accounts.length) {
-      bodyAll.innerHTML = `<div class="card pad"><div class="empty-state" style="padding:20px 10px"><h3>No Xendit account to show</h3>
-        <p>Finance reads the ledger of a Xendit payments account: ${state.can('platform:admin') ? 'connect PlugSure\'s under <b>Integrations → Payments</b>.' : 'connect your own under <b>Integrations → Payments → Your account</b>. Payments taken through PlugSure\'s account are in PlugSure\'s finance.'}</p></div>
+      bodyAll.innerHTML = `<div class="card pad"><div class="empty-state" style="padding:20px 10px"><h3>No payments account to show</h3>
+        <p>Finance reads the ledger of a Xendit (or Duitku fallback) payments account: ${state.can('platform:admin') ? 'connect PlugSure\'s under <b>Integrations → Payments</b>.' : 'connect your own under <b>Integrations → Payments → Your account</b>. Payments taken through PlugSure\'s account are in PlugSure\'s finance.'}</p></div>
         <div class="row" style="justify-content:center"><a class="btn primary" href="#/integrations">${icon('link')} Open Integrations</a></div></div>`;
       return;
     }
     const pre = presets();
+    const gw = () => (accounts.find((a) => a.id === acct)?.provider === 'duitku' ? 'Duitku' : 'Xendit');
+    const isDuitku = () => gw() === 'Duitku';
     let acct = accounts[0].id, from = pre.month.from, to = pre.month.to, current = tabs.find((t) => t.id === initialTab)?.id ?? 'overview';
     bodyAll.innerHTML = `
       <div class="filters" style="margin-top:0">
@@ -153,9 +156,9 @@ registerView('finance', {
       const o = await api(`${base()}/overview?${per()}`);
       const s = o.sync;
       body.innerHTML = `<div class="fin-notes">
-        ${!s ? callout('info', 'Not synced yet: the first sync reads the last 35 days from Xendit within 15 minutes, or now with <b>Sync now</b>.')
+        ${!s ? callout('info', `Not synced yet: the first sync reads the last 35 days from ${gw()} within 15 minutes, or now with <b>Sync now</b>.`)
           : s.ok === false ? callout('crit', `<b>The last sync failed</b> (${esc(fmt.ago(s.lastRunAt))}): ${esc(s.error ?? '')}`) : ''}
-        ${o.exceptionsOpen ? callout('warn', `<b>${esc(String(o.exceptionsOpen))} difference${o.exceptionsOpen === 1 ? '' : 's'}</b> between Xendit and PlugSure to check. <button class="btn sm" type="button" data-go="reconciliation">Open Reconciliation</button>`) : ''}</div>
+        ${o.exceptionsOpen ? callout('warn', `<b>${esc(String(o.exceptionsOpen))} difference${o.exceptionsOpen === 1 ? '' : 's'}</b> between ${gw()} and PlugSure to check. <button class="btn sm" type="button" data-go="reconciliation">Open Reconciliation</button>`) : ''}</div>
         <div class="grid k4">
           ${kpi('Collected', esc(rp(o.collected)), esc(`${fmt.num(o.payments)} payments`))}
           ${kpi('Fees incl. VAT', esc(rp(o.fees + o.vat)), esc(o.feeRate == null ? 'no payments' : `${pct(o.feeRate)} of collected`))}
@@ -165,7 +168,7 @@ registerView('finance', {
         <div class="grid k4 section">
           ${kpi('Receivable', esc(rp(o.receivable.amount)), esc(o.receivable.overdue ? `${rp(o.receivable.overdue)} overdue` : `${fmt.num(o.receivable.count)} payments not yet settled`), o.receivable.overdue ? 'warn' : '')}
           ${kpi('Settled in period', esc(rp(o.settled)), 'net, paid out to the bank')}
-          ${kpi('Balance at Xendit', esc(o.balance ? rp(o.balance.amount) : '—'), esc(o.balance ? `cash account · ${fmt.ago(o.balance.at)}` : 'not read yet'))}
+          ${kpi(`Balance at ${gw()}`, esc(o.balance ? rp(o.balance.amount) : '—'), esc(o.balance ? `${isDuitku() ? 'available (Disbursement)' : 'cash account'} · ${fmt.ago(o.balance.at)}` : isDuitku() ? 'needs the Disbursement credentials' : 'not read yet'))}
           ${kpi('Refunds due', esc(rp(o.payable.refundsDue)), esc(`${fmt.num(o.payable.refundsDueCount)} to pay back`), o.payable.refundsDueCount ? 'warn' : '')}
         </div>
         <div class="card section"><header><h3>Collected per day</h3><span class="cell-sub right">days in the platform time zone · ${esc(s?.lastRunAt ? `synced ${fmt.ago(s.lastRunAt)}` : 'not synced')}</span></header>
@@ -204,7 +207,7 @@ registerView('finance', {
           ${field('Search', '<input data-f="q" placeholder="Reference or id" autocomplete="off">')}
         </div>
         <div class="card" data-list></div><div class="row" style="justify-content:center;margin-top:10px" data-more></div>
-        <p class="cell-sub">From Xendit's ledger: amounts, fees and VAT as Xendit charged them. Net = amount − fee − VAT (money in).</p>`;
+        <p class="cell-sub">${isDuitku() ? 'Built from PlugSure\'s Duitku payments with the amount and fee Duitku reports for each; the settlement date is estimated from Duitku\'s schedule (QRIS and e-wallets 2 working days, cards 4).' : 'From Xendit\'s ledger: amounts, fees and VAT as Xendit charged them.'} Net = amount − fee − VAT (money in).</p>`;
       let rows = [];
       const draw = async (more = false) => {
         const q = new URLSearchParams({ from, to, limit: '200' });
@@ -287,9 +290,9 @@ registerView('finance', {
       body.innerHTML = `
         <div class="grid k4">${kpi('QRIS fees charged', esc(rp(q.actual)), esc(`${fmt.num(q.payments)} QRIS payments`))}
           ${kpi('PlugSure\'s estimate', esc(rp(q.estimated)), 'the MDR on owner statements')}
-          ${kpi('Difference', esc(rp(q.difference)), q.difference > 0 ? 'Xendit charged more than estimated' : q.difference < 0 ? 'Xendit charged less than estimated' : 'as estimated', Math.abs(q.difference) > 0 ? 'warn' : '')}</div>
+          ${kpi('Difference', esc(rp(q.difference)), q.difference > 0 ? `${gw()} charged more than estimated` : q.difference < 0 ? `${gw()} charged less than estimated` : 'as estimated', Math.abs(q.difference) > 0 ? 'warn' : '')}</div>
         <div class="card section"><header><h3>Fees by month and channel</h3></header><div data-rows></div></div>
-        <p class="cell-sub">Fees, VAT on fees and withholding tax as Xendit reports them on each payment. The estimate is the Bank Indonesia QRIS MDR PlugSure applies on statements (0% up to ${esc(rp(100000))}).</p>`;
+        <p class="cell-sub">Fees, VAT on fees and withholding tax as ${gw()} reports them on each payment. The estimate is the Bank Indonesia QRIS MDR PlugSure applies on statements (0% up to ${esc(rp(100000))}).</p>`;
       table($('[data-rows]', body), {
         columns: [
           { label: 'Month', render: (x) => esc(x.month) },
@@ -307,7 +310,7 @@ registerView('finance', {
     const drawReconciliation = async () => {
       body.innerHTML = `<div class="filters section" style="margin-top:0">${field('Show', '<select data-state><option value="open">Open</option><option value="resolved">Resolved</option><option value="">All</option></select>')}</div>
         <div class="card" data-list></div>
-        <p class="cell-sub">Every 6 hours PlugSure compares the last 35 days of Xendit's ledger with its own payments. A difference that is put right (a late notification, a settlement) closes itself.</p>`;
+        <p class="cell-sub">Every 6 hours PlugSure compares the last 35 days of ${gw()}'s ledger with its own payments. A difference that is put right (a late notification, a settlement) closes itself.</p>`;
       const draw = async () => {
         const st = $('[data-state]', body).value;
         let r;
@@ -315,13 +318,13 @@ registerView('finance', {
         table($('[data-list]', body), {
           columns: [
             { label: 'Difference', render: (x) => `${tag(x.state === 'open' ? EXC_TAG[x.kind] ?? 't-warn' : 't-mute', x.state === 'open' ? x.kind.replace(/_/g, ' ') : 'resolved')}<div class="wrap" style="margin-top:4px">${esc(x.text)}</div>` },
-            { label: 'Reference', render: (x) => `<span class="mono small">${esc(x.reference ?? x.gatewayId ?? '—')}</span>${x.channel ? `<div class="cell-sub">${esc(x.channel)}</div>` : ''}${x.detail?.intentState ? `<div class="cell-sub">PlugSure: ${esc(x.detail.intentState)}</div>` : ''}${x.detail?.plugsureAmount != null ? `<div class="cell-sub">PlugSure ${esc(rp(x.detail.plugsureAmount))} · Xendit ${esc(rp(x.detail.gatewayAmount))}</div>` : ''}` },
+            { label: 'Reference', render: (x) => `<span class="mono small">${esc(x.reference ?? x.gatewayId ?? '—')}</span>${x.channel ? `<div class="cell-sub">${esc(x.channel)}</div>` : ''}${x.detail?.intentState ? `<div class="cell-sub">PlugSure: ${esc(x.detail.intentState)}</div>` : ''}${x.detail?.plugsureAmount != null ? `<div class="cell-sub">PlugSure ${esc(rp(x.detail.plugsureAmount))} · ${gw()} ${esc(rp(x.detail.gatewayAmount))}</div>` : ''}` },
             { label: 'Amount', num: true, render: (x) => esc(rp(x.amount)) },
             { label: 'Seen', render: (x) => `${esc(fmt.ago(x.firstSeenAt))}${x.resolution ? `<div class="cell-sub wrap">${esc(x.resolution)}</div>` : ''}` },
             { label: '', render: (x) => (canWrite && x.state === 'open'
               ? `<div class="row nowrap" style="gap:6px">${x.canApply ? `<button class="btn sm primary" type="button" data-apply="${esc(x.id)}">Apply payment</button>` : ''}<button class="btn sm" type="button" data-resolve="${esc(x.id)}">Resolve…</button></div>` : '') },
           ],
-          rows: r.exceptions, empty: st === 'open' ? 'No open differences: Xendit and PlugSure agree.' : 'Nothing here.',
+          rows: r.exceptions, empty: st === 'open' ? `No open differences: ${gw()} and PlugSure agree.` : 'Nothing here.',
         });
         $$('[data-apply]', body).forEach((b) => b.addEventListener('click', async () => {
           b.disabled = true;
