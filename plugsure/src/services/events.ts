@@ -56,7 +56,7 @@ export interface PlugSureEvents {
   };
   /** Money is owed back to a driver (unused prepaid balance, or paid but never started). */
   'refund.due': OrgScoped & { paymentIntentId: string; amountMinor: number; currency: string; reason: string };
-  'refund.completed': OrgScoped & { paymentIntentId: string; amountMinor: number; currency: string; method: 'provider' | 'manual'; reference: string };
+  'refund.completed': OrgScoped & { paymentIntentId: string; amountMinor: number; currency: string; method: 'provider' | 'manual' | 'disbursement'; reference: string };
   /** An unpaid session (expired card hold, failed post-pay charge) was paid by the driver in the app. */
   'payment.unpaid_settled': OrgScoped & { paymentIntentId: string };
   /** A card hold was captured for what the session cost; the rest was released. */

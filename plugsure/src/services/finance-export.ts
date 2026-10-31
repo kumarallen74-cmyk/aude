@@ -7,7 +7,8 @@ import { monthClose } from './finance.js';
 
 /**
  * Finance exports (v1.12.0): one account's period, as CSV (the transactions), Excel (Summary, By channel, Fees,
- * Transactions) or PDF (the summary, by channel and fees, then the transactions). For the accountant's close.
+ * Transactions; v1.15.0 then By operator and By site, after the four sheets of v1.12.0) or PDF (the summary, by channel, by operator and site, fees, then the
+ * transactions). For the accountant's close.
  */
 
 export type ExportFormat = 'csv' | 'xlsx' | 'pdf';
@@ -49,6 +50,12 @@ export function toXlsx(a: Account, c: Close): Buffer {
       widths: [10, 20, 10, 16, 14, 12, 14, 14, 8], formats: [null, null, 'int', 'money', 'money', 'money', 'money', 'money', 'pct'] },
     { name: 'Transactions', rows: [TX_HEAD, ...c.transactions.map(txRow)], widths: [24, 30, 10, 10, 14, 38, 14, 12, 10, 12, 14, 13, 24, 38, 12, 24],
       formats: [null, null, null, null, null, null, 'money', 'money', 'money', 'money', 'money'] },
+    { name: 'By operator', rows: [['Operator', 'Payments', 'Collected', 'Fees', 'VAT on fees', 'Refunds', 'Net', 'Owners\' shares (statements)', 'Owners\' shares paid'],
+      ...c.byOperator.map((x) => [x.operator ?? '(platform / unmatched)', x.payments, x.collected, x.fees, x.vat, x.refunds, x.net, x.ownerShares, x.ownerSharesPaid])],
+      widths: [30, 10, 16, 14, 12, 14, 16, 18, 18], formats: [null, 'int', 'money', 'money', 'money', 'money', 'money', 'money', 'money'] },
+    { name: 'By site', rows: [['Operator', 'Site', 'Payments', 'Collected', 'Fees', 'VAT on fees', 'Refunds', 'Net'],
+      ...c.bySite.map((x) => [x.operator ?? '', x.site ?? '(no site: passes, unmatched)', x.payments, x.collected, x.fees, x.vat, x.refunds, x.net])],
+      widths: [26, 30, 10, 16, 14, 12, 14, 16], formats: [null, null, 'int', 'money', 'money', 'money', 'money', 'money'] },
   ];
   return xlsx(sheets);
 }
@@ -75,6 +82,16 @@ export function toPdf(a: Account, c: Close): Buffer {
   f.heading('By channel');
   f.table([{ label: 'Channel', width: 3 }, { label: 'Payments', width: 1.4, align: 'right' }, { label: 'Amount', width: 2.2, align: 'right' }, { label: 'Fees incl. VAT', width: 2.2, align: 'right' }],
     o.byChannel.map((x) => ({ cells: [x.channel, String(x.count), rp(x.amount), rp(x.fees)] })));
+  if (c.byOperator.length) {
+    f.heading('By operator');
+    f.table([{ label: 'Operator', width: 2.6 }, { label: 'Collected', width: 1.8, align: 'right' }, { label: 'Fees + VAT', width: 1.5, align: 'right' }, { label: 'Refunds', width: 1.5, align: 'right' },
+      { label: 'Net', width: 1.8, align: 'right' }, { label: 'Owners\' shares', width: 1.8, align: 'right' }, { label: 'paid', width: 1.6, align: 'right' }],
+    c.byOperator.map((x) => ({ cells: [x.operator ?? '(platform / unmatched)', rp(x.collected), rp(x.fees + x.vat), rp(x.refunds), rp(x.net), rp(x.ownerShares), rp(x.ownerSharesPaid)] })));
+    f.heading('By site');
+    f.table([{ label: 'Site', width: 3.2 }, { label: 'Payments', width: 1.2, align: 'right' }, { label: 'Collected', width: 1.9, align: 'right' }, { label: 'Fees + VAT', width: 1.6, align: 'right' },
+      { label: 'Refunds', width: 1.5, align: 'right' }, { label: 'Net', width: 1.9, align: 'right' }],
+    c.bySite.map((x) => ({ cells: [`${x.site ?? '(no site)'}${x.operator ? ` · ${x.operator}` : ''}`, String(x.payments), rp(x.collected), rp(x.fees + x.vat), rp(x.refunds), rp(x.net)] })), { size: 8 });
+  }
   if (c.fees.rows.length) {
     f.heading('Fees by month');
     f.table([{ label: 'Month', width: 1.3 }, { label: 'Channel', width: 2.2 }, { label: 'Amount', width: 2, align: 'right' }, { label: 'Fee', width: 1.7, align: 'right' }, { label: 'VAT', width: 1.5, align: 'right' }, { label: 'Rate', width: 1, align: 'right' }],

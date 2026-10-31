@@ -6,6 +6,7 @@ import { TokenBuckets } from '../services/ratelimit.js';
 import * as fin from '../services/finance.js';
 import { render, type ExportFormat } from '../services/finance-export.js';
 import * as pay from '../services/payouts.js';
+import * as xfer from '../services/refund-transfers.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -15,6 +16,7 @@ import * as pay from '../services/payouts.js';
  *   GET  /v1/finance/accounts/:id/transactions              the gateway ledger, filtered, paged
  *   GET  /v1/finance/accounts/:id/receivables               collected, not yet settled; fleet invoices due
  *   GET  /v1/finance/accounts/:id/payables                  refunds due, owners' shares on finalised statements
+ *   GET  /v1/finance/accounts/:id/breakdown                 (v1.15.0) the period by operator and by site
  *   GET  /v1/finance/accounts/:id/fees                      fees by month and channel; QRIS actual vs estimated
  *   GET  /v1/finance/accounts/:id/exceptions                reconciliation differences
  *   POST /v1/finance/accounts/:id/exceptions/:eid/apply     apply a payment the gateway has and PlugSure missed
@@ -30,6 +32,13 @@ import * as pay from '../services/payouts.js';
  *   POST /v1/finance/statement-payments/:pid/void           void a mistaken one, with a reason
  *   GET  /v1/finance/owners/:oid/bank-account               an owner's bank details (the number masked)
  *   PUT  /v1/finance/owners/:oid/bank-account               set them (the number sealed)
+ *   (v1.15.0) Duitku Disbursement: refunds sent with two people, owners' accounts checked by name
+ *   POST /v1/finance/owners/:oid/bank-account/check         the holder's name the bank has (Disbursement inquiry)
+ *   GET  /v1/refund-transfers                               refund transfers (?open=true: those not settled)
+ *   POST /v1/refunds/:id/disbursement                       request one: the driver's bank account, checked by name
+ *   POST /v1/refund-transfers/:tid/approve                  a second person approves: sent, once
+ *   POST /v1/refund-transfers/:tid/reject                   rejected or withdrawn before it is sent, with a reason
+ *   POST /v1/refund-transfers/:tid/resolve                  a result Duitku never confirmed, settled by a person
  *
  * Reading is payment:read, changing is payment:write. An operator sees its own account(s); the platform's account
  * (org NULL) needs platform:admin as well. Every action is audited.
@@ -94,9 +103,14 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     try { const a = await account(req); return await fin.receivables(a.id, a.orgId); } catch (e) { return failed(reply, e); }
   });
 
+  app.get('/v1/finance/accounts/:id/breakdown', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { const a = await account(req); return await fin.closeBreakdown(a.id, period(req)); } catch (e) { return failed(reply, e); }
+  });
+
   app.get('/v1/finance/accounts/:id/payables', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
-    try { const a = await account(req); return await fin.payables(a.id); } catch (e) { return failed(reply, e); }
+    try { const a = await account(req); return await fin.payables(a.id, a.orgId ?? null); } catch (e) { return failed(reply, e); }
   });
 
   app.get('/v1/finance/accounts/:id/fees', async (req, reply) => {
@@ -244,6 +258,71 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     assertCan(req.principal, { permission: 'payment:read' });
     const a = await pay.bankAccount(req.principal.orgId, uuidParam(req, 'oid', 'site owner'));
     return a ? { account: a } : reply.status(404).send({ error: 'No bank details saved for this owner.' });
+  });
+
+  // ─────────────────────────────────────────── (v1.15.0) Duitku Disbursement
+
+  const xferFailed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof xfer.TransferError) return reply.status(e.statusCode).send({ error: e.message });
+    return payFailed(reply, e);
+  };
+  const userUuid = (req: FastifyRequest) => (/^[0-9a-f-]{36}$/i.test(String(req.principal.userId ?? '')) ? req.principal.userId! : null);
+  const tidParam = (req: FastifyRequest) => String((req.params as Record<string, string>).tid ?? '');
+  const auditX = (req: FastifyRequest, action: string, t: xfer.TransferView, extra: Record<string, unknown> = {}) =>
+    auditPay(req, action, 'payment_intent', t.paymentId, { transfer: t.id, amount: t.amount, currency: t.currency, bank: t.bankCode, account: t.accountMasked, state: t.state, ...extra });
+
+  app.post('/v1/finance/owners/:oid/bank-account/check', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const oid = uuidParam(req, 'oid', 'site owner');
+      const r = await xfer.checkOwnerAccount(req.principal.orgId, oid);
+      await auditPay(req, 'finance.owner_bank_account_checked', 'site_owner', oid, { status: r.status, bankName: r.bankName });
+      return { check: r, account: await pay.bankAccount(req.principal.orgId, oid) };
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.get('/v1/refund-transfers', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const open = String(((req.query ?? {}) as Record<string, string>).open ?? '') === 'true';
+    return { transfers: await xfer.listTransfers(req.principal.orgId, { open }) };
+  });
+
+  app.post('/v1/refunds/:id/disbursement', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const id = uuidParam(req, 'id', 'payment');
+      const t = await xfer.requestTransfer(req.principal.orgId, id, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditX(req, 'refund.transfer_requested', t, { holder: t.holderName, bankName: t.checkedName, namesMatch: t.namesMatch });
+      return reply.status(201).send({ transfer: t });
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.post('/v1/refund-transfers/:tid/approve', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const t = await xfer.approveTransfer(req.principal.orgId, tidParam(req), userUuid(req));
+      await auditX(req, 'refund.transfer_approved', t, { responseCode: t.responseCode, error: t.error });
+      return { transfer: t };
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.post('/v1/refund-transfers/:tid/reject', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const t = await xfer.rejectTransfer(req.principal.orgId, tidParam(req), ((req.body ?? {}) as Record<string, unknown>).reason, userUuid(req));
+      await auditX(req, 'refund.transfer_rejected', t, { reason: t.reason });
+      return { transfer: t };
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.post('/v1/refund-transfers/:tid/resolve', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const t = await xfer.resolveTransfer(req.principal.orgId, tidParam(req), b.outcome, b.note, userUuid(req));
+      await auditX(req, 'refund.transfer_resolved', t, { outcome: b.outcome, note: String(b.note ?? '').slice(0, 300) });
+      return { transfer: t };
+    } catch (e) { return xferFailed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

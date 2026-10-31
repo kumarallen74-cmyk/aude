@@ -162,20 +162,48 @@ async function paymentDialog(row, { title, canWrite, onDone }) {
 }
 
 /** An owner's bank details: shown masked, set or changed (the account number is kept sealed on the server). */
+/** (v1.15.0) PlugSure Hub settlement positions, for Receivables (from the payer) and Payables (to the payee). */
+const hubPositionColumns = (who) => [
+  { label: who, render: (h) => esc(h.counterparty ?? '—') },
+  { label: 'Due', render: (h) => `${esc(fmt.date(h.dueDate))}${h.status === 'overdue' ? ` ${tag('t-crit', 'overdue')}` : h.status === 'partially_paid' ? ` ${tag('t-info', 'part-paid')}` : ''}` },
+  { label: 'Outstanding', num: true, render: (h) => `<b>${esc(fmt.money(h.outstanding, h.currency))}</b>` },
+];
+
+/** (v1.15.0) The last name check of an owner's saved account (Duitku Disbursement), if any. */
+const nameCheckLine = (a) => {
+  const c = a?.nameCheck;
+  if (!c) return '<div data-namecheck class="cell-sub" style="margin-bottom:10px">Not checked with the bank.</div>';
+  const t = c.status === 'matched' ? tag('t-ok', 'name matches') : c.status === 'mismatch' ? tag('t-warn', 'name differs') : tag('t-crit', 'check failed');
+  return `<div data-namecheck class="cell-sub" style="margin-bottom:10px">${t} ${c.bankName ? `the bank names it <b>${esc(c.bankName)}</b> · ` : ''}${esc(fmt.time(c.checkedAt))}</div>`;
+};
+
 async function bankDialog(row, { canWrite, onDone }) {
   let cur = null;
   try { cur = (await api(`/v1/finance/owners/${encodeURIComponent(row.ownerId)}/bank-account`)).account; } catch (e) { if (e.status !== 404) { toast(e.message, 'crit'); return; } }
   modal({
     title: `Bank details · ${row.owner}`,
     subtitle: cur ? `${cur.bankName} · ${cur.accountMasked} · ${cur.holderName}` : 'Not set yet',
-    body: canWrite ? `<div class="form">
+    body: (cur ? nameCheckLine(cur) : '') + (canWrite ? `<div class="form">
         ${field('Bank', `<input name="bankName" maxlength="80" placeholder="BCA, Mandiri, BRI…" value="${esc(cur?.bankName ?? '')}">`)}
         ${field('Bank code', `<input name="bankCode" maxlength="12" placeholder="014" value="${esc(cur?.bankCode ?? '')}">`, { opt: true })}
         ${field('Account holder', `<input name="holderName" maxlength="120" value="${esc(cur?.holderName ?? '')}">`, { full: true, help: 'As the bank has it.' })}
         ${field('Account number', `<input name="accountNumber" inputmode="numeric" autocomplete="off" placeholder="${esc(cur ? `${cur.accountMasked} — leave empty to keep` : '')}">`, { full: true })}
-      </div>` : (cur ? '' : callout('info', 'No bank details saved.')),
+      </div>` : (cur ? '' : callout('info', 'No bank details saved.'))),
     actions: canWrite ? [
       { label: 'Cancel' },
+      // (v1.15.0) The saved account checked with Duitku Disbursement's inquiry: the name the bank has. Nothing is sent.
+      ...(cur ? [{
+        label: 'Check name with the bank',
+        onClick: async (ctx) => {
+          try {
+            const r = await api(`/v1/finance/owners/${encodeURIComponent(row.ownerId)}/bank-account/check`, { method: 'POST' });
+            const box = $('[data-namecheck]', ctx.el);
+            if (box) box.outerHTML = nameCheckLine(r.account);
+            toast(r.check.status === 'matched' ? `The bank names it ${r.check.bankName}` : r.check.status === 'mismatch' ? `The bank names it ${r.check.bankName}, not ${r.account.holderName}` : `The check failed: ${r.check.error}`, r.check.status === 'matched' ? 'ok' : 'warn');
+          } catch (e) { toast(e.message, 'crit'); }
+          return false;
+        },
+      }] : []),
       {
         label: 'Save', kind: 'primary',
         onClick: async (ctx) => {
@@ -330,7 +358,20 @@ registerView('finance', {
         <div class="grid two section">
           <div class="card"><header><h3>By channel</h3></header><div data-channels></div></div>
           <div class="card"><header><h3>Next settlements</h3></header><div data-settle></div></div>
-        </div>`;
+        </div>
+        <div class="card section"><header><h3>By operator</h3></header><div data-byop><div class="empty-state"><span class="spinner"></span></div></div></div>
+        <p class="cell-sub">The month close by site is in the Excel and PDF exports.</p>`;
+      // (v1.15.0) The accountant's close by operator: collected, fees, refunds, net, and owners' shares on its statements.
+      api(`${base()}/breakdown?${per()}`).then((b) => table($('[data-byop]', body), {
+        columns: [
+          { label: 'Operator', render: (x) => esc(x.operator ?? 'platform / not matched') },
+          { label: 'Collected', num: true, render: (x) => `${esc(rp(x.collected))}<div class="cell-sub">${esc(fmt.num(x.payments))} payments</div>` },
+          { label: 'Fees incl. VAT', num: true, render: (x) => esc(rp(x.fees + x.vat)) },
+          { label: 'Refunds', num: true, render: (x) => esc(rp(x.refunds)) },
+          { label: 'Net', num: true, render: (x) => `<b>${esc(rp(x.net))}</b>` },
+          { label: 'Owners\' shares', num: true, render: (x) => (x.ownerShares ? `${esc(rp(x.ownerShares))}<div class="cell-sub">${esc(rp(x.ownerSharesPaid))} paid</div>` : '<span class="cell-sub">—</span>') },
+        ], rows: b.byOperator, empty: 'No payments in this period.',
+      })).catch((e) => { $('[data-byop]', body).innerHTML = callout('crit', esc(e.message)); });
       if (o.daily.length) $('[data-chart]', body).innerHTML = chart(o.daily, $('[data-chart]', body).clientWidth - 32);
       table($('[data-channels]', body), {
         columns: [
@@ -384,7 +425,9 @@ registerView('finance', {
       const r = await api(`${base()}/receivables`);
       body.innerHTML = `
         <div class="grid k4">${kpi('Not yet settled', esc(rp(r.total)), 'net of fees, all periods')}
-          ${kpi('Overdue', esc(rp(r.byDay.filter((d) => d.overdue).reduce((a, d) => a + d.net, 0))), 'past the expected settlement date', r.byDay.some((d) => d.overdue) ? 'warn' : '')}</div>
+          ${kpi('Overdue', esc(rp(r.byDay.filter((d) => d.overdue).reduce((a, d) => a + d.net, 0))), 'past the expected settlement date', r.byDay.some((d) => d.overdue) ? 'warn' : '')}
+          ${r.postpay?.count ? kpi('Post-pay not charged', esc(rp(r.postpay.amount)), esc(`${fmt.num(r.postpay.count)} sessions${r.postpay.failed ? ` · ${fmt.num(r.postpay.failed)} failed` : ''}`), r.postpay.failed ? 'warn' : '') : ''}</div>
+        ${r.hubFeeInvoices?.length || r.hubPositions?.length ? '<div class="card section" data-hub-recv></div>' : ''}
         <div class="grid two section">
           <div class="card"><header><h3>By expected settlement day</h3></header><div data-days></div></div>
           <div class="card"><header><h3>Fleet invoices due</h3></header><div data-fleet></div></div>
@@ -407,6 +450,19 @@ registerView('finance', {
         ], rows: r.fleetInvoices, empty: 'No fleet invoices outstanding for this account.',
       });
       table($('[data-rows]', body), { columns: txColumns(), rows: r.rows, empty: 'Nothing waiting to settle.' });
+      // (v1.15.0) PlugSure Hub: its fee invoices not paid (platform), or settlement positions owed to this operator.
+      const hub = $('[data-hub-recv]', body);
+      if (hub && r.hubFeeInvoices?.length) {
+        hub.innerHTML = '<header><h3>PlugSure Hub fee invoices unpaid</h3><a class="btn sm right" href="#/hub">Open Hub</a></header><div data-t></div>';
+        table($('[data-t]', hub), { columns: [
+          { label: 'Invoice', render: (h) => `<span class="mono">${esc(h.number)}</span><div class="cell-sub">${esc(h.member ?? '')}</div>` },
+          { label: 'Due', render: (h) => `${esc(fmt.date(h.dueDate))}${h.overdue ? ` ${tag('t-crit', 'overdue')}` : ''}` },
+          { label: 'Total', num: true, render: (h) => esc(fmt.money(h.total, h.currency)) },
+        ], rows: r.hubFeeInvoices, empty: '' });
+      } else if (hub) {
+        hub.innerHTML = '<header><h3>Owed to you through PlugSure Hub</h3></header><div data-t></div>';
+        table($('[data-t]', hub), { columns: hubPositionColumns('From'), rows: r.hubPositions, empty: '' });
+      }
       const ops = $('[data-op-statements]', body);
       if (ops) await operatorStatementsSection(ops, canWrite);
     };
@@ -418,7 +474,9 @@ registerView('finance', {
         <div class="grid k4">${kpi('Refunds due', esc(rp(r.refunds.reduce((a, x) => a + x.amount, 0))), esc(`${r.refunds.length} payments`), r.refunds.length ? 'warn' : '')}
           <div data-kpi-owners>${kpi('Owners\' shares outstanding', '…', 'site owners\' statements')}</div></div>
         <div class="card section"><header><h3>Refunds due</h3><a class="btn sm right" href="#/refunds">Open Refunds</a></header><div data-refunds></div></div>
-        <div class="section" data-owner-shares></div>`;
+        <div class="section" data-owner-shares></div>
+        ${r.hubPositions?.length ? '<div class="card section"><header><h3>Owed through PlugSure Hub</h3></header><div data-hub-pay></div></div>' : ''}`;
+      if (r.hubPositions?.length) table($('[data-hub-pay]', body), { columns: hubPositionColumns('To'), rows: r.hubPositions, empty: '' });
       table($('[data-refunds]', body), {
         columns: [
           { label: 'Paid', render: (x) => `${esc(fmt.time(x.paidAt))}<div class="cell-sub">${esc(x.channel ?? '')} · <span class="mono">${esc(x.reference ?? '')}</span></div>` },
@@ -441,7 +499,7 @@ registerView('finance', {
           ${kpi('PlugSure\'s estimate', esc(rp(q.estimated)), 'the MDR on owner statements')}
           ${kpi('Difference', esc(rp(q.difference)), q.difference > 0 ? `${gw()} charged more than estimated` : q.difference < 0 ? `${gw()} charged less than estimated` : 'as estimated', Math.abs(q.difference) > 0 ? 'warn' : '')}</div>
         <div class="card section"><header><h3>Fees by month and channel</h3></header><div data-rows></div></div>
-        <p class="cell-sub">Fees, VAT on fees and withholding tax as ${gw()} reports them on each payment. The estimate is the Bank Indonesia QRIS MDR PlugSure applies on statements (0% up to ${esc(rp(100000))}).</p>`;
+        <p class="cell-sub">Fees, VAT on fees and withholding tax as ${gw()} reports them on each payment. The estimate is the Bank Indonesia QRIS MDR (0% up to ${esc(rp(100000))}); from v1.15.0 owner statements use the actual fee for every payment synced here, and the estimate only for the rest.</p>`;
       table($('[data-rows]', body), {
         columns: [
           { label: 'Month', render: (x) => esc(x.month) },

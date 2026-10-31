@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.14.0 (31 October 2026), the current release:** owner payouts and statement payments recorded in Finance: owners' shares due, part-paid or paid, owners' bank details, a transfer list for the bank. Notes: [`RELEASE-NOTES-v1.14.0.md`](RELEASE-NOTES-v1.14.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.15.0 (31 October 2026), the current release:** phase 4 of the finance review: refund windows and Xendit QRIS refunds, Duitku refunds through Disbursement with two people, owners' accounts checked by name, the actual MDR on statements, and the month close by operator and site. Notes: [`RELEASE-NOTES-v1.15.0.md`](RELEASE-NOTES-v1.15.0.md); guides: [`deploy/FINANCE.md`](deploy/FINANCE.md), [`deploy/DUITKU.md`](deploy/DUITKU.md).
+
+**v1.14.0 (31 October 2026):** owner payouts and statement payments recorded in Finance: owners' shares due, part-paid or paid, owners' bank details, a transfer list for the bank. Notes: [`RELEASE-NOTES-v1.14.0.md`](RELEASE-NOTES-v1.14.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.13.0 (31 October 2026):** Duitku as the fallback acquirer when Xendit does not answer, and in Finance. Notes: [`RELEASE-NOTES-v1.13.0.md`](RELEASE-NOTES-v1.13.0.md); setup: [`deploy/DUITKU.md`](deploy/DUITKU.md).
 

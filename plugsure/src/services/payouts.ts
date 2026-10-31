@@ -27,11 +27,18 @@ const statusOf = (due: number, paid: number): PayStatus => (paid <= 0 ? 'due' : 
 
 // ─────────────────────────────────────────── bank details
 
-export interface BankAccountView { ownerId: string; bankName: string; bankCode: string | null; holderName: string; accountMasked: string; updatedAt: string }
+export interface BankAccountView {
+  ownerId: string; bankName: string; bankCode: string | null; holderName: string; accountMasked: string; updatedAt: string;
+  /** (v1.15.0) Duitku Disbursement's name check: the holder's name the bank returned (services/refund-transfers.ts). */
+  nameCheck: { status: 'matched' | 'mismatch' | 'failed'; bankName: string | null; checkedAt: string } | null;
+}
 
 export async function bankAccount(orgId: string, ownerId: string): Promise<BankAccountView | null> {
   const r = await outsideRequestScope(() => one<any>(`SELECT * FROM owner_bank_account WHERE owner_id = $1 AND org_id = $2`, [ownerId, orgId]));
-  return r ? { ownerId, bankName: r.bank_name, bankCode: r.bank_code, holderName: r.holder_name, accountMasked: `••••${r.account_last4}`, updatedAt: iso(r.updated_at)! } : null;
+  return r ? {
+    ownerId, bankName: r.bank_name, bankCode: r.bank_code, holderName: r.holder_name, accountMasked: `••••${r.account_last4}`, updatedAt: iso(r.updated_at)!,
+    nameCheck: r.name_check_status ? { status: r.name_check_status, bankName: r.name_check_name, checkedAt: iso(r.name_checked_at)! } : null,
+  } : null;
 }
 
 export async function saveBankAccount(orgId: string, ownerId: string, b: { bankName?: unknown; bankCode?: unknown; holderName?: unknown; accountNumber?: unknown }, userId: string | null): Promise<BankAccountView> {
@@ -50,10 +57,16 @@ export async function saveBankAccount(orgId: string, ownerId: string, b: { bankN
       `INSERT INTO owner_bank_account (owner_id, org_id, bank_name, bank_code, holder_name, account_number_sealed, account_last4, updated_by, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
        ON CONFLICT (owner_id) DO UPDATE SET bank_name = EXCLUDED.bank_name, bank_code = EXCLUDED.bank_code, holder_name = EXCLUDED.holder_name,
-         account_number_sealed = EXCLUDED.account_number_sealed, account_last4 = EXCLUDED.account_last4, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+         account_number_sealed = EXCLUDED.account_number_sealed, account_last4 = EXCLUDED.account_last4, updated_by = EXCLUDED.updated_by, updated_at = now(),
+         name_check_status = NULL, name_check_name = NULL, name_checked_at = NULL`,
       [ownerId, orgId, bankName, code || null, holder, seal(number, AAD(ownerId)), number.slice(-4), userId])
     // Only the bank name, code or holder changed: the sealed number stays.
-    : query(`UPDATE owner_bank_account SET bank_name = $2, bank_code = $3, holder_name = $4, updated_by = $5, updated_at = now() WHERE owner_id = $1`,
+    // A name check stands only for the account and name it checked.
+    : query(`UPDATE owner_bank_account SET bank_name = $2, bank_code = $3, holder_name = $4, updated_by = $5, updated_at = now(),
+               name_check_status = CASE WHEN holder_name = $4 AND bank_code IS NOT DISTINCT FROM $3 THEN name_check_status END,
+               name_check_name = CASE WHEN holder_name = $4 AND bank_code IS NOT DISTINCT FROM $3 THEN name_check_name END,
+               name_checked_at = CASE WHEN holder_name = $4 AND bank_code IS NOT DISTINCT FROM $3 THEN name_checked_at END
+             WHERE owner_id = $1`,
       [ownerId, bankName, code || null, holder, userId])));
   return (await bankAccount(orgId, ownerId))!;
 }

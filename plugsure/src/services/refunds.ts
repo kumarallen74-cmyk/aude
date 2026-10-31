@@ -4,6 +4,7 @@ import { bus } from './events.js';
 import { moneyText, currencyOr, LEGACY_CURRENCY } from '../domain/money.js';
 import { extras, providerOfPayment } from './payments/registry.js';
 import { PREPAID_CLAIM_WINDOW_MIN } from './sessions.js';
+import { refundWindowDays, refundDaysLeft, REFUND_WINDOW_WARN_DAYS } from './refund-windows.js';
 
 /**
  * Refunds — money PlugSure owes back to a driver.
@@ -101,7 +102,9 @@ export async function sweepUnusedPayments(): Promise<number> {
     });
   }
   if (n) logger.info({ n }, 'unused prepaid payments marked for refund');
-  return n + (await sweepProcessingRefunds());
+  // (v1.15.0) Refunds sent through Duitku Disbursement whose result is not known yet (services/refund-transfers.ts).
+  const transfers = await (await import('./refund-transfers.js')).sweepTransfers().catch((e) => { logger.warn({ err: (e as Error).message }, 'refund transfer sweep failed'); return 0; });
+  return n + transfers + (await sweepProcessingRefunds());
 }
 
 /**
@@ -115,6 +118,8 @@ export async function sweepProcessingRefunds(): Promise<number> {
     `SELECT id, org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_ref, refund_due_minor AS due
        FROM payment_intent
       WHERE refund_state = 'processing' AND updated_at < now() - make_interval(mins => $1::int)
+        -- (v1.15.0) A refund being paid through Duitku Disbursement is settled by its transfer (services/refund-transfers.ts).
+        AND refund_method IS DISTINCT FROM 'disbursement'
       ORDER BY updated_at LIMIT 50`,
     [PROCESSING_STALE_MIN],
   );
@@ -184,7 +189,8 @@ export async function processRefund(intentId: string, actorUserId: string | null
   const row = await one<{ org_id: string; provider: string; provider_ref: string | null; integration_id: string | null; channel: string | null; provider_payment_id: string | null; due: number }>(
     `UPDATE payment_intent SET refund_state = 'processing', refund_error = NULL, updated_at = now()
       WHERE id = $1 AND (refund_state IN ('due', 'failed')
-                         OR ($2::boolean AND refund_state = 'processing' AND refund_ref IS NULL AND updated_at < now() - make_interval(mins => $3::int)))
+                         OR ($2::boolean AND refund_state = 'processing' AND refund_ref IS NULL AND refund_method IS DISTINCT FROM 'disbursement'
+                             AND updated_at < now() - make_interval(mins => $3::int)))
       RETURNING org_id, provider, provider_ref, integration_id, channel, provider_payment_id, refund_due_minor AS due`,
     [intentId, opts.resume === true, PROCESSING_STALE_MIN],
   );
@@ -216,7 +222,7 @@ export async function processRefund(intentId: string, actorUserId: string | null
       reason: 'PlugSure prepaid refund',
       idempotencyKey: `refund-${intentId}`,
     });
-    if (res.status === 'failed') return fail(`Provider refused the refund${res.refundRef ? ` (${res.refundRef})` : ''}.`);
+    if (res.status === 'failed') return fail(refusal(String((res.raw as any)?.error ?? ''), res.refundRef));
     if (res.status === 'pending') {
       // Accepted by the provider, settles asynchronously; keep 'processing' with its reference (the worker and the
       // acquirer's refund callback complete it).
@@ -238,15 +244,32 @@ export async function processRefund(intentId: string, actorUserId: string | null
   }
 }
 
+/** (v1.15.0) The gateway's refusal, in words finance can act on; every one of them is then payable by bank transfer. */
+function refusal(code: string, ref: string | undefined): string {
+  const tail = ' Refund by bank transfer and record the transfer reference.';
+  const known: Record<string, string> = {
+    PARTIAL_REFUND_NOT_SUPPORTED: 'The payer\'s issuer does not allow a partial refund through the gateway.',
+    REFUND_NOT_SUPPORTED: 'The payer\'s issuer does not allow refunds through the gateway.',
+    MAXIMUM_REFUND_AMOUNT_REACHED: 'The payment has already been refunded in full at the gateway: check the gateway dashboard before paying again.',
+    REFUND_PERIOD_EXPIRED: 'The gateway\'s refund window for this payment has closed.',
+    INELIGIBLE_TRANSACTION: 'The gateway cannot refund this payment.',
+  };
+  if (known[code]) return code === 'MAXIMUM_REFUND_AMOUNT_REACHED' ? known[code] : known[code] + tail;
+  return `Provider refused the refund${ref ? ` (${ref})` : ''}${code ? `: ${code.slice(0, 120)}` : ''}.`;
+}
+
 /** Record a refund paid outside the provider (bank transfer), with its reference. */
 export async function markRefundedManually(intentId: string, reference: string, actorUserId: string | null): Promise<RefundOutcome> {
   const ref = String(reference ?? '').trim();
   if (ref.length < 3) return { ok: false, state: 'due', error: 'Enter the bank transfer reference.' };
-  const row = await one<{ org_id: string; due: number; refund_state: string; refund_ref: string | null }>(
-    `SELECT org_id, refund_due_minor AS due, refund_state, refund_ref FROM payment_intent WHERE id = $1 AND refund_state IN ('due', 'failed', 'processing')`,
+  const row = await one<{ org_id: string; due: number; refund_state: string; refund_ref: string | null; refund_method: string | null }>(
+    `SELECT org_id, refund_due_minor AS due, refund_state, refund_ref, refund_method FROM payment_intent WHERE id = $1 AND refund_state IN ('due', 'failed', 'processing')`,
     [intentId],
   );
   if (!row) return { ok: false, state: 'none', error: 'No refund is outstanding for this payment.' };
+  if (row.refund_state === 'processing' && row.refund_method === 'disbursement') {
+    return { ok: false, state: 'processing', error: 'A Duitku Disbursement transfer for this refund is awaiting approval or being made. Reject it first, or wait for its result.' };
+  }
   // A provider refund in flight or pending at the acquirer may still pay the driver: a bank transfer on top would pay
   // twice. Only once the acquirer has refused it ('failed') can it be paid another way.
   if (row.refund_state === 'processing') {
@@ -265,7 +288,10 @@ export async function markRefundedManually(intentId: string, reference: string, 
 }
 
 /** Mark the refund paid, once: only from the states given (a conditional UPDATE). False when it was not in one of them. */
-async function complete(intentId: string, orgId: string, amount: number, method: 'provider' | 'manual', reference: string, actor: string | null, from: Array<'due' | 'failed' | 'processing'>): Promise<boolean> {
+export async function completeRefund(intentId: string, orgId: string, amount: number, method: 'provider' | 'manual' | 'disbursement', reference: string, actor: string | null, from: Array<'due' | 'failed' | 'processing'>): Promise<boolean> {
+  return complete(intentId, orgId, amount, method, reference, actor, from);
+}
+async function complete(intentId: string, orgId: string, amount: number, method: 'provider' | 'manual' | 'disbursement', reference: string, actor: string | null, from: Array<'due' | 'failed' | 'processing'>): Promise<boolean> {
   const done = await one<{ id: string; currency: string }>(
     `UPDATE payment_intent
         SET refund_state = 'refunded', refunded_minor = $2, refund_method = $3, refund_ref = $4,
@@ -284,9 +310,18 @@ async function complete(intentId: string, orgId: string, amount: number, method:
   return true;
 }
 
+/**
+ * The refunds of an organisation. From v1.15.0 each row also has:
+ *   refund_window_days / refund_days_left  the gateway's refund window for the payment's channel and what is left of it
+ *                                          (services/refund-windows.ts); outstanding refunds closest to it come first
+ *   gateway_refund_status / _fee           the refund as Finance's ledger has it (Xendit: its status, and the refund fee
+ *                                          and VAT it charged), when synced
+ *   fee_kept                               the payment's own fee and VAT, which the gateway keeps on a partial refund
+ *                                          or one made more than 24 hours after the payment (Xendit QRIS and e-wallets)
+ */
 export async function listRefunds(orgId: string, state?: string) {
   const states = state && ['due', 'processing', 'refunded', 'failed'].includes(state) ? [state] : ['due', 'processing', 'refunded', 'failed'];
-  return many(
+  const rows = await many<any>(
     `SELECT pi.id, pi.refund_state, pi.refund_due_minor, pi.refunded_minor, pi.refund_reason, pi.refund_method,
             pi.refund_ref, pi.refund_error, pi.refund_requested_at, pi.refunded_at,
             pi.provider, pi.provider_ref, pi.method, pi.channel, pi.amount_captured_minor, pi.currency, COALESCE(pi.paid_at, pi.created_at) AS paid_at,
@@ -305,6 +340,36 @@ export async function listRefunds(orgId: string, state?: string) {
       LIMIT 500`,
     [orgId, states],
   );
+  // The ledger rows of these payments. A payment taken on the platform's account has its ledger outside the operator's
+  // scope (org_id NULL): read unscoped, for this organisation's own payments only.
+  const ids = rows.map((r) => r.id);
+  const ledger = ids.length ? await outsideRequestScope(() => many<{ id: string; kind: string; status: string; fee: string; amount: string; external_id: string; gateway_created_at: Date }>(
+    `SELECT payment_intent_id AS id, kind, status, (fee + vat)::text AS fee, amount::text AS amount, external_id, gateway_created_at
+       FROM gateway_transaction WHERE payment_intent_id = ANY($1::uuid[]) AND kind IN ('payment', 'refund')
+      ORDER BY gateway_created_at`, [ids])) : [];
+  const now = Date.now();
+  const out = rows.map((r) => {
+    const mine = ledger.filter((g) => g.id === r.id);
+    const pay = mine.find((g) => g.kind === 'payment' && g.status === 'success');
+    const ref = [...mine].reverse().find((g) => g.kind === 'refund' && (!r.refund_ref || g.external_id === r.refund_ref)) ?? [...mine].reverse().find((g) => g.kind === 'refund');
+    const windowDays = refundWindowDays(r.provider, r.channel ?? (r.method === 'qris' ? 'QRIS' : null));
+    const amount = Number(r.refunded_minor ?? r.refund_due_minor ?? 0);
+    const partial = r.amount_captured_minor != null && amount < Number(r.amount_captured_minor);
+    const late = r.paid_at && (r.refunded_at ? new Date(r.refunded_at).getTime() : now) - new Date(r.paid_at).getTime() > 86_400_000;
+    return {
+      ...r,
+      refund_window_days: windowDays,
+      refund_days_left: r.refund_state === 'refunded' ? null : refundDaysLeft(windowDays, r.paid_at, now),
+      partial,
+      gateway_refund_status: ref?.status ?? null,
+      gateway_refund_fee: ref ? Math.round(Number(ref.fee)) : null,
+      fee_kept: pay && r.provider === 'xendit' && (partial || late) ? Math.round(Number(pay.fee)) : null,
+    };
+  });
+  // Outstanding refunds whose window closes first lead (past it: a bank transfer, so last among the urgent).
+  const urgency = (x: any) => (x.refund_state === 'refunded' ? 3 : x.refund_days_left == null ? 2 : x.refund_days_left < 0 ? 1.5 : x.refund_days_left <= REFUND_WINDOW_WARN_DAYS ? 0 : 1);
+  return out.map((x, i) => ({ x, i })).sort((a, b) => urgency(a.x) - urgency(b.x)
+    || (urgency(a.x) === 0 ? a.x.refund_days_left - b.x.refund_days_left : 0) || a.i - b.i).map((e) => e.x);
 }
 
 export async function refundSummary(orgId: string) {
@@ -318,7 +383,15 @@ export async function refundSummary(orgId: string) {
     [orgId],
   );
   const idr = rows.find((r) => r.currency === LEGACY_CURRENCY);
+  // (v1.15.0) Outstanding refunds whose gateway refund window closes within REFUND_WINDOW_WARN_DAYS.
+  const open = await many<{ provider: string; channel: string | null; method: string | null; paid_at: Date | null }>(
+    `SELECT provider, channel, method, COALESCE(paid_at, created_at) AS paid_at FROM payment_intent WHERE org_id = $1 AND refund_state IN ('due', 'failed')`, [orgId]);
+  const closingSoon = open.filter((o) => {
+    const left = refundDaysLeft(refundWindowDays(o.provider, o.channel ?? (o.method === 'qris' ? 'QRIS' : null)), o.paid_at);
+    return left != null && left >= 0 && left <= REFUND_WINDOW_WARN_DAYS;
+  }).length;
   return {
+    closing_soon_count: closingSoon,
     due_count: rows.reduce((a, r) => a + r.due_count, 0),
     due_minor: Number(idr?.due_minor ?? 0),
     failed_count: rows.reduce((a, r) => a + r.failed_count, 0),

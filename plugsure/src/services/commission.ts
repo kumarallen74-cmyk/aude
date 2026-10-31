@@ -1,4 +1,4 @@
-import { one, many, query } from '../db/pool.js';
+import { one, many, query, outsideRequestScope } from '../db/pool.js';
 import { upgradeLegacyKeys, moneyText, isCurrency, LEGACY_CURRENCY, CURRENCY_CODES, type CurrencyCode } from '../domain/money.js';
 import { LOCALE_TAG } from '../domain/locale.js';
 import { config } from '../config.js';
@@ -109,12 +109,15 @@ export async function setSiteModel(siteId: string, model: string) {
   return r ? { site: r } : { error: 'not found' };
 }
 
+/** (v1.15.0) How a statement's MDR was arrived at: the gateway's actual fee where Finance has it, else PlugSure's estimate. */
+export interface MdrBasis { actualMinor: number; estimatedMinor: number; actualPayments: number; estimatedPayments: number }
+
 /**
  * Compute the statement for a month from live data: for the whole organisation
  * (ownerId undefined), for one owner's sites (ownerId), or for the sites that
  * have no owner (ownerId null — the operator's own sites).
  */
-export async function draftStatement(orgId: string, period: string, ownerId?: string | null, currency: CurrencyCode = LEGACY_CURRENCY): Promise<Statement & { status: 'draft'; projected: boolean }> {
+export async function draftStatement(orgId: string, period: string, ownerId?: string | null, currency: CurrencyCode = LEGACY_CURRENCY): Promise<Statement & { mdrBasis: MdrBasis; status: 'draft'; projected: boolean }> {
   // The statement's month in the organisation's zone for its currency (services/org-timezone.ts; Indonesia as v1.6).
   const tz = await billingZone(orgId, currency);
   const b = await one<{ start: Date; end: Date; days: number; now: Date }>(
@@ -149,9 +152,9 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
   // the start), not the site its charger is at now: a charger moved to another
   // site — another owner's — used to take its earlier sessions, and their
   // commission and owner share, along with it.
-  const sessions = await many<{ charge_point_id: string; site_id: string; subtotal_minor: string; local_tax_minor: string; tax_minor: string; total_minor: string; energy_wh: string; method: string | null; captured: string | null; paid_at: Date | null; needs_review: boolean }>(
+  const sessions = await many<{ charge_point_id: string; site_id: string; subtotal_minor: string; local_tax_minor: string; tax_minor: string; total_minor: string; energy_wh: string; intent_id: string | null; method: string | null; captured: string | null; paid_at: Date | null; needs_review: boolean }>(
     `SELECT cs.charge_point_id, cs.site_id, d.subtotal_minor, d.local_tax_minor, d.tax_minor, d.total_minor, cs.energy_wh,
-            pi.method, pi.amount_captured_minor AS captured, pi.created_at AS paid_at, cs.needs_review
+            pi.id AS intent_id, pi.method, pi.amount_captured_minor AS captured, pi.created_at AS paid_at, cs.needs_review
        FROM cdr d
        JOIN charging_session cs ON cs.id = d.session_id
        LEFT JOIN payment_intent pi ON pi.id = cs.payment_intent_id
@@ -160,6 +163,20 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
         AND NOT d.test_mode`,
     [orgId, b!.start, b!.end, currency],
   );
+
+  // (v1.15.0) The gateway's ACTUAL fee and VAT on the fee, where Finance has the payment in its ledger (services/finance.ts:
+  // Xendit's own figures; Duitku's per-payment fee). Else the estimate. The ledger of the platform's account is outside the
+  // operator's scope (org_id NULL): read unscoped, for this operator's own payments only.
+  const qrisIntents = currency === LEGACY_CURRENCY ? sessions.filter((s) => s.method === 'qris' && s.intent_id).map((s) => s.intent_id!) : [];
+  const actualFee = new Map<string, number>();
+  if (qrisIntents.length) {
+    const rows = await outsideRequestScope(() => many<{ id: string; fee: string }>(
+      `SELECT payment_intent_id AS id, sum(fee + vat) AS fee FROM gateway_transaction
+        WHERE payment_intent_id = ANY($1::uuid[]) AND kind = 'payment' AND status = 'success' GROUP BY 1`, [qrisIntents]));
+    for (const r of rows) actualFee.set(r.id, Math.round(Number(r.fee)));
+  }
+  const mdrBasis: MdrBasis = { actualMinor: 0, estimatedMinor: 0, actualPayments: 0, estimatedPayments: 0 };
+  const publicSite = new Set(sites.filter((x) => x.billing_model === 'public').map((x) => x.id));
 
   const byCp = new Map<string, ChargerInput>();
   for (const c of cps) {
@@ -198,8 +215,17 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
     // The QRIS MDR credit exists in Indonesia only (§D9).
     if (s.method === 'qris' && currency === LEGACY_CURRENCY) {
       // MDR is charged on what the driver paid (the prepaid amount), by the rules in force that day.
-      const amount = Number(s.captured ?? s.total_minor ?? 0);
-      c.mdrMinor += estimateQrisMdrIdr(amount, { onOrAfterOct2026: s.paid_at ? new Date(s.paid_at) >= new Date('2026-10-01T00:00:00+07:00') : undefined });
+      const actual = s.intent_id ? actualFee.get(s.intent_id) : undefined;
+      if (actual !== undefined) {
+        c.mdrMinor += actual;
+        // Counted only where the statement deducts MDR (public sites, as computeStatement).
+        if (publicSite.has(c.siteId)) { mdrBasis.actualMinor += actual; mdrBasis.actualPayments++; }
+      } else {
+        const amount = Number(s.captured ?? s.total_minor ?? 0);
+        const est = estimateQrisMdrIdr(amount, { onOrAfterOct2026: s.paid_at ? new Date(s.paid_at) >= new Date('2026-10-01T00:00:00+07:00') : undefined });
+        c.mdrMinor += est;
+        if (publicSite.has(c.siteId)) { mdrBasis.estimatedMinor += est; mdrBasis.estimatedPayments++; }
+      }
     }
   }
   // A charger with no service in the month and nothing sold does not appear.
@@ -210,7 +236,7 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
     ? { ppnRateBps: config.tax.id.ppnRateBps, dppNum: config.tax.id.ppnDppNumerator, dppDen: config.tax.id.ppnDppDenominator }
     : null;
   const st = computeStatement(plan, period, b!.days, siteIn, chargers, tax, currency);
-  return { ...st, status: 'draft', projected: new Date(b!.now).getTime() < end };
+  return { ...st, mdrBasis, status: 'draft', projected: new Date(b!.now).getTime() < end };
 }
 
 export async function orgInfo(orgId: string) {

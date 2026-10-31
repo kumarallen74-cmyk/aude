@@ -61,9 +61,9 @@ zone (WIB).
 
 | Format | Contents |
 |---|---|
-| **Excel** (.xlsx) | Four sheets: Summary, By channel, Fees, Transactions. |
+| **Excel** (.xlsx) | Summary, By channel, Fees, Transactions; (v1.15.0) then **By operator** (collected, fees, VAT, refunds, net, owners' shares and paid) and **By site**. |
 | **CSV** | Every transaction, UTF-8 with a BOM, so Excel opens it with the right characters. |
-| **PDF** | The summary, by channel, fees by month, then every transaction. For the monthly close. |
+| **PDF** | The summary, by channel, (v1.15.0) by operator and by site, fees by month, then every transaction. For the monthly close. |
 
 ## Payouts and statement payments (v1.14.0)
 
@@ -102,6 +102,35 @@ Each record, void, bank-details change and transfer-list download is in the
 audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 `finance.statement_payment_voided`, `finance.owner_bank_account_saved`,
 `finance.transfer_list_exported`).
+
+## Refunds, statements and the month close (v1.15.0)
+
+- **Refunds page.** Each refund shows the gateway's **refund window** for its
+  channel and what is left of it: Xendit OVO 90 days, DANA 30, ShopeePay 365,
+  LinkAja 30, GoPay 30, **QRIS 7** (Xendit's QRIS table; confirm with Xendit).
+  Outstanding refunds whose window closes soonest come first; a KPI counts those
+  closing within 7 days. Past the window, a refund goes by bank transfer.
+- **QRIS refunds at Xendit** go through the gateway now (they were bank
+  transfers): full, or partial where the payer's issuer allows it (DANA,
+  ShopeePay, OVO; not LinkAja). A refusal (for example
+  `PARTIAL_REFUND_NOT_SUPPORTED`) is shown in words and the refund can then be
+  paid by bank transfer.
+- **Fees on refunds.** From the ledger: the refund's status at the gateway and
+  its refund fee; and, on a partial refund or one made more than 24 hours after
+  the payment, the payment's own fee, which Xendit does not return.
+- **Duitku refunds** can be sent through Disbursement, with two people
+  ([DUITKU.md](DUITKU.md), *Refunds*).
+- **Actual MDR on statements.** Owner statements drafted (and finalised) from
+  v1.15.0 deduct the gateway's **actual** fee and VAT on the fee for every QRIS
+  payment synced here, and PlugSure's estimate only for the rest. The statement
+  says which (*actual*, *estimated*, or both with the split). Statements
+  already finalised do not change.
+- **By operator** on the Overview, and **By operator / By site** in the exports:
+  the period's collected, fees, VAT, refunds and net per operator and site, with
+  the owners' shares on statements finalised for months starting in the period.
+- **Receivables** also show post-pay sessions not charged yet; on the platform's
+  account, PlugSure Hub fee invoices unpaid; on an operator's, Hub settlement
+  positions owed to it. **Payables** show the Hub positions an operator owes.
 
 ## Reconciliation
 

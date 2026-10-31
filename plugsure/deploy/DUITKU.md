@@ -31,17 +31,20 @@ fallback acquirer*. The integration's activity also shows the error.
    3. Note the project's **merchant code** and **API key**.
    4. Ask Duitku whether the project signs with the classic MD5 scheme (the
       one in Duitku's SDK) or HMAC-SHA256.
-   5. Optionally, for the balance in Finance, enable **Disbursement
-      (Transfer Online)** and note its **user ID**, **e-mail** and **secret
-      key**.
+   5. Optionally, enable **Disbursement (Transfer Online)** and note its
+      **user ID**, **e-mail** and **secret key**. With it, Finance shows the
+      balance, and (v1.15.0) refunds of Duitku payments can be sent from the
+      Refunds page and owners' bank accounts checked by name.
 2. **In PlugSure:** go to **Govern → Integrations → Payments — fallback**,
    provider **Duitku**:
    - **Environment:** sandbox or production.
    - **Merchant code** and **API key.**
    - **Payment methods:** tick only those active on the project.
    - **QRIS method on the account:** SP or NQ.
-   - **Advanced:** the signature scheme, the Disbursement credentials, and a
-     base URL (for a proxy only).
+   - **Advanced:** the signature scheme, the Disbursement credentials, the
+     refund-transfer limits (v1.15.0: largest transfer, default 5,000,000
+     rupiah; all transfers approved in a day, default 25,000,000), and a base
+     URL (for a proxy only).
 3. **Test** asks Duitku for the project's payment methods. It reports whether
    the key works and whether the QRIS method is active.
 4. **`PUBLIC_BASE_URL`** must be the public host. PlugSure sends Duitku its
@@ -68,7 +71,42 @@ of the card. Otherwise the platform's account applies, as for payments.
 
 Duitku has no refund API. Refunds of Duitku payments, such as unused balance or
 a charge that never started, appear on the **Refunds** page as due. Pay them by
-bank transfer and record the transfer reference, as for QRIS refunds today.
+bank transfer and record the transfer reference, or (v1.15.0) send them through
+Disbursement:
+
+1. **Send via Disbursement** (`payment:write`): enter the driver's bank code,
+   account number and account holder. Duitku's inquiry returns the holder's
+   name the bank has; the console shows whether it matches. The refund is held
+   while the transfer is open, so it cannot be paid another way too.
+2. **Approve and send**, by a **second person** with `payment:write`. The
+   requester cannot approve their own transfer. Within the limits, PlugSure
+   checks the account again (the bank's name must not have changed) and sends
+   the transfer once.
+3. The result:
+   - **paid** (`00`): the refund is recorded refunded, method *Duitku
+     Disbursement*;
+   - **refused**: the refund is due again (a bank transfer, or another request);
+   - **not known** (no answer, timeout): the worker asks Duitku
+     (`inquirystatus`) every few minutes; only a confirmed payment counts. After
+     a day the operator is alerted; check Duitku's dashboard and **Settle by
+     hand** (paid, or not paid) with a note.
+4. **Reject** (or **Withdraw**, for the requester) before it is sent, with a
+   reason: the refund is due again.
+
+Every step is in the audit log (`refund.transfer_requested`, `_approved`,
+`_rejected`, `_resolved`). The account number is stored sealed.
+
+**Owners' bank accounts** (Finance → Payables → Bank details → *Check name with
+the bank*): the same inquiry, with nothing transferred. It needs the bank code.
+The check is cleared when the account number, bank code or holder changes.
+
+**To confirm with Duitku before live transfers:** the Disbursement paths
+(`/webapi/api/disbursement/inquiry`, `/transfer`, and `inquirysandbox` /
+`transfersandbox` in the sandbox; `/inquirystatus`), the signatures
+(SHA-256 of email + timestamp + bank code + account + amount + purpose + secret
+key for the inquiry; with account name, customer reference and disburseId for
+the transfer; email + timestamp + disburseId + secret key for the status), and
+the bank codes.
 
 ## Finance
 
@@ -98,3 +136,6 @@ ledger itself:
 | Callbacks answered 401 (integration activity: rejected) | The signature scheme differs. Switch *Signature scheme* (MD5 / HMAC-SHA256) to the one your project uses. |
 | "Duitku needs PUBLIC_BASE_URL" | Set `PUBLIC_BASE_URL` on the API to the public host and restart. |
 | Payments never move to Duitku | The fallback only takes over when Xendit errors. Its alert and the Xendit integration's activity show when it happened. Check that the method is ticked on the Duitku account. |
+| Refund transfer: "Duitku could not check the account" | Wrong bank code or account number, or the Disbursement credentials are wrong. Duitku's answer is in the message. |
+| Approve: "would pass the daily limit" | Approve it the next day (platform time zone), raise the limit in the integration, or pay it by bank transfer. |
+| A transfer stays *sent, not confirmed* | Duitku has not confirmed it. Check it in Duitku's dashboard, then **Settle by hand**. |
