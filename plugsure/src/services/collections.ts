@@ -61,7 +61,7 @@ async function receivables(orgId: string, platformAdmin: boolean, now = new Date
   }
   if (platformAdmin) {
     const st = await outsideRequestScope(() => many<any>(
-      `SELECT s.id, s.number, s.total_minor, s.currency, s.finalised_at, o.name,
+      `SELECT s.id, s.number, s.total_minor, s.currency, s.finalised_at, o.name, o.billing_email,
               COALESCE((SELECT sum(amount_minor) FROM statement_payment p WHERE p.statement_id = s.id AND p.voided_at IS NULL), 0)::bigint AS paid
          FROM commission_statement s JOIN organisation o ON o.id = s.org_id WHERE s.owner_id IS NULL AND s.finalised_at IS NOT NULL AND s.total_minor > 0`));
     for (const s of st) {
@@ -69,7 +69,7 @@ async function receivables(orgId: string, platformAdmin: boolean, now = new Date
       if (left <= 0) continue;
       const due = ymd(new Date(new Date(s.finalised_at).getTime() + PLATFORM_TERMS_DAYS * DAY))!;
       const d = daysBetween(due, t);
-      out.push({ kind: 'platform_statement', ref: s.id, number: s.number, counterparty: s.name, email: null, phone: null, currency: s.currency,
+      out.push({ kind: 'platform_statement', ref: s.id, number: s.number, counterparty: s.name, email: s.billing_email ?? null, phone: null, currency: s.currency,
         total: Number(s.total_minor), outstanding: left, dueDate: due, daysPastDue: d, bucket: bucketOf(d) });
     }
   }
@@ -206,7 +206,7 @@ export async function remindNow(orgId: string, platformAdmin: boolean, kind: str
   const r = await findOne(orgId, platformAdmin, kind, ref);
   const channel = b.channel === 'whatsapp' ? 'whatsapp' : 'email';
   const to = b.to == null || b.to === '' ? undefined : String(b.to).slice(0, 200);
-  if (kind === 'platform_statement' && channel === 'email' && !to) throw new CollectionsError(422, 'Enter the operator\'s billing e-mail address.');
+  if (kind === 'platform_statement' && channel === 'email' && !to && !r.email) throw new CollectionsError(422, 'Enter the operator\'s billing e-mail address.');
   const res = await remind(orgId, r, channel, r.daysPastDue, true, userId, to);
   if (!res.ok) throw new CollectionsError(502, `The reminder was not sent: ${res.error}`);
   return res;

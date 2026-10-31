@@ -1490,6 +1490,138 @@ async function exportSettings(el, canWrite) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.25.0) roaming settlement
+
+const lastMonthYm = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return zonedYmd(d).slice(0, 7); };
+
+async function roamingSection(host, canWrite, month = lastMonthYm()) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let o;
+  try { o = await api(`/v1/finance/roaming?month=${month}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (m = month) => roamingSection(host, canWrite, m);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-rm value="${esc(o.month)}">`)}
+      <div class="row" style="gap:6px;align-self:flex-end"><button class="btn" type="button" data-rcsv>${icon('download')} CSV</button></div></div>
+    ${callout('info', 'With each roaming partner: what it owes (our charge records of its drivers at our chargers) and what we owe it (its accepted records of our drivers), netted per currency. Finalise an ended month to freeze it as the settlement statement; record the transfer either way; it is matched on the bank statement.')}
+    ${Object.entries(o.totals).map(([c, t]) => `<div class="grid k4 section">${kpi('Partners owe us', esc(fmt.money(t.receivable, c)), '')}${kpi('We owe partners', esc(fmt.money(t.payable, c)), '')}${kpi('Net', esc(fmt.money(t.net, c)), t.net >= 0 ? 'in our favour' : 'we pay')}${kpi('Still to settle', esc(fmt.money(t.outstandingIn, c)), `to receive · ${fmt.money(t.outstandingOut, c)} to pay`)}</div>`).join('')}
+    <div class="card section" data-rl></div>`;
+  table($('[data-rl]', el), { columns: [
+    { label: 'Partner', render: (r) => `<div class="cell-title">${esc(r.partner.name)}</div><div class="cell-sub">${esc(r.partner.kind.toUpperCase())}${r.partner.party ? ` · ${esc(r.partner.party)}` : ''} · ${esc(r.currency)}</div>` },
+    { label: 'They owe', num: true, render: (r) => `${esc(fmt.money((r.settlement ?? r.live).receivable, r.currency))}<div class="cell-sub">${(r.settlement ?? r.live).receivableCdrs} records</div>` },
+    { label: 'We owe', num: true, render: (r) => `${esc(fmt.money((r.settlement ?? r.live).payable, r.currency))}<div class="cell-sub">${(r.settlement ?? r.live).payableCdrs} records</div>` },
+    { label: 'Net', num: true, render: (r) => `<b>${esc(fmt.money((r.settlement ?? r.live).net, r.currency))}</b>` },
+    { label: 'Settlement', render: (r) => (r.settlement
+      ? `<span class="mono">${esc(r.settlement.number)}</span> ${tag(r.settlement.status === 'settled' || r.settlement.status === 'nil' ? 't-ok' : r.settlement.status === 'partial' ? 't-warn' : 't-info', r.settlement.status)}${r.drift ? `<div class="cell-sub" style="color:var(--warn)">${esc(fmt.money(r.drift, r.currency))} arrived later</div>` : ''}`
+      : o.ended ? '<span class="cell-sub">not finalised</span>' : '<span class="cell-sub">month in progress</span>') },
+  ], rows: o.rows, empty: 'No charging with roaming partners this month.', onRow: (r) => openRoaming(r, o, canWrite, reload) });
+  $('[data-rm]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+  $('[data-rcsv]', el).addEventListener('click', async () => {
+    try { const res = await api(`/v1/finance/roaming?month=${o.month}&format=csv`, { raw: true }); download(`plugsure-roaming-${o.month}.csv`, await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+  });
+}
+
+function openRoaming(r, o, canWrite, reload) {
+  const q = `month=${o.month}&currency=${encodeURIComponent(r.currency)}`;
+  drawer({ title: r.partner.name, subtitle: esc(`${o.month} · ${r.currency}`), tabs: [
+    { id: 'settle', label: 'Settlement', async render(body, ctx) {
+      const d = await api(`/v1/finance/roaming/partners/${r.partner.id}?${q}`);
+      const m = (n) => fmt.money(n, d.currency);
+      const s = d.settlement;
+      body.innerHTML = `<div class="grid k4">${kpi('They owe', esc(m((s ?? d.live).receivable)), '')}${kpi('We owe', esc(m((s ?? d.live).payable)), '')}${kpi('Net', esc(m((s ?? d.live).net)), (s ?? d.live).net >= 0 ? 'they pay us' : 'we pay them')}${kpi('Outstanding', s ? esc(m(s.outstanding)) : '—', s ? s.status : 'not finalised')}</div>
+        <div class="row section" style="gap:6px;flex-wrap:wrap"><button class="btn" type="button" data-dcsv>${icon('download')} Records (CSV)</button>
+          ${canWrite && !s && o.ended ? '<button class="btn primary" type="button" data-fin>Finalise settlement</button>' : ''}
+          ${canWrite && s && s.outstanding > 0 ? `<button class="btn primary" type="button" data-pay>${s.direction === 'receive' ? 'Record money received' : 'Record money paid'}</button>` : ''}</div>
+        ${s ? `<div class="card section"><header><h3>Payments</h3><span class="right cell-sub mono">${esc(s.number)}</span></header><div data-pl></div></div>` : ''}
+        <div class="grid two section"><div class="card"><header><h3>They owe (our records)</h3></header><div data-ra></div></div><div class="card"><header><h3>We owe (their records)</h3></header><div data-rb></div></div></div>`;
+      if (s) table($('[data-pl]', body), { columns: [
+        { label: 'Date', render: (p) => `${esc(p.paidOn)}<div class="cell-sub">${esc(p.direction)}</div>` }, { label: 'Reference', render: (p) => `<span class="mono">${esc(p.reference)}</span>${p.voided ? ` ${tag('t-crit', 'voided')}` : ''}` },
+        { label: 'Amount', num: true, render: (p) => esc(m(p.amount)) },
+        { label: '', render: (p) => (canWrite && !p.voided ? `<button class="btn sm" type="button" data-void="${esc(p.id)}">Void</button>` : '') },
+      ], rows: d.payments, empty: 'Nothing recorded yet.' });
+      const cdrCols = [{ label: 'Ended', render: (x) => esc(x.ended) }, { label: 'kWh', num: true, render: (x) => esc(fmt.num(Math.round(x.kwh * 10) / 10)) }, { label: 'Amount', num: true, render: (x) => esc(m(x.amount)) }];
+      table($('[data-ra]', body), { columns: cdrCols, rows: d.receivable.slice(0, 200), empty: 'None.' });
+      table($('[data-rb]', body), { columns: cdrCols, rows: d.payable.slice(0, 200), empty: 'None.' });
+      $('[data-dcsv]', body).addEventListener('click', async () => {
+        try { const res = await api(`/v1/finance/roaming/partners/${r.partner.id}?${q}&format=csv`, { raw: true }); download(`plugsure-roaming-${o.month}-${r.partner.name}.csv`, await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+      });
+      $('[data-fin]', body)?.addEventListener('click', async (e) => {
+        e.currentTarget.disabled = true;
+        try { const x = await api(`/v1/finance/roaming/partners/${r.partner.id}/settle`, { method: 'POST', body: { month: o.month, currency: d.currency } }); toast(`${x.number} finalised.`, 'ok'); ctx.show('settle'); reload(); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+      });
+      $('[data-pay]', body)?.addEventListener('click', () => modal({ title: s.direction === 'receive' ? 'Money received' : 'Money paid', subtitle: s.number,
+        body: `<div class="form">${field(`Amount (${esc(d.currency)}, minor units)`, `<input name="amt" type="number" min="1" value="${s.outstanding}">`)}${field('Date', `<input name="on" type="date" value="${zonedYmd(new Date())}">`)}${field('Bank reference', '<input name="ref">')}${field('Note', '<input name="note">')}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) {
+          try { await api(`/v1/finance/roaming/settlements/${s.id}/payments`, { method: 'POST', body: { amount: Number($('[name="amt"]', mc.el).value), paidOn: $('[name="on"]', mc.el).value, reference: $('[name="ref"]', mc.el).value.trim(), note: $('[name="note"]', mc.el).value.trim() || undefined } }); toast('Recorded.', 'ok'); ctx.show('settle'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] }));
+      body.querySelectorAll('[data-void]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Void the payment', body: field('Why', '<input name="why">'),
+        actions: [{ label: 'Cancel' }, { label: 'Void', kind: 'danger', async onClick(mc) {
+          try { await api(`/v1/finance/roaming/payments/${b.dataset.void}/void`, { method: 'POST', body: { reason: $('[name="why"]', mc.el).value.trim() } }); toast('Voided.', 'ok'); ctx.show('settle'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] })));
+    } },
+  ] });
+}
+
+// ─────────────────────────────────────────── (v1.25.0) controls and the change log
+
+async function controlsSection(host, month = zonedYmd(new Date()).slice(0, 7)) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  const canAudit = state.can('audit:read');
+  if (!canAudit) { el.innerHTML = callout('info', 'Controls and the change log need the audit:read permission (Finance Manager).'); return; }
+  let c;
+  try { c = await api(`/v1/finance/controls?month=${month}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const canApprove = state.can('finance:approve');
+  const reload = (m = month) => controlsSection(host, m);
+  const open = c.findings.filter((f) => !f.acknowledged).length;
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-cm value="${esc(c.month)}">`)}
+      <div class="row" style="gap:6px;align-self:flex-end"><button class="btn" type="button" data-crep>${icon('download')} Controls report</button>${canApprove ? `<button class="btn" type="button" data-cset>${icon('gear')} Thresholds</button>` : ''}</div></div>
+    ${open ? callout('warn', `${open} finding${open === 1 ? '' : 's'} to review. Nothing is blocked: these are for a second look, and each can be acknowledged with a note.`) : callout('ok', 'No open findings this month.')}
+    <div class="card section"><header><h3>Segregation of duties</h3></header><div data-cs></div></div>
+    <div class="card section"><header><h3>Findings</h3></header><div data-cf></div></div>
+    <div class="card section"><header><h3>Change log</h3><span class="right"><input type="date" data-lf style="width:150px"> <input type="date" data-lt style="width:150px"> <input data-la placeholder="action, e.g. finance.owner" style="width:200px"> <button class="btn sm" type="button" data-lgo>Show</button> <button class="btn sm" type="button" data-lcsv>CSV</button></span></header><div data-cl></div></div>`;
+  table($('[data-cs]', el), { columns: [
+    { label: 'Control', render: (s) => `<div class="cell-title">${esc(s.title)}</div><div class="cell-sub wrap">${esc(s.why)}</div>` },
+    { label: 'Findings', num: true, render: (s) => (!s.ran ? '<span class="cell-sub">not set</span>' : s.open ? tag('t-warn', `${s.open} open`) : s.findings ? tag('t-ok', `${s.findings} acknowledged`) : tag('t-ok', 'none')) },
+  ], rows: c.summary, empty: '' });
+  table($('[data-cf]', el), { columns: [
+    { label: 'Finding', render: (f) => `<div class="wrap">${esc(f.detail)}</div><div class="cell-sub">${esc(c.summary.find((s) => s.id === f.control)?.title ?? f.control)}${f.at ? ` · ${esc(fmt.date(f.at))}` : ''}</div>` },
+    { label: '', render: (f) => (f.acknowledged ? `${tag('t-ok', 'acknowledged')}<div class="cell-sub wrap">${esc(f.acknowledged.by ?? '')}: ${esc(f.acknowledged.note)}</div>` : canApprove ? `<button class="btn sm" type="button" data-ack="${esc(f.key)}">Acknowledge</button>` : tag('t-warn', 'open')) },
+  ], rows: c.findings, empty: 'No findings.' });
+  el.querySelectorAll('[data-ack]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Acknowledge the finding', body: field('What was checked', '<textarea name="note" rows="3"></textarea>'),
+    actions: [{ label: 'Cancel' }, { label: 'Acknowledge', kind: 'primary', async onClick(mc) {
+      try { await api('/v1/finance/controls/acknowledge', { method: 'POST', body: { key: b.dataset.ack, note: $('[name="note"]', mc.el).value.trim() } }); toast('Acknowledged.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] })));
+  const lq = () => { const p = new URLSearchParams(); const f = $('[data-lf]', el).value, t = $('[data-lt]', el).value, a = $('[data-la]', el).value.trim(); if (f) p.set('from', f); if (t) p.set('to', t); if (a) p.set('action', a); return p.toString(); };
+  const drawLog = async () => {
+    let l;
+    try { l = await api(`/v1/finance/change-log?${lq()}`); } catch (e) { $('[data-cl]', el).innerHTML = callout('crit', esc(e.message)); return; }
+    table($('[data-cl]', el), { columns: [
+      { label: 'When', render: (e) => `${esc(fmt.ago(e.at))}<div class="cell-sub">${esc(fmt.date(e.at))}</div>` },
+      { label: 'Who', render: (e) => esc(e.actor.name ?? e.actor.type) },
+      { label: 'Action', render: (e) => `<span class="mono">${esc(e.action)}</span><div class="cell-sub">${esc(e.targetType ?? '')} ${esc(String(e.targetId ?? '').slice(0, 36))}</div>` },
+      { label: 'Recorded', render: (e) => `<span class="cell-sub mono wrap">${esc(JSON.stringify(e.after ?? {}).slice(0, 240))}</span>` },
+    ], rows: l.entries.slice(0, 300), empty: 'No finance changes in this period.' });
+  };
+  await drawLog();
+  $('[data-lgo]', el).addEventListener('click', drawLog);
+  $('[data-lcsv]', el).addEventListener('click', async () => {
+    try { const res = await api(`/v1/finance/change-log?${lq()}&format=csv`, { raw: true }); download('plugsure-finance-changes.csv', await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+  });
+  $('[data-cm]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+  $('[data-crep]', el).addEventListener('click', async () => {
+    try { const res = await api(`/v1/finance/controls/report?month=${c.month}`, { raw: true }); download(`plugsure-finance-controls-${c.month}.xlsx`, await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+  });
+  $('[data-cset]', el)?.addEventListener('click', () => modal({ title: 'Control thresholds', body: `<div class="form">${field('At least this many people hold finance:approve', `<input name="min" type="number" min="1" max="10" value="${c.settings.minApprovers}">`)}
+      <label class="check"><input type="checkbox" name="wh"${c.settings.workingHours ? ' checked' : ''}><span>Flag payments recorded outside working hours and at weekends</span></label>
+      ${field('From (hour)', `<input name="hf" type="number" min="0" max="23" value="${c.settings.workingHours?.from ?? 8}">`)}${field('To (hour)', `<input name="ht" type="number" min="1" max="24" value="${c.settings.workingHours?.to ?? 18}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el);
+      try { await api('/v1/finance/controls/settings', { method: 'PUT', body: { minApprovers: Number(v('min').value), workingHours: v('wh').checked ? { from: Number(v('hf').value), to: Number(v('ht').value) } : null } }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -1503,7 +1635,7 @@ registerView('finance', {
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
       { id: 'payables', label: 'Payables' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'settings', label: 'Settings' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -1873,7 +2005,8 @@ registerView('finance', {
       margin: () => marginSection(body, canWrite), budgets: () => budgetsSection(body, canWrite), collections: () => collectionsSection(body, canWrite),
       investments: () => investmentsSection(body, canWrite), close: () => closeSection(body, canWrite),
       pnl: () => pnlSection(body, canWrite), settlements: () => settlementsSection(body, base(), canWrite),
-      yearend: () => yearEndSection(body, canWrite) };
+      yearend: () => yearEndSection(body, canWrite),
+      roaming: () => roamingSection(body, canWrite), controls: () => controlsSection(body) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

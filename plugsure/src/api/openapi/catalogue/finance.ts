@@ -7,6 +7,7 @@ import { type Op, type Schema, ref, arrayOf, nullable } from '../types.js';
  */
 
 const T = 'Finance' as const;
+const PLATFORM_ADMIN = 'platform administration';
 const OWNER_PORTAL = "Site Owner portal: the console sign-in of a site owner's staff (role site_owner); API keys have no owner grant.";
 const DT = { type: 'string', format: 'date-time' };
 const money: Schema = { type: 'number' };
@@ -1054,6 +1055,154 @@ export const ops: Op[] = [
     description: '(v1.24.0) One ZIP for the accountant: the workbook (months, sites, owners, PPh 23, tax filings), each as CSV, a README and a manifest with SHA-256s (x-manifest-sha256).',
     pathParams: { year: 'YYYY.' },
     responses: { 200: { description: 'ZIP', contentType: 'application/zip', schema: { type: 'string', format: 'binary' } } },
+    errors: [422],
+  },
+
+  // ─────────────────────────── (v1.25.0) operator invoicing of PlugSure fees, roaming settlement, controls
+  {
+    method: 'GET', path: '/v1/finance/platform-invoices', tag: T, summary: 'PlugSure fee invoices to operators', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) Every finalised fee statement (an operator\'s statement to PlugSure) as an invoice: total, paid, outstanding, due (14 days after finalising), status (due, partial, overdue, paid), when e-mailed, reminders, the open payment link; the automatic invoicing settings.',
+    query: [{ name: 'status', schema: { type: 'string', enum: ['due', 'partial', 'overdue', 'paid'] } }, { name: 'operatorId', schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Invoices', schema: { type: 'object', properties: { invoices: arrayOf({ type: 'object' }), settings: { type: 'object' }, termsDays: { type: 'integer' } } } } },
+  },
+  {
+    method: 'PUT', path: '/v1/finance/platform-invoices/settings', tag: T, summary: 'Set automatic fee invoicing', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) autoSend (e-mail each fee statement once to the operator\'s billing e-mail), autoLink (with a Xendit payment link), reminderDays (up to 6 days from the due date, -14 to 180), linkDays (how long a link lasts, 1–90). Audited.',
+    body: { required: true, schema: { type: 'object', properties: { autoSend: { type: 'boolean' }, autoLink: { type: 'boolean' }, reminderDays: arrayOf({ type: 'integer' }), linkDays: { type: 'integer', minimum: 1, maximum: 90 } } }, example: { autoSend: true, autoLink: true, reminderDays: [3, 14, 30], linkDays: 30 } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object' } } },
+    errors: [422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/platform-invoices/:sid', tag: T, summary: 'A fee invoice', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) The invoice: the operator, the fee lines, tax, total, payments, outstanding, the payment links and the e-mails sent.',
+    pathParams: { sid: 'The statement id.' },
+    responses: { 200: { description: 'Invoice', schema: { type: 'object' } } },
+    errors: [404],
+  },
+  {
+    method: 'GET', path: '/v1/finance/platform-invoices/:sid/pdf', tag: T, summary: 'A fee invoice as PDF', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) PlugSure as seller, the operator as buyer; with the payment link when one is open.',
+    pathParams: { sid: 'The statement id.' },
+    responses: { 200: { description: 'PDF', contentType: 'application/pdf', schema: { type: 'string', format: 'binary' } } },
+    errors: [404],
+  },
+  {
+    method: 'POST', path: '/v1/finance/platform-invoices/:sid/send', tag: T, summary: 'E-mail a fee invoice or a reminder', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) To the operator\'s billing e-mail (or to), with the PDF; kind invoice or reminder; link true makes a payment link first. Logged and audited. 409 without an e-mail channel; 502 when the mail server refuses.',
+    pathParams: { sid: 'The statement id.' },
+    body: { schema: { type: 'object', properties: { to: { type: 'string' }, kind: { type: 'string', enum: ['invoice', 'reminder'] }, link: { type: 'boolean' } } } },
+    responses: { 200: { description: 'Sent', schema: { type: 'object', properties: { ok: { type: 'boolean' }, to: { type: 'string' }, kind: { type: 'string' }, link: nullable('string') } } } },
+    errors: [404, 409, 422, 502],
+  },
+  {
+    method: 'POST', path: '/v1/finance/platform-invoices/:sid/link', tag: T, summary: 'Make a payment link', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) A Xendit invoice on PlugSure\'s own Xendit account for what is outstanding (the open one if there is one). When Xendit reports it paid, the payment is recorded on the statement. Audited.',
+    pathParams: { sid: 'The statement id.' },
+    responses: { 200: { description: 'Link', schema: { type: 'object', properties: { id: { type: 'string' }, url: { type: 'string' }, amount: { type: 'integer' }, status: { type: 'string' } } } } },
+    errors: [404, 409, 502],
+  },
+  {
+    method: 'POST', path: '/v1/finance/platform-invoices/:sid/link/cancel', tag: T, summary: 'Stop using a payment link', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) Marks the open link expired here (expire it at Xendit too). Audited.',
+    pathParams: { sid: 'The statement id.' },
+    responses: { 200: { description: 'Cancelled', schema: { type: 'object' } } },
+    errors: [404],
+  },
+  {
+    method: 'POST', path: '/v1/finance/platform-invoices/:sid/link/check', tag: T, summary: 'Check a payment link now', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) Asks Xendit (the worker does hourly): paid records the payment once; expired closes the link.',
+    pathParams: { sid: 'The statement id.' },
+    responses: { 200: { description: 'State', schema: { type: 'object', properties: { state: { type: 'string' }, invoice: { type: 'object' } } } } },
+    errors: [404],
+  },
+  {
+    method: 'PUT', path: '/v1/finance/operators/:oid/billing-email', tag: T, summary: 'Set an operator\'s billing e-mail', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) Where PlugSure\'s fee invoices and reminders go (several separated by commas; empty to clear). Audited.',
+    pathParams: { oid: 'The operator (organisation) id.' },
+    body: { required: true, schema: { type: 'object', properties: { billingEmail: nullable('string') } } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object' } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/operators/:oid/fee-account', tag: T, summary: 'An operator\'s statement of account', internal: PLATFORM_ADMIN,
+    description: '(v1.25.0) Every fee statement and payment, per currency, with the running balance. format=csv for a CSV.',
+    pathParams: { oid: 'The operator (organisation) id.' },
+    query: [{ name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }],
+    responses: { 200: { description: 'Account', schema: { type: 'object', properties: { operator: { type: 'object' }, currencies: arrayOf({ type: 'object' }) } } } },
+    errors: [404],
+  },
+  {
+    method: 'GET', path: '/v1/finance/roaming', tag: T, summary: 'Roaming settlement',
+    description: '(v1.25.0) For a month (default last month), per roaming partner (eMSP or CPO; not hubs) and currency: what it owes us (our charge records of its drivers), what we owe it (its accepted charge records of ours), net; the settlement if finalised, with what is received or paid and outstanding, and the drift (records that arrived later). format=csv for a CSV.',
+    query: [{ name: 'month', schema: { type: 'string', pattern: '^\\d{4}-\\d{2}$' } }, { name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }],
+    responses: { 200: { description: 'Overview', schema: { type: 'object', properties: { month: { type: 'string' }, ended: { type: 'boolean' }, rows: arrayOf({ type: 'object' }), totals: { type: 'object' } } } } },
+    errors: [422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/roaming/partners/:pid', tag: T, summary: 'A roaming partner\'s month',
+    description: '(v1.25.0) The figures with the charge records behind them, both sides; the settlement and its payments. format=csv for the records as CSV (to send to the partner).',
+    pathParams: { pid: 'The OCPI partner id.' },
+    query: [{ name: 'month', schema: { type: 'string', pattern: '^\\d{4}-\\d{2}$' } }, { name: 'currency', schema: { type: 'string' } }, { name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }],
+    responses: { 200: { description: 'Detail', schema: { type: 'object' } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/roaming/partners/:pid/settle', tag: T, summary: 'Finalise a roaming settlement',
+    description: '(v1.25.0) Freezes an ended month\'s figures with the partner in a currency, numbered RS-…; once. Audited.',
+    pathParams: { pid: 'The OCPI partner id.' },
+    body: { required: true, schema: { type: 'object', required: ['month', 'currency'], properties: { month: { type: 'string' }, currency: { type: 'string' } } } },
+    responses: { 200: { description: 'Settlement', schema: { type: 'object', properties: { id: { type: 'string' }, number: { type: 'string' }, net: { type: 'integer' }, direction: { type: 'string' }, outstanding: { type: 'integer' } } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/roaming/settlements/:id/payments', tag: T, summary: 'Record a roaming settlement payment',
+    description: '(v1.25.0) Money received from the partner (net positive) or paid to it (net negative), with the bank reference; more than is outstanding is refused. Matched on bank statements as roaming_payment. Audited.',
+    pathParams: { id: 'The settlement id.' },
+    body: { required: true, schema: { type: 'object', required: ['amount', 'paidOn', 'reference'], properties: { amount: { type: 'integer', minimum: 1 }, paidOn: { type: 'string', format: 'date' }, reference: { type: 'string' }, note: { type: 'string' } } } },
+    responses: { 200: { description: 'Recorded', schema: { type: 'object', properties: { paymentId: { type: 'string' }, recorded: { type: 'string' }, status: { type: 'string' }, outstanding: { type: 'integer' } } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/roaming/payments/:id/void', tag: T, summary: 'Void a roaming settlement payment',
+    description: '(v1.25.0) With a reason; refused while it is matched to a bank line. Audited.',
+    pathParams: { id: 'The payment id.' },
+    body: { required: true, schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } },
+    responses: { 200: { description: 'Voided', schema: { type: 'object' } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/change-log', tag: T, summary: 'Finance change log',
+    description: '(v1.25.0) The finance actions in the audit log (finance, billing, refunds, fleet invoices, credit notes and credit, site owners, controls) between two days (default the last 30), by person, action prefix or target, with what was recorded before and after. format=csv for a CSV (audited).',
+    query: [{ name: 'from', schema: { type: 'string', format: 'date' } }, { name: 'to', schema: { type: 'string', format: 'date' } }, { name: 'actor', schema: { type: 'string' } }, { name: 'action', schema: { type: 'string' } }, { name: 'target', schema: { type: 'string' } }, { name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }],
+    responses: { 200: { description: 'Log', schema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, entries: arrayOf({ type: 'object' }), truncated: { type: 'boolean' } } } } },
+    errors: [422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/controls', tag: T, summary: 'Finance controls',
+    description: '(v1.25.0) Segregation-of-duties checks for a month (default this month): bank details approved then paid by the same person; a payment recorded and matched by one person; a refund approved and paid by one person; a month reopened by who locked it; too few people with finance:approve; payments outside working hours; write-offs with no collection history. Each finding with its acknowledgement.',
+    query: [{ name: 'month', schema: { type: 'string', pattern: '^\\d{4}-\\d{2}$' } }],
+    responses: { 200: { description: 'Controls', schema: { type: 'object', properties: { month: { type: 'string' }, settings: { type: 'object' }, summary: arrayOf({ type: 'object' }), findings: arrayOf({ type: 'object' }), approvers: arrayOf({ type: 'object' }) } } } },
+    errors: [422],
+  },
+  {
+    method: 'PUT', path: '/v1/finance/controls/settings', tag: T, summary: 'Set the controls\' thresholds',
+    description: '(v1.25.0) minApprovers (1–10, default 2) and workingHours ({ from, to } whole hours in the billing time zone, or null to not check). Needs finance:approve. Audited.',
+    body: { required: true, schema: { type: 'object', properties: { minApprovers: { type: 'integer', minimum: 1, maximum: 10 }, workingHours: nullable('object', { properties: { from: { type: 'integer' }, to: { type: 'integer' } } }) } }, example: { minApprovers: 2, workingHours: { from: 8, to: 18 } } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object' } } },
+    errors: [422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/controls/acknowledge', tag: T, summary: 'Acknowledge a control finding',
+    description: '(v1.25.0) A finding\'s key with a note on what was checked; recorded in the audit log (controls.finding_acknowledged). Needs finance:approve.',
+    body: { required: true, schema: { type: 'object', required: ['key', 'note'], properties: { key: { type: 'string' }, note: { type: 'string' } } } },
+    responses: { 200: { description: 'Acknowledged', schema: { type: 'object', properties: { ok: { type: 'boolean' }, key: { type: 'string' } } } } },
+    errors: [422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/controls/report', tag: T, summary: 'Monthly controls report',
+    description: '(v1.25.0) A workbook for the month: the controls, the findings, the change log and the actions per person. Audited.',
+    query: [{ name: 'month', schema: { type: 'string', pattern: '^\\d{4}-\\d{2}$' } }],
+    responses: { 200: { description: 'Workbook', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', schema: { type: 'string', format: 'binary' } } },
     errors: [422],
   },
 ];

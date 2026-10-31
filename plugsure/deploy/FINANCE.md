@@ -490,6 +490,48 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   for the accountant: the workbook, each table as CSV, a README and a
   manifest of SHA-256s.
 
+## Fee invoices, roaming settlement and controls (v1.25.0)
+
+- **Fee invoices** (Govern → Fee invoices; platform administrators). Each
+  finalised fee statement (Platform billing) is PlugSure's invoice to the
+  operator, due 14 days after finalising:
+  - **E-mail:** the invoice PDF, to the operator's billing e-mail (set it in
+    the invoice's drawer), through your e-mail channel. Each send is logged.
+  - **Payment link:** a Xendit invoice on PlugSure's own Xendit account
+    (Integrations, platform level) for what is outstanding. The operator pays
+    by virtual account, e-wallet or card; the hourly worker asks Xendit, and a
+    paid link is recorded on the statement as a platform-fee payment. If the
+    payment cannot be recorded (for example it would overpay),
+    `finance.platform_invoice_link` is raised: record it by hand.
+  - **Automatic:** e-mail each statement once it is finalised (with a link if
+    you choose), and reminders on days from the due date (e.g. 3, 14, 30).
+  - **Statement of account:** each operator's fee statements and payments,
+    with the running balance (CSV).
+- **Roaming** (tab). With each roaming partner (an eMSP or CPO over OCPI;
+  hubs are not settled here), for a month and a currency:
+  - **They owe:** our charge records of sessions their drivers started at our
+    chargers.
+  - **We owe:** their accepted charge records of our drivers (held records are
+    not owed until accepted).
+  - **Net,** and once the month has ended, **Finalise** freezes it as the
+    settlement statement (RS-…), with both sides' records as CSV for the
+    partner. Record the transfer received or paid; it is matched on the bank
+    statement (Bank) like a statement payment. Records that arrive after
+    finalising show as drift.
+- **Controls** (tab; audit:read). For a month, checks on who did what:
+  - bank details approved, then that owner paid, by the same person;
+  - a payment recorded and matched to its bank line by the same person;
+  - a driver's refund approved and recorded paid by the same person;
+  - a month reopened by the person who locked it;
+  - fewer people holding finance:approve than the minimum (default 2);
+  - payments recorded outside working hours (set them to check);
+  - a write-off with no note or reminder before it.
+
+  Nothing is blocked: a Finance Manager reviews each finding and
+  acknowledges it with a note (audited). The **change log** lists every
+  finance action from the audit log with what was recorded (CSV), and the
+  **controls report** is the month's workbook for the auditor.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

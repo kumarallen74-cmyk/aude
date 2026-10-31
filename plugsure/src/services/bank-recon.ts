@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
+import { bankCandidates as roamingCandidates } from './roaming-settlement.js';
 
 /**
  * Bank statement reconciliation (v1.18.0). The operator uploads its bank's statement (CSV: BCA KlikBCA / KlikBCA
@@ -145,12 +146,12 @@ export function parseStatement(text: string, now = new Date()): { bank: string; 
 
 // ─────────────────────────────────────────── candidates and matching
 
-export interface Candidate { kind: 'gateway_withdrawal' | 'statement_payment' | 'refund'; ref: string; date: string; amount: number; label: string; reference: string | null }
+export interface Candidate { kind: 'gateway_withdrawal' | 'statement_payment' | 'refund' | 'roaming_payment'; ref: string; date: string; amount: number; label: string; reference: string | null }
 
 /** What should appear on the operator's bank account between two dates (credits positive, debits negative). */
 export async function candidates(orgId: string, platformAdmin: boolean, from: string, to: string): Promise<Candidate[]> {
   return outsideRequestScope(async () => {
-    const [wd, sp, rf] = await Promise.all([
+    const [wd, sp, rf, rm] = await Promise.all([
       many<any>(
         `SELECT g.id::text AS ref, to_char(g.gateway_created_at::date, 'YYYY-MM-DD') AS d, round(g.amount)::bigint AS amount, g.external_id, i.provider
            FROM gateway_transaction g JOIN integration i ON i.id = g.integration_id
@@ -165,12 +166,14 @@ export async function candidates(orgId: string, platformAdmin: boolean, from: st
         `SELECT id::text AS ref, to_char(refunded_at::date, 'YYYY-MM-DD') AS d, refunded_minor AS amount, refund_ref
            FROM payment_intent WHERE org_id = $1 AND refund_state = 'refunded' AND refund_method = 'manual'
             AND refunded_at >= ($2::date - 5) AND refunded_at < ($3::date + 6)`, [orgId, from, to]),
+      roamingCandidates(orgId, from, to),
     ]);
     return [
       ...wd.map((x) => ({ kind: 'gateway_withdrawal' as const, ref: x.ref, date: x.d, amount: Number(x.amount), label: `${x.provider === 'xendit' ? 'Xendit' : x.provider} payout to the bank`, reference: x.external_id })),
       ...sp.map((x) => ({ kind: 'statement_payment' as const, ref: x.ref, date: x.d, amount: x.kind === 'owner_payout' ? -Number(x.amount) : Number(x.amount),
         label: x.kind === 'owner_payout' ? `Owner payout · ${x.who ?? ''} · ${x.number}` : `Statement paid by ${x.who ?? 'operator'} · ${x.number}`, reference: x.reference })),
       ...rf.map((x) => ({ kind: 'refund' as const, ref: x.ref, date: x.d, amount: -Number(x.amount), label: 'Refund by bank transfer', reference: x.refund_ref })),
+      ...rm,
     ];
   });
 }
@@ -281,7 +284,7 @@ export async function setMatch(orgId: string, platformAdmin: boolean, lineId: st
     await query(`UPDATE bank_statement_line SET matched_kind = 'ignored', matched_ref = NULL, matched_auto = false, matched_by = $3, matched_at = now(), note = $4 WHERE id = $1 AND org_id = $2`, [lineId, orgId, userId, note]);
     return { ok: true };
   }
-  if (!['gateway_withdrawal', 'statement_payment', 'refund'].includes(kind)) throw new BankReconError(422, 'kind is gateway_withdrawal, statement_payment, refund, ignored or none.');
+  if (!['gateway_withdrawal', 'statement_payment', 'refund', 'roaming_payment'].includes(kind)) throw new BankReconError(422, 'kind is gateway_withdrawal, statement_payment, refund, roaming_payment, ignored or none.');
   const ref = String(b.ref ?? '');
   const c = (await lineCandidates(orgId, platformAdmin, lineId)).find((x) => x.kind === kind && x.ref === ref);
   if (!c) throw new BankReconError(422, 'That record is not a candidate for this line (another direction, already matched, or not this organisation\'s).');

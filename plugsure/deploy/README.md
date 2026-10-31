@@ -521,6 +521,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      export; an S3-compatible bucket and an access key that can only write to
      it), and route finance.driver_refund_request and fleet.credit_limit
      ([FINANCE.md](FINANCE.md)).
+  18. (v1.25.0) Platform administrators: set each operator's billing e-mail
+     and automatic fee invoicing (Govern → Fee invoices; payment links need
+     PlugSure's own Xendit account under Integrations), and route
+     finance.platform_invoice_link. Operators: roaming settlement is in
+     Finance → Roaming; Finance → Controls needs audit:read, and its
+     thresholds a Finance Manager ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

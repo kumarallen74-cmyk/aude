@@ -33,6 +33,9 @@ import * as settle from '../services/settlement-tracking.js';
 import * as driverRefunds from '../services/driver-refunds.js';
 import * as warehouse from '../services/finance-warehouse.js';
 import * as yearEnd from '../services/year-end.js';
+import * as opInv from '../services/operator-invoicing.js';
+import * as roamSettle from '../services/roaming-settlement.js';
+import * as controls from '../services/finance-controls.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -1168,6 +1171,180 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await audit(req, 'finance.year_end_pack_exported', req.principal.orgId, { year: r.year, manifestSha256: r.manifestSha256 });
       return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="plugsure-year-end-${r.year}.zip"`).header('x-manifest-sha256', r.manifestSha256).send(r.body);
     } catch (e) { return p13Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.25.0) operator invoicing, roaming settlement, controls
+
+  const p14Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof opInv.InvoicingError || e instanceof roamSettle.RoamingSettlementError || e instanceof controls.ControlsError) return reply.status(e.statusCode).send({ error: e.message });
+    return p13Failed(reply, e);
+  };
+  const qs = (req: FastifyRequest) => (req.query ?? {}) as Record<string, string>;
+  const body = (req: FastifyRequest) => (req.body ?? {}) as Record<string, unknown>;
+  const platformOnly = (req: FastifyRequest) => assertCan(req.principal, { permission: 'platform:admin' });
+
+  app.get('/v1/finance/platform-invoices', async (req, reply) => {
+    platformOnly(req);
+    try { return { invoices: await opInv.list({ status: qs(req).status, operatorId: qs(req).operatorId }), settings: await opInv.settings(req.principal.orgId), termsDays: opInv.TERMS_DAYS }; } catch (e) { return p14Failed(reply, e); }
+  });
+  app.put('/v1/finance/platform-invoices/settings', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const r = await opInv.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.platform_invoicing_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.get('/v1/finance/platform-invoices/:sid', async (req, reply) => {
+    platformOnly(req);
+    try { return await opInv.invoice(prm(req, 'sid')); } catch (e) { return p14Failed(reply, e); }
+  });
+  app.get('/v1/finance/platform-invoices/:sid/pdf', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const inv = await opInv.invoice(prm(req, 'sid'));
+      const { seller, settings: fb } = await opInv.sellerOf(req.principal.orgId);
+      return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="invoice-${inv.number.replace(/[^\w-]+/g, '-')}.pdf"`)
+        .send(opInv.invoicePdf(inv, seller, fb.paymentInstructions || null));
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/platform-invoices/:sid/send', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const b = body(req);
+      const r = await opInv.send(req.principal.orgId, prm(req, 'sid'), { to: b.to, kind: b.kind === 'reminder' ? 'reminder' : 'invoice', link: b.link === true, userId: userUuid(req) });
+      await auditPay(req, `finance.platform_invoice_${r.kind === 'reminder' ? 'reminded' : 'sent'}`, 'commission_statement', prm(req, 'sid'), { to: r.to, link: r.link });
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/platform-invoices/:sid/link', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const r = await opInv.createLink(req.principal.orgId, prm(req, 'sid'), userUuid(req));
+      await auditPay(req, 'finance.platform_invoice_link_created', 'commission_statement', prm(req, 'sid'), { link: r.id, amount: r.amount, currency: r.currency });
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/platform-invoices/:sid/link/cancel', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const r = await opInv.cancelLink(prm(req, 'sid'));
+      await auditPay(req, 'finance.platform_invoice_link_cancelled', 'commission_statement', prm(req, 'sid'), {});
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/platform-invoices/:sid/link/check', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const inv = await opInv.invoice(prm(req, 'sid'));
+      if (!inv.link) return reply.status(404).send({ error: 'No open payment link on this statement.' });
+      const state = await opInv.checkLink(req.principal.orgId, inv.link.id);
+      return { state, invoice: await opInv.invoice(prm(req, 'sid')) };
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.put('/v1/finance/operators/:oid/billing-email', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const r = await opInv.setBillingEmail(prm(req, 'oid'), body(req).billingEmail);
+      await auditPay(req, 'finance.operator_billing_email_saved', 'organisation', r.operatorId, { billingEmail: r.billingEmail });
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.get('/v1/finance/operators/:oid/fee-account', async (req, reply) => {
+    platformOnly(req);
+    try {
+      const a = await opInv.accountStatement(prm(req, 'oid'));
+      if (qs(req).format === 'csv') {
+        return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="plugsure-fees-${a.operator.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv"`).send(opInv.accountCsv(a));
+      }
+      return a;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/roaming', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const o = await roamSettle.overview(req.principal.orgId, qs(req).month);
+      if (qs(req).format === 'csv') return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="plugsure-roaming-${o.month}.csv"`).send(roamSettle.overviewCsv(o));
+      return o;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.get('/v1/finance/roaming/partners/:pid', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const d = await roamSettle.detail(req.principal.orgId, prm(req, 'pid'), qs(req).month, qs(req).currency);
+      if (qs(req).format === 'csv') return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="plugsure-roaming-${d.month}-${d.currency}.csv"`).send(roamSettle.detailCsv(d));
+      return d;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/roaming/partners/:pid/settle', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await roamSettle.finalise(req.principal.orgId, prm(req, 'pid'), body(req), userUuid(req));
+      await auditPay(req, 'finance.roaming_settled', 'roaming_settlement', r.id, { number: r.number, month: r.month, currency: r.currency, receivable: r.receivable, payable: r.payable, net: r.net });
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/roaming/settlements/:id/payments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = body(req);
+      const r = await roamSettle.recordPayment(req.principal.orgId, prm(req, 'id'), b, userUuid(req));
+      await auditPay(req, 'finance.roaming_payment_recorded', 'roaming_settlement', prm(req, 'id'), { payment: r.paymentId, direction: r.recorded, amount: b.amount, paidOn: b.paidOn, reference: b.reference });
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/roaming/payments/:id/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await roamSettle.voidPayment(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.roaming_payment_voided', 'roaming_settlement_payment', prm(req, 'id'), { reason });
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/change-log', async (req, reply) => {
+    assertCan(req.principal, { permission: 'audit:read' });
+    try {
+      const l = await controls.changeLog(req.principal.orgId, qs(req));
+      if (qs(req).format === 'csv') {
+        await audit(req, 'finance.change_log_exported', req.principal.orgId, { from: l.from, to: l.to, entries: l.entries.length });
+        return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="plugsure-finance-changes-${l.from}-${l.to}.csv"`).send(controls.changeLogCsv(l));
+      }
+      return l;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.get('/v1/finance/controls', async (req, reply) => {
+    assertCan(req.principal, { permission: 'audit:read' });
+    try { return await controls.run(req.principal.orgId, qs(req).month); } catch (e) { return p14Failed(reply, e); }
+  });
+  app.put('/v1/finance/controls/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'finance:approve' });
+    try {
+      const r = await controls.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'controls.settings_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.post('/v1/finance/controls/acknowledge', async (req, reply) => {
+    assertCan(req.principal, { permission: 'finance:approve' });
+    try {
+      const b = body(req);
+      const key = controls.assertKey(b.key);
+      const note = String(b.note ?? '').trim();
+      if (!note || note.length > 500) return reply.status(422).send({ error: 'Say what was checked (up to 500 characters).' });
+      await auditPay(req, 'controls.finding_acknowledged', 'finance_control', key, { note });
+      return { ok: true, key };
+    } catch (e) { return p14Failed(reply, e); }
+  });
+  app.get('/v1/finance/controls/report', async (req, reply) => {
+    assertCan(req.principal, { permission: 'audit:read' });
+    try {
+      const r = await controls.report(req.principal.orgId, qs(req).month);
+      await audit(req, 'finance.controls_report_exported', req.principal.orgId, { month: r.month });
+      return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="plugsure-finance-controls-${r.month}.xlsx"`).send(r.xlsx);
+    } catch (e) { return p14Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
