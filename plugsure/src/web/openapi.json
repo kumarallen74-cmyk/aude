@@ -45971,6 +45971,7 @@
               "cpo_operations_manager",
               "site_host_landlord",
               "field_technician",
+              "finance_manager",
               "financial_auditor",
               "site_owner",
               "fleet_customer"
@@ -46130,6 +46131,7 @@
               "cpo_operations_manager",
               "site_host_landlord",
               "field_technician",
+              "finance_manager",
               "financial_auditor",
               "site_owner",
               "fleet_customer"
@@ -46211,6 +46213,7 @@
               "cpo_operations_manager",
               "site_host_landlord",
               "field_technician",
+              "finance_manager",
               "financial_auditor",
               "site_owner",
               "fleet_customer"

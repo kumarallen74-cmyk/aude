@@ -1,4 +1,5 @@
 import { type Op, type Schema, ref, arrayOf, nullable, OK } from '../types.js';
+import { CONSOLE_ROLES } from '../../../services/authz.js';
 
 /**
  * Console routes, part A: src/api/console-routes.ts from the top of the file to
@@ -44,7 +45,8 @@ const WEBHOOK_EVENTS = [
   'refund.completed',
   'firmware.status',
 ];
-const ROLE_NAMES = ['super_admin', 'cpo_operations_manager', 'site_host_landlord', 'field_technician', 'financial_auditor', 'site_owner', 'fleet_customer'];
+// The system roles, from the one list the server uses (a new role must not leave the documented enum behind).
+const ROLE_NAMES = CONSOLE_ROLES.map((r) => r.name);
 
 /** Statements are per currency (IDR, MYR, SGD): one each, never added across currencies. */
 const currencyQuery = { name: 'currency', description: 'Statement currency: IDR (default), MYR or SGD.', schema: { type: 'string', enum: ['IDR', 'MYR', 'SGD'] } };

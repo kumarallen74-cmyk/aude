@@ -3144,7 +3144,7 @@ export interface RoamingSite {
 }
 
 export interface RoleDefinition {
-  name: "super_admin" | "cpo_operations_manager" | "site_host_landlord" | "field_technician" | "financial_auditor" | "site_owner" | "fleet_customer";
+  name: "super_admin" | "cpo_operations_manager" | "site_host_landlord" | "field_technician" | "finance_manager" | "financial_auditor" | "site_owner" | "fleet_customer";
   label: string;
   siteScoped: boolean;
   ownerScoped?: boolean;
@@ -4508,7 +4508,7 @@ export interface UserCreateInput {
   /** Unique across PlugSure; stored lower-case. */
   email: string;
   phone?: string | null;
-  role: "super_admin" | "cpo_operations_manager" | "site_host_landlord" | "field_technician" | "financial_auditor" | "site_owner" | "fleet_customer";
+  role: "super_admin" | "cpo_operations_manager" | "site_host_landlord" | "field_technician" | "finance_manager" | "financial_auditor" | "site_owner" | "fleet_customer";
   /** Sites for site_host_landlord (at least one). */
   siteIds?: string[];
   /** The site owner, for the site_owner role (required there). */
@@ -4561,7 +4561,7 @@ export interface UserUpdateInput {
   name?: string;
   phone?: string | null;
   /** Replaces every role grant. Not allowed on your own account. */
-  role?: "super_admin" | "cpo_operations_manager" | "site_host_landlord" | "field_technician" | "financial_auditor" | "site_owner" | "fleet_customer";
+  role?: "super_admin" | "cpo_operations_manager" | "site_host_landlord" | "field_technician" | "finance_manager" | "financial_auditor" | "site_owner" | "fleet_customer";
   siteIds?: string[];
   ownerId?: string | null;
   /** Not allowed on your own account. Disabling ends the user's sessions. */
