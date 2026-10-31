@@ -360,6 +360,45 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   It sends one Excel workbook through your e-mail channel. *Send now* tries
   it at once.
 
+## Month lock, investments, revenue alerts and statements of account (v1.22.0)
+
+- **Close** (tab). Lock a month once the accountant has closed it. Only a
+  month that has ended can be locked. The dialog first shows what is still
+  open:
+  - sites with sessions but no energy bill;
+  - currencies with no rate;
+  - bank lines not matched.
+
+  In a locked month, energy bills, exchange rates, budgets and site
+  investments can't be added, changed or voided. To reopen it, a Finance
+  Manager (`finance:approve`) gives a reason. Who locked and who reopened it
+  stay in the history.
+- **Investments** (tab). *Record an investment*: the site, a category
+  (chargers, installation, grid connection, other), the amount, the date it
+  was paid, and the months it is depreciated over (default 96). Per site,
+  Finance shows:
+  - the net book value (straight-line depreciation from the month after);
+  - the margin recovered since the first investment;
+  - the payback month, reached or estimated at the last 6 months' average;
+  - a year's ROI.
+
+  Click a site to see or void its investments.
+- **Revenue drop alerts** (Settings). Each morning, each site's revenue
+  yesterday is compared with the same weekday over the 4 weeks before. A
+  drop by the threshold (default 50%) raises `finance.revenue_drop` on the
+  site: route it in Govern → Alert routing. Sites with too little history,
+  or a baseline under the minimum, aren't compared.
+- **Statements of account** (Fleet billing). Open an account's drawer →
+  **Statement**. Pick a month to see:
+  - the opening balance;
+  - invoices, credit notes, payments and refunds, with the running balance;
+  - the closing balance and the invoices still open.
+
+  Download it as a PDF or Excel, or e-mail it to the billing address. In
+  Fleet billing → **Settings → Statements of account**, choose a day (1–28).
+  On that day every account with movements or a balance is e-mailed last
+  month's statement, once.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

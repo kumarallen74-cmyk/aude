@@ -1089,6 +1089,115 @@ async function phase10Settings(el, canWrite) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.22.0) month lock, site investments, revenue drop alerts
+
+async function closeSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let r;
+  try { r = await api('/v1/finance/periods'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const canApprove = state.can('finance:approve');
+  const reload = () => closeSection(host, canWrite);
+  el.innerHTML = `${callout('info', 'Lock a month once the accountant has closed it: its energy bills, exchange rates, budgets and site investments can then no longer be added, changed or voided. Reopening needs a Finance Manager (finance:approve) and a reason.')}
+    <div class="card section"><header><h3>Months</h3></header><div data-pl></div></div>`;
+  table($('[data-pl]', el), {
+    columns: [
+      { label: 'Month', render: (m) => `<b>${esc(m.month)}</b>` },
+      { label: 'State', render: (m) => (m.locked ? `${tag('t-ok', 'locked')}<div class="cell-sub">${esc(m.lockedBy ?? '')} · ${esc(fmt.ago(m.lockedAt))}${m.note ? ` · ${esc(m.note)}` : ''}</div>` : m.lockable ? tag('t-mute', 'open') : '<span class="cell-sub">in progress</span>') },
+      { label: 'History', render: (m) => (m.history.filter((h) => h.reopenedAt).length ? `<span class="cell-sub">${m.history.filter((h) => h.reopenedAt).map((h) => `reopened by ${esc(h.reopenedBy ?? '')} (${esc(h.reopenReason ?? '')})`).join('; ')}</span>` : '') },
+      { label: '', render: (m) => (!canWrite || !m.lockable ? '' : m.locked ? (canApprove ? `<button class="btn sm" type="button" data-reopen="${m.month}">Reopen</button>` : '') : `<button class="btn sm primary" type="button" data-lock="${m.month}">Close &amp; lock…</button>`) },
+    ],
+    rows: r.months, empty: 'No months.',
+  });
+  el.addEventListener('click', async (e) => {
+    const lb = e.target.closest('[data-lock]'), rb = e.target.closest('[data-reopen]');
+    if (lb) {
+      const month = lb.dataset.lock;
+      let ck;
+      try { ck = await api(`/v1/finance/periods/${month}/checklist`); } catch (err) { toast(err.message, 'crit'); return; }
+      modal({ title: `Lock ${month}`, subtitle: ck.ready ? 'Everything is in' : 'Some things are still open',
+        body: `<ul class="plain">${ck.items.map((i) => `<li>${tag(i.ok ? 't-ok' : 't-warn', i.ok ? 'done' : 'open')} ${esc(i.label)}${i.sites?.length ? `<div class="cell-sub">${i.sites.map((x) => esc(x.name)).join(', ')}</div>` : ''}</li>`).join('')}</ul>
+          <div class="form one" style="margin-top:10px">${field('Note', '<input name="note" maxlength="300" placeholder="e.g. Closed with the accountant on 5 Nov">', { opt: true })}</div>`,
+        actions: [{ label: 'Cancel' }, { label: ck.ready ? 'Lock' : 'Lock anyway', kind: 'primary', async onClick(ctx) {
+          try { await api(`/v1/finance/periods/${month}/lock`, { method: 'POST', body: { note: $('[name="note"]', ctx.body).value.trim() || undefined } }); toast(`${month} locked.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] });
+    }
+    if (rb) {
+      const month = rb.dataset.reopen;
+      modal({ title: `Reopen ${month}`, body: `<div class="form one">${field('Why', '<input name="why" maxlength="300" placeholder="e.g. Late electricity bill">')}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Reopen', kind: 'danger', async onClick(ctx) {
+          try { await api(`/v1/finance/periods/${month}/reopen`, { method: 'POST', body: { reason: $('[name="why"]', ctx.body).value.trim() } }); toast(`${month} reopened.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] });
+    }
+  });
+}
+
+const INV_CAT = { chargers: 'Chargers', installation: 'Installation', grid: 'Grid connection', other: 'Other' };
+async function investmentsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let r, sites;
+  try { [r, sites] = await Promise.all([api('/v1/finance/investments'), api('/v1/finance/energy').then((x) => x.sites)]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => investmentsSection(host, canWrite);
+  const totals = Object.entries(r.totals);
+  el.innerHTML = `${totals.length ? `<div class="grid k4">${totals.map(([c, t]) => `${kpi('Invested', esc(fmt.money(t.invested, c)), 'not voided')}${kpi('Net book value', esc(fmt.money(t.netBookValue, c)), 'after depreciation')}${kpi('Margin recovered', esc(fmt.money(t.recovered, c)), t.invested ? `${Math.round((t.recovered / t.invested) * 100)}% of invested` : '')}`).join('')}</div>` : ''}
+    <div class="card section"${totals.length ? '' : ' style="margin-top:0"'}><header><h3>By site</h3>${canWrite ? '<button class="btn sm right primary" type="button" data-inew>Record an investment</button>' : ''}</header><div data-il></div></div>
+    <p class="cell-sub">Depreciation is straight line from the month after the payment. The margin recovered is revenue − energy cost (Margin) since the first investment; the payback month is when it covered the investment, or when it will at the last 6 months' average margin. ROI: a year's margin at that average less a year's depreciation, ÷ invested.</p>`;
+  table($('[data-il]', el), {
+    columns: [
+      { label: 'Site', render: (x) => `${esc(x.siteName)}<div class="cell-sub">since ${esc(x.since)} · ${Object.entries(x.byCategory).filter(([, v]) => v).map(([k, v]) => `${INV_CAT[k]} ${fmt.money(v, x.currency)}`).map(esc).join(' · ')}</div>` },
+      { label: 'Invested', num: true, render: (x) => esc(fmt.money(x.invested, x.currency)) },
+      { label: 'Book value', num: true, render: (x) => `${esc(fmt.money(x.depreciation.netBookValue, x.currency))}<div class="cell-sub">${esc(fmt.money(x.depreciation.perMonth, x.currency))}/month</div>` },
+      { label: 'Recovered', num: true, render: (x) => `${esc(fmt.money(x.recovered.margin, x.currency))}<div class="cell-sub">${esc(pctTxt(x.recovered.pct))}${x.recovered.unknownCostMonths ? ` · ${x.recovered.unknownCostMonths} month(s) without energy cost` : ''}</div>` },
+      { label: 'Payback', render: (x) => (x.payback ? `${x.payback.projected ? tag('t-info', `est. ${x.payback.month}`) : tag('t-ok', x.payback.month)}<div class="cell-sub">${x.payback.monthsFromStart} months</div>` : tag('t-warn', 'not at this margin')) },
+      { label: 'ROI', num: true, render: (x) => esc(x.roiPct == null ? '—' : `${x.roiPct}%`) },
+    ],
+    rows: r.sites, empty: 'No investments recorded yet.',
+    onRow: (x) => modal({ title: `Investments — ${x.siteName}`, size: 'lg',
+      body: `<table class="table"><thead><tr><th>Paid</th><th>What</th><th class="num">Amount</th><th class="num">Months</th><th></th></tr></thead><tbody>${x.items.map((i) => `<tr><td>${esc(i.investedOn)}</td><td>${esc(INV_CAT[i.category])}<div class="cell-sub">${esc(i.description)}${i.reference ? ` · ${esc(i.reference)}` : ''}</div></td><td class="num">${esc(fmt.money(i.amount, i.currency))}</td><td class="num">${i.lifeMonths}</td><td>${canWrite ? `<button class="btn sm" type="button" data-ivoid="${esc(i.id)}">Void</button>` : ''}</td></tr>`).join('')}</tbody></table>`,
+      onMount: (ctx) => $$('[data-ivoid]', ctx.el).forEach((b) => b.addEventListener('click', async () => {
+        const reason = window.prompt('Why is this investment voided?');
+        if (!reason || !reason.trim()) return;
+        try { await api(`/v1/finance/investments/${b.dataset.ivoid}/void`, { method: 'POST', body: { reason: reason.trim() } }); toast('Voided.', 'ok'); ctx.close(); reload(); } catch (e) { toast(e.message, 'crit'); }
+      })),
+    }),
+  });
+  $('[data-inew]', el)?.addEventListener('click', () => modal({ title: 'Record an investment', subtitle: 'In the site\'s currency',
+    body: `<div class="form">${field('Site', `<select name="site">${sites.map((x) => `<option value="${esc(x.siteId)}">${esc(x.site)} (${esc(x.currency)})</option>`).join('')}</select>`)}
+      ${field('Category', `<select name="cat">${Object.entries(INV_CAT).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>`)}
+      ${field('Description', '<input name="desc" maxlength="200" placeholder="2 × 60 kW DC">', { full: true })}
+      ${field('Amount', '<input name="amount" inputmode="decimal">')}${field('Paid on', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}
+      ${field('Depreciated over (months)', '<input name="life" type="number" min="1" max="360" value="96">')}${field('Reference', '<input name="ref" maxlength="80">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(ctx) {
+      const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+      const cur = sites.find((x) => x.siteId === v('site'))?.currency;
+      try { await api('/v1/finance/investments', { method: 'POST', body: { siteId: v('site'), category: v('cat'), description: v('desc'), amount: toMinor(v('amount').replace(',', '.'), cur), investedOn: v('on'), lifeMonths: Number(v('life')), reference: v('ref') || undefined } }); toast('Recorded.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+}
+
+async function phase11Settings(el, canWrite) {
+  let ra;
+  try { ra = await api('/v1/finance/revenue-alerts'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const st = ra.settings, dis = canWrite ? '' : ' disabled';
+  el.innerHTML = `<div class="card section"><header><h3>Revenue drop alerts</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">Each morning, every site's revenue yesterday is compared with the same weekday over the 4 weeks before; a fall by the threshold or more raises an alert (a charger down, a payment method failing, a tariff typed wrong). Sites with less than 3 of those weeks, or a baseline under the minimum, are not compared.</p>
+      <div class="filters" style="margin-top:0"><label class="check" style="align-self:flex-end"><input type="checkbox" name="ra_on"${st.enabled ? ' checked' : ''}${dis}><span>Alert on revenue drops</span></label>
+      ${field('Drop of at least (%)', `<input name="ra_pct" type="number" min="10" max="100" value="${st.dropPct}" style="width:90px"${dis}>`)}
+      ${field('Minimum baseline (minor unit)', `<input name="ra_min" inputmode="numeric" value="${st.minBaseline}" style="width:140px"${dis}>`)}
+      ${canWrite ? '<div class="row" style="align-self:flex-end"><button class="btn" type="button" data-rasave>Save</button></div>' : ''}</div>
+      <div data-ral></div></div></div>`;
+  table($('[data-ral]', el), { columns: [
+    { label: 'Day', render: (a) => esc(fmt.date(a.day)) }, { label: 'Site', render: (a) => esc(a.site) },
+    { label: 'Revenue', num: true, render: (a) => `${esc(fmt.money(a.revenue, a.currency))}<div class="cell-sub">usual ${esc(fmt.money(a.baseline, a.currency))}</div>` },
+    { label: 'Drop', num: true, render: (a) => tag('t-warn', `−${a.dropPct}%`) },
+  ], rows: ra.anomalies, empty: 'No drops in the last 90 days.' });
+  $('[data-rasave]', el)?.addEventListener('click', async () => {
+    try { await api('/v1/finance/revenue-alerts/settings', { method: 'PUT', body: { enabled: $('[name="ra_on"]', el).checked, dropPct: Number($('[name="ra_pct"]', el).value), minBaseline: Number($('[name="ra_min"]', el).value.replace(/\D/g, '') || 0) } }); toast('Saved.', 'ok'); phase11Settings(el, canWrite); } catch (e) { toast(e.message, 'crit'); }
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -1102,7 +1211,7 @@ registerView('finance', {
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
       { id: 'payables', label: 'Payables' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'settings', label: 'Settings' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'close', label: 'Close' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -1433,9 +1542,11 @@ registerView('finance', {
           </tbody></table></div></div>
         ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}
         <div class="section" data-acct-sw></div>
-        <div data-p10></div>`;
+        <div data-p10></div>
+        <div data-p11></div>`;
       accountingSection($('[data-acct-sw]', body), base(), canWrite, st.accountingPackage);
       phase10Settings($('[data-p10]', body), canWrite);
+      phase11Settings($('[data-p11]', body), canWrite);
       $('[data-jdl]', body).addEventListener('click', () => $('[data-journal]', bodyAll).click());
       $('[data-save]', body)?.addEventListener('click', async () => {
         const journalAccounts = Object.fromEntries(Object.keys(r.defaults).map((k) => [k, { code: $(`[name="code_${k}"]`, body).value.trim(), name: $(`[name="name_${k}"]`, body).value.trim() }]));
@@ -1463,7 +1574,8 @@ registerView('finance', {
       bank: () => bankSection(body, canWrite), tax: () => taxSection(body, canWrite),
       forecast: () => { load(); return forecastSection(body, base(), gw()); },
       summary: () => summarySection(body),
-      margin: () => marginSection(body, canWrite), budgets: () => budgetsSection(body, canWrite), collections: () => collectionsSection(body, canWrite) };
+      margin: () => marginSection(body, canWrite), budgets: () => budgetsSection(body, canWrite), collections: () => collectionsSection(body, canWrite),
+      investments: () => investmentsSection(body, canWrite), close: () => closeSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

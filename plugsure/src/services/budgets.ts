@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { month as energyMonth, lastMonths } from './energy-margin.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { consolidate } from './fx.js';
+import { assertOpen } from './finance-periods.js';
 
 /**
  * Budgets vs actuals (v1.20.0). A budget is set per month for the organisation (all sites) or for one site, per
@@ -104,6 +105,7 @@ export async function compare(orgId: string, mRaw: unknown) {
 export async function save(orgId: string, b: Record<string, unknown>, userId: string | null) {
   const m = String(b.month ?? '');
   if (!MONTH_RE.test(m)) throw new BudgetError(422, 'month is YYYY-MM.');
+  await assertOpen(orgId, m, 'A budget', (st, msg) => new BudgetError(st, msg));
   let siteId: string | null = null, currency = String(b.currency ?? '');
   if (b.siteId) {
     const s = await outsideRequestScope(() => one<{ id: string; currency: string }>(

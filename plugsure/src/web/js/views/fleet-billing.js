@@ -495,6 +495,48 @@ async function renderAccounts(box, canWrite) {
           },
         },
         {
+          // (v1.22.0) The statement of account: opening balance, invoices, credit notes, payments, closing; PDF, Excel, e-mail.
+          id: 'soa', label: 'Statement',
+          async render(b) {
+            const d0 = new Date(); d0.setDate(1); d0.setMonth(d0.getMonth() - 1);
+            const months = recentMonths(`${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`, 13);
+            const draw = async (month) => {
+              b.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+              let st, log;
+              try { [st, log] = await Promise.all([api(`/v1/fleet-accounts/${id}/account-statement?month=${month}`), api(`/v1/fleet-account-statements?account=${id}`)]); } catch (e) { b.innerHTML = callout('crit', esc(e.message)); return; }
+              const KL = { invoice: 'Invoice', credit_note: 'Credit note', payment: 'Payment', refund: 'Refund' };
+              b.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+                  <select data-soam>${months.map((m) => `<option value="${m}"${m === month ? ' selected' : ''}>${esc(monthLabel(m))}</option>`).join('')}</select>
+                  <button class="btn sm" type="button" data-soapdf>${icon('download')} PDF</button><button class="btn sm" type="button" data-soaxl>Excel</button>
+                  ${canWrite ? `<button class="btn sm primary" type="button" data-soasend>E-mail to ${esc(st.account.email || '…')}</button>` : ''}</div>
+                ${st.currencies.length ? '' : '<div class="empty-state">No invoices, credit notes or payments up to the end of this month.</div>'}
+                ${st.currencies.map((c, ci) => `<div class="card section"${ci ? '' : ' style="margin-top:0"'}><header><h3>${st.currencies.length > 1 ? esc(c.currency) : 'Movements'}</h3><span class="right cell-sub">opening ${esc(fmt.money(c.opening, c.currency))} · closing <b>${esc(fmt.money(c.closing, c.currency))}</b></span></header><div data-soat="${ci}"></div>
+                  ${c.open.length ? `<div class="body cell-sub">Open at month end: ${c.open.map((o) => `${esc(o.number)} ${esc(fmt.money(o.outstanding, c.currency))}${o.daysPastDue > 0 ? ` (${o.daysPastDue} days past due)` : ''}`).join(' · ')}</div>` : ''}</div>`).join('')}
+                <p class="cell-sub">${log.sent.length ? `Last sent: ${esc(log.sent[0].month)} to ${esc(log.sent[0].to ?? '')} ${esc(fmt.ago(log.sent[0].at))}${log.sent[0].automatic ? ' (automatic)' : ''}${log.sent[0].error ? ` — failed: ${esc(log.sent[0].error)}` : ''}` : 'Not sent yet.'}</p>`;
+              st.currencies.forEach((c, ci) => table($(`[data-soat="${ci}"]`, b), {
+                columns: [
+                  { label: 'Date', render: (e) => esc(fmt.date(e.date)) },
+                  { label: 'What', render: (e) => `${esc(KL[e.kind])} <span class="mono">${esc(e.number)}</span><div class="cell-sub">${esc(e.description)}</div>` },
+                  { label: 'Debit', num: true, render: (e) => (e.debit ? esc(fmt.money(e.debit, c.currency)) : '') },
+                  { label: 'Credit', num: true, render: (e) => (e.credit ? esc(fmt.money(e.credit, c.currency)) : '') },
+                  { label: 'Balance', num: true, render: (e) => `<b>${esc(fmt.money(e.balance, c.currency))}</b>` },
+                ],
+                rows: c.entries, empty: 'No movements this month.',
+              }));
+              $('[data-soam]', b).addEventListener('change', (e) => draw(e.target.value));
+              $('[data-soapdf]', b).addEventListener('click', () => open(`/v1/fleet-accounts/${id}/account-statement.pdf?month=${month}`));
+              $('[data-soaxl]', b).addEventListener('click', async () => {
+                try { const res = await api(`/v1/fleet-accounts/${id}/account-statement.xlsx?month=${month}`, { raw: true }); download(`statement-of-account-${month}.xlsx`, await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+              });
+              $('[data-soasend]', b)?.addEventListener('click', async (ev) => {
+                ev.currentTarget.disabled = true;
+                try { const r = await api(`/v1/fleet-accounts/${id}/account-statement/send`, { method: 'POST', body: { month } }); toast(`Sent to ${r.to}.`, 'ok'); draw(month); } catch (e) { toast(e.message, 'crit'); ev.currentTarget.disabled = false; }
+              });
+            };
+            await draw(months[0]);
+          },
+        },
+        {
           id: 'portal', label: `Portal access (${a.portalUsers?.length ?? 0})`,
           async render(b) {
             const cur = await api(`/v1/fleet-accounts/${id}`);
@@ -549,7 +591,7 @@ async function renderAccounts(box, canWrite) {
 // ─────────────────────────────────────────── settings
 
 async function renderSettings(box) {
-  const r = await api('/v1/fleet-billing/settings');
+  const [r, soa] = await Promise.all([api('/v1/fleet-billing/settings'), api('/v1/fleet-account-statements')]);
   const s = r.settings;
   const ef = s.efaktur;
   box.innerHTML = `
@@ -573,7 +615,17 @@ async function renderSettings(box) {
         ${field('Membership fees: unit', `<input name="feeUnitCode" value="${esc(ef.feeUnitCode ?? '')}" placeholder="UM.0000">`)}
         <div class="field full"><label class="check"><input type="checkbox" name="confirmed"${ef.confirmed ? ' checked' : ''}> <span>Confirmed with our tax adviser${ef.confirmed && ef.confirmedAt ? ` <span class="cell-sub">(${esc(fmt.date(ef.confirmedAt))})</span>` : ''}</span></label></div>
       </div></div></div>
-    <button class="btn primary" type="button" data-save>Save settings</button>`;
+    <button class="btn primary" type="button" data-save>Save settings</button>
+    <div class="card section"><header><h3>Statements of account</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">Each fleet account's statement for the month just ended — opening balance, invoices, credit notes, payments and what it still owes — e-mailed as a PDF to its billing address on a day of each month, through your e-mail channel. Accounts with nothing to show are skipped. An account's statement can also be seen and sent from its drawer (Accounts → Statement).</p>
+      <div class="filters" style="margin-top:0"><label class="check" style="align-self:flex-end"><input type="checkbox" name="soa_on"${soa.settings.enabled ? ' checked' : ''}><span>Send them automatically</span></label>
+      ${field('On day', `<input name="soa_day" type="number" min="1" max="28" value="${esc(String(soa.settings.day))}" style="width:80px">`)}
+      <div class="row" style="align-self:flex-end"><button class="btn" type="button" data-soasave>Save</button></div></div>
+      <p class="cell-sub">${soa.sent.length ? `${soa.sent.length} sent so far; the last ${esc(fmt.ago(soa.sent[0].at))} to ${esc(soa.sent[0].account)}.` : 'None sent yet.'}</p></div></div>`;
+  $('[data-soasave]', box).addEventListener('click', async () => {
+    try { await api('/v1/fleet-account-statements/settings', { method: 'PUT', body: { enabled: $('[name="soa_on"]', box).checked, day: Number($('[name="soa_day"]', box).value) } }); toast('Saved', 'ok'); }
+    catch (e) { toast(e.message, 'crit'); }
+  });
   $('[data-save]', box).addEventListener('click', async () => {
     const v = formValues(box);
     try {

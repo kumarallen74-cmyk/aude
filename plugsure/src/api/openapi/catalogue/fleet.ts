@@ -597,4 +597,46 @@ export const ops: Op[] = [
     responses: { 200: { description: 'Done', schema: { type: 'object', properties: { ok: { type: 'boolean' }, status: { type: 'string' } } } } },
     errors: [404, 409],
   },
+  // (v1.22.0) statements of account
+  {
+    method: 'GET', path: '/v1/fleet-accounts/:id/account-statement', tag: T, summary: 'A fleet account\'s statement of account', pathParams: ID,
+    description: '(v1.22.0) For the month, per currency: the opening balance, the invoices, credit notes, payments and refunds (with the running balance), the closing balance, and the invoices still open at month end by age.',
+    query: [{ name: 'month', required: true, description: 'Month, YYYY-MM.', schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }],
+    responses: { 200: { description: 'Statement', schema: { type: 'object', properties: { month: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, account: { type: 'object' }, seller: { type: 'object' }, currencies: arrayOf({ type: 'object', properties: { currency: { type: 'string' }, opening: money(), closing: money(), entries: arrayOf({ type: 'object' }), open: arrayOf({ type: 'object' }), aging: { type: 'object' } } }) } } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'GET', path: '/v1/fleet-accounts/:id/account-statement.pdf', tag: T, summary: 'Download a statement of account as PDF', pathParams: ID,
+    description: '(v1.22.0) The statement of account for the month as a PDF.',
+    query: [{ name: 'month', required: true, description: 'Month, YYYY-MM.', schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }],
+    responses: { 200: { description: 'PDF', contentType: 'application/pdf', schema: { type: 'string', format: 'binary' } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'GET', path: '/v1/fleet-accounts/:id/account-statement.xlsx', tag: T, summary: 'Download a statement of account as Excel', pathParams: ID,
+    description: '(v1.22.0) The movements and the open invoices, one sheet each.',
+    query: [{ name: 'month', required: true, description: 'Month, YYYY-MM.', schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }],
+    responses: { 200: { description: 'Workbook', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', schema: { type: 'string', format: 'binary' } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'POST', path: '/v1/fleet-accounts/:id/account-statement/send', tag: T, summary: 'E-mail a statement of account', pathParams: ID,
+    description: '(v1.22.0) To the account\'s billing address (or `to`), with the PDF attached, through the e-mail channel; logged. 409 without an e-mail channel; 502 when the server refuses. Audited as fleet_account.statement_sent.',
+    body: { required: true, schema: { type: 'object', required: ['month'], properties: { month: { type: 'string' }, to: { type: 'string' } } } },
+    responses: { 200: { description: 'Sent', schema: { type: 'object', properties: { ok: { type: 'boolean' }, to: { type: 'string' }, month: { type: 'string' }, reference: nullable('string') } } } },
+    errors: [404, 409, 422, 502],
+  },
+  {
+    method: 'GET', path: '/v1/fleet-account-statements', tag: T, summary: 'Statements of account sent',
+    description: '(v1.22.0) The automatic statements setting (enabled, day of the month) and the last 200 statements e-mailed (automatic or by hand). account: one account.',
+    query: [{ name: 'account', schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Sent', schema: { type: 'object', properties: { settings: { type: 'object', properties: { enabled: { type: 'boolean' }, day: { type: 'integer' } } }, sent: arrayOf({ type: 'object' }) } } } },
+  },
+  {
+    method: 'PUT', path: '/v1/fleet-account-statements/settings', tag: T, summary: 'Set automatic statements of account',
+    description: '(v1.22.0) enabled; day 1–28: on that day of each month, every account with a billing address that had movements or owes something is e-mailed its statement for the month just ended. Audited.',
+    body: { required: true, schema: { type: 'object', properties: { enabled: { type: 'boolean' }, day: { type: 'integer', minimum: 1, maximum: 28 } } }, example: { enabled: true, day: 3 } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object' } } },
+    errors: [422],
+  },
 ];

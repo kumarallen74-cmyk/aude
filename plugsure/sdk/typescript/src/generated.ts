@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.21.0";
+export const API_VERSION = "1.22.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5359,6 +5359,15 @@ export type CheckChargingProfileDriftResponse = {
   drift: number;
 };
 
+export type CheckDayForRevenueDropsBody = {
+  day: string;
+};
+
+export type CheckDayForRevenueDropsResponse = {
+  day?: string;
+  found?: Record<string, unknown>[];
+};
+
 export type CheckSiteOwnerBankAccountByNameResponse = {
   check: {
     status?: "matched" | "mismatch" | "failed";
@@ -5733,6 +5742,18 @@ export type EMailFleetInvoiceResponse = {
   reference?: string | null;
 };
 
+export type EMailStatementOfAccountBody = {
+  month: string;
+  to?: string;
+};
+
+export type EMailStatementOfAccountResponse = {
+  ok?: boolean;
+  to?: string;
+  month?: string;
+  reference?: string | null;
+};
+
 export type EnergyCostAndMarginByMonthResponse = {
   months?: {
     month?: string;
@@ -5910,6 +5931,22 @@ export type FinanceSummaryKeyFiguresResponse = {
   months?: string[];
   perCurrency?: Record<string, unknown>[];
   consolidated?: Record<string, unknown> | null;
+};
+
+export type FleetAccountStatementOfAccountResponse = {
+  month?: string;
+  from?: string;
+  to?: string;
+  account?: Record<string, unknown>;
+  seller?: Record<string, unknown>;
+  currencies?: {
+    currency?: string;
+    opening?: number;
+    closing?: number;
+    entries?: Record<string, unknown>[];
+    open?: Record<string, unknown>[];
+    aging?: Record<string, unknown>;
+  }[];
 };
 
 export type GatewayFeeAuditResponse = {
@@ -6361,6 +6398,16 @@ export type ListWebhookEndpointsResponse = {
   rows: WebhookEndpointRow[];
 };
 
+export type LockMonthBody = {
+  note?: string;
+};
+
+export type LockMonthResponse = {
+  id?: string;
+  month?: string;
+  locked?: boolean;
+};
+
 export type MatchIgnoreOrUnmatchBankLineBody = {
   kind: "gateway_withdrawal" | "statement_payment" | "refund" | "ignored" | "none";
   ref?: string;
@@ -6370,6 +6417,28 @@ export type MatchIgnoreOrUnmatchBankLineBody = {
 export type MatchIgnoreOrUnmatchBankLineResponse = {
   ok: boolean;
   amountDiffers?: boolean;
+};
+
+export type MonthCloseChecklistResponse = {
+  month?: string;
+  ready?: boolean;
+  items?: {
+    key?: "energy_bills" | "fx_rates" | "bank_lines";
+    ok?: boolean;
+    label?: string;
+  }[];
+};
+
+export type MonthLocksResponse = {
+  months?: {
+    month?: string;
+    locked?: boolean;
+    lockable?: boolean;
+    lockedBy?: string | null;
+    lockedAt?: string | null;
+    note?: string | null;
+    history?: Record<string, unknown>[];
+  }[];
 };
 
 export type MyCommissionTermsPerCurrencyResponse = {
@@ -7040,6 +7109,16 @@ export type RecordSiteElectricityBillResponse = {
   id?: string;
 };
 
+export type RecordSiteInvestmentBody = {
+  siteId: string;
+  category: "chargers" | "installation" | "grid" | "other";
+  description: string;
+  amount: number;
+  investedOn: string;
+  lifeMonths?: number;
+  reference?: string;
+};
+
 export type RecordTaxRegistrationInCountryBody = {
   countryCode: "ID" | "MY" | "SG";
   /** Default true. */
@@ -7164,6 +7243,16 @@ export type RemoveVariableMonitorClearVariableMonitoringResponse = {
 export type RenameSuspendOrResumePartnerBody = {
   name?: string;
   state?: "suspended" | "connected";
+};
+
+export type ReopenLockedMonthBody = {
+  reason: string;
+};
+
+export type ReopenLockedMonthResponse = {
+  id?: string;
+  month?: string;
+  locked?: boolean;
 };
 
 export type ReplaceAlertContactResponse = {
@@ -7295,6 +7384,15 @@ export type RetryFailedFirmwareJobsResponse = {
   ok: true;
   /** Jobs reset. */
   retried: number;
+};
+
+export type RevenueDropAlertsResponse = {
+  settings?: {
+    enabled?: boolean;
+    dropPct?: number;
+    minBaseline?: number;
+  };
+  anomalies?: Record<string, unknown>[];
 };
 
 export type RevokeApiKeyResponse = {
@@ -7547,6 +7645,11 @@ export type SetApprovalsMatrixResponse = {
   canApprove?: boolean;
 };
 
+export type SetAutomaticStatementsOfAccountBody = {
+  enabled?: boolean;
+  day?: number;
+};
+
 export type SetBudgetAlertThresholdBody = {
   budgetAlertPct: number;
 };
@@ -7606,6 +7709,12 @@ export type SetReportingCurrencyBody = {
 
 export type SetReportingCurrencyResponse = {
   reportingCurrency?: string | null;
+};
+
+export type SetRevenueDropAlertsBody = {
+  enabled?: boolean;
+  dropPct?: number;
+  minBaseline?: number;
 };
 
 export type SetRoamingIdentityBody = {
@@ -7803,6 +7912,13 @@ export type SiteDriverQueueResponse = {
   };
 };
 
+export type SiteInvestmentsAndPaybackResponse = {
+  asOf?: string;
+  sites?: Record<string, unknown>[];
+  totals?: Record<string, unknown>;
+  voided?: Record<string, unknown>[];
+};
+
 export type SiteOwnerBankDetailsResponse = {
   account: OwnerBankAccount;
 };
@@ -7841,6 +7957,14 @@ export type StartSessionRemotelyBody = {
   limitType?: "none" | "energy" | "duration" | "amount";
   /** energy: 0.1–1000 kWh; duration: 1–1440 minutes; amount: Rp 1,000–10,000,000 (converted to energy through the tariff). */
   limitValue?: number;
+};
+
+export type StatementsOfAccountSentResponse = {
+  settings?: {
+    enabled?: boolean;
+    day?: number;
+  };
+  sent?: Record<string, unknown>[];
 };
 
 export type StopSessionRemotelyBody = {
@@ -8071,6 +8195,14 @@ export type VoidRecordedPaymentBody = {
 export type VoidRecordedPaymentResponse = {
   ok: boolean;
   statement: StatementDue;
+};
+
+export type VoidSiteInvestmentBody = {
+  reason: string;
+};
+
+export type VoidSiteInvestmentResponse = {
+  ok?: boolean;
 };
 
 export type VoidWithholdingRecordBody = {
@@ -9095,6 +9227,19 @@ export class Operations {
   }
 
   /**
+   * Check a day for revenue drops
+   *
+   * (v1.22.0) Compare every site's revenue on a day with its baseline now (the worker checks yesterday every morning); drops are recorded and alerted.
+   *
+   * `POST /v1/finance/revenue-alerts/check` · needs `payment:write`
+   */
+  checkDayForRevenueDrops(params: {
+    body: CheckDayForRevenueDropsBody;
+  }, options?: RequestOptions): Promise<CheckDayForRevenueDropsResponse> {
+    return this.transport.request<CheckDayForRevenueDropsResponse>({ method: "POST", path: "/v1/finance/revenue-alerts/check", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Check the iOS notifications key with Apple again
    *
    * Asks APNs about a device token that cannot exist: Apple checks the key first, so nobody is notified.
@@ -9711,6 +9856,42 @@ export class Operations {
   }
 
   /**
+   * Download a statement of account as Excel
+   *
+   * (v1.22.0) The movements and the open invoices, one sheet each.
+   *
+   * `GET /v1/fleet-accounts/{id}/account-statement.xlsx` · needs `invoice:read`
+   */
+  downloadStatementOfAccountAsExcel(params: {
+    /** Fleet account id. */
+    id: string;
+    query: {
+      /** Month, YYYY-MM. */
+      month: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/fleet-accounts/{id}/account-statement.xlsx", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
+  }
+
+  /**
+   * Download a statement of account as PDF
+   *
+   * (v1.22.0) The statement of account for the month as a PDF.
+   *
+   * `GET /v1/fleet-accounts/{id}/account-statement.pdf` · needs `invoice:read`
+   */
+  downloadStatementOfAccountAsPdf(params: {
+    /** Fleet account id. */
+    id: string;
+    query: {
+      /** Month, YYYY-MM. */
+      month: string;
+    };
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/fleet-accounts/{id}/account-statement.pdf", pathParams: { id: params.id }, query: params.query, accept: "binary" }, options);
+  }
+
+  /**
    * Download the store build kit
    *
    * A zip with everything to build and list the app: an Android Trusted Web Activity project for Bubblewrap with launcher icons, Digital Asset Links and a CI workflow; an iOS Capacitor shell with the App Store icon, Info.plist and entitlement additions and the app-site association; and store listing texts (Indonesian, English) with data-safety answers. The `x-kit-warnings` header counts what is still missing (listed in the kit’s README).
@@ -9763,6 +9944,21 @@ export class Operations {
     body?: EMailFleetInvoiceBody;
   }, options?: RequestOptions): Promise<EMailFleetInvoiceResponse> {
     return this.transport.request<EMailFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * E-mail a statement of account
+   *
+   * (v1.22.0) To the account's billing address (or `to`), with the PDF attached, through the e-mail channel; logged. 409 without an e-mail channel; 502 when the server refuses. Audited as fleet_account.statement_sent.
+   *
+   * `POST /v1/fleet-accounts/{id}/account-statement/send` · needs `invoice:write`
+   */
+  eMailStatementOfAccount(params: {
+    /** Fleet account id. */
+    id: string;
+    body: EMailStatementOfAccountBody;
+  }, options?: RequestOptions): Promise<EMailStatementOfAccountResponse> {
+    return this.transport.request<EMailStatementOfAccountResponse>({ method: "POST", path: "/v1/fleet-accounts/{id}/account-statement/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10039,6 +10235,24 @@ export class Operations {
    */
   financeSummaryKeyFigures(options?: RequestOptions): Promise<FinanceSummaryKeyFiguresResponse> {
     return this.transport.request<FinanceSummaryKeyFiguresResponse>({ method: "GET", path: "/v1/finance/summary", accept: "json" }, options);
+  }
+
+  /**
+   * A fleet account's statement of account
+   *
+   * (v1.22.0) For the month, per currency: the opening balance, the invoices, credit notes, payments and refunds (with the running balance), the closing balance, and the invoices still open at month end by age.
+   *
+   * `GET /v1/fleet-accounts/{id}/account-statement` · needs `invoice:read`
+   */
+  fleetAccountStatementOfAccount(params: {
+    /** Fleet account id. */
+    id: string;
+    query: {
+      /** Month, YYYY-MM. */
+      month: string;
+    };
+  }, options?: RequestOptions): Promise<FleetAccountStatementOfAccountResponse> {
+    return this.transport.request<FleetAccountStatementOfAccountResponse>({ method: "GET", path: "/v1/fleet-accounts/{id}/account-statement", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -11423,6 +11637,21 @@ export class Operations {
   }
 
   /**
+   * Lock a month
+   *
+   * (v1.22.0) A month that has ended. Energy bills, exchange rates, budgets and site investments dated in it can then not be added, changed or voided (409). Audited as finance.period_locked.
+   *
+   * `POST /v1/finance/periods/{month}/lock` · needs `payment:write`
+   */
+  lockMonth(params: {
+    /** YYYY-MM. */
+    month: string;
+    body: LockMonthBody;
+  }, options?: RequestOptions): Promise<LockMonthResponse> {
+    return this.transport.request<LockMonthResponse>({ method: "POST", path: "/v1/finance/periods/{month}/lock", pathParams: { month: params.month }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Match, ignore or unmatch a bank line
    *
    * (v1.18.0) kind: a candidate's kind with its ref; ignored with a note (bank fee, another business); none to undo. A record matches one line only (409). payment:write; audited as finance.bank_line_matched.
@@ -11435,6 +11664,31 @@ export class Operations {
     body: MatchIgnoreOrUnmatchBankLineBody;
   }, options?: RequestOptions): Promise<MatchIgnoreOrUnmatchBankLineResponse> {
     return this.transport.request<MatchIgnoreOrUnmatchBankLineResponse>({ method: "POST", path: "/v1/finance/bank-lines/{lid}/match", pathParams: { lid: params.lid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A month's close checklist
+   *
+   * (v1.22.0) What is still open before locking: sites with sessions and no energy bill, currencies without a rate into the reporting currency, bank statement lines not matched.
+   *
+   * `GET /v1/finance/periods/{month}/checklist` · needs `payment:read`
+   */
+  monthCloseChecklist(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<MonthCloseChecklistResponse> {
+    return this.transport.request<MonthCloseChecklistResponse>({ method: "GET", path: "/v1/finance/periods/{month}/checklist", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Month locks
+   *
+   * (v1.22.0) The last 24 months: locked or open, whether they can be locked (ended), who locked them, and each lock's history (reopened by whom and why).
+   *
+   * `GET /v1/finance/periods` · needs `payment:read`
+   */
+  monthLocks(options?: RequestOptions): Promise<MonthLocksResponse> {
+    return this.transport.request<MonthLocksResponse>({ method: "GET", path: "/v1/finance/periods", accept: "json" }, options);
   }
 
   /**
@@ -12236,6 +12490,19 @@ export class Operations {
   }
 
   /**
+   * Record a site investment
+   *
+   * (v1.22.0) In the site's currency (minor unit). lifeMonths: the depreciation period (default 96). 409 when its month is locked. Audited as finance.investment_recorded.
+   *
+   * `POST /v1/finance/investments` · needs `payment:write`
+   */
+  recordSiteInvestment(params: {
+    body: RecordSiteInvestmentBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/investments", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a tax registration in a country
    *
    * From the date given, sessions in that country are taxed by it; the registration in force there before ends that day (409 when the new date is not after its start). `registered: false` records that the organisation is not registered from that date. Malaysia: service tax is charged on EV charging only with `evChargingTaxable: true`. An Indonesian registration in force today also sets the organisation's PKP / NPWP. Audited.
@@ -12544,6 +12811,21 @@ export class Operations {
     body: RenameSuspendOrResumePartnerBody;
   }, options?: RequestOptions): Promise<RoamingPartner> {
     return this.transport.request<RoamingPartner>({ method: "PATCH", path: "/v1/roaming/partners/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Reopen a locked month
+   *
+   * (v1.22.0) Needs finance:approve (403 otherwise) and a reason. Audited as finance.period_reopened.
+   *
+   * `POST /v1/finance/periods/{month}/reopen` · needs `payment:write`, `finance:approve`
+   */
+  reopenLockedMonth(params: {
+    /** YYYY-MM. */
+    month: string;
+    body: ReopenLockedMonthBody;
+  }, options?: RequestOptions): Promise<ReopenLockedMonthResponse> {
+    return this.transport.request<ReopenLockedMonthResponse>({ method: "POST", path: "/v1/finance/periods/{month}/reopen", pathParams: { month: params.month }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12862,6 +13144,17 @@ export class Operations {
   }
 
   /**
+   * Revenue drop alerts
+   *
+   * (v1.22.0) The settings (enabled, dropPct, minBaseline) and the site days found below their baseline (the same weekday's average over the 4 weeks before) in the last 90 days.
+   *
+   * `GET /v1/finance/revenue-alerts` · needs `payment:read`
+   */
+  revenueDropAlerts(options?: RequestOptions): Promise<RevenueDropAlertsResponse> {
+    return this.transport.request<RevenueDropAlertsResponse>({ method: "GET", path: "/v1/finance/revenue-alerts", accept: "json" }, options);
+  }
+
+  /**
    * Revoke an API key
    *
    * Revokes a key immediately. The row stays in the list with `revoked_at` set.
@@ -13168,6 +13461,19 @@ export class Operations {
   }
 
   /**
+   * Set automatic statements of account
+   *
+   * (v1.22.0) enabled; day 1–28: on that day of each month, every account with a billing address that had movements or owes something is e-mailed its statement for the month just ended. Audited.
+   *
+   * `PUT /v1/fleet-account-statements/settings` · needs `invoice:write`
+   */
+  setAutomaticStatementsOfAccount(params: {
+    body: SetAutomaticStatementsOfAccountBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/fleet-account-statements/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the budget alert threshold
    *
    * (v1.20.0) From the 7th of the month, revenue below or energy cost above the pro-rated budget by more than this % raises finance.budget_off_track. Audited.
@@ -13275,6 +13581,19 @@ export class Operations {
     body: SetReportingCurrencyBody;
   }, options?: RequestOptions): Promise<SetReportingCurrencyResponse> {
     return this.transport.request<SetReportingCurrencyResponse>({ method: "PUT", path: "/v1/finance/fx-rates/reporting-currency", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set revenue drop alerts
+   *
+   * (v1.22.0) enabled; dropPct 10–100 (default 50); minBaseline: the smallest baseline compared (minor unit). Audited.
+   *
+   * `PUT /v1/finance/revenue-alerts/settings` · needs `payment:write`
+   */
+  setRevenueDropAlerts(params: {
+    body: SetRevenueDropAlertsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/revenue-alerts/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13507,6 +13826,21 @@ export class Operations {
   }
 
   /**
+   * Site investments and payback
+   *
+   * (v1.22.0) Per site with investments: invested (by category), depreciation (per month, accumulated, net book value; straight line from the month after), the margin recovered since the first investment, the payback month (reached, or projected at the last 6 months' average margin) and a year's ROI. site: one site.
+   *
+   * `GET /v1/finance/investments` · needs `payment:read`
+   */
+  siteInvestmentsAndPayback(params?: {
+    query?: {
+      site?: string;
+    };
+  }, options?: RequestOptions): Promise<SiteInvestmentsAndPaybackResponse> {
+    return this.transport.request<SiteInvestmentsAndPaybackResponse>({ method: "GET", path: "/v1/finance/investments", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * A site owner's bank details
    *
    * Where the owner is paid: bank, code, account holder; the account number masked (it is stored sealed). 404 when none are saved.
@@ -13559,6 +13893,21 @@ export class Operations {
     body: StartSessionRemotelyBody;
   }, options?: RequestOptions): Promise<CommandRemoteStartResult> {
     return this.transport.request<CommandRemoteStartResult>({ method: "POST", path: "/v1/charge-points/{identity}/remote-start", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Statements of account sent
+   *
+   * (v1.22.0) The automatic statements setting (enabled, day of the month) and the last 200 statements e-mailed (automatic or by hand). account: one account.
+   *
+   * `GET /v1/fleet-account-statements` · needs `invoice:read`
+   */
+  statementsOfAccountSent(params?: {
+    query?: {
+      account?: string;
+    };
+  }, options?: RequestOptions): Promise<StatementsOfAccountSentResponse> {
+    return this.transport.request<StatementsOfAccountSentResponse>({ method: "GET", path: "/v1/fleet-account-statements", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -14139,6 +14488,21 @@ export class Operations {
     body: VoidRecordedPaymentBody;
   }, options?: RequestOptions): Promise<VoidRecordedPaymentResponse> {
     return this.transport.request<VoidRecordedPaymentResponse>({ method: "POST", path: "/v1/finance/statement-payments/{pid}/void", pathParams: { pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a site investment
+   *
+   * (v1.22.0) With a reason. 409 when its month is locked. Audited as finance.investment_voided.
+   *
+   * `POST /v1/finance/investments/{iid}/void` · needs `payment:write`
+   */
+  voidSiteInvestment(params: {
+    /** The investment id. */
+    iid: string;
+    body: VoidSiteInvestmentBody;
+  }, options?: RequestOptions): Promise<VoidSiteInvestmentResponse> {
+    return this.transport.request<VoidSiteInvestmentResponse>({ method: "POST", path: "/v1/finance/investments/{iid}/void", pathParams: { iid: params.iid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

@@ -23,6 +23,9 @@ import * as fx from '../services/fx.js';
 import * as approvals from '../services/finance-approvals.js';
 import * as reportSched from '../services/report-schedules.js';
 import * as finSummary from '../services/finance-summary.js';
+import * as periods from '../services/finance-periods.js';
+import * as invest from '../services/site-investments.js';
+import * as anomalies from '../services/revenue-anomalies.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -904,6 +907,80 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, 'finance.report_sent', 'finance_report_schedule', prm(req, 'rid'), { to: r.to });
       return r;
     } catch (e) { return p10Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.22.0) month lock, site investments, revenue drop alerts
+
+  const p11Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof periods.PeriodError || e instanceof invest.InvestmentError || e instanceof anomalies.AnomalyError) return reply.status(e.statusCode).send({ error: e.message });
+    return p10Failed(reply, e);
+  };
+
+  app.get('/v1/finance/periods', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await periods.list(req.principal.orgId); } catch (e) { return p11Failed(reply, e); }
+  });
+  app.get('/v1/finance/periods/:month/checklist', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await periods.checklist(req.principal.orgId, prm(req, 'month')); } catch (e) { return p11Failed(reply, e); }
+  });
+  app.post('/v1/finance/periods/:month/lock', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await periods.lock(req.principal.orgId, prm(req, 'month'), b.note, userUuid(req));
+      await auditPay(req, 'finance.period_locked', 'finance_period_lock', r.id, { month: r.month, note: b.note ?? null });
+      return r;
+    } catch (e) { return p11Failed(reply, e); }
+  });
+  app.post('/v1/finance/periods/:month/reopen', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await periods.reopen(req.principal.orgId, prm(req, 'month'), b.reason, userUuid(req), can(req.principal, { permission: 'finance:approve' }));
+      await auditPay(req, 'finance.period_reopened', 'finance_period_lock', r.id, { month: r.month, reason: String(b.reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p11Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/investments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try { return await invest.overview(req.principal.orgId, q.site || undefined); } catch (e) { return p11Failed(reply, e); }
+  });
+  app.post('/v1/finance/investments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await invest.record(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.investment_recorded', 'site_investment', r.id, { site: r.siteId, category: r.category, amount: r.amount, currency: r.currency, investedOn: r.investedOn, lifeMonths: r.lifeMonths });
+      return reply.status(201).send(r);
+    } catch (e) { return p11Failed(reply, e); }
+  });
+  app.post('/v1/finance/investments/:iid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await invest.voidInvestment(req.principal.orgId, prm(req, 'iid'), b.reason, userUuid(req));
+      await auditPay(req, 'finance.investment_voided', 'site_investment', prm(req, 'iid'), { reason: String(b.reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p11Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/revenue-alerts', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await anomalies.list(req.principal.orgId); } catch (e) { return p11Failed(reply, e); }
+  });
+  app.put('/v1/finance/revenue-alerts/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await anomalies.saveSettings(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.revenue_alert_settings_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p11Failed(reply, e); }
+  });
+  app.post('/v1/finance/revenue-alerts/check', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try { return await anomalies.detect(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).day); } catch (e) { return p11Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
