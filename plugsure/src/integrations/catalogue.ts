@@ -26,7 +26,7 @@ export interface ProviderDef {
   fields: Field[];
   /** Refused when NODE_ENV=production (test doubles). */
   devOnly?: boolean;
-  /** The provider calls PlugSure back (payment notifications): show the webhook URL. */
+  /** The provider calls PlugSure back (payment notifications, (v1.10.0) Meta's WhatsApp status webhook): show the webhook URL. */
   webhook?: boolean;
   docs?: string;
 }
@@ -159,14 +159,18 @@ export const CATALOGUE: KindDef[] = [
     scope: 'platform',
     providers: [
       {
-        id: 'whatsapp_cloud', label: 'WhatsApp (Meta Cloud API)', docs: 'https://developers.facebook.com/docs/whatsapp/business-management-api/authentication-templates',
-        description: 'An approved Authentication template with a copy-code button. Cheapest per message in Indonesia; most drivers have WhatsApp.',
+        // (v1.10.0) webhook: Meta's delivery-status webhook (/hooks/whatsapp-cloud/<key>) for the WhatsApp dashboard.
+        id: 'whatsapp_cloud', label: 'WhatsApp (Meta Cloud API)', webhook: true, docs: 'https://developers.facebook.com/docs/whatsapp/business-management-api/authentication-templates',
+        description: 'An approved Authentication template with a copy-code button. Cheapest per message in Indonesia; most drivers have WhatsApp. Delivery, templates and number quality on Operate → WhatsApp (deploy/WHATSAPP.md).',
         fields: [
           { key: 'phoneNumberId', label: 'Phone number ID', type: 'text', required: true },
           { key: 'accessToken', label: 'Access token (System User)', type: 'secret', required: true },
           { key: 'templateName', label: 'Template name', type: 'text', required: true, default: 'plugsure_otp' },
           { key: 'language', label: 'Template language', type: 'text', required: true, default: 'id' },
           { key: 'copyCodeButton', label: 'Template has a copy-code button', type: 'boolean', default: true },
+          // (v1.10.0) Optional, for the WhatsApp dashboard; a config saved before keeps working without them.
+          { key: 'wabaId', label: 'WhatsApp Business Account ID', type: 'text', help: 'WhatsApp Business Account ID — for the WhatsApp dashboard: templates and account status. Meta app → WhatsApp → API Setup.' },
+          { key: 'appSecret', label: 'App secret', type: 'secret', help: 'App secret — verifies Meta\'s delivery-status webhook (delivered / read). Meta app → App settings → Basic. After saving, paste the webhook URL and verify token shown here into the Meta app.' },
           { key: 'apiVersion', label: 'Graph API version', type: 'text', default: 'v20.0', advanced: true },
           { ...baseUrl, help: 'Default https://graph.facebook.com' },
         ],

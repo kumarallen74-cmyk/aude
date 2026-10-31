@@ -8,6 +8,7 @@ import { msSignInButton, msMessage, takeMsOutcome, microsoftOffered, signInMulti
 
 // Views register themselves on import.
 import './views/dashboard.js';
+import './views/whatsapp.js';
 import './views/chargers.js';
 import './views/onboard.js';
 import './views/onboarding.js';

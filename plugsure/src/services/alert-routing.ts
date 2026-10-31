@@ -353,24 +353,40 @@ export async function whatsappStatusWebhook(key: string, rawBody: string, signat
   let n = 0;
   for (const e of Array.isArray(j?.entry) ? j.entry : []) for (const c of Array.isArray(e?.changes) ? e.changes : []) {
     for (const s of Array.isArray(c?.value?.statuses) ? c.value.statuses : []) {
-      const ref = String(s?.id ?? ''), st = String(s?.status ?? '');
       const at = Number(s?.timestamp) > 0 ? new Date(Number(s.timestamp) * 1000) : new Date();
-      if (!ref || !['delivered', 'read', 'failed'].includes(st)) continue;
-      const err = st === 'failed' ? (s.errors ?? []).map((x: any) => `${x?.title ?? x?.message ?? 'failed'}${x?.code ? ` (code ${x.code})` : ''}${x?.error_data?.details ? `: ${x.error_data.details}` : ''}`).join('; ').slice(0, 300) || 'failed' : null;
-      const row = await one<{ id: string }>(
-        `UPDATE alert_notification SET
-            delivery = CASE WHEN $3 = 'failed' THEN 'failed' WHEN $3 = 'read' OR delivery = 'read' THEN 'read' ELSE 'delivered' END,
-            delivered_at = CASE WHEN $3 IN ('delivered', 'read') THEN COALESCE(delivered_at, $4) ELSE delivered_at END,
-            read_at = CASE WHEN $3 = 'read' THEN COALESCE(read_at, $4) ELSE read_at END,
-            delivery_error = CASE WHEN $3 = 'failed' THEN $5 ELSE delivery_error END
-          WHERE org_id = $1 AND channel = 'whatsapp' AND provider_ref = $2 RETURNING id`,
-        [ch.org_id, ref, st, at, err]);
-      if (!row) continue;
-      n++;
-      if (st === 'failed') await smsFallback(row.id);
+      n += await applyAlertDeliveryStatus({ orgId: ch.org_id, ref: String(s?.id ?? ''), status: String(s?.status ?? ''), at, errors: s?.errors });
     }
   }
   return { status: 200, body: { ok: true, statuses: n } };
+}
+
+/** Meta's errors[] on a failed status, as one readable line: "title (code N): details; …". */
+export function metaStatusErrorText(errors: unknown): string {
+  const list = Array.isArray(errors) ? errors : [];
+  return list.map((x: any) => `${x?.title ?? x?.message ?? 'failed'}${x?.code ? ` (code ${x.code})` : ''}${x?.error_data?.details ? `: ${x.error_data.details}` : ''}`).join('; ').slice(0, 300) || 'failed';
+}
+
+/**
+ * Apply one Meta status (delivered, read, failed; "sent" carries nothing new for an alert) to the alert messages
+ * with that WhatsApp message id, and queue the SMS fallback for a failed one. Returns how many rows matched.
+ *
+ * (v1.10.0) Shared by the alert channel's own webhook (scoped to its organisation) and the WhatsApp Business
+ * connection's webhook (orgId null: any organisation). A Meta app has ONE callback URL, so an alert channel that
+ * sends from the same app as the platform's connection only gets its statuses through the latter.
+ */
+export async function applyAlertDeliveryStatus(s: { orgId: string | null; ref: string; status: string; at: Date; errors?: unknown }): Promise<number> {
+  if (!s.ref || !['delivered', 'read', 'failed'].includes(s.status)) return 0;
+  const err = s.status === 'failed' ? metaStatusErrorText(s.errors) : null;
+  const rows = await many<{ id: string }>(
+    `UPDATE alert_notification SET
+        delivery = CASE WHEN $3 = 'failed' THEN 'failed' WHEN $3 = 'read' OR delivery = 'read' THEN 'read' ELSE 'delivered' END,
+        delivered_at = CASE WHEN $3 IN ('delivered', 'read') THEN COALESCE(delivered_at, $4) ELSE delivered_at END,
+        read_at = CASE WHEN $3 = 'read' THEN COALESCE(read_at, $4) ELSE read_at END,
+        delivery_error = CASE WHEN $3 = 'failed' THEN $5 ELSE delivery_error END
+      WHERE ($1::uuid IS NULL OR org_id = $1::uuid) AND channel = 'whatsapp' AND provider_ref = $2 RETURNING id`,
+    [s.orgId, s.ref, s.status, s.at, err]);
+  if (s.status === 'failed') for (const r of rows) await smsFallback(r.id);
+  return rows.length;
 }
 
 /** One worker pass. */

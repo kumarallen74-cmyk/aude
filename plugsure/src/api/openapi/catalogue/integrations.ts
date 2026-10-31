@@ -13,6 +13,7 @@ const configured: Schema = {
     secretHints: { type: 'object', description: 'Secret fields that are set, as a hint (last characters). Secret values are never returned.' },
     enabled: { type: 'boolean' },
     webhookPath: nullable('string'), webhookUrl: nullable('string'),
+    webhookVerifyToken: { type: 'string', description: 'Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app\'s status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only.' },
     lastTest: { type: ['object', 'null'], properties: { at: DT, ok: { type: ['boolean', 'null'] }, message: nullable('string') } },
     updatedAt: DT,
   },

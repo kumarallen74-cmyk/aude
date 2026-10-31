@@ -81,6 +81,7 @@ async function draw(box) {
       ${OTHERS.map(([t, d, href]) => `<a class="card pad link" href="${href}"><div class="cell-title">${esc(t)} ${icon('external')}</div><div class="cell-sub">${esc(d)}</div></a>`).join('')}
       <div class="card pad"><div class="cell-title">HashiCorp Vault PKI</div><div class="cell-sub">Optional issuer for Profile 3 certificates and V2G signing: ${state.me.features?.vault ? tag('t-ok', 'configured') : tag('t-mute', 'not configured')} (VAULT_ADDR / VAULT_TOKEN).</div></div>
     </div>`;
+  $$('[data-copy-text]', box).forEach((b) => b.addEventListener('click', () => copy(b.dataset.copyText)));
   $$('[data-act]', box).forEach((b) => b.addEventListener('click', () => {
     const k = byKind[b.dataset.kind];
     if (!k) return;
@@ -131,9 +132,30 @@ function card(k) {
       <div class="row" style="align-items:flex-start;gap:6px 10px"><div style="flex:1 1 200px"><h3 style="margin:0">${esc(k.label)}</h3></div><div class="chips">${statusOf(k)}</div></div>
       <p class="cell-sub" style="margin:6px 0 0">${esc(k.description)}</p>
       <div style="margin-top:10px"><span class="lbl small">In force:</span> <b>${eff ? esc(providerLabel(k, eff.provider)) : '—'}</b></div>
-      ${ownBlock}${platformBlock}
+      ${ownBlock}${platformBlock}${isWhatsApp(k.kind, k.platform?.provider) ? whatsappBlock(k) : ''}
       <div style="margin-top:10px"><button class="btn sm ghost" data-act="activity" data-kind="${key}">${icon('list')} Activity</button></div>
     </div>`;
+}
+
+/** (v1.10.0) Sign-in codes on the WhatsApp Cloud API: Meta's status webhook feeds the WhatsApp dashboard. */
+const isWhatsApp = (kind, provider) => (kind === 'otp' || kind === 'otp_fallback') && provider === 'whatsapp_cloud';
+
+/**
+ * (v1.10.0) On the sign-in codes card, when it sends by WhatsApp: the webhook URL and verify token to paste into the
+ * Meta app (both made by the server, shown to platform administrators only), and the way to the WhatsApp dashboard.
+ */
+function whatsappBlock(k) {
+  const p = k.platform;
+  const hook = p?.webhookUrl ? `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <div class="lbl small" style="font-weight:600">Meta webhook</div>
+        <div class="cell-sub" style="margin-top:4px">Callback URL</div>
+        <div class="row" style="gap:6px;flex-wrap:nowrap"><span class="mono small" style="flex:1;word-break:break-all">${esc(p.webhookUrl)}</span><button class="btn sm ghost" type="button" data-copy-text="${esc(p.webhookUrl)}" aria-label="Copy the callback URL">${icon('copy')}</button></div>
+        ${p.webhookVerifyToken ? `<div class="cell-sub" style="margin-top:4px">Verify token</div>
+        <div class="row" style="gap:6px;flex-wrap:nowrap"><span class="mono small" style="flex:1;word-break:break-all">${esc(p.webhookVerifyToken)}</span><button class="btn sm ghost" type="button" data-copy-text="${esc(p.webhookVerifyToken)}" aria-label="Copy the verify token">${icon('copy')}</button></div>` : ''}
+      </div>` : '';
+  const noKey = !p?.webhookUrl && state.can('platform:admin') ? '<div class="cell-sub" style="margin-top:8px">Save this integration once to get the webhook URL for delivery tracking.</div>' : '';
+  return `${hook}${noKey}<div style="margin-top:10px"><a class="btn sm" href="#/whatsapp">${icon('chart')} Open the WhatsApp dashboard</a></div>`;
 }
 
 // ─────────────────────────────────────────── configure
@@ -178,7 +200,7 @@ function configure(k, scope, o, done) {
       try {
         const saved = await api(`/v1/integrations/${k.kind}`, { method: 'PUT', body: { scope, provider: p.id, settings, secrets, enabled, ...ccBody(k) } });
         toast('Saved', 'ok');
-        if (saved.webhookUrl) setTimeout(() => showWebhook(p, saved.webhookUrl), 50);
+        if (saved.webhookUrl) setTimeout(() => (isWhatsApp(k.kind, p.id) ? showWhatsAppWebhook(saved) : showWebhook(p, saved.webhookUrl)), 50);
         done();
       } catch (e) { toast(e.message, 'crit'); return false; }
     } }],
@@ -194,7 +216,8 @@ function configure(k, scope, o, done) {
       ${p.fields.length ? `<div class="form">${basic.map((f) => fieldHtml(f, current, hints)).join('')}</div>` : `<p class="cell-sub">${esc(p.description)}</p>`}
       ${adv.length ? `<details style="margin-top:10px"><summary class="small">Advanced</summary><div class="form" style="margin-top:8px">${adv.map((f) => fieldHtml(f, current, hints)).join('')}</div></details>` : ''}
       ${cur?.testMode ? `<div style="margin-top:12px">${callout('warn', '<b>TEST mode.</b> This account runs on Stripe test keys: payments through it move no money, their receipts are marked TEST and are not tax invoices, and they are left out of revenue and commission.')}</div>` : ''}
-      ${p.webhook ? `<div style="margin-top:12px">${callout('info', cur?.webhookUrl && cur.provider === provider ? `Payment notification URL (paste into the provider's dashboard): <span class="mono small" style="word-break:break-all">${esc(cur.webhookUrl)}</span>` : 'After saving, you get the payment notification URL to paste into the provider\'s dashboard.')}</div>` : ''}
+      ${p.webhook && isWhatsApp(k.kind, p.id) ? `<div style="margin-top:12px">${callout('info', cur?.webhookUrl ? 'The webhook URL and verify token for the Meta app are on this card and on the WhatsApp dashboard (Setup).' : 'After saving, you get the webhook URL and verify token to paste into the Meta app.')}</div>` : ''}
+      ${p.webhook && !isWhatsApp(k.kind, p.id) ? `<div style="margin-top:12px">${callout('info', cur?.webhookUrl && cur.provider === provider ? `Payment notification URL (paste into the provider's dashboard): <span class="mono small" style="word-break:break-all">${esc(cur.webhookUrl)}</span>` : 'After saving, you get the payment notification URL to paste into the provider\'s dashboard.')}</div>` : ''}
       <div class="field full" style="margin-top:10px"><label class="check"><input type="checkbox" data-enabled${cur?.enabled === false ? '' : ' checked'}> <span>Enabled</span></label><div class="help">Off: the ${k.scope === 'org' && scope === 'org' ? 'platform default' : 'environment variables or default'} apply instead.</div></div>`;
     // Values are set as properties, never interpolated into HTML.
     for (const f of p.fields) {
@@ -215,6 +238,22 @@ function showWebhook(p, url) {
       <p class="cell-sub" style="margin-top:10px">It must be reachable from the internet: expose <span class="mono">/pay/*</span> on the public host (deploy/Caddyfile).</p>`,
     actions: [{ label: 'Copy', async onClick() { copy(url); return false; } }, { label: 'Done', kind: 'primary' }],
     onMount(ctx) { $('[data-url]', ctx.body).textContent = url; },
+  });
+}
+
+function showWhatsAppWebhook(saved) {
+  modal({
+    title: 'WhatsApp: Meta status webhook',
+    body: `<p>In the Meta app: <b>WhatsApp → Configuration → Webhook → Edit</b>. Paste the callback URL and the verify token, choose <b>Verify and save</b>, then subscribe the fields <span class="mono">messages</span>, <span class="mono">message_template_status_update</span>, <span class="mono">phone_number_quality_update</span> and <span class="mono">account_update</span>.</p>
+      <div class="lbl small">Callback URL</div><div class="secret mono" data-url></div>
+      <div class="lbl small" style="margin-top:10px">Verify token</div><div class="secret mono" data-token></div>
+      <p class="cell-sub" style="margin-top:10px">It must be reachable from the internet: <span class="mono">/hooks/*</span> on the public host (deploy/Caddyfile). Both stay on this card and on the WhatsApp dashboard (Setup). Save the app secret too, or the callbacks cannot be verified.</p>`,
+    actions: [
+      { label: 'Copy URL', async onClick() { copy(saved.webhookUrl); return false; } },
+      { label: 'Copy token', async onClick() { copy(saved.webhookVerifyToken ?? ''); return false; } },
+      { label: 'Done', kind: 'primary' },
+    ],
+    onMount(ctx) { $('[data-url]', ctx.body).textContent = saved.webhookUrl; $('[data-token]', ctx.body).textContent = saved.webhookVerifyToken ?? '—'; },
   });
 }
 

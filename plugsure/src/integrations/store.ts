@@ -105,10 +105,15 @@ export async function resolve(kind: Kind, orgId: string | null = null, country: 
   return value;
 }
 
-/** The account behind a payment webhook URL. */
-export async function byWebhookKey(key: string): Promise<Resolved | null> {
+/**
+ * The account behind a webhook URL: a payment notification URL, or (v1.10.0) the WhatsApp status webhook of a
+ * sign-in code integration (main or fallback) on the WhatsApp Cloud API.
+ */
+export async function byWebhookKey(key: string, hook: 'payments' | 'whatsapp' = 'payments'): Promise<Resolved | null> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(key)) return null;
-  const r = await outsideRequestScope(() => one<Row>(`SELECT * FROM integration WHERE webhook_key = $1 AND kind = 'payments'`, [key]));
+  const r = await outsideRequestScope(() => one<Row>(hook === 'payments'
+    ? `SELECT * FROM integration WHERE webhook_key = $1 AND kind = 'payments'`
+    : `SELECT * FROM integration WHERE webhook_key = $1 AND kind IN ('otp', 'otp_fallback') AND provider = 'whatsapp_cloud' AND archived_at IS NULL`, [key]));
   return r ? fromRow(r) : null;
 }
 
@@ -122,11 +127,33 @@ export async function byId(id: string): Promise<Resolved | null> {
 
 const hint = (v: string) => (v.length <= 4 ? '••••' : `••••${v.slice(-4)}`);
 
+/** (v1.10.0) Sign-in codes on the WhatsApp Cloud API: Meta's status webhook feeds the WhatsApp dashboard. */
+export const isWhatsAppCloud = (kind: string, provider: string) => (kind === 'otp' || kind === 'otp_fallback') && provider === 'whatsapp_cloud';
+
+/**
+ * Where a provider calls PlugSure back. Payments: /pay/notify/<key> (v1.3). (v1.10.0) Sign-in codes on the WhatsApp
+ * Cloud API: /hooks/whatsapp-cloud/<key>, next to the alert channels' /hooks/whatsapp/<key>; Caddy exposes /hooks/*.
+ */
+export const webhookPathFor = (kind: string, provider: string, key: string) =>
+  (isWhatsAppCloud(kind, provider) ? `/hooks/whatsapp-cloud/${key}` : `/pay/notify/${key}`);
+
+/**
+ * (v1.10.0) Secrets the server makes, per provider. The WhatsApp webhook's verify token: random, made on the first
+ * save and kept sealed with the other secrets (never typed by anyone, so it is never weak), stable across later
+ * saves. Meta echoes it in the subscription handshake; it is compared in constant time (services/whatsapp-cloud.ts).
+ */
+export const GENERATED_SECRETS: Record<string, string[]> = { whatsapp_cloud: ['verifyToken'] };
+
 function publicView(r: Row | null) {
   if (!r) return null;
+  // (v1.10.0) The WhatsApp verify token is shown (with the webhook URL) so it can be pasted into the Meta app. Only
+  // platform administrators reach a platform row's full view (overview, save).
+  let verifyToken: string | undefined;
+  if (isWhatsAppCloud(r.kind, r.provider) && r.secrets_sealed) { try { verifyToken = JSON.parse(unseal(r.secrets_sealed)).verifyToken; } catch { /* reported by fromRow */ } }
   return {
     id: r.id, scope: r.org_id ? 'org' : 'platform', provider: r.provider, settings: r.settings, secretHints: r.secret_hints, countryCode: r.country_code ?? 'ID',
-    enabled: r.enabled, webhookPath: r.webhook_key ? `/pay/notify/${r.webhook_key}` : null,
+    enabled: r.enabled, webhookPath: r.webhook_key ? webhookPathFor(r.kind, r.provider, r.webhook_key) : null,
+    ...(verifyToken ? { webhookVerifyToken: verifyToken } : {}),
     // Stripe on test keys: payments through it are TEST (no money moves at Stripe; no tax invoice, no commission).
     testMode: (r as Row & { test_mode?: boolean }).test_mode === true,
     lastTest: r.last_test_at ? { at: r.last_test_at, ok: r.last_test_ok, message: r.last_test_message } : null, updatedAt: r.updated_at,
@@ -233,6 +260,12 @@ export async function save(kind: Kind, orgId: string | null, input: SaveInput, u
     if (v !== undefined) settings[f.key] = v;
   }
   if (kind === 'map_tiles' && p.id === 'custom' && !/\{z\}/.test(String(settings.tileUrl)) ) throw new IntegrationError(422, 'The tile URL must contain {z}, {x} and {y}.');
+  if (isWhatsAppCloud(kind, p.id)) {
+    // (v1.10.0) Meta's ids are long decimal numbers; a pasted phone number or a name is the usual mistake. Optional:
+    // a configuration saved before keeps working without it (the dashboard then shows no templates).
+    if (settings.wabaId && !/^\d{5,30}$/.test(String(settings.wabaId))) throw new IntegrationError(422, 'The WhatsApp Business Account ID is Meta\'s numeric ID (5 to 30 digits), not a phone number or a name.');
+    for (const k of GENERATED_SECRETS[p.id]!) secrets[k] ??= randomBytes(24).toString('base64url');
+  }
   if (kind === 'otp' || kind === 'otp_fallback') {
     if (p.id === 'twilio' && !settings.from && !settings.messagingServiceSid) throw new IntegrationError(422, 'Set the sender (From) or a Messaging Service SID.');
   }
@@ -257,7 +290,7 @@ export async function save(kind: Kind, orgId: string | null, input: SaveInput, u
     try { createPublicKey(String(settings.bankPublicKeyPem)); } catch { throw new IntegrationError(422, 'The bank public key is not a valid PEM public key.'); }
   }
   // Drop secrets the provider does not have (a provider change).
-  for (const k of Object.keys(secrets)) if (!p.fields.some((f) => f.key === k && f.type === 'secret')) { delete secrets[k]; delete hints[k]; }
+  for (const k of Object.keys(secrets)) if (!p.fields.some((f) => f.key === k && f.type === 'secret') && !GENERATED_SECRETS[p.id]?.includes(k)) { delete secrets[k]; delete hints[k]; }
   // A different acquirer is a different account: the old one is archived, not overwritten, so the
   // payments it took still get its notifications (its URL keeps working) and its refunds.
   let keep = existing;

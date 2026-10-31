@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.9.2",
+    "version": "1.10.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -69,6 +69,10 @@
     {
       "name": "Integrations",
       "description": "Third-party services: the QRIS acquirer, driver sign-in codes (WhatsApp / SMS), the Plug & Charge PKI and map tiles. Secrets are write-only."
+    },
+    {
+      "name": "WhatsApp",
+      "description": "The platform's WhatsApp Business Account (Meta Cloud API): connection health, templates, the message ledger with delivery statuses (numbers masked), account events and test sends. Platform administrators only."
     },
     {
       "name": "Payments and refunds",
@@ -20496,6 +20500,10 @@
                                   "null"
                                 ]
                               },
+                              "webhookVerifyToken": {
+                                "type": "string",
+                                "description": "Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app's status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only."
+                              },
                               "lastTest": {
                                 "type": [
                                   "object",
@@ -20664,6 +20672,10 @@
                         "string",
                         "null"
                       ]
+                    },
+                    "webhookVerifyToken": {
+                      "type": "string",
+                      "description": "Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app's status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only."
                     },
                     "lastTest": {
                       "type": [
@@ -26284,6 +26296,699 @@
         },
         "x-permissions": [
           "roaming:write"
+        ]
+      }
+    },
+    "/v1/whatsapp/overview": {
+      "get": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "WhatsApp Business dashboard",
+        "operationId": "whatsappBusinessDashboard",
+        "description": "The connection: the platform's sign-in codes integration on the WhatsApp Cloud API (main channel, else fallback), read from the Graph API (display number, verified name, quality rating, messaging limit tier, name status; a Graph API failure is `connection.error`, never an error status), the webhook (URL and verify token for the Meta app, the fields to subscribe, when it last delivered an event and a status), the templates PlugSure needs with their status, and statistics for the last 7 or 30 days in the platform time zone (ALERT_TIMEZONE): the ledger plus the operator alerts sent from the same number. Each message counts once at its latest status; `sent` in `daily` includes accepted. deliveryRate = (delivered + read) / total; readRate = read / (delivered + read).\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                7,
+                30
+              ],
+              "default": 7
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The dashboard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "configured",
+                    "connection",
+                    "webhook",
+                    "requiredTemplates",
+                    "stats",
+                    "recentFailures"
+                  ],
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "connection": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "otp",
+                            "otp_fallback"
+                          ],
+                          "description": "The sign-in codes integration the credentials come from: the main channel, else the fallback."
+                        },
+                        "wabaId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Null when not saved on the integration: no templates then."
+                        },
+                        "phoneNumberId": {
+                          "type": "string"
+                        },
+                        "displayPhoneNumber": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "verifiedName": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "qualityRating": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "GREEN, YELLOW, RED or UNKNOWN."
+                        },
+                        "messagingLimitTier": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "nameStatus": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "status": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "checkedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "error": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "webhook": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "url": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Null until the sign-in codes integration is saved once on 1.10.0 (that issues the key)."
+                        },
+                        "hasAppSecret": {
+                          "type": "boolean",
+                          "description": "False: Meta's calls are refused (403) until the app secret is saved."
+                        },
+                        "verifyToken": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "lastEventAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "lastStatusAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        }
+                      }
+                    },
+                    "requiredTemplates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppRequiredTemplate"
+                      }
+                    },
+                    "stats": {
+                      "type": "object",
+                      "required": [
+                        "days",
+                        "total",
+                        "byStatus",
+                        "byPurpose",
+                        "daily"
+                      ],
+                      "properties": {
+                        "days": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "byStatus": {
+                          "type": "object",
+                          "properties": {
+                            "accepted": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "sent": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "delivered": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "read": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "failed": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          }
+                        },
+                        "byPurpose": {
+                          "type": "object",
+                          "properties": {
+                            "otp": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "alert": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "test": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "other": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          }
+                        },
+                        "deliveryRate": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "readRate": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "daily": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "day",
+                              "sent",
+                              "delivered",
+                              "read",
+                              "failed"
+                            ],
+                            "properties": {
+                              "day": {
+                                "type": "string",
+                                "format": "date"
+                              },
+                              "sent": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "delivered": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "read": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "failed": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "recentFailures": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppMessage"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/templates": {
+      "get": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "WhatsApp message templates",
+        "operationId": "whatsappMessageTemplates",
+        "description": "The WhatsApp Business Account's templates (up to 500), the ones PlugSure sends marked, and a link to WhatsApp Manager. 409 when WhatsApp is not configured, or no WhatsApp Business Account ID is saved (`code: no_waba`); 502 with Meta's message when the Graph API refuses.\n\n**Permissions checked:** `platform:admin`.",
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "templates",
+                    "required",
+                    "managerUrl"
+                  ],
+                  "properties": {
+                    "templates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppTemplate"
+                      }
+                    },
+                    "required": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppRequiredTemplate"
+                      }
+                    },
+                    "managerUrl": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/messages": {
+      "get": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "WhatsApp messages",
+        "operationId": "whatsappMessages",
+        "description": "Newest first: the ledger and the WhatsApp alerts sent from the same number, numbers masked. Kept 180 days. Page with `before` = the `nextBefore` of the previous page.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "otp",
+                "alert",
+                "test",
+                "other"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "sent",
+                "delivered",
+                "read",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Only messages before this time.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "messages",
+                    "nextBefore"
+                  ],
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppMessage"
+                      }
+                    },
+                    "nextBefore": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/events": {
+      "get": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "WhatsApp account events",
+        "operationId": "whatsappAccountEvents",
+        "description": "From the webhook: template status and quality changes, number quality, account updates (payloads trimmed). The last 500, at most 90 days.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "events"
+                  ],
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "field",
+                          "createdAt"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "type": "string"
+                          },
+                          "event": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "payload": {
+                            "type": "object"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/test": {
+      "post": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "Send a WhatsApp test message",
+        "operationId": "sendWhatsAppTestMessage",
+        "description": "Sends one approved template with the sign-in codes integration's credentials (recorded with purpose test). `params` fill the body variables in order; `copyCodeButton` repeats the first one for an Authentication template's copy-code button. At most 5 a minute per administrator. Audited as whatsapp.test_sent (number masked).\n\n**Permissions checked:** `platform:admin`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "phone",
+                  "template",
+                  "language"
+                ],
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "description": "A mobile number in Indonesia, Malaysia or Singapore."
+                  },
+                  "template": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9_]{1,512}$"
+                  },
+                  "language": {
+                    "type": "string",
+                    "examples": [
+                      "id",
+                      "en_US"
+                    ]
+                  },
+                  "params": {
+                    "type": "array",
+                    "maxItems": 10,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 1024
+                    }
+                  },
+                  "copyCodeButton": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              "example": {
+                "phone": "081234567890",
+                "template": "plugsure_alert",
+                "language": "id",
+                "params": [
+                  "Test",
+                  "PlugSure test message"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sent, or Meta's reason it was not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "to"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "messageId": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
         ]
       }
     }
@@ -43537,6 +44242,10 @@
                   "null"
                 ]
               },
+              "webhookVerifyToken": {
+                "type": "string",
+                "description": "Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app's status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only."
+              },
               "lastTest": {
                 "type": [
                   "object",
@@ -44454,6 +45163,194 @@
               "null"
             ],
             "description": "The Microsoft account that proved control of the tenant."
+          }
+        }
+      },
+      "WhatsAppMessage": {
+        "type": "object",
+        "description": "One message sent from the platform's number: a sign-in code or a test send, or an operator alert from an alert channel on the same number. The number is masked; codes are never stored.",
+        "required": [
+          "id",
+          "at",
+          "purpose",
+          "to",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`m<n>` for the ledger, `a<n>` for an alert notification."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "otp",
+              "alert",
+              "test",
+              "other"
+            ]
+          },
+          "to": {
+            "type": "string",
+            "description": "Masked, e.g. +6281****890."
+          },
+          "template": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "sent",
+              "delivered",
+              "read",
+              "failed"
+            ],
+            "description": "accepted: WhatsApp took it, no status report yet."
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed (Meta's title, code and details)."
+          },
+          "sentAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "deliveredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "readAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "pricingCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From Meta's status: authentication, utility, marketing, service…"
+          },
+          "billable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "WhatsAppTemplate": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "language"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "APPROVED, PENDING, REJECTED, PAUSED, DISABLED…"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": "string"
+          },
+          "qualityScore": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GREEN, YELLOW, RED or UNKNOWN."
+          },
+          "rejectedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "PlugSure sends it (the sign-in code template, an alert channel's template)."
+          }
+        }
+      },
+      "WhatsAppRequiredTemplate": {
+        "type": "object",
+        "required": [
+          "name",
+          "language",
+          "purpose",
+          "inUse"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "otp",
+              "alert"
+            ]
+          },
+          "inUse": {
+            "type": "boolean",
+            "description": "False for the default alert template when no alert channel sends from this number yet."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its status at Meta; MISSING when the WABA has no such template; null when the templates could not be read."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       }

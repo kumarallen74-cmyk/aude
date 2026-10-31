@@ -13,6 +13,8 @@ import { logger } from '../logger.js';
  *                       (abandoned at Microsoft); also trimmed at each sign-in start
  *   api_key_rate_bucket shared rate-limit buckets idle for a day (a bucket idle
  *                       that long is full; dropping it changes nothing)
+ *   whatsapp_message    (v1.10.0) the WhatsApp ledger (masked numbers, statuses):
+ *                       180 days; whatsapp_event: 90 days, at most the last 500
  *
  * Both logs grew without bound — a few hundred chargers write tens of millions
  * of frames a year — until the disk filled or backups became unrestorable in
@@ -28,6 +30,10 @@ import { logger } from '../logger.js';
  */
 
 export const BATCH_ROWS = 10_000;
+/** (v1.10.0) The WhatsApp ledger keeps 180 days; account events 90 days, at most the last 500. */
+const WA_MESSAGE_DAYS = 180;
+const WA_EVENT_DAYS = 90;
+const WA_EVENT_KEEP = 500;
 const PAUSE_MS = 200;
 const MAX_PASS_MS = 50_000;
 
@@ -39,6 +45,9 @@ export interface RetentionResult {
   rateBuckets: number;
   /** Expired "Sign in with Microsoft" transactions removed. */
   oidcTransactions: number;
+  /** (v1.10.0) WhatsApp ledger rows and account events removed. */
+  whatsappMessages: number;
+  whatsappEvents: number;
   /** True when the pass stopped on its time budget with old rows still left. */
   incomplete: boolean;
 }
@@ -103,7 +112,7 @@ export async function runRetention(opts: {
   const pause = opts.pauseMs ?? PAUSE_MS;
   const now = opts.now ?? Date.now();
   const deadline = Date.now() + (opts.maxPassMs ?? MAX_PASS_MS);
-  const out: RetentionResult = { ocppFrames: 0, connectionAttempts: 0, rateBuckets: 0, oidcTransactions: 0, incomplete: false };
+  const out: RetentionResult = { ocppFrames: 0, connectionAttempts: 0, rateBuckets: 0, oidcTransactions: 0, whatsappMessages: 0, whatsappEvents: 0, incomplete: false };
 
   // 0 (or a negative / non-numeric value) keeps that table forever.
   if (frameDays > 0) {
@@ -122,6 +131,13 @@ export async function runRetention(opts: {
   out.rateBuckets = b?.rowCount ?? 0;
   const t = await query(`DELETE FROM oidc_login_tx WHERE expires_at < now()`).catch(() => null);
   out.oidcTransactions = t?.rowCount ?? 0;
+  // An hour's worth of messages per pass at most (the pass is hourly), on the (created_at) index: no batching needed.
+  const wm = await query(`DELETE FROM whatsapp_message WHERE created_at < now() - make_interval(days => $1)`, [WA_MESSAGE_DAYS]).catch(() => null);
+  out.whatsappMessages = wm?.rowCount ?? 0;
+  const we = await query(
+    `DELETE FROM whatsapp_event WHERE created_at < now() - make_interval(days => $1)
+        OR id <= (SELECT id FROM whatsapp_event ORDER BY id DESC OFFSET $2 LIMIT 1)`, [WA_EVENT_DAYS, WA_EVENT_KEEP]).catch(() => null);
+  out.whatsappEvents = we?.rowCount ?? 0;
 
   if (out.ocppFrames || out.connectionAttempts || out.incomplete) {
     logger.info({ ...out, frameDays, attemptDays }, out.incomplete ? 'retention pass stopped on its time budget; the next pass continues' : 'retention pass');

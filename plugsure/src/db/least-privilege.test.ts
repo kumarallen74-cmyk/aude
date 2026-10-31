@@ -25,7 +25,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     `SELECT table_name AS t, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
        FROM information_schema.role_table_grants
       WHERE grantee = 'plugsure_app' AND table_name = ANY($1::text[]) GROUP BY 1 ORDER BY 1`,
-    [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event']]);
+    [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event', 'whatsapp_event', 'whatsapp_message']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -35,5 +35,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     currency_unit: 'SELECT',
     oidc_login_tx: 'DELETE,INSERT,SELECT',
     payment_webhook_event: 'DELETE,INSERT,SELECT',
+    // (v1.10.0, 078) the WhatsApp ledger is updated by the webhook; an account event is recorded once.
+    whatsapp_event: 'DELETE,INSERT,SELECT',
+    whatsapp_message: 'DELETE,INSERT,SELECT,UPDATE',
   });
 });
