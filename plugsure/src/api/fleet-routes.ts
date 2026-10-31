@@ -6,6 +6,7 @@ import * as fb from '../services/fleet-billing.js';
 import * as credit from '../services/fleet-credit.js';
 import { invoicePdf, creditNotePdf } from '../services/fleet-pdf.js';
 import * as soa from '../services/fleet-statements.js';
+import * as credit2 from '../services/fleet-credit-limits.js';
 
 /**
  * Fleet billing (Commercial → Fleet billing): fleet accounts, their monthly
@@ -24,6 +25,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       if (e instanceof fb.FleetBillingError) return reply.status(e.status).send({ error: e.message });
       if (e instanceof soa.StatementError) return reply.status(e.statusCode).send({ error: e.message });
+      if (e instanceof credit2.CreditError) return reply.status(e.statusCode).send({ error: e.message });
       throw e;
     }
   };
@@ -305,6 +307,47 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     return run(reply, async () => {
       const r = await soa.saveSettings(org(req), (req.body ?? {}) as Record<string, unknown>, req.principal.userId && /^[0-9a-f-]{36}$/i.test(req.principal.userId) ? req.principal.userId : null);
       await audit(req, 'fleet_account.statement_settings_saved', 'organisation', org(req), r);
+      return r;
+    });
+  });
+
+  // ---------------------------------------------------------------- credit limits and prepay (v1.24.0)
+
+  const uid = (req: FastifyRequest) => (req.principal.userId && /^[0-9a-f-]{36}$/i.test(req.principal.userId) ? req.principal.userId : null);
+  app.get('/v1/fleet-credit', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    return run(reply, () => credit2.overview(org(req)));
+  });
+  app.get('/v1/fleet-accounts/:id/credit', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    const { id } = req.params as { id: string };
+    return run(reply, () => credit2.position(org(req), id));
+  });
+  app.put('/v1/fleet-accounts/:id/credit', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    const { id } = req.params as { id: string };
+    return run(reply, async () => {
+      const r = await credit2.saveSettings(org(req), id, (req.body ?? {}) as Record<string, unknown>);
+      await audit(req, 'fleet_account.credit_saved', 'fleet_account', id, { mode: r.mode, limit: r.limit, currency: r.currency, block: r.block, autoApply: r.autoApply });
+      return r;
+    });
+  });
+  app.post('/v1/fleet-accounts/:id/credit/entries', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    const { id } = req.params as { id: string };
+    return run(reply, async () => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await credit2.topUp(org(req), id, b, uid(req));
+      await audit(req, `fleet_account.deposit_${r.kind}`, 'fleet_account', id, { amount: r.amount, currency: r.currency, reference: b.reference ?? null, note: b.note ?? null });
+      return reply.status(201).send(r);
+    });
+  });
+  app.post('/v1/fleet-invoices/:id/pay-from-deposit', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    const { id } = req.params as { id: string };
+    return run(reply, async () => {
+      const r = await credit2.payFromDeposit(org(req), id, uid(req));
+      await audit(req, 'fleet_invoice.paid_from_deposit', 'fleet_invoice', id, { amount: r.paid, depositLeft: r.depositLeft });
       return r;
     });
   });

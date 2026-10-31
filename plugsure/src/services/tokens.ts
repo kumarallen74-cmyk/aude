@@ -127,7 +127,8 @@ export async function updateToken(tokenId: string, t: TokenInput, pinHash?: stri
     sets.push('pin_failures = 0', 'pin_locked_until = NULL');
   }
   // The operator set the status: a block is now the operator's, not the fleet customer's (migration 030).
-  if (t.status !== undefined) sets.push('customer_blocked_at = NULL');
+  // (v1.24.0) Nor is it the credit limit's any more: the hourly credit check will not unblock it.
+  if (t.status !== undefined) sets.push('customer_blocked_at = NULL', 'credit_blocked_at = NULL');
   sets.push('updated_at = now()');
   await query(`UPDATE token SET ${sets.join(', ')} WHERE id = $1`, vals);
 }

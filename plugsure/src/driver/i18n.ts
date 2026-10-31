@@ -22,6 +22,16 @@ import { isLang, type Lang } from '../domain/locale.js';
 export const EN: Readonly<Record<string, string>> = Object.freeze({
   // charging, payments
   'Charger ini tidak lagi beroperasi.': 'This charger is no longer in service.',
+  // (v1.24.0) refund requests (services/driver-refunds.ts)
+  'Pengisian ini tidak dibayar di aplikasi: hubungi pengelola armada Anda.': 'This charge was not paid in the app: contact your fleet manager.',
+  'Pilih alasan pengembalian dana.': 'Choose why you want a refund.',
+  'Ceritakan apa yang salah (minimal 10 karakter).': 'Tell us what went wrong (at least 10 characters).',
+  'Pembayaran ini tidak ditagih: tidak ada yang perlu dikembalikan.': 'This payment was not taken: nothing to refund.',
+  'Permintaan pengembalian dana tidak diterima di aplikasi: hubungi operator.': 'Refund requests are not taken in the app: contact the operator.',
+  'Pengembalian dana untuk pembayaran ini sudah diproses.': 'A refund for this payment is already on its way.',
+  'Jumlahnya harus bilangan bulat lebih dari 0.': 'The amount must be a whole number above 0.',
+  'Tidak ada lagi yang bisa dikembalikan dari pembayaran ini.': 'Nothing is left to refund on this payment.',
+  'Hanya permintaan yang masih menunggu yang bisa dibatalkan.': 'Only a request still waiting can be withdrawn.',
   'Charger ini sementara tidak beroperasi.': 'This charger is temporarily out of service.',
   'Konektor ini sedang tidak dapat menjual energi.': 'This connector cannot sell energy at the moment.',
   'Kartu armada Anda diblokir. Hubungi admin armada Anda.': 'Your fleet card is blocked. Contact your fleet admin.',
@@ -207,6 +217,8 @@ export const EN: Readonly<Record<string, string>> = Object.freeze({
  */
 export const EN_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = Object.freeze([
   [/^(.+) terhubung tidak tersedia di operator ini\.$/, 'Linked $1 is not available at this operator.'],
+  [/^Permintaan diterima paling lambat (\d+) hari setelah pembayaran\.$/, 'Requests are taken within $1 days of the payment.'],
+  [/^Paling banyak (.+) yang bisa dikembalikan dari pembayaran ini\.$/, 'At most $1 can be refunded on this payment.'],
   [/^(.+) tidak tersedia di operator ini\.$/, '$1 is not available at this operator.'],
   [/^(.+) tidak bisa dihubungkan di operator ini\.$/, '$1 cannot be linked at this operator.'],
   [/^(.+) tidak bisa dihubungkan sekarang\. Coba lagi nanti\.$/, '$1 cannot be linked right now. Try again later.'],

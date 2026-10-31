@@ -582,6 +582,10 @@ input{font-family:inherit}
     'Perawatan':'Maintenance','Dalam perawatan':'Under maintenance','Sedang dalam perawatan.':'Under maintenance.',
     'Sedang tidak dapat digunakan (verifikasi meter).':'Temporarily unavailable (meter verification).',
     'Unduh struk pajak':'Download tax receipt','Tidak dikenakan':'Not charged',
+    'Ajukan pengembalian dana':'Ask for a refund','Alasan':'Reason','Jumlah':'Amount','Ceritakan apa yang terjadi':'Tell us what happened','Kirim permintaan':'Send request',
+    'Contoh: pengisian berhenti setelah 1 menit':'e.g. charging stopped after 1 minute','Sisa saldo belum kembali':'Unused balance not returned','Pengisian gagal':'Charging failed',
+    'Tagihan terlalu besar':'Charged too much','Lainnya':'Other','Permintaan pengembalian dana sedang ditinjau':'Your refund request is being reviewed',
+    'Pengembalian dana disetujui':'Refund approved','Permintaan pengembalian dana ditolak':'Refund request declined','Batalkan permintaan':'Withdraw request','Permintaan terkirim.':'Request sent.',
     'Konektor ini sedang dalam perawatan.':'This connector is under maintenance.',
     'Charger ini tidak lagi beroperasi.':'This charger is no longer in service.',
     'Sementara tidak beroperasi.':'Temporarily out of service.',
@@ -2661,6 +2665,7 @@ VIEWS.receipt=async(v)=>{
       ${set&&set.refundMinor>0?`<div class="refund">${svg(I.gift)}<div><div class="t">Pengembalian ${rp(set.refundMinor)}</div><div class="s">Dari ${rp(set.paidMinor)} dibayar, ${rp(set.usedMinor)} terpakai. ${set.refund&&set.refund.state==='refunded'?'Sudah dikembalikan.':'Sedang diproses.'}</div></div></div>`:''}
     </div>
     ${t?`<button class="cta ghost" id="taxdoc" style="margin-top:16px">Unduh struk pajak</button>`:''}
+    ${r.mode!=='fleet'?'<div id="rfbox" style="margin-top:10px"></div>':''}
     <button class="cta ghost" id="done" style="margin-top:10px">Selesai</button>`;
   $('.rc-head svg')&&($('.rc-head .chk svg').style.cssText='width:28px;height:28px');
   $('#done').onclick=()=>go('home');
@@ -2684,6 +2689,36 @@ VIEWS.receipt=async(v)=>{
         state._spay={...r,chargeId:id}; rememberCheckout('spay',state._spay); go('spay',{_back:()=>go('receipt',{chargeId:id,_back:()=>go('home')})}); }
       catch(e){ alertBanner(e.message); b.disabled=false; b.textContent='Bayar '+rp(owed);
         if(e.body&&(e.body.code==='wallet_link_ended'||e.body.code==='saved_card_ended')) go('receipt',{...state.params}); } };
+  }
+  // (v1.24.0) Ask for money back on this charge (driver/server.ts → services/driver-refunds.ts).
+  const rfb=$('#rfbox');
+  if(rfb){
+    const RFR={unused_balance:'Sisa saldo belum kembali',charging_failed:'Pengisian gagal',overcharged:'Tagihan terlalu besar',other:'Lainnya'};
+    const RFS={pending:'Permintaan pengembalian dana sedang ditinjau',approved:'Pengembalian dana disetujui',rejected:'Permintaan pengembalian dana ditolak'};
+    const showRf=async()=>{
+      let d; try{ d=await api('/v1/charge/'+id+'/refund-request'); }catch(e){ rfb.innerHTML=''; return; }
+      const q=d.request;
+      if(q&&q.state!=='withdrawn'){
+        rfb.innerHTML=`<div class="refund">${svg(I.gift)}<div><div class="t">${RFS[q.state]}</div><div class="s">${rp(q.amount)}${q.state==='rejected'&&q.note?' · '+esc(q.note):''}</div></div></div>${q.state==='pending'?'<button class="cta ghost" id="rfw" style="margin-top:8px">Batalkan permintaan</button>':''}`;
+        if($('#rfw')) $('#rfw').onclick=async()=>{ try{ await api('/v1/charge/'+id+'/refund-request/'+q.id+'/withdraw',{method:'POST'}); showRf(); }catch(e){ alertBanner(e.message); } };
+        return;
+      }
+      // Already coming back by itself (unused balance), or nothing was paid in the app: no button.
+      if((set&&set.refundMinor>0)||!d.currency){ rfb.innerHTML=''; return; }
+      rfb.innerHTML='<button class="cta ghost" id="rfa">Ajukan pengembalian dana</button>';
+      $('#rfa').onclick=()=>{
+        rfb.innerHTML=`<div class="receipt" style="padding:14px">
+          <div class="field" style="margin-top:0"><label>Alasan</label><select id="rfr">${Object.keys(RFR).map((k)=>`<option value="${k}">${RFR[k]}</option>`).join('')}</select></div>
+          <div class="field"><label>Jumlah</label><input id="rfamt" inputmode="numeric" value="${d.refundable||''}" /></div>
+          <div class="field"><label>Ceritakan apa yang terjadi</label><textarea id="rfmsg" rows="3" maxlength="1000" placeholder="Contoh: pengisian berhenti setelah 1 menit"></textarea></div>
+          <button class="cta" id="rfsend" style="margin-top:12px">Kirim permintaan</button></div>`;
+        $('#rfsend').onclick=async()=>{ const b=$('#rfsend'); b.disabled=true;
+          try{ await api('/v1/charge/'+id+'/refund-request',{method:'POST',body:JSON.stringify({reason:$('#rfr').value,amount:Number(String($('#rfamt').value).replace(/\D/g,''))||undefined,message:$('#rfmsg').value.trim()||undefined})});
+            haptic(); alertBanner('Permintaan terkirim.'); showRf(); }
+          catch(e){ alertBanner(e.message); b.disabled=false; } };
+      };
+    };
+    showRf();
   }
   const td=$('#taxdoc');
   if(td) td.onclick=async()=>{

@@ -197,7 +197,9 @@ dbDescribe('Finance: the Xendit ledger', () => {
 
   test('balance snapshot; overview, receivables, payables, fees', async () => {
     assert.equal(await fin.snapshotBalance(acct), 1_234_567.5);
-    const p = fin.periodOf(new Date(Date.now() - 30 * D).toISOString().slice(0, 10), new Date().toISOString().slice(0, 10));
+    // Days in the billing zone (periodOf's): UTC's date is a day behind in the hours after midnight there.
+    const localDay = (t: number) => new Intl.DateTimeFormat('en-CA', { timeZone: config.billing.timeZone }).format(new Date(t));
+    const p = fin.periodOf(localDay(Date.now() - 30 * D), localDay(Date.now()));
     const o = await fin.overview(acct, p);
     assert.equal(o.collected, 50_000 * 3 + 75_000 + 20_000);
     assert.equal(o.payments, 5);

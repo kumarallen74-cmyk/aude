@@ -57,6 +57,7 @@ registerView('refunds', {
       <div class="filters section">${field('Status', `<select data-state>
         <option value="">Outstanding and recent</option><option value="due">Due</option><option value="processing">Processing</option>
         <option value="failed">Failed</option><option value="refunded">Refunded</option></select>`)}</div>
+      <div class="section" data-requests style="margin-top:0"></div>
       <div data-note></div><div class="card" data-list></div>
       <div class="section" data-transfers></div>
       <div class="section" data-holds></div>`;
@@ -315,8 +316,50 @@ registerView('refunds', {
       }
       loadHolds();
     });
+    // (v1.24.0) Drivers' requests from the app's receipt: approved ones join the list below as due.
+    const RQ = { pending: ['t-warn', 'waiting'], approved: ['t-ok', 'approved'], rejected: ['t-mute', 'rejected'], withdrawn: ['t-mute', 'withdrawn'] };
+    const REASON = { unused_balance: 'Unused balance', charging_failed: 'Charging failed', overcharged: 'Overcharged', other: 'Other' };
+    const loadRequests = async () => {
+      const box = $('[data-requests]', root);
+      let d;
+      try { d = await api('/v1/finance/driver-refunds'); } catch { box.innerHTML = ''; return; }
+      const pol = d.policy;
+      box.innerHTML = `<div class="section-head"><h2>Driver requests</h2><div class="muted">Drivers ask from a charge's receipt in the app. ${pol.enabled ? (pol.autoApproveUpTo ? `Unused balance and failed charges up to ${esc(fmt.idr(pol.autoApproveUpTo))} are approved at once` : 'Every request is reviewed here') : 'Requests in the app are off'}; requests are taken within ${pol.windowDays} days of the payment. ${canPay ? '<button class="btn sm" type="button" data-rqpol>Policy</button>' : ''}</div></div><div class="card" data-rql></div>`;
+      table($('[data-rql]', box), {
+        columns: [
+          { label: 'Asked', render: (q) => `${esc(fmt.ago(q.createdAt))}<div class="cell-sub">${esc(q.site ?? '')}</div>` },
+          { label: 'Amount', num: true, render: (q) => `<b>${esc(fmt.money(q.amount, q.currency))}</b>${q.captured != null ? `<div class="cell-sub">of ${esc(fmt.money(q.captured, q.currency))} paid</div>` : ''}` },
+          { label: 'Why', render: (q) => `${esc(REASON[q.reason] ?? q.reason)}${q.message ? `<div class="cell-sub wrap">${esc(q.message)}</div>` : ''}` },
+          { label: 'Status', render: (q) => `${tag(...RQ[q.state])}${q.auto ? '<div class="cell-sub">by the policy</div>' : q.decidedBy ? `<div class="cell-sub">${esc(q.decidedBy)}</div>` : ''}${q.note && !q.auto ? `<div class="cell-sub wrap">${esc(q.note)}</div>` : ''}` },
+          { label: '', render: (q) => (canPay && q.state === 'pending' ? `<div class="row nowrap" style="gap:6px"><button class="btn sm primary" type="button" data-rqok="${esc(q.id)}">Approve</button><button class="btn sm" type="button" data-rqno="${esc(q.id)}">Reject</button></div>` : '') },
+        ],
+        rows: d.requests, empty: 'No requests from drivers yet.',
+      });
+      $('[data-rqpol]', box)?.addEventListener('click', () => modal({ title: 'Driver refund policy',
+        body: `<div class="form one"><label class="check"><input type="checkbox" name="on"${pol.enabled ? ' checked' : ''}><span>Drivers can ask for a refund in the app</span></label>
+          ${field('Approve automatically up to (Rp)', `<input name="auto" inputmode="numeric" value="${pol.autoApproveUpTo}">`, { help: 'Unused balance and failed charges within what is left on the payment. 0: review every request.' })}
+          ${field('Within (days of the payment)', `<input name="days" type="number" min="1" max="365" value="${pol.windowDays}">`)}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(ctx) {
+          try { await api('/v1/finance/driver-refunds/policy', { method: 'PUT', body: { enabled: $('[name="on"]', ctx.body).checked, autoApproveUpTo: Number($('[name="auto"]', ctx.body).value.replace(/\D/g, '') || 0), windowDays: Number($('[name="days"]', ctx.body).value) } }); toast('Saved', 'ok'); loadRequests(); } catch (e) { toast(e.message, 'crit'); return false; }
+        } }] }));
+      box.onclick = (ev) => {
+        const ok = ev.target.closest('[data-rqok]'), no = ev.target.closest('[data-rqno]');
+        const q = d.requests.find((x) => x.id === (ok ?? no)?.dataset[ok ? 'rqok' : 'rqno']);
+        if (!q) return;
+        modal({ title: ok ? 'Approve the request' : 'Reject the request', subtitle: `${REASON[q.reason]} · ${fmt.money(q.amount, q.currency)}`,
+          body: `<div class="form one">${ok ? field(`Amount (${esc(q.currency)})`, `<input name="amount" inputmode="numeric" value="${q.amount}">`, { help: 'Up to what was asked. The refund then appears below as due.' }) : ''}
+            ${field(ok ? 'Note' : 'Why (the driver sees it)', '<input name="note" maxlength="500">', ok ? { opt: true } : {})}</div>`,
+          actions: [{ label: 'Cancel' }, { label: ok ? 'Approve' : 'Reject', kind: ok ? 'primary' : 'danger', async onClick(ctx) {
+            const v = (n) => $(`[name="${n}"]`, ctx.body)?.value.trim();
+            try {
+              await api(`/v1/finance/driver-refunds/${q.id}/${ok ? 'approve' : 'reject'}`, { method: 'POST', body: { note: v('note') || undefined, amount: ok ? Number(v('amount').replace(/\D/g, '')) : undefined } });
+              toast(ok ? 'Approved: the refund is due.' : 'Rejected.', 'ok'); loadRequests(); load();
+            } catch (e) { toast(e.message, 'crit'); return false; }
+          } }] });
+      };
+    };
     $('[data-state]', root).addEventListener('change', load);
-    $('[data-refresh]', root).addEventListener('click', () => { load(); loadHolds(); loadTransfers(); });
-    await Promise.all([load(), loadHolds(), loadTransfers()]);
+    $('[data-refresh]', root).addEventListener('click', () => { load(); loadHolds(); loadTransfers(); loadRequests(); });
+    await Promise.all([load(), loadHolds(), loadTransfers(), loadRequests()]);
   },
 });

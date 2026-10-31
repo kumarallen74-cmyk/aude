@@ -1395,6 +1395,101 @@ async function settlementsSection(host, base, canWrite) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.24.0) year end, data export
+
+async function yearEndSection(host, canWrite, year = new Date().getFullYear() - 1) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let s;
+  try { s = await api(`/v1/finance/year-end?year=${year}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (y = year) => yearEndSection(host, canWrite, y);
+  const now = new Date().getFullYear();
+  const totals = Object.entries(s.totals);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Year', `<select data-yy>${[now, now - 1, now - 2, now - 3].map((v) => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select>`)}
+      <div class="row" style="gap:6px;align-self:flex-end"><button class="btn" type="button" data-ypack>${icon('download')} Year-end pack</button>${canWrite && s.ended && s.monthsLocked < 12 ? `<button class="btn primary" type="button" data-yclose>Close ${s.year}</button>` : ''}</div></div>
+    ${s.ended ? (s.monthsLocked === 12 ? callout('ok', `${s.year} is closed: every month is locked.`) : callout('info', `${s.monthsLocked} of 12 months locked. <b>Close ${s.year}</b> locks the rest (reopening a month needs a Finance Manager).`)) : callout('info', `${s.year} has not ended: the figures are to date.`)}
+    ${totals.map(([c, t]) => `<div class="grid k4">${kpi('Revenue', esc(fmt.money(t.revenue, c)), 'before tax')}${kpi('Energy', esc(fmt.money(t.energyCost, c)), '')}${kpi('Shared costs + depreciation', esc(fmt.money(t.shared + t.depreciation, c)), '')}${kpi('Contribution', esc(fmt.money(t.contribution, c)), t.revenue ? `${Math.round((t.contribution / t.revenue) * 100)}% of revenue` : '', t.contribution < 0 ? 'crit' : '')}</div>`).join('')}
+    <div class="grid two section"><div class="card"><header><h3>By month</h3></header><div data-ym></div></div><div class="card"><header><h3>By site</h3></header><div data-ys></div></div></div>
+    <div class="grid two section"><div class="card"><header><h3>Site owners</h3></header><div data-yo></div></div>
+      <div class="card"><header><h3>PPh 23 withheld</h3><span class="right cell-sub">${esc(rp(s.pph23.total))} · ${s.pph23.records.length} records</span></header>${s.pph23.withoutBukti ? `<div class="body">${callout('warn', `${s.pph23.withoutBukti} without a bukti potong number (Finance → Tax).`)}</div>` : ''}<div data-yw></div></div></div>`;
+  const rowsM = s.months.flatMap((m) => Object.entries(m.totals).map(([c, t]) => ({ month: m.month, locked: m.locked, c, ...t })));
+  table($('[data-ym]', el), { columns: [
+    { label: 'Month', render: (r) => `${esc(r.month)} ${r.locked ? tag('t-ok', 'locked') : ''}` },
+    { label: 'Revenue', num: true, render: (r) => esc(fmt.money(r.revenue, r.c)) },
+    { label: 'Contribution', num: true, render: (r) => `<span style="color:${r.contribution < 0 ? 'var(--crit)' : 'inherit'}">${esc(fmt.money(r.contribution, r.c))}</span>` },
+  ], rows: rowsM, empty: 'No revenue this year.' });
+  table($('[data-ys]', el), { columns: [
+    { label: 'Site', render: (x) => `${esc(x.site)}<div class="cell-sub">${esc(fmt.num(x.sessions))} sessions · ${esc(fmt.num(Math.round(x.kwh)))} kWh</div>` },
+    { label: 'Revenue', num: true, render: (x) => esc(fmt.money(x.revenue, x.currency)) },
+    { label: 'Contribution', num: true, render: (x) => `<b style="color:${x.contribution < 0 ? 'var(--crit)' : 'inherit'}">${esc(fmt.money(x.contribution, x.currency))}</b>` },
+  ], rows: s.sites, empty: 'No sites.' });
+  table($('[data-yo]', el), { columns: [
+    { label: 'Owner', render: (o) => `${esc(o.owner)}<div class="cell-sub">${o.statements} statements</div>` },
+    { label: 'Share', num: true, render: (o) => esc(fmt.money(o.share, o.currency)) },
+    { label: 'Still due', num: true, render: (o) => (o.outstanding ? tag('t-warn', fmt.money(o.outstanding, o.currency)) : '<span class="cell-sub">paid</span>') },
+  ], rows: s.owners, empty: 'No owner statements this year.' });
+  table($('[data-yw]', el), { columns: [
+    { label: 'Period', render: (w) => `${esc(w.period)}<div class="cell-sub">${esc(w.counterparty)}</div>` },
+    { label: 'Withheld', num: true, render: (w) => esc(rp(w.amount)) },
+    { label: 'Bukti potong', render: (w) => (w.bukti ? `<span class="mono">${esc(w.bukti)}</span>` : tag('t-warn', 'missing')) },
+  ], rows: s.pph23.records, empty: 'No PPh 23 records this year.' });
+  $('[data-yy]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  $('[data-ypack]', el).addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { const res = await api(`/v1/finance/year-end/${s.year}/pack`, { raw: true }); download(`plugsure-year-end-${s.year}.zip`, await res.blob()); } catch (err) { toast(err.message, 'crit'); }
+    e.currentTarget.disabled = false;
+  });
+  $('[data-yclose]', el)?.addEventListener('click', () => modal({ title: `Close ${s.year}`, subtitle: 'Lock every month of the year',
+    body: `<p>Energy bills, exchange rates, budgets, investments and shared costs dated in ${s.year} can then no longer be changed. A Finance Manager can reopen a month with a reason.</p>`,
+    actions: [{ label: 'Cancel' }, { label: `Close ${s.year}`, kind: 'primary', async onClick() {
+      try { const r = await api(`/v1/finance/year-end/${s.year}/close`, { method: 'POST' }); toast(`${r.locked.length} month(s) locked.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+}
+
+async function exportSettings(el, canWrite) {
+  let w;
+  try { w = await api('/v1/finance/warehouse'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const st = w.settings, dis = canWrite ? '' : ' disabled';
+  const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return zonedYmd(d); })();
+  el.innerHTML = `<div class="card section"><header><h3>Data export</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">Each night, the day before's payments, charges, refunds, statement payments, fleet invoices and credit notes, and snapshots of statements, shared costs, investments, PPh 23 and sites, as gzipped CSV or JSON Lines — to an S3-compatible bucket (AWS S3, Cloudflare R2, MinIO, Wasabi) for your BI tool or warehouse, or to the server's storage. Any day can also be downloaded as a ZIP.</p>
+      <div class="form">
+        <label class="check"><input type="checkbox" name="w_on"${st.enabled ? ' checked' : ''}${dis}><span>Export every night</span></label>
+        ${field('Target', `<select name="w_target"${dis}><option value="s3"${st.target === 's3' ? ' selected' : ''}>S3-compatible bucket</option><option value="local"${st.target === 'local' ? ' selected' : ''}>The server's storage</option></select>`)}
+        ${field('Format', `<select name="w_format"${dis}><option value="csv"${st.format === 'csv' ? ' selected' : ''}>CSV (gzipped)</option><option value="ndjson"${st.format === 'ndjson' ? ' selected' : ''}>JSON Lines (gzipped)</option></select>`)}
+        ${field('Prefix', `<input name="w_prefix" value="${esc(st.prefix)}"${dis}>`)}
+        ${field('Endpoint', `<input name="w_ep" value="${esc(st.endpoint ?? '')}" placeholder="https://s3.ap-southeast-3.amazonaws.com"${dis}>`)}
+        ${field('Region', `<input name="w_region" value="${esc(st.region)}"${dis}>`)}
+        ${field('Bucket', `<input name="w_bucket" value="${esc(st.bucket ?? '')}"${dis}>`)}
+        ${field('Access key id', `<input name="w_key" value="${esc(st.accessKeyId ?? '')}" autocomplete="off"${dis}>`)}
+        ${field('Secret access key', `<input name="w_secret" type="password" autocomplete="new-password" placeholder="${st.secretSet ? 'saved — leave empty to keep' : ''}"${dis}>`)}
+      </div>
+      ${canWrite ? `<div class="row" style="gap:8px;margin-top:10px"><button class="btn primary" type="button" data-wsave>Save</button><input type="date" data-wday value="${yesterday}" style="width:160px"><button class="btn" type="button" data-wrun>Export this day</button><button class="btn" type="button" data-wzip>${icon('download')} Download it</button></div>` : ''}
+    </div><div data-wl></div></div>`;
+  table($('[data-wl]', el), { columns: [
+    { label: 'Day', render: (r) => `${esc(r.day)}<div class="cell-sub">${r.automatic ? 'nightly' : esc(r.by ?? 'by hand')} · ${esc(fmt.ago(r.at))}</div>` },
+    { label: 'Target', render: (r) => esc(r.target === 's3' ? 'bucket' : 'server') },
+    { label: 'Files', num: true, render: (r) => `${r.files}<div class="cell-sub">${esc(fmt.num(r.rows))} rows · ${esc(fmt.num(Math.round(r.bytes / 1024)))} KB</div>` },
+    { label: '', render: (r) => (r.error ? `<span class="cell-sub wrap" style="color:var(--crit)">${esc(r.error)}</span>` : r.finished ? tag('t-ok', 'done') : tag('t-info', 'running')) },
+  ], rows: w.runs, empty: 'No export yet.' });
+  const v = (n) => $(`[name="${n}"]`, el)?.value.trim();
+  $('[data-wsave]', el)?.addEventListener('click', async () => {
+    try {
+      await api('/v1/finance/warehouse/settings', { method: 'PUT', body: { enabled: $('[name="w_on"]', el).checked, target: v('w_target'), format: v('w_format'), prefix: v('w_prefix'), endpoint: v('w_ep') || undefined, region: v('w_region') || undefined, bucket: v('w_bucket') || undefined, accessKeyId: v('w_key') || undefined, secretAccessKey: v('w_secret') || undefined } });
+      toast('Saved.', 'ok'); exportSettings(el, canWrite);
+    } catch (e) { toast(e.message, 'crit'); }
+  });
+  $('[data-wrun]', el)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { const r = await api('/v1/finance/warehouse/run', { method: 'POST', body: { day: $('[data-wday]', el).value } }); toast(`Exported ${r.files.length} files.`, 'ok'); exportSettings(el, canWrite); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+  });
+  $('[data-wzip]', el)?.addEventListener('click', async () => {
+    const day = $('[data-wday]', el).value;
+    try { const res = await api(`/v1/finance/warehouse/days/${day}`, { raw: true }); download(`plugsure-finance-${day}.zip`, await res.blob()); } catch (err) { toast(err.message, 'crit'); }
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -1408,7 +1503,7 @@ registerView('finance', {
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
       { id: 'payables', label: 'Payables' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'close', label: 'Close' }, { id: 'settings', label: 'Settings' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -1742,10 +1837,12 @@ registerView('finance', {
         ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}
         <div class="section" data-acct-sw></div>
         <div data-p10></div>
-        <div data-p11></div>`;
+        <div data-p11></div>
+        <div data-p13></div>`;
       accountingSection($('[data-acct-sw]', body), base(), canWrite, st.accountingPackage);
       phase10Settings($('[data-p10]', body), canWrite);
       phase11Settings($('[data-p11]', body), canWrite);
+      exportSettings($('[data-p13]', body), canWrite);
       $('[data-jdl]', body).addEventListener('click', () => $('[data-journal]', bodyAll).click());
       $('[data-save]', body)?.addEventListener('click', async () => {
         const journalAccounts = Object.fromEntries(Object.keys(r.defaults).map((k) => [k, { code: $(`[name="code_${k}"]`, body).value.trim(), name: $(`[name="name_${k}"]`, body).value.trim() }]));
@@ -1775,7 +1872,8 @@ registerView('finance', {
       summary: () => summarySection(body),
       margin: () => marginSection(body, canWrite), budgets: () => budgetsSection(body, canWrite), collections: () => collectionsSection(body, canWrite),
       investments: () => investmentsSection(body, canWrite), close: () => closeSection(body, canWrite),
-      pnl: () => pnlSection(body, canWrite), settlements: () => settlementsSection(body, base(), canWrite) };
+      pnl: () => pnlSection(body, canWrite), settlements: () => settlementsSection(body, base(), canWrite),
+      yearend: () => yearEndSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

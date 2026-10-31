@@ -43,7 +43,9 @@ import {
   receipt,
   receiptDocument,
   history,
+  ownedCharge,
 } from './charge.js';
+import * as driverRefunds from '../services/driver-refunds.js';
 import { listRoamingStations, startRoaming, roamingStatus, stopRoaming, roamingReceipt, roamingHistory, reserveRoaming, roamingReservation, cancelRoamingReservation, currentRoamingReservation } from './roaming.js';
 import { config, isRelaxedEnv } from '../config.js';
 import { vapid } from '../services/webpush.js';
@@ -633,6 +635,33 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     .header('cache-control', 'public, max-age=86400')
     .type('application/javascript; charset=utf-8')
     .send("document.addEventListener('click',function(e){var t=e.target;if(t&&t.closest&&t.closest('[data-print]'))window.print();});\n"));
+
+  // (v1.24.0) Asking for money back on a charge (services/driver-refunds.ts).
+  app.get('/d/v1/charge/:id/refund-request', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const dc = await ownedCharge(driver(req), id);
+    if (!dc) return reply.status(404).send({ error: 'not_found' });
+    const p = dc.payment_intent_id ? await driverRefunds.refundable(dc.payment_intent_id) : null;
+    return { request: dc.payment_intent_id ? await driverRefunds.forPayment(dc.payment_intent_id) : null, refundable: p?.state === 'captured' ? p.refundable : 0, currency: p?.currency ?? null, reasons: driverRefunds.REASONS };
+  });
+  app.post('/d/v1/charge/:id/refund-request', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const dc = await ownedCharge(driver(req), id);
+    if (!dc) return reply.status(404).send({ error: 'not_found' });
+    try { return reply.status(201).send(await driverRefunds.request(dc, (req.body ?? {}) as Record<string, unknown>)); } catch (e) {
+      if (e instanceof driverRefunds.DriverRefundError) return reply.status(e.statusCode).send({ error: e.message, code: e.code });
+      throw e;
+    }
+  });
+  app.post('/d/v1/charge/:id/refund-request/:rid/withdraw', async (req, reply) => {
+    const { id, rid } = req.params as { id: string; rid: string };
+    const dc = await ownedCharge(driver(req), id);
+    if (!dc?.payment_intent_id || !/^\d{1,18}$/.test(rid)) return reply.status(404).send({ error: 'not_found' });
+    try { return await driverRefunds.withdraw(dc.payment_intent_id, rid); } catch (e) {
+      if (e instanceof driverRefunds.DriverRefundError) return reply.status(e.statusCode).send({ error: e.message });
+      throw e;
+    }
+  });
 
   app.get('/d/v1/charge/:id/receipt.html', async (req, reply) => {
     const { id } = req.params as { id: string };

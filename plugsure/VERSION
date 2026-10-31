@@ -1,11 +1,18 @@
 PlugSure CSMS
-Version:   1.23.0
-Package:   plugsure-v1.23.0
-Prepared:  2026-10-31  (v1.22.0 + finance phase 12 — see RELEASE-NOTES-v1.23.0.md)
+Version:   1.24.0
+Package:   plugsure-v1.24.0
+Prepared:  2026-10-31  (v1.23.0 + finance phase 13 — see RELEASE-NOTES-v1.24.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (447 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (462 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.23.0 = v1.22.0 + finance phase 12: a tax filing calendar (PPh 23, PPN and e-Faktur due dates, the
+Status:    v1.24.0 = v1.23.0 + finance phase 13: drivers ask for refunds from the app's receipt (approved by the
+           operator's policy or reviewed in Refunds), fleet credit limits and prepaid deposits (warnings, cards blocked
+           while over, invoices paid from the deposit), a nightly finance data export (CSV / JSON Lines to an
+           S3-compatible bucket or the server), and the year end (summary, closing the year, the accountant's pack).
+           Migration 092 (additive).
+
+v1.23.0 (2026-10-31):
+           v1.23.0 = v1.22.0 + finance phase 12: a tax filing calendar (PPh 23, PPN and e-Faktur due dates, the
            amounts recorded, filed with the reference, reminders), site owners' queries on their statements (answered,
            an agreed adjustment added to the next statement), shared costs allocated by site with a site P&L, and
            gateway settlement tracking (late settlements, withdrawals missing or short at the bank). Migration 091

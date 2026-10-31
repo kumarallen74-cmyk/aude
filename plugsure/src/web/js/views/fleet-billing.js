@@ -537,6 +537,52 @@ async function renderAccounts(box, canWrite) {
           },
         },
         {
+          // (v1.24.0) A credit limit or a prepaid deposit; cards blocked while over (services/fleet-credit-limits.ts).
+          id: 'credit', label: 'Credit',
+          async render(b) {
+            const draw = async () => {
+              let p;
+              try { p = await api(`/v1/fleet-accounts/${id}/credit`); } catch (e) { b.innerHTML = callout('crit', esc(e.message)); return; }
+              const m = (n) => fmt.money(n, p.currency);
+              const dis = canWrite ? '' : ' disabled';
+              const ENTRY = { topup: 'Top-up', invoice: 'Invoice paid', adjustment: 'Adjustment' };
+              b.innerHTML = `${p.mode === 'none' ? '' : `<div class="grid k3">${kpi('Owed', esc(m(p.owed)), `${esc(m(p.openInvoices))} invoiced · ${esc(m(p.notInvoiced))} not invoiced yet`)}
+                  ${kpi(p.mode === 'prepaid' ? 'Deposit' : 'Limit', esc(m(p.mode === 'prepaid' ? p.deposit : p.limit)), p.mode === 'credit' && p.deposit ? `+ deposit ${esc(m(p.deposit))}` : '')}
+                  ${kpi('Available', esc(m(p.available)), p.usedPct != null ? `${p.usedPct}% used` : '', p.over ? 'crit' : p.usedPct >= 80 ? 'warn' : '')}</div>
+                ${p.cards.blockedForCredit ? callout('crit', `${p.cards.blockedForCredit} card(s) blocked until the account is back under its ${p.mode === 'prepaid' ? 'deposit' : 'limit'}.`) : ''}`}
+                <div class="form" style="margin-top:12px">
+                  ${field('Mode', `<select name="mode"${dis}><option value="none"${p.mode === 'none' ? ' selected' : ''}>None: invoiced monthly, nothing checked</option><option value="credit"${p.mode === 'credit' ? ' selected' : ''}>Credit limit</option><option value="prepaid"${p.mode === 'prepaid' ? ' selected' : ''}>Prepaid deposit</option></select>`)}
+                  ${field('Credit limit', `<input name="limit" inputmode="numeric" value="${p.limit}"${dis}>`, { help: `In ${esc(p.currency)} (minor unit).` })}
+                  <label class="check"><input type="checkbox" name="block"${p.block ? ' checked' : ''}${dis}><span>Block the cards while over</span></label>
+                  <label class="check"${p.mode === 'prepaid' ? '' : ' hidden'}><input type="checkbox" name="auto"${p.autoApply ? ' checked' : ''}${dis}><span>Pay issued invoices from the deposit</span></label>
+                </div>
+                ${canWrite ? `<div class="row" style="gap:8px;margin-top:10px"><button class="btn primary" type="button" data-csave>Save</button>${p.mode === 'prepaid' ? '<button class="btn" type="button" data-ctop>Record a top-up</button><button class="btn" type="button" data-cadj>Adjust</button>' : ''}</div>` : ''}
+                ${p.entries.length ? '<h4 style="margin:16px 0 6px">Deposit</h4><div data-cent></div>' : ''}`;
+              if (p.entries.length) table($('[data-cent]', b), { columns: [
+                { label: 'When', render: (e) => esc(fmt.ago(e.at)) },
+                { label: 'What', render: (e) => `${esc(ENTRY[e.kind] ?? e.kind)}${e.invoice ? ` <span class="mono">${esc(e.invoice)}</span>` : ''}<div class="cell-sub">${esc(e.reference ?? '')} ${esc(e.note ?? '')}</div>` },
+                { label: 'Amount', num: true, render: (e) => `<span style="color:${e.amount < 0 ? 'var(--crit)' : 'inherit'}">${esc(m(e.amount))}</span>` },
+              ], rows: p.entries, empty: '' });
+              $('[data-csave]', b)?.addEventListener('click', async () => {
+                const v = (n) => $(`[name="${n}"]`, b);
+                try { await api(`/v1/fleet-accounts/${id}/credit`, { method: 'PUT', body: { mode: v('mode').value, limit: Number(v('limit').value.replace(/\D/g, '') || 0), block: v('block').checked, autoApply: v('auto').checked } }); toast('Saved', 'ok'); draw(); }
+                catch (e) { toast(e.message, 'crit'); }
+              });
+              const entry = (kind) => modal({ title: kind === 'topup' ? 'Record a top-up' : 'Adjust the deposit', subtitle: p.currency,
+                body: `<div class="form one">${field(`Amount (${esc(p.currency)})`, '<input name="amount" inputmode="numeric">', { help: kind === 'topup' ? 'What arrived in your bank account.' : 'Negative to take off.' })}
+                  ${field(kind === 'topup' ? 'Bank reference' : 'Reference', '<input name="ref" maxlength="120">', kind === 'topup' ? {} : { opt: true })}${field('Note', '<input name="note" maxlength="300">', kind === 'topup' ? { opt: true } : {})}</div>`,
+                actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(ctx) {
+                  const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+                  try { await api(`/v1/fleet-accounts/${id}/credit/entries`, { method: 'POST', body: { kind, amount: Number(v('amount').replace(/[^\d-]/g, '')), reference: v('ref') || undefined, note: v('note') || undefined } }); toast('Recorded', 'ok'); draw(); }
+                  catch (e) { toast(e.message, 'crit'); return false; }
+                } }] });
+              $('[data-ctop]', b)?.addEventListener('click', () => entry('topup'));
+              $('[data-cadj]', b)?.addEventListener('click', () => entry('adjustment'));
+            };
+            await draw();
+          },
+        },
+        {
           id: 'portal', label: `Portal access (${a.portalUsers?.length ?? 0})`,
           async render(b) {
             const cur = await api(`/v1/fleet-accounts/${id}`);

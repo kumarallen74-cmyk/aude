@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.23.0 (31 October 2026), the current release:** finance phase 12: a tax filing calendar, owner statement queries with adjustments, cost allocation by site with a site P&L, and gateway settlement tracking. Notes: [`RELEASE-NOTES-v1.23.0.md`](RELEASE-NOTES-v1.23.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.24.0 (31 October 2026), the current release:** finance phase 13: driver refund requests in the app, fleet credit limits and prepaid deposits, a nightly finance data export, and the year-end close and pack. Notes: [`RELEASE-NOTES-v1.24.0.md`](RELEASE-NOTES-v1.24.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.23.0 (31 October 2026):** finance phase 12: a tax filing calendar, owner statement queries with adjustments, cost allocation by site with a site P&L, and gateway settlement tracking. Notes: [`RELEASE-NOTES-v1.23.0.md`](RELEASE-NOTES-v1.23.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.22.0 (31 October 2026):** finance phase 11: month lock with a close checklist, site investments with payback and ROI, revenue drop alerts, and fleet statements of account. Notes: [`RELEASE-NOTES-v1.22.0.md`](RELEASE-NOTES-v1.22.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

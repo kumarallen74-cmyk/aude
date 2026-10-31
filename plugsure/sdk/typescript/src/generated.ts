@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.23.0";
+export const API_VERSION = "1.24.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5099,6 +5099,18 @@ export type ApproveAndSendRefundTransferResponse = {
   transfer: RefundTransfer;
 };
 
+export type ApproveOrRejectDriverRefundRequestBody = {
+  amount?: number;
+  note?: string;
+};
+
+export type ApproveOrRejectDriverRefundRequestResponse = {
+  id?: string;
+  state?: string;
+  amount?: number;
+  paymentId?: string;
+};
+
 export type ApproveOrRejectSiteOwnerBankDetailChangeBody = {
   note?: string;
 };
@@ -5393,6 +5405,12 @@ export type CheckSiteOwnerBankAccountByNameResponse = {
 export type ClearReviewAndBillSessionBody = {
   /** Bill despite a rating violation. */
   force?: boolean;
+};
+
+export type CloseYearResponse = {
+  year?: number;
+  locked?: string[];
+  alreadyLocked?: string[];
 };
 
 export type ConfirmPaymentWasReceivedPayeeResponse = {
@@ -5735,6 +5753,12 @@ export type DisputeWithItsNotesResponse = {
   notes: Record<string, unknown>[];
 };
 
+export type DriversRefundRequestsResponse = {
+  requests?: Record<string, unknown>[];
+  pending?: number;
+  policy?: Record<string, unknown>;
+};
+
 export type EMailCreditNoteBody = {
   to?: string;
 };
@@ -5849,6 +5873,17 @@ export type ExportClosedMonthToAccountingPackageBody = {
   package?: "jurnal" | "accurate" | "generic";
 };
 
+export type ExportDayNowBody = {
+  day: string;
+};
+
+export type ExportDayNowResponse = {
+  id?: string;
+  day?: string;
+  target?: string;
+  files?: Record<string, unknown>[];
+};
+
 export type FetchMonthEcbReferenceRatesBody = {
   month: string;
 };
@@ -5864,6 +5899,12 @@ export type FetchMonthEcbReferenceRatesResponse = {
 export type FetchPkiRootCertificatesResponse = {
   anchors: PncTrustAnchor[];
   received: number;
+};
+
+export type FinanceDataExportResponse = {
+  settings?: Record<string, unknown>;
+  runs?: Record<string, unknown>[];
+  datasets?: Record<string, unknown>;
 };
 
 export type FinanceOverviewResponse = {
@@ -5955,6 +5996,18 @@ export type FinanceSummaryKeyFiguresResponse = {
   consolidated?: Record<string, unknown> | null;
 };
 
+export type FleetAccountCreditPositionResponse = {
+  mode?: "none" | "credit" | "prepaid";
+  currency?: string;
+  limit?: number;
+  deposit?: number;
+  owed?: number;
+  available?: number | null;
+  usedPct?: number | null;
+  over?: boolean;
+  entries?: Record<string, unknown>[];
+};
+
 export type FleetAccountStatementOfAccountResponse = {
   month?: string;
   from?: string;
@@ -5969,6 +6022,10 @@ export type FleetAccountStatementOfAccountResponse = {
     open?: Record<string, unknown>[];
     aging?: Record<string, unknown>;
   }[];
+};
+
+export type FleetAccountsWithCreditLimitOrDepositResponse = {
+  accounts?: Record<string, unknown>[];
 };
 
 export type GatewayFeeAuditResponse = {
@@ -6826,6 +6883,13 @@ export type PayablesResponse = {
   }[];
 };
 
+export type PayInvoiceFromDepositResponse = {
+  invoiceId?: string;
+  number?: string;
+  paid?: number;
+  depositLeft?: number;
+};
+
 export type PaymentsAccountsWithFinanceDataResponse = {
   accounts: FinanceAccount[];
 };
@@ -7016,6 +7080,13 @@ export type ReconciliationExceptionsResponse = {
 export type RecordCreditNoteAsRefundedBody = {
   refundedAt?: string;
   reference?: string;
+};
+
+export type RecordDepositTopUpOrAdjustmentBody = {
+  kind?: "topup" | "adjustment";
+  amount: number;
+  reference?: string;
+  note?: string;
 };
 
 export type RecordFakturPajakNumberBody = {
@@ -7704,8 +7775,34 @@ export type SetConnectorLoadManagementPrioritiesResponse = {
   ok: true;
 };
 
+export type SetDriverRefundPolicyBody = {
+  enabled?: boolean;
+  autoApproveUpTo?: number;
+  windowDays?: number;
+};
+
 export type SetEvseAndConnectorTopologyResponse = {
   ok: true;
+};
+
+export type SetFinanceDataExportBody = {
+  enabled?: boolean;
+  target?: "local" | "s3";
+  format?: "csv" | "ndjson";
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+};
+
+export type SetFleetAccountCreditLimitOrPrepayBody = {
+  mode?: "none" | "credit" | "prepaid";
+  limit?: number;
+  currency?: string;
+  block?: boolean;
+  autoApply?: boolean;
 };
 
 export type SetMonthBudgetBody = {
@@ -8502,6 +8599,18 @@ export type XenditReportsResponse = {
   reports: GatewayReport[];
 };
 
+export type YearEndSummaryResponse = {
+  year?: number;
+  ended?: boolean;
+  monthsLocked?: number;
+  months?: Record<string, unknown>[];
+  totals?: Record<string, unknown>;
+  sites?: Record<string, unknown>[];
+  owners?: Record<string, unknown>[];
+  pph23?: Record<string, unknown>;
+  filings?: Record<string, unknown>[];
+};
+
 /** Every operation of the API, one method each. `PlugSure` (index.ts) adds the transport. */
 export class Operations {
   constructor(protected readonly transport: Transport) {}
@@ -8812,6 +8921,23 @@ export class Operations {
     tid: string;
   }, options?: RequestOptions): Promise<ApproveAndSendRefundTransferResponse> {
     return this.transport.request<ApproveAndSendRefundTransferResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/approve", pathParams: { tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
+   * Approve or reject a driver's refund request
+   *
+   * (v1.24.0) decision approve (optionally a smaller amount: the payment's refund becomes due, paid from Refunds) or reject (a note the driver sees). Audited.
+   *
+   * `POST /v1/finance/driver-refunds/{qid}/{decision}` · needs `payment:write`
+   */
+  approveOrRejectDriverRefundRequest(params: {
+    /** The request id. */
+    qid: string;
+    /** approve or reject. */
+    decision: string;
+    body: ApproveOrRejectDriverRefundRequestBody;
+  }, options?: RequestOptions): Promise<ApproveOrRejectDriverRefundRequestResponse> {
+    return this.transport.request<ApproveOrRejectDriverRefundRequestResponse>({ method: "POST", path: "/v1/finance/driver-refunds/{qid}/{decision}", pathParams: { qid: params.qid, decision: params.decision }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9420,6 +9546,20 @@ export class Operations {
   }
 
   /**
+   * Close a year
+   *
+   * (v1.24.0) Lock every month of an ended year (Finance → Close; reopening a month needs finance:approve). Audited as finance.year_closed.
+   *
+   * `POST /v1/finance/year-end/{year}/close` · needs `payment:write`
+   */
+  closeYear(params: {
+    /** YYYY. */
+    year: string;
+  }, options?: RequestOptions): Promise<CloseYearResponse> {
+    return this.transport.request<CloseYearResponse>({ method: "POST", path: "/v1/finance/year-end/{year}/close", pathParams: { year: params.year }, accept: "json" }, options);
+  }
+
+  /**
    * Confirm a payment was received (payee)
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -9900,6 +10040,20 @@ export class Operations {
   }
 
   /**
+   * Download a day's finance data
+   *
+   * (v1.24.0) The day's datasets as one ZIP (gzipped files and a manifest with SHA-256s), whatever the target.
+   *
+   * `GET /v1/finance/warehouse/days/{day}` · needs `payment:read`
+   */
+  downloadDayFinanceData(params: {
+    /** YYYY-MM-DD. */
+    day: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/warehouse/days/{day}", pathParams: { day: params.day }, accept: "binary" }, options);
+  }
+
+  /**
    * Download a fleet invoice as PDF
    *
    * The invoice as an A4 PDF: seller and buyer, the lines per site with DPP and PPN, partner networks and memberships, credits and the amount due, how to pay, and an appendix with every card and session.
@@ -10040,6 +10194,31 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/diagnostics/{id}/download", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
+   * Download the year-end pack
+   *
+   * (v1.24.0) One ZIP for the accountant: the workbook (months, sites, owners, PPh 23, tax filings), each as CSV, a README and a manifest with SHA-256s (x-manifest-sha256).
+   *
+   * `GET /v1/finance/year-end/{year}/pack` · needs `payment:read`
+   */
+  downloadYearEndPack(params: {
+    /** YYYY. */
+    year: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/year-end/{year}/pack", pathParams: { year: params.year }, accept: "binary" }, options);
+  }
+
+  /**
+   * Drivers' refund requests
+   *
+   * (v1.24.0) Requests drivers made from a charge's receipt in the app (unused balance, charging failed, overcharged, other): pending first, then the last decided; the policy.
+   *
+   * `GET /v1/finance/driver-refunds` · needs `payment:read`
+   */
+  driversRefundRequests(options?: RequestOptions): Promise<DriversRefundRequestsResponse> {
+    return this.transport.request<DriversRefundRequestsResponse>({ method: "GET", path: "/v1/finance/driver-refunds", accept: "json" }, options);
   }
 
   /**
@@ -10195,6 +10374,19 @@ export class Operations {
   }
 
   /**
+   * Export a day now
+   *
+   * (v1.24.0) A day that has ended, to the target; logged with each file's rows, size and SHA-256. 502 when the store refuses. Audited.
+   *
+   * `POST /v1/finance/warehouse/run` · needs `payment:write`
+   */
+  exportDayNow(params: {
+    body: ExportDayNowBody;
+  }, options?: RequestOptions): Promise<ExportDayNowResponse> {
+    return this.transport.request<ExportDayNowResponse>({ method: "POST", path: "/v1/finance/warehouse/run", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Export e-Faktur (Coretax XML) for a month
    *
    * The bulk-import XML for DJP Coretax (Faktur Pajak → Impor Data): one faktur per live invoice with PPN, transaction code 04 (PPN 12% on DPP nilai lain), one line per site. Refused (409) until the seller NPWP/NITKU and the e-Faktur item settings are saved and confirmed. Invoices whose buyer has no NPWP/NIK are skipped; the included and skipped invoices are in the X-PlugSure-Included and X-PlugSure-Skipped headers. Import, check the drafts in Coretax, then approve there.
@@ -10334,6 +10526,17 @@ export class Operations {
   }
 
   /**
+   * Finance data export
+   *
+   * (v1.24.0) The export settings (target local or S3-compatible, format csv or ndjson, bucket and prefix; the secret is never shown), the last 60 runs, and the datasets.
+   *
+   * `GET /v1/finance/warehouse` · needs `payment:read`
+   */
+  financeDataExport(options?: RequestOptions): Promise<FinanceDataExportResponse> {
+    return this.transport.request<FinanceDataExportResponse>({ method: "GET", path: "/v1/finance/warehouse", accept: "json" }, options);
+  }
+
+  /**
    * Finance overview
    *
    * Over the period: collected, payments, fees, VAT on fees, withholding tax, refunds, payouts, settled, net (collected − fees − VAT − refunds), by channel and by day. Now: receivable (collected, not yet settled, by expected day; overdue), the last balance at the gateway, refunds due, open reconciliation exceptions, and the sync state.
@@ -10379,6 +10582,20 @@ export class Operations {
   }
 
   /**
+   * A fleet account's credit position
+   *
+   * (v1.24.0) Mode, limit, deposit, owed, available, % used, cards blocked for credit, and the deposit's last 50 entries.
+   *
+   * `GET /v1/fleet-accounts/{id}/credit` · needs `invoice:read`
+   */
+  fleetAccountCreditPosition(params: {
+    /** Fleet account id. */
+    id: string;
+  }, options?: RequestOptions): Promise<FleetAccountCreditPositionResponse> {
+    return this.transport.request<FleetAccountCreditPositionResponse>({ method: "GET", path: "/v1/fleet-accounts/{id}/credit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * A fleet account's statement of account
    *
    * (v1.22.0) For the month, per currency: the opening balance, the invoices, credit notes, payments and refunds (with the running balance), the closing balance, and the invoices still open at month end by age.
@@ -10394,6 +10611,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<FleetAccountStatementOfAccountResponse> {
     return this.transport.request<FleetAccountStatementOfAccountResponse>({ method: "GET", path: "/v1/fleet-accounts/{id}/account-statement", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Fleet accounts with a credit limit or deposit
+   *
+   * (v1.24.0) Each account in credit or prepaid mode: owed (invoices open and charging not invoiced), deposit, available, % used, cards blocked for credit.
+   *
+   * `GET /v1/fleet-credit` · needs `invoice:read`
+   */
+  fleetAccountsWithCreditLimitOrDeposit(options?: RequestOptions): Promise<FleetAccountsWithCreditLimitOrDepositResponse> {
+    return this.transport.request<FleetAccountsWithCreditLimitOrDepositResponse>({ method: "GET", path: "/v1/fleet-credit", accept: "json" }, options);
   }
 
   /**
@@ -12174,6 +12402,20 @@ export class Operations {
   }
 
   /**
+   * Pay an invoice from the deposit
+   *
+   * (v1.24.0) A prepaid account's issued invoice, when the deposit covers what is owed on it: debited from the deposit and marked paid. Audited.
+   *
+   * `POST /v1/fleet-invoices/{id}/pay-from-deposit` · needs `invoice:write`
+   */
+  payInvoiceFromDeposit(params: {
+    /** The invoice id. */
+    id: string;
+  }, options?: RequestOptions): Promise<PayInvoiceFromDepositResponse> {
+    return this.transport.request<PayInvoiceFromDepositResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/pay-from-deposit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Payments accounts with finance data
    *
    * The gateway accounts the caller may see: its organisation's own Xendit account(s), and for platform administrators the platform's.
@@ -12540,6 +12782,21 @@ export class Operations {
     body?: RecordCreditNoteAsRefundedBody;
   }, options?: RequestOptions): Promise<FleetCreditNote> {
     return this.transport.request<FleetCreditNote>({ method: "POST", path: "/v1/fleet-credit-notes/{id}/refunded", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a deposit top-up or adjustment
+   *
+   * (v1.24.0) Prepaid accounts: kind topup (amount above 0, the bank reference) or adjustment (a non-zero amount and a note). Audited.
+   *
+   * `POST /v1/fleet-accounts/{id}/credit/entries` · needs `invoice:write`
+   */
+  recordDepositTopUpOrAdjustment(params: {
+    /** Fleet account id. */
+    id: string;
+    body: RecordDepositTopUpOrAdjustmentBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/fleet-accounts/{id}/credit/entries", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13669,6 +13926,19 @@ export class Operations {
   }
 
   /**
+   * Set the driver refund policy
+   *
+   * (v1.24.0) enabled (drivers can ask in the app); autoApproveUpTo (minor unit; unused balance and failed charges up to it are approved at once; 0: review all); windowDays (1–365). Audited.
+   *
+   * `PUT /v1/finance/driver-refunds/policy` · needs `payment:write`
+   */
+  setDriverRefundPolicy(params: {
+    body: SetDriverRefundPolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/driver-refunds/policy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the EVSE and connector topology
    *
    * Creates or updates EVSEs and connectors with nameplate and metrology data; nothing is deleted, because sessions reference connectors. On OCPP 1.6 each EVSE may have only one connector (a second gun is a second EVSE). Invalid topologies are refused with 422 listing every problem. Audited as charge_point.topology_changed.
@@ -13681,6 +13951,34 @@ export class Operations {
     body: EvseTopology;
   }, options?: RequestOptions): Promise<SetEvseAndConnectorTopologyResponse> {
     return this.transport.request<SetEvseAndConnectorTopologyResponse>({ method: "PUT", path: "/v1/charge-points/{identity}/evses", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the finance data export
+   *
+   * (v1.24.0) enabled (nightly, for the day before); target local or s3 (endpoint, region, bucket, accessKeyId, secretAccessKey: kept sealed, leave empty to keep); format csv or ndjson (gzipped); prefix. Audited.
+   *
+   * `PUT /v1/finance/warehouse/settings` · needs `payment:write`
+   */
+  setFinanceDataExport(params: {
+    body: SetFinanceDataExportBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/warehouse/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set a fleet account's credit limit or prepay
+   *
+   * (v1.24.0) mode none, credit (limit) or prepaid (deposit); currency; block (the cards while over); autoApply (pay issued invoices from the deposit). Checked at once. Audited.
+   *
+   * `PUT /v1/fleet-accounts/{id}/credit` · needs `invoice:write`
+   */
+  setFleetAccountCreditLimitOrPrepay(params: {
+    /** Fleet account id. */
+    id: string;
+    body: SetFleetAccountCreditLimitOrPrepayBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/fleet-accounts/{id}/credit", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14971,5 +15269,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<XenditReportsResponse> {
     return this.transport.request<XenditReportsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/reports", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Year-end summary
+   *
+   * (v1.24.0) For a year (default last year): per month and per site revenue, energy, shared costs, depreciation and contribution, months locked; each owner's share, paid and outstanding; PPh 23 withheld with the records without a bukti potong; tax filings marked.
+   *
+   * `GET /v1/finance/year-end` · needs `payment:read`
+   */
+  yearEndSummary(params?: {
+    query?: {
+      year?: number;
+    };
+  }, options?: RequestOptions): Promise<YearEndSummaryResponse> {
+    return this.transport.request<YearEndSummaryResponse>({ method: "GET", path: "/v1/finance/year-end", query: params?.query, accept: "json" }, options);
   }
 }
