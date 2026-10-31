@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.17.0 (31 October 2026), the current release:** finance phase 6: the accounting journal, the monthly close e-mail, and Xendit Payouts for refunds and owner payouts. Notes: [`RELEASE-NOTES-v1.17.0.md`](RELEASE-NOTES-v1.17.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.18.0 (31 October 2026), the current release:** finance phase 7: bank statement reconciliation, alerts for transfers waiting for approval, payout results by callback, and PPh 23 and e-Faktur for PlugSure's platform fee. Notes: [`RELEASE-NOTES-v1.18.0.md`](RELEASE-NOTES-v1.18.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.17.0 (31 October 2026):** finance phase 6: the accounting journal, the monthly close e-mail, and Xendit Payouts for refunds and owner payouts. Notes: [`RELEASE-NOTES-v1.17.0.md`](RELEASE-NOTES-v1.17.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.16.0 (31 October 2026):** phase 5 of the finance review: a payment's whole trail, what each payment method costs, owners' shares paid through Duitku Disbursement (two people), and Xendit's reports from the console. Notes: [`RELEASE-NOTES-v1.16.0.md`](RELEASE-NOTES-v1.16.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

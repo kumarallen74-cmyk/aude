@@ -489,6 +489,11 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   10. (v1.17.0) Optionally set the chart of accounts and the monthly close
      e-mail (Finance → Settings), and Xendit payouts on the Xendit integration
      (the key needs Money-out write) ([FINANCE.md](FINANCE.md)).
+  11. (v1.18.0) Route the approval alerts (finance.transfer_awaiting_approval,
+     finance.transfer_approval_overdue) to the people who approve, set
+     Xendit's payout callback URL to the payments notification URL, and set
+     `BILLING_ISSUER_NPWP` for the platform e-Faktur. Bank statements and
+     PPh 23 are under Finance → Bank and Tax ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

@@ -536,6 +536,17 @@ export class XenditProvider implements PaymentProvider {
     return s === 'SUCCEEDED' ? 'refunded' : s === 'FAILED' ? 'failed' : 'pending';
   }
 
+  /** (v1.18.0) A payout callback (payout.succeeded / payout.failed / …), verified like a payment callback: the payout's id. */
+  parsePayoutEvent(rawBody: string, headers: Record<string, string | string[] | undefined>): { ref: string; event: string } | null {
+    if (!this.callbackOk(headers)) return null;
+    let j: any;
+    try { j = JSON.parse(rawBody); } catch { return null; }
+    const event = String(j?.event ?? '');
+    const id = j?.data?.id ?? j?.id;
+    if (!event.startsWith('payout.') || !id) return null;
+    return { ref: String(id), event };
+  }
+
   /** A refund callback (refund.succeeded / refund.failed; ewallet.refund; qr.refund), verified like a payment callback. */
   parseRefundEvent(rawBody: string, headers: Record<string, string | string[] | undefined>): { refundRef: string; status: 'refunded' | 'pending' | 'failed'; event: string } | null {
     if (!this.callbackOk(headers)) return null;

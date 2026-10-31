@@ -187,6 +187,19 @@ export class DuitkuProvider implements PaymentProvider {
     return { balance: b, effective: Number.isFinite(e) ? e : b };
   }
 
+  /**
+   * (v1.18.0) Duitku Disbursement's callback (JSON with a disburseId), set in Duitku's dashboard to this account's
+   * notification URL. Its signature scheme is not relied on: it only names the transfer, whose state PlugSure then asks
+   * Duitku (inquirystatus). Only with Disbursement set up.
+   */
+  parsePayoutEvent(rawBody: string): { ref: string; event: string } | null {
+    if (!this.hasDisbursement()) return null;
+    let j: any;
+    try { j = JSON.parse(rawBody); } catch { return null; }
+    const id = j?.disburseId;
+    return id != null && /^[A-Za-z0-9_-]{1,40}$/.test(String(id)) ? { ref: String(id), event: `disbursement ${String(j.responseCode ?? '')}`.trim() } : null;
+  }
+
   /** (v1.15.0) Disbursement credentials saved: refunds can be sent and accounts checked. */
   hasDisbursement(): boolean { return Boolean(this.cfg.disbursementUserId && this.cfg.disbursementEmail && this.cfg.disbursementSecretKey); }
   disbursementLimits(): { perTransfer: number; perDay: number } {

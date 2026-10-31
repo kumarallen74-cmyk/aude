@@ -5,6 +5,7 @@ import { seal, unseal } from './secrets.js';
 import { namesMatch, TransferError, askRail } from './refund-transfers.js';
 import { railFor, type Rail } from './payout-rails.js';
 import { persistAlert } from './alerts.js';
+import { notifyAwaiting, clearAwaiting } from './transfer-approvals.js';
 
 /**
  * Owners' shares paid to their bank accounts, with two people (v1.16.0: Duitku Disbursement; v1.17.0: also Xendit Payouts,
@@ -124,6 +125,8 @@ export async function requestPayout(orgId: string, platformAdmin: boolean, state
       `INSERT INTO payout_transfer (org_id, statement_id, owner_id, integration_id, amount_minor, currency, bank_code, account_number_sealed, account_last4, holder_name, checked_name, state, note, requested_by, rail)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'awaiting_approval', $12, $13, $14) RETURNING *`,
       [orgId, statementId, s.owner_id, d.integrationId, amount, s.currency, acct.bank_code, seal(number, AAD(orgId, statementId)), number.slice(-4), acct.holder_name, q.accountName, note, userId, d.kind]);
+    const who = userId ? (await one<{ name: string }>(`SELECT name FROM app_user WHERE id = $1`, [userId]))?.name ?? null : null;
+    await notifyAwaiting('payout', r, who, `${s.owner}, ${s.number}`);
     return view({ ...r, number: s.number, owner: s.owner });
   } catch (e) {
     if ((e as any).code === '23505') throw new TransferError(409, 'A payout for this statement is already open.');
@@ -138,6 +141,7 @@ export async function rejectPayout(orgId: string, id: string, reasonRaw: unknown
   const r = await one<any>(`UPDATE payout_transfer SET state = 'rejected', rejected_by = $3, reason = $4, updated_at = now() WHERE id = $1 AND org_id = $2 AND state = 'awaiting_approval' RETURNING *`,
     [id, orgId, userId, reason]);
   if (!r) throw new TransferError(409, `The payout is ${t.state}: only one awaiting approval can be rejected.`);
+  await clearAwaiting('payout', orgId, id);
   return view(r);
 }
 
@@ -163,10 +167,16 @@ export async function approvePayout(orgId: string, id: string, userId: string | 
   const won = await one<any>(`UPDATE payout_transfer SET state = 'sending', approved_by = $3, approved_at = now(), updated_at = now() WHERE id = $1 AND org_id = $2 AND state = 'awaiting_approval' RETURNING *`,
     [id, orgId, userId]);
   if (!won) throw new TransferError(409, 'The payout changed meanwhile. Reload.');
+  await clearAwaiting('payout', orgId, id);
   const number = unseal(t.account_number_sealed, AAD(orgId, t.statement_id));
   const res = await d.send({ idempotencyKey: `ps-payout-${t.id}`, bankCode: t.bank_code, account: number, holderName: t.holder_name, checkedName: t.checked_name, amount, purpose: 'PlugSure owner share' });
   if (res.ref || res.cust) await query(`UPDATE payout_transfer SET disburse_id = COALESCE($2, disburse_id), cust_ref = COALESCE($3, cust_ref), updated_at = now() WHERE id = $1`, [id, res.ref, res.cust]);
   return settle({ ...t, disburse_id: res.ref ?? t.disburse_id }, res.outcome, res.code, res.error, userId);
+}
+
+/** (v1.18.0) Settle a payout from what its rail answered (services/transfer-callbacks.ts). */
+export async function settlePayout(t: any, outcome: 'succeeded' | 'failed' | 'unknown', code: string, error: string | null): Promise<PayoutTransferView> {
+  return settle(t, outcome, code, error, null);
 }
 
 async function settle(t: any, outcome: 'succeeded' | 'failed' | 'unknown', code: string, error: string | null, actor: string | null): Promise<PayoutTransferView> {

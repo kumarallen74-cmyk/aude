@@ -199,7 +199,9 @@ try {
      VALUES ($1,$2,'[]'::jsonb,27000,1000,2700,24750,1200,2970,31450,'{}'::jsonb)`, [A.s, org]);
   await db.query(`UPDATE charging_session SET state = 'rated' WHERE id = $1`, [A.s]);
   const end = (await until(() => sentTo(LA_A), (h) => h.length >= 4, 15_000))[3];
-  const aRow = (await db.query(`SELECT state, sent_count FROM live_activity WHERE charge_id = $1`, [A.c])).rows[0];
+  // The sender records the push after Apple answers: wait for the row as well as the push.
+  const aRow = await until(async () => (await db.query(`SELECT state, sent_count FROM live_activity WHERE charge_id = $1`, [A.c])).rows[0],
+    (r) => r?.state === 'ended' && r.sent_count === 4, 10_000);
   check('end: once rated, the activity ends with the cost (Rp 31.450) and stays 30 minutes on the lock screen',
     end?.body?.aps?.event === 'end' && end.body.aps['content-state'].costIdr === 31450 && end.body.aps['dismissal-date'] - end.body.aps.timestamp === 1800 && aRow.state === 'ended' && aRow.sent_count === 4,
     { end: end?.body, aRow });

@@ -99,9 +99,12 @@ class RawCharger {
 function sim(args: string[]): ChildProcess {
   const cli = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   const p = spawn(process.execPath, [cli, 'tools/simulator/autel-sim.ts', '--url', OCPP, '--api', API, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-  p.stdout!.on('data', () => {}); p.stderr!.on('data', () => {});
+  // Kept (the last 200 lines) so a failed check can show what the charger did.
+  const keep = (d: Buffer) => { simOutput.push(...d.toString().split(/\r?\n|\r/).filter(Boolean)); simOutput.splice(0, Math.max(0, simOutput.length - 200)); };
+  p.stdout!.on('data', keep); p.stderr!.on('data', keep);
   return p;
 }
+const simOutput: string[] = [];
 
 // ================================================================== the run
 const ops = new Client();
@@ -229,12 +232,17 @@ try {
     () => ops.post(`/v1/charge-points/${ID}/remote-start`, { connectorId: 1, idTag: 'ID-RFID-0001', limitType: 'energy', limitValue: '1' }),
     (r) => r.status === 200 && r.data?.status === 'Accepted', 20_000, 1000);
   check('cockpit: remote start with 1 kWh preset accepted', start.status === 200 && start.data.status === 'Accepted' && start.data.limit?.energyLimitWh === 1000, start.data);
-  const running = await until(() => ops.get('/v1/charge-points'), (r) => !!r.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId), 30_000, 1000);
+  // At --speed 120 the 1 kWh session is live for under a second of real time: look often (a 1 s poll could miss it
+  // entirely, CI run 41208849440).
+  const running = await until(() => ops.get('/v1/charge-points'), (r) => !!r.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId), 30_000, 100);
   const conn1 = running.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId);
   check('cockpit: session visible live on the fleet table', !!conn1, conn1);
+  if (!conn1) console.log(`  the charger's last output:\n${simOutput.slice(-40).map((l) => `    ${l}`).join('\n')}`);
 
-  // The simulator delivers ~2 kWh; the operator limit must stop it at ~1 kWh.
-  const sessId = conn1?.sessionId;
+  // The simulator delivers ~2 kWh; the operator limit must stop it at ~1 kWh. The session is found by the charger's
+  // identity, so the checks below do not hang on the live sample above.
+  const listed = await until(() => ops.get(`/v1/sessions?identity=${encodeURIComponent(ID)}&limit=5`), (r) => Array.isArray(r.data) && r.data.length > 0, 30_000, 500);
+  const sessId = conn1?.sessionId ?? listed.data?.[0]?.id;
   const ended = await until(() => ops.get(`/v1/sessions/${sessId}`), (r) => r.data?.state && r.data.state !== 'active', 90_000, 1500);
   check('cockpit: session ended by the platform at the energy preset', ended.data?.state !== 'active' && ended.data?.energy_wh >= 900 && ended.data?.energy_wh < 1900, { state: ended.data?.state, energy: ended.data?.energy_wh, reason: ended.data?.stop_reason });
 

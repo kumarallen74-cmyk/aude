@@ -1,11 +1,19 @@
 PlugSure CSMS
-Version:   1.17.0
-Package:   plugsure-v1.17.0
-Prepared:  2026-10-31  (v1.16.0 + finance phase 6 — see RELEASE-NOTES-v1.17.0.md)
+Version:   1.18.0
+Package:   plugsure-v1.18.0
+Prepared:  2026-10-31  (v1.17.0 + finance phase 7 — see RELEASE-NOTES-v1.18.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (373 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (384 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.17.0 = v1.16.0 + finance phase 6: the accounting journal (double-entry entries per day and kind, the
+Status:    v1.18.0 = v1.17.0 + finance phase 7: bank statement reconciliation (the bank's CSV matched to gateway
+           withdrawals, owner payouts and manual refunds; match or ignore by hand), alerts for transfers waiting for a
+           second person (critical after 24 hours; a badge on Refunds and Finance), payout results by callback (Xendit
+           payout.*, Duitku Disbursement; the gateway is asked), and tax: PPh 23 withheld on gateway fees and PlugSure's
+           fee (records, bukti potong, CSV) and PlugSure's platform-fee statements as e-Faktur XML. Migration 086
+           (additive).
+
+v1.17.0 (2026-10-31):
+           v1.17.0 = v1.16.0 + finance phase 6: the accounting journal (double-entry entries per day and kind, the
            operator's chart of accounts, Excel / CSV), the monthly close e-mail (export, PDF and journal to up to 10
            recipients on the 1st), Xendit Payouts beside Duitku Disbursement for refunds and owner payouts (two people,
            same limits), and the flaky console end-to-end check fixed. Migration 085 (additive).

@@ -55,6 +55,11 @@ export interface ProviderExtras {
    * so a replayed or re-delivered event is answered 2xx and not applied again.
    */
   eventId?(rawBody: string, headers: Record<string, string | string[] | undefined>): string | null;
+  /**
+   * (v1.18.0) A payout / disbursement callback: the gateway's id of the transfer. Taken only as a prompt: PlugSure then
+   * asks the gateway for the transfer's state (services/transfer-callbacks.ts), never trusting the callback's body.
+   */
+  parsePayoutEvent?(rawBody: string, headers: Record<string, string | string[] | undefined>): { ref: string; event: string } | null;
   /** Any other verified event the acquirer sends (it must be answered 2xx, or the acquirer retries it). */
   parseOtherEvent?(rawBody: string, headers: Record<string, string | string[] | undefined>): { event: string } | null;
   /** The card behind a saved-card token, where the notification does not carry it. */
@@ -516,6 +521,14 @@ export async function handleNotification(key: string, rawBody: string, headers: 
       const { refundSettled } = await import('../refunds.js');
       const outcome = await outsideRequestScope(() => refundSettled({ provider: r.provider, integrationId: r.integrationId }, rf.refundRef, rf.status));
       await logEvent(r, r.orgId, 'notification', outcome, { refundEvent: rf.event, refundRef: rf.refundRef, status: rf.status });
+      return done(ack(true), outcome);
+    }
+    // ...or (v1.18.0) a payout's result: the transfer is checked with the gateway at once.
+    const po = extras(provider).parsePayoutEvent?.call(provider, rawBody, headers) ?? null;
+    if (po && r.integrationId) {
+      const { payoutCallback } = await import('../transfer-callbacks.js');
+      const outcome = await outsideRequestScope(() => payoutCallback(r.integrationId!, po.ref));
+      await logEvent(r, r.orgId, 'notification', outcome, { payoutEvent: po.event, ref: po.ref });
       return done(ack(true), outcome);
     }
     // ...or any other verified event: acknowledged, nothing to do (an unanswered event is retried for days).

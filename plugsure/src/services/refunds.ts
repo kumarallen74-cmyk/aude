@@ -106,6 +106,8 @@ export async function sweepUnusedPayments(): Promise<number> {
   const transfers = await (await import('./refund-transfers.js')).sweepTransfers().catch((e) => { logger.warn({ err: (e as Error).message }, 'refund transfer sweep failed'); return 0; });
   // (v1.16.0) Owner payouts sent the same way (services/payout-transfers.ts).
   await (await import('./payout-transfers.js')).sweepPayouts().catch((e) => { logger.warn({ err: (e as Error).message }, 'payout transfer sweep failed'); return 0; });
+  // (v1.18.0) Transfers waiting more than a day for approval: a critical alert.
+  await (await import('./transfer-approvals.js')).escalateWaiting().catch((e) => { logger.warn({ err: (e as Error).message }, 'approval escalation failed'); return 0; });
   return n + transfers + (await sweepProcessingRefunds());
 }
 
