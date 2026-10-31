@@ -1,5 +1,7 @@
 import { providerFetch } from '../services/payments/provider.js';
 import { logEvent, resolve, type Resolved } from './store.js';
+import { maskPhone } from '../domain/phone.js';
+import * as wa from '../services/whatsapp-cloud.js';
 
 /**
  * Driver sign-in codes: WhatsApp (Meta Cloud API authentication template),
@@ -21,9 +23,17 @@ interface Sender {
   channel: 'whatsapp' | 'sms' | 'dev';
 }
 
-export const maskPhone = (p: string) => (p.length > 7 ? `${p.slice(0, 5)}****${p.slice(-3)}` : '****');
+// (v1.10.0) Moved to domain/phone.ts so the WhatsApp ledger masks numbers the same way; re-exported for callers.
+export { maskPhone };
 const errText = (r: { status: number; body: any; text: string }) =>
   `${r.status} ${r.body?.error?.message ?? r.body?.message ?? r.body?.text ?? r.text.slice(0, 160)}`.trim();
+
+/** An Authentication template's parameters: the code in the body, and again for the copy-code button. */
+function otpComponents(code: string, copyCodeButton: boolean): any[] {
+  const components: any[] = [{ type: 'body', parameters: [{ type: 'text', text: code }] }];
+  if (copyCodeButton) components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: code }] });
+  return components;
+}
 
 export function senderFor(r: Pick<Resolved, 'provider' | 'settings' | 'secrets'>): Sender {
   const s = r.settings, k = r.secrets;
@@ -34,15 +44,17 @@ export function senderFor(r: Pick<Resolved, 'provider' | 'settings' | 'secrets'>
       return {
         channel: 'whatsapp',
         async send(phone, code) {
-          const components: any[] = [{ type: 'body', parameters: [{ type: 'text', text: code }] }];
-          // Authentication templates with a copy-code button take the code again as the button's parameter.
-          if (s.copyCodeButton !== false) components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: code }] });
+          const components = otpComponents(code, s.copyCodeButton !== false);
           const res = await providerFetch(`${base}/${encodeURIComponent(s.phoneNumberId)}/messages`, {
             method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
             body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: phone.replace(/^\+/, ''), type: 'template', template: { name: s.templateName, language: { code: s.language || 'id' }, components } }),
           });
           const id = res.body?.messages?.[0]?.id;
-          return res.status < 300 && id ? { ok: true, messageId: id } : { ok: false, error: `WhatsApp: ${errText(res)}` };
+          const out: SendResult = res.status < 300 && id ? { ok: true, messageId: id } : { ok: false, error: `WhatsApp: ${errText(res)}` };
+          // (v1.10.0) In the WhatsApp ledger too, so the dashboard counts these codes and the webhook can track them.
+          await wa.recordMessage({ purpose: 'otp', template: s.templateName, language: s.language || 'id', to: phone, wamid: out.ok ? String(id) : null,
+            status: out.ok ? 'accepted' : 'failed', errorCode: res.body?.error?.code != null ? String(res.body.error.code) : null, errorText: out.ok ? null : out.error!.replace(/^WhatsApp: /, '') });
+          return out;
         },
         async check() {
           const res = await providerFetch(`${base}/${encodeURIComponent(s.phoneNumberId)}?fields=display_phone_number,verified_name`, { headers: auth });

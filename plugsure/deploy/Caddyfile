@@ -200,6 +200,9 @@ ocpp.example.id {
 	#   /hooks/whatsapp/<key>   WhatsApp delivery statuses for alerts (Meta webhook);
 	#                           shown in Alert routing → WhatsApp → Edit settings,
 	#                           signed with the Meta app secret
+	#   /hooks/whatsapp-cloud/<key>  (v1.10.0) Meta status webhook of sign-in codes on
+	#                           the WhatsApp Cloud API (statuses, template and quality events); shown in
+	#                           Integrations → Driver sign-in codes and Operate → WhatsApp → Setup
 	@payments path /pay/* /hooks/*
 	handle @payments {
 		request_body {

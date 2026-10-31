@@ -15,6 +15,7 @@ import * as consoleBrandCat from './catalogue/console-brand.js';
 import * as microsoftCat from './catalogue/microsoft.js';
 import * as hubCat from './catalogue/hub.js';
 import * as hubClearingCat from './catalogue/hub-clearing.js';
+import * as whatsappCat from './catalogue/whatsapp.js';
 
 /**
  * Builds the published OpenAPI 3.1 document from the catalogue.
@@ -23,7 +24,7 @@ import * as hubClearingCat from './catalogue/hub-clearing.js';
  * when the committed file, the catalogue and the registered routes disagree.
  */
 
-const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
+const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
 
 export function allOps(): Op[] {
   return CATALOGUES.flatMap((c) => c.ops);
@@ -42,6 +43,7 @@ const TAG_TEXT: Record<string, string> = {
   Tariffs: 'Tariffs, validated against the regulated ceilings, and their assignment; membership plans, members and promotions.',
   'Plug & Charge': 'ISO 15118 Plug & Charge: contracts (eMAIDs), trust anchors, the V2G certificates of chargers, and the certificate exchange log.',
   Integrations: 'Third-party services: the QRIS acquirer, driver sign-in codes (WhatsApp / SMS), the Plug & Charge PKI and map tiles. Secrets are write-only.',
+  WhatsApp: 'The platform\'s WhatsApp Business Account (Meta Cloud API): connection health, templates, the message ledger with delivery statuses (numbers masked), account events and test sends. Platform administrators only.',
   'Payments and refunds': 'QRIS checkout and the refund queue.',
   'RFID and tokens': 'RFID and fleet cards, limits and the unknown-card log.',
   'Firmware and diagnostics': 'Firmware images and campaigns, and diagnostics log uploads.',

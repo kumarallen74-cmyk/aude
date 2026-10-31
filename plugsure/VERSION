@@ -1,11 +1,19 @@
 PlugSure CSMS
-Version:   1.9.2
-Package:   plugsure-v1.9.2
-Prepared:  2026-10-26  (v1.9.1 on the live app.plugsure.co.id host — see RELEASE-NOTES-v1.9.2.md)
+Version:   1.10.0
+Package:   plugsure-v1.10.0
+Prepared:  2026-10-31  (v1.9.2 + the WhatsApp Business dashboard — see RELEASE-NOTES-v1.10.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (323 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (328 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.9.2 = v1.9.1 with the PlugSure app on its live host: API and links app.plugsure.co.id (was
+Status:    v1.10.0 = v1.9.2 + a WhatsApp dashboard in the console (Operate → WhatsApp, platform administrators):
+           the number's health and quality rating, templates and their approval status, delivery (sent, delivered,
+           read, failed) of sign-in codes and alerts, a message log with masked numbers, and a test send. The
+           existing sign-in-codes WhatsApp integration gains the WABA ID, the app secret and a delivery webhook
+           (/hooks/whatsapp-cloud/<key>); template, quality and account problems raise operator alerts.
+           Migration 078 (additive).
+
+v1.9.2 (2026-10-26):
+           v1.9.2 = v1.9.1 with the PlugSure app on its live host: API and links app.plugsure.co.id (was
            plugsure.asia, never live); support hello@railsure.co.id / WhatsApp +62 811 3555 570; terms, privacy and
            refunds on plugsure.com; the driver-app Caddy block also serves the link paths. No migration.
 

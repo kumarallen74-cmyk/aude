@@ -434,6 +434,13 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
 .stackbar i { display: block; height: 100%; }
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
 .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; background: var(--c); vertical-align: -1px; }
+/* (v1.10.0) WhatsApp dashboard: the daily stacked bars (views/whatsapp.js). Series colours are status tokens, so
+   dark mode uses its own steps; axis text stays in muted ink. */
+.wa-chart { width: 100%; height: auto; display: block; }
+.wa-chart .wa-grid { stroke: var(--line); stroke-width: 1; }
+.wa-chart .wa-axis { fill: var(--muted); font: 500 11px var(--sans); }
+.wa-chart .wa-hit { fill: transparent; }
+.wa-chart .wa-col:hover .wa-hit { fill: var(--bg-2, var(--line)); }
 
 /* ------------------------------------------------------------------ map picker */
 .map { position: relative; height: 280px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: #dfe7ee; cursor: crosshair; touch-action: none; user-select: none; }

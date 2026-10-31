@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.9.2";
+export const API_VERSION = "1.10.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -2017,6 +2017,8 @@ export interface IntegrationKind {
     enabled?: boolean;
     webhookPath?: string | null;
     webhookUrl?: string | null;
+    /** Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app's status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only. */
+    webhookVerifyToken?: string;
     lastTest?: {
       at?: string;
       ok?: boolean | null;
@@ -4339,6 +4341,53 @@ export interface WebhookSendResult {
   ms: number;
 }
 
+/** One message sent from the platform's number: a sign-in code or a test send, or an operator alert from an alert channel on the same number. The number is masked; codes are never stored. */
+export interface WhatsAppMessage {
+  /** `m<n>` for the ledger, `a<n>` for an alert notification. */
+  id: string;
+  at: string;
+  purpose: "otp" | "alert" | "test" | "other";
+  /** Masked, e.g. +6281****890. */
+  to: string;
+  template?: string | null;
+  language?: string | null;
+  /** accepted: WhatsApp took it, no status report yet. */
+  status: "accepted" | "sent" | "delivered" | "read" | "failed";
+  errorCode?: string | null;
+  /** Why it failed (Meta's title, code and details). */
+  error?: string | null;
+  sentAt?: string | null;
+  deliveredAt?: string | null;
+  readAt?: string | null;
+  /** From Meta's status: authentication, utility, marketing, service… */
+  pricingCategory?: string | null;
+  billable?: boolean | null;
+}
+
+export interface WhatsAppRequiredTemplate {
+  name: string;
+  language: string;
+  purpose: "otp" | "alert";
+  /** False for the default alert template when no alert channel sends from this number yet. */
+  inUse: boolean;
+  /** Its status at Meta; MISSING when the WABA has no such template; null when the templates could not be read. */
+  status?: string | null;
+  category?: string | null;
+}
+
+export interface WhatsAppTemplate {
+  name: string;
+  /** APPROVED, PENDING, REJECTED, PAUSED, DISABLED… */
+  status: string;
+  category?: string | null;
+  language: string;
+  /** GREEN, YELLOW, RED or UNKNOWN. */
+  qualityScore?: string | null;
+  rejectedReason?: string | null;
+  /** PlugSure sends it (the sign-in code template, an alert channel's template). */
+  required?: boolean;
+}
+
 // ─────────────────────────────────────────────── webhook events
 
 /** An operational alert was raised */
@@ -4864,6 +4913,8 @@ export type ConnectOrChangeIntegrationResponse = {
   enabled?: boolean;
   webhookPath?: string | null;
   webhookUrl?: string | null;
+  /** Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app's status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only. */
+  webhookVerifyToken?: string;
   lastTest?: {
     at?: string;
     ok?: boolean | null;
@@ -5338,6 +5389,8 @@ export type IntegrationsAndTheirStatusResponse = {
       enabled?: boolean;
       webhookPath?: string | null;
       webhookUrl?: string | null;
+      /** Sign-in codes on the WhatsApp Cloud API: the verify token for the Meta app's status webhook (webhookUrl, /hooks/whatsapp-cloud/<key>), made by the server on the first save. Platform administrators only. */
+      webhookVerifyToken?: string;
       lastTest?: {
         at?: string;
         ok?: boolean | null;
@@ -6360,6 +6413,22 @@ export type SendTestAlertMessageResponse = {
   error: string | null;
 };
 
+export type SendWhatsAppTestMessageBody = {
+  /** A mobile number in Indonesia, Malaysia or Singapore. */
+  phone: string;
+  template: string;
+  language: string;
+  params?: string[];
+  copyCodeButton?: boolean;
+};
+
+export type SendWhatsAppTestMessageResponse = {
+  ok: boolean;
+  messageId?: string;
+  error?: string;
+  to: string;
+};
+
 export type SetAccountCounterpartiesPayIntoBody = {
   bank_details: string;
 };
@@ -6714,6 +6783,85 @@ export type VoidFleetInvoiceBody = {
 export type VoidFleetInvoiceResponse = {
   invoice: FleetStatement;
   fakturWarning?: string | null;
+};
+
+export type WhatsappAccountEventsResponse = {
+  events: {
+    id: string;
+    field: string;
+    event?: string | null;
+    payload?: Record<string, unknown>;
+    createdAt: string;
+  }[];
+};
+
+export type WhatsappBusinessDashboardResponse = {
+  configured: boolean;
+  connection: {
+    /** The sign-in codes integration the credentials come from: the main channel, else the fallback. */
+    source?: "otp" | "otp_fallback";
+    /** Null when not saved on the integration: no templates then. */
+    wabaId?: string | null;
+    phoneNumberId?: string;
+    displayPhoneNumber?: string | null;
+    verifiedName?: string | null;
+    /** GREEN, YELLOW, RED or UNKNOWN. */
+    qualityRating?: string | null;
+    messagingLimitTier?: string | null;
+    nameStatus?: string | null;
+    status?: string | null;
+    checkedAt?: string;
+    error?: string | null;
+  } | null;
+  webhook: {
+    /** Null until the sign-in codes integration is saved once on 1.10.0 (that issues the key). */
+    url?: string | null;
+    /** False: Meta's calls are refused (403) until the app secret is saved. */
+    hasAppSecret?: boolean;
+    verifyToken?: string | null;
+    fields?: string[];
+    lastEventAt?: string | null;
+    lastStatusAt?: string | null;
+  } | null;
+  requiredTemplates: WhatsAppRequiredTemplate[];
+  stats: {
+    days: number;
+    total: number;
+    byStatus: {
+      accepted?: number;
+      sent?: number;
+      delivered?: number;
+      read?: number;
+      failed?: number;
+    };
+    byPurpose: {
+      otp?: number;
+      alert?: number;
+      test?: number;
+      other?: number;
+    };
+    deliveryRate?: number | null;
+    readRate?: number | null;
+    daily: {
+      day: string;
+      sent: number;
+      delivered: number;
+      read: number;
+      failed: number;
+    }[];
+  };
+  recentFailures: WhatsAppMessage[];
+};
+
+export type WhatsappMessagesResponse = {
+  messages: WhatsAppMessage[];
+  nextBefore: string | null;
+};
+
+export type WhatsappMessageTemplatesResponse = {
+  templates: WhatsAppTemplate[];
+  required: WhatsAppRequiredTemplate[];
+  managerUrl: string;
 };
 
 export type WithdrawMyDisputeEMSPSideBody = {
@@ -10612,6 +10760,19 @@ export class Operations {
   }
 
   /**
+   * Send a WhatsApp test message
+   *
+   * Sends one approved template with the sign-in codes integration's credentials (recorded with purpose test). `params` fill the body variables in order; `copyCodeButton` repeats the first one for an Authentication template's copy-code button. At most 5 a minute per administrator. Audited as whatsapp.test_sent (number masked).
+   *
+   * `POST /v1/whatsapp/test` · needs `platform:admin`
+   */
+  sendWhatsAppTestMessage(params: {
+    body: SendWhatsAppTestMessageBody;
+  }, options?: RequestOptions): Promise<SendWhatsAppTestMessageResponse> {
+    return this.transport.request<SendWhatsAppTestMessageResponse>({ method: "POST", path: "/v1/whatsapp/test", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the account counterparties pay into
    *
    * Sealed at rest; printed as the payment instruction on payers' statements.
@@ -11342,6 +11503,66 @@ export class Operations {
     body: VoidFleetInvoiceBody;
   }, options?: RequestOptions): Promise<VoidFleetInvoiceResponse> {
     return this.transport.request<VoidFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * WhatsApp account events
+   *
+   * From the webhook: template status and quality changes, number quality, account updates (payloads trimmed). The last 500, at most 90 days.
+   *
+   * `GET /v1/whatsapp/events` · needs `platform:admin`
+   */
+  whatsappAccountEvents(params?: {
+    query?: {
+      limit?: number;
+    };
+  }, options?: RequestOptions): Promise<WhatsappAccountEventsResponse> {
+    return this.transport.request<WhatsappAccountEventsResponse>({ method: "GET", path: "/v1/whatsapp/events", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * WhatsApp Business dashboard
+   *
+   * The connection: the platform's sign-in codes integration on the WhatsApp Cloud API (main channel, else fallback), read from the Graph API (display number, verified name, quality rating, messaging limit tier, name status; a Graph API failure is `connection.error`, never an error status), the webhook (URL and verify token for the Meta app, the fields to subscribe, when it last delivered an event and a status), the templates PlugSure needs with their status, and statistics for the last 7 or 30 days in the platform time zone (ALERT_TIMEZONE): the ledger plus the operator alerts sent from the same number. Each message counts once at its latest status; `sent` in `daily` includes accepted. deliveryRate = (delivered + read) / total; readRate = read / (delivered + read).
+   *
+   * `GET /v1/whatsapp/overview` · needs `platform:admin`
+   */
+  whatsappBusinessDashboard(params?: {
+    query?: {
+      days?: 7 | 30;
+    };
+  }, options?: RequestOptions): Promise<WhatsappBusinessDashboardResponse> {
+    return this.transport.request<WhatsappBusinessDashboardResponse>({ method: "GET", path: "/v1/whatsapp/overview", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * WhatsApp messages
+   *
+   * Newest first: the ledger and the WhatsApp alerts sent from the same number, numbers masked. Kept 180 days. Page with `before` = the `nextBefore` of the previous page.
+   *
+   * `GET /v1/whatsapp/messages` · needs `platform:admin`
+   */
+  whatsappMessages(params?: {
+    query?: {
+      purpose?: "otp" | "alert" | "test" | "other";
+      status?: "accepted" | "sent" | "delivered" | "read" | "failed";
+      /** Only messages before this time. */
+      before?: string;
+      limit?: number;
+    };
+  }, options?: RequestOptions): Promise<WhatsappMessagesResponse> {
+    return this.transport.request<WhatsappMessagesResponse>({ method: "GET", path: "/v1/whatsapp/messages", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * WhatsApp message templates
+   *
+   * The WhatsApp Business Account's templates (up to 500), the ones PlugSure sends marked, and a link to WhatsApp Manager. 409 when WhatsApp is not configured, or no WhatsApp Business Account ID is saved (`code: no_waba`); 502 with Meta's message when the Graph API refuses.
+   *
+   * `GET /v1/whatsapp/templates` · needs `platform:admin`
+   */
+  whatsappMessageTemplates(options?: RequestOptions): Promise<WhatsappMessageTemplatesResponse> {
+    return this.transport.request<WhatsappMessageTemplatesResponse>({ method: "GET", path: "/v1/whatsapp/templates", accept: "json" }, options);
   }
 
   /**

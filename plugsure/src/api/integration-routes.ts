@@ -9,6 +9,7 @@ import { kindDef, providerDef, type Kind } from '../integrations/catalogue.js';
 import * as store from '../integrations/store.js';
 import { testOtp } from '../integrations/otp.js';
 import { whatsappWebhookVerify, whatsappStatusWebhook } from '../services/alert-routing.js';
+import * as wa from '../services/whatsapp-cloud.js';
 import { handleNotification, providerFor, sandboxCheckout, sandboxSettle, sandboxProvider } from '../services/payments/registry.js';
 import { CHANNEL_LABEL, type Channel } from '../services/payments/provider.js';
 import { normalisePhone } from '../driver/identity.js';
@@ -37,7 +38,8 @@ import { stripeCheckoutPage, STRIPE_PAGE_JS } from '../services/payments/stripe-
  *
  * Also the public payment webhook: POST /pay/notify/<key>, one URL per QRIS
  * account, verified with that account's secret. Expose /pay/* publicly
- * (deploy/Caddyfile).
+ * (deploy/Caddyfile). (v1.10.0) And the Meta status webhook of sign-in codes on
+ * the WhatsApp Cloud API, GET/POST /hooks/whatsapp-cloud/<key> (under /hooks/*, also public).
  */
 export async function registerIntegrationRoutes(app: FastifyInstance): Promise<void> {
   const org = (req: FastifyRequest) => req.principal.orgId;
@@ -174,6 +176,20 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     pub.post('/hooks/whatsapp/:key', async (req, reply) => {
       const { key } = req.params as { key: string };
       const r = await outsideRequestScope(() => whatsappStatusWebhook(key, typeof req.body === 'string' ? req.body : '', req.headers['x-hub-signature-256'] as string | undefined));
+      return reply.status(r.status).send(r.body);
+    });
+
+    // (v1.10.0) The WhatsApp status webhook of the sign-in codes integration (WhatsApp Cloud API): message statuses
+    // for the ledger and for alerts sent from the same Meta app, template / quality / account events.
+    pub.get('/hooks/whatsapp-cloud/:key', async (req, reply) => {
+      const { key } = req.params as { key: string };
+      const q = (req.query ?? {}) as Record<string, string>;
+      const echo = await outsideRequestScope(() => wa.webhookVerify(key, String(q['hub.mode'] ?? ''), String(q['hub.verify_token'] ?? ''), String(q['hub.challenge'] ?? '')));
+      return echo === null ? reply.status(403).send({ error: 'verification failed' }) : reply.type('text/plain').send(echo);
+    });
+    pub.post('/hooks/whatsapp-cloud/:key', async (req, reply) => {
+      const { key } = req.params as { key: string };
+      const r = await outsideRequestScope(() => wa.webhook(key, typeof req.body === 'string' ? req.body : '', req.headers['x-hub-signature-256'] as string | undefined));
       return reply.status(r.status).send(r.body);
     });
 

@@ -33,6 +33,10 @@ export const ALERT_KINDS: Record<string, string> = {
   'webhook.disabled': 'Webhook disabled',
   'platform.worker_failing': 'Background worker failing',
   'platform.microsoft_tenant_linked': 'Microsoft tenant connected',
+  // (v1.10.0) From the WhatsApp Business webhook (services/whatsapp-cloud.ts): the platform's own sender.
+  'platform.whatsapp_template': 'WhatsApp template paused or rejected',
+  'platform.whatsapp_quality': 'WhatsApp number quality low',
+  'platform.whatsapp_account': 'WhatsApp Business account restricted',
 };
 
 export const titleOf = (kind: string) =>

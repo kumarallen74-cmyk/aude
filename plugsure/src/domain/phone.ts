@@ -56,3 +56,9 @@ export function phoneToE164(raw: string, defaultCountry: CountryCode = 'ID'): st
     : s;
   return /^\+\d{8,15}$/.test(e164) ? e164 : null;
 }
+
+/**
+ * A phone number for logs and the console: the country code and operator prefix, and the last three digits
+ * (+6281****890). The full number is never stored next to a message (sign-in codes, WhatsApp ledger).
+ */
+export const maskPhone = (p: string) => (p.length > 7 ? `${p.slice(0, 5)}****${p.slice(-3)}` : '****');

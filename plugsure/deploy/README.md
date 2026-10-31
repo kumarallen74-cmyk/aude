@@ -527,7 +527,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
 - **Driver sign-in codes** (required for phone sign-in): WhatsApp Cloud API
   (an approved *Authentication* template with a copy-code button, e.g.
   `plugsure_otp` in `id`), Twilio, Zenziva, or your own gateway. You can add an
-  SMS fallback. **Test** with your own number.
+  SMS fallback. **Test** with your own number. With WhatsApp, also save the
+  WhatsApp Business Account ID and the Meta app secret (v1.10.0). Then paste the
+  status webhook URL (`https://<OCPP host>/hooks/whatsapp-cloud/<key>`) and the
+  verify token it shows into the Meta app. Delivery, templates and number
+  quality appear on **Operate → WhatsApp**. Step by step:
+  [WHATSAPP.md](WHATSAPP.md).
 - **Plug & Charge PKI** and **map tiles**: see those sections. The `PNC_*` and
   `MAP_TILE_*` variables keep working when nothing is set in the console.
 
