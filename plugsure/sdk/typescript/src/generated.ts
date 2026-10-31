@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.12.0";
+export const API_VERSION = "1.13.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -1438,8 +1438,10 @@ export interface FinanceAccount {
   /** Null: the platform's own account (it takes the payments of every operator without one). */
   orgId?: string | null;
   orgName?: string | null;
-  provider: "xendit";
+  provider: "xendit" | "duitku";
   environment?: string | null;
+  /** (v1.13.0) The fallback account (Duitku): its ledger is built from PlugSure's payments with the fee Duitku reports, settlement estimated from Duitku's schedule. */
+  fallback?: boolean;
   /** Replaced by another account; kept while its money settles. */
   archived?: boolean;
   testMode?: boolean;
@@ -2039,7 +2041,7 @@ export interface IntegrationInput {
 }
 
 export interface IntegrationKind {
-  kind: "payments" | "otp" | "otp_fallback" | "pnc_pki" | "map_tiles" | "ai_support";
+  kind: "payments" | "payments_fallback" | "otp" | "otp_fallback" | "pnc_pki" | "map_tiles" | "ai_support";
   label: string;
   description?: string;
   /** org: each operator may connect its own account (falls back to the platform's); platform: one for the deployment. */
@@ -7852,7 +7854,7 @@ export class Operations {
    * `PUT /v1/integrations/{kind}`
    */
   connectOrChangeIntegration(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), payments_fallback (Duitku, when the acquirer does not answer), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     body: IntegrationInput;
   }, options?: RequestOptions): Promise<ConnectOrChangeIntegrationResponse> {
@@ -9194,7 +9196,7 @@ export class Operations {
    * `GET /v1/integrations/{kind}/events` · needs `org:read`
    */
   integrationActivity(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), payments_fallback (Duitku, when the acquirer does not answer), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     query?: {
       limit?: number;
@@ -10752,7 +10754,7 @@ export class Operations {
    * `DELETE /v1/integrations/{kind}`
    */
   removeIntegrationConsoleSettings(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), payments_fallback (Duitku, when the acquirer does not answer), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     query?: {
       scope?: "org" | "platform";
@@ -11736,7 +11738,7 @@ export class Operations {
    * `POST /v1/integrations/{kind}/test`
    */
   testIntegration(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), payments_fallback (Duitku, when the acquirer does not answer), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     body: TestIntegrationBody;
   }, options?: RequestOptions): Promise<TestIntegrationResponse> {

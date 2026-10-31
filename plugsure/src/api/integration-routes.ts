@@ -284,7 +284,8 @@ ${done ? `<p>This payment is already <b>${esc(c.state)}</b>.</p><a href="${esc(r
 
 async function runTest(r: store.Resolved, b: any): Promise<{ ok: boolean; message: string }> {
   switch (r.kind) {
-    case 'payments': {
+    case 'payments':
+    case 'payments_fallback': {
       const p = providerFor(r);
       return p.testConnection ? p.testConnection() : { ok: true, message: 'No connection test for this provider.' };
     }

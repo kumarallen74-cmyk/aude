@@ -1,11 +1,18 @@
 PlugSure CSMS
-Version:   1.12.0
-Package:   plugsure-v1.12.0
-Prepared:  2026-10-31  (v1.11.0 + Finance for Xendit — see RELEASE-NOTES-v1.12.0.md)
+Version:   1.13.0
+Package:   plugsure-v1.13.0
+Prepared:  2026-10-31  (v1.12.0 + Duitku as the fallback acquirer — see RELEASE-NOTES-v1.13.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
 API:       OpenAPI 3.1 at /openapi.json (344 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.12.0 = v1.11.0 + Finance (Commercial → Finance): the Xendit account's ledger synced every 15 minutes —
+Status:    v1.13.0 = v1.12.0 + Duitku as the fallback acquirer: when Xendit does not answer, a driver's charging payment
+           (QRIS, DANA, ShopeePay, LinkAja, card) is made at Duitku instead, recorded on Duitku's account, confirmed by its
+           signed callback or a status check, and the operator alerted. Duitku in Finance: its ledger from PlugSure's
+           payments with Duitku's fee, settlement estimated from its schedule, the Disbursement balance. Refunds of Duitku
+           payments by bank transfer. Migration 081 (one constraint).
+
+v1.12.0 (2026-10-31):
+           v1.12.0 = v1.11.0 + Finance (Commercial → Finance): the Xendit account's ledger synced every 15 minutes —
            collected, fees and VAT, refunds, payouts, net, settlement status — with receivables (not yet settled,
            overdue flagged), payables (refunds due with their refund window, owners' shares), fees against the QRIS
            estimate, the balance at Xendit, a reconciliation against PlugSure's payments (a missed payment can be

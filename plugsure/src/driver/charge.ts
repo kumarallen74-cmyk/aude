@@ -20,7 +20,7 @@ import { connectorMaySellEnergy } from '../services/compliance.js';
 import { effectivePpnRateBps } from '../services/tax.js';
 import { PREPAID_CLAIM_WINDOW_MIN, runningCost } from '../services/sessions.js';
 import { receiptHtml } from '../services/session-query.js';
-import { paymentsFor, PaymentsUnavailable, logPaymentCreated, availableMethods, methodChoices, startPayment, MethodUnavailable, cardOptions, walletOptions, postpayOptions, type PreparedPayment } from '../services/payments/registry.js';
+import { paymentsFor, PaymentsUnavailable, logPaymentCreated, availableMethods, methodChoices, startPayment, startPaymentWithFallback, MethodUnavailable, cardOptions, walletOptions, postpayOptions, type PreparedPayment } from '../services/payments/registry.js';
 import { outstandingPostpay, settlePostpayNow, LINK_ENDED, HOLD_EXPIRED, PAID_IN_APP } from '../services/payments/holds.js';
 import { endLink, listCards, walletToken } from '../services/payments/cards.js';
 import { WalletLinkEnded, methodOf, type Channel } from '../services/payments/provider.js';
@@ -428,15 +428,17 @@ export async function checkoutPrepaid(
     [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), amountMinor, q.allowanceWh, c.connector_uuid, claimTag,
      acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20), currency],
   );
+  // (v1.13.0) The account asked is recorded too: the fallback (Duitku), when the main acquirer did not answer.
   const prepare = (p: PreparedPayment) => query(
     `UPDATE payment_intent SET provider_ref = COALESCE($2, provider_ref), idem_key = COALESCE($2, idem_key), mode = $3, method = $4, channel = $5,
-            driver_card_id = $6, save_card = $7, updated_at = now()
+            driver_card_id = $6, save_card = $7, provider = COALESCE($8, provider), integration_id = CASE WHEN $8::text IS NULL THEN integration_id ELSE $9::uuid END,
+            updated_at = now()
       WHERE id = $1`,
-    [intentId, p.providerRef, p.mode, p.method, p.channel, p.savedCardId, p.saveCard],
+    [intentId, p.providerRef, p.mode, p.method, p.channel, p.savedCardId, p.saveCard, p.account?.provider ?? null, p.account?.integrationId ?? null],
   ).then(() => undefined);
   let charge: Awaited<ReturnType<typeof startPayment>>;
   try {
-    charge = await startPayment(acq, {
+    charge = await startPaymentWithFallback(acq, c.org_id, {
       channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
       appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: true, walletId: pay.walletId ?? null,
       referenceId: `charge:${intentId}`,

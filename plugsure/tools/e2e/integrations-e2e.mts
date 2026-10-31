@@ -107,13 +107,13 @@ try {
   // ================================================================ setup
   const l1 = await ops('POST', '/v1/auth/login', { email: 'ops@plugsure.com', password: process.env.E2E_PASSWORD ?? 'Console-Test-2026!' });
   const l2 = await pa('POST', '/v1/auth/login', { email: process.env.E2E_PLATFORM_EMAIL ?? 'platform@plugsure.test', password: process.env.E2E_PLATFORM_PASSWORD ?? 'Platform-Test-2026!' });
-  for (const k of ['otp', 'otp_fallback', 'pnc_pki', 'map_tiles', 'ai_support', 'payments']) cleanup.push(() => pa('DELETE', `/v1/integrations/${k}?scope=platform`));
+  for (const k of ['otp', 'otp_fallback', 'pnc_pki', 'map_tiles', 'ai_support', 'payments_fallback', 'payments']) cleanup.push(() => pa('DELETE', `/v1/integrations/${k}?scope=platform`));
   cleanup.push(() => ops('DELETE', '/v1/integrations/payments?scope=org'));
   const ov0 = await ops('GET', '/v1/integrations');
   cc('/v1/integrations', 'get', '200', ov0.data);
   const k0 = Object.fromEntries(ov0.data.kinds.map((k: any) => [k.kind, k]));
-  check('overview: six integrations (v1.11.0: WhatsApp AI support); in development the sandbox acquirer and on-screen codes are the defaults; the operator may change only its QRIS account',
-    l1.status === 200 && l2.status === 200 && ov0.data.kinds.length === 6 && k0.payments.effective?.provider === 'mock' && k0.payments.effective.source === 'default'
+  check('overview: seven integrations (v1.11.0: WhatsApp AI support, v1.13.0: payments fallback); in development the sandbox acquirer and on-screen codes are the defaults; the operator may change only its QRIS account',
+    l1.status === 200 && l2.status === 200 && ov0.data.kinds.length === 7 && k0.payments.effective?.provider === 'mock' && k0.payments.effective.source === 'default'
       && k0.otp.effective?.provider === 'dev' && k0.payments.editable === true && k0.otp.editable === false, { k0: Object.values(k0).map((k: any) => [k.kind, k.effective, k.editable]) });
 
   // ================================================================ QRIS: Midtrans

@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { byId, type Resolved } from '../integrations/store.js';
 import { providerFor, applyGatewayPayment } from './payments/registry.js';
 import { XenditProvider, type XenditTransaction } from './payments/xendit.js';
+import { DuitkuProvider } from './payments/duitku.js';
 import { estimateQrisMdrIdr } from './payments/provider.js';
 import { LEGACY_CURRENCY } from '../domain/money.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
@@ -33,7 +34,8 @@ export class FinanceError extends Error {
   constructor(public statusCode: number, message: string) { super(message); }
 }
 
-export const FINANCE_PROVIDERS = ['xendit'] as const;
+export const FINANCE_PROVIDERS = ['xendit', 'duitku'] as const;
+const FINANCE_KINDS = ['payments', 'payments_fallback'];
 const LOOKBACK_DAYS = 35;
 let MAX_PAGES = 40;
 /** For tests: a smaller page limit per run. */
@@ -44,22 +46,26 @@ const OVERLAP_MS = 10 * 60_000;
 export interface Account {
   id: string; orgId: string | null; orgName: string | null; provider: string; environment: string | null;
   archived: boolean; testMode: boolean; label: string;
+  /** (v1.13.0) The fallback account (Duitku), used when the main acquirer does not answer. */
+  fallback: boolean;
 }
+export const PROVIDER_LABEL: Record<string, string> = { xendit: 'Xendit', duitku: 'Duitku' };
 
 /** The gateway accounts a caller may see: its organisation's own, and the platform's for platform administrators. */
 export async function accountsFor(orgId: string, platformAdmin: boolean): Promise<Account[]> {
   const rows = await outsideRequestScope(() => many<any>(
-    `SELECT i.id, i.org_id, o.name AS org_name, i.provider, i.settings->>'environment' AS environment, i.archived_at, i.test_mode, i.country_code
+    `SELECT i.id, i.org_id, o.name AS org_name, i.provider, i.kind, i.settings->>'environment' AS environment, i.archived_at, i.test_mode, i.country_code
        FROM integration i LEFT JOIN organisation o ON o.id = i.org_id
-      WHERE i.kind = 'payments' AND i.provider = ANY($3::text[])
+      WHERE i.kind = ANY($4::text[]) AND i.provider = ANY($3::text[])
         AND (i.org_id = $1 OR ($2 AND i.org_id IS NULL))
         AND (i.archived_at IS NULL OR i.archived_at > now() - interval '120 days')
       ORDER BY (i.org_id IS NULL) DESC, i.archived_at NULLS FIRST, i.updated_at DESC`,
-    [orgId, platformAdmin, [...FINANCE_PROVIDERS]]));
+    [orgId, platformAdmin, [...FINANCE_PROVIDERS], FINANCE_KINDS]));
   return rows.map((r) => ({
     id: r.id, orgId: r.org_id, orgName: r.org_name, provider: r.provider, environment: r.environment,
     archived: Boolean(r.archived_at), testMode: r.test_mode === true || r.environment === 'sandbox',
-    label: `${r.org_id ? r.org_name ?? 'Operator' : 'PlugSure (platform)'} · ${r.provider === 'xendit' ? 'Xendit' : r.provider}${r.environment === 'sandbox' ? ' (sandbox)' : ''}${r.archived_at ? ' · archived' : ''}`,
+    fallback: r.kind === 'payments_fallback',
+    label: `${r.org_id ? r.org_name ?? 'Operator' : 'PlugSure (platform)'} · ${PROVIDER_LABEL[r.provider] ?? r.provider}${r.kind === 'payments_fallback' ? ' (fallback)' : ''}${r.environment === 'sandbox' ? ' (sandbox)' : ''}${r.archived_at ? ' · archived' : ''}`,
   }));
 }
 
@@ -75,6 +81,14 @@ async function xenditOf(integrationId: string): Promise<{ r: Resolved; x: Xendit
   if (!r || r.provider !== 'xendit') return null;
   const p = providerFor(r);
   return p instanceof XenditProvider ? { r, x: p } : null;
+}
+async function duitkuOf(integrationId: string): Promise<{ r: Resolved; d: DuitkuProvider } | null> {
+  const r = await byId(integrationId);
+  if (!r || r.provider !== 'duitku') return null;
+  try {
+    const p = providerFor(r);
+    return p instanceof DuitkuProvider ? { r, d: p } : null;
+  } catch { return null; }
 }
 
 // ─────────────────────────────────────────── sync
@@ -106,8 +120,11 @@ export function rowOf(t: XenditTransaction) {
   };
 }
 
+type LedgerRow = ReturnType<typeof rowOf>;
 async function upsert(r: Resolved, t: XenditTransaction): Promise<void> {
-  const v = rowOf(t);
+  await upsertRow(r, rowOf(t), trimmed(t));
+}
+async function upsertRow(r: Resolved, v: LedgerRow, raw: Record<string, unknown>): Promise<void> {
   await query(
     `INSERT INTO gateway_transaction (integration_id, org_id, provider, external_id, kind, gateway_type, status, cashflow, channel_category, channel_code,
             reference_id, product_id, currency, amount, fee, vat, withholding_tax, net_amount, settlement_status, estimated_settlement_at,
@@ -124,7 +141,7 @@ async function upsert(r: Resolved, t: XenditTransaction): Promise<void> {
        gateway_updated_at = EXCLUDED.gateway_updated_at, raw = EXCLUDED.raw, synced_at = now()`,
     [r.integrationId, r.orgId, r.provider, v.externalId, v.kind, v.gatewayType, v.status, v.cashflow, v.channelCategory, v.channelCode,
       v.referenceId, v.productId, v.currency, v.amount, v.fee, v.vat, v.wht, v.net, v.settlement, v.estimatedSettlementAt,
-      v.createdAt, v.updatedAt, JSON.stringify(trimmed(t))]);
+      v.createdAt, v.updatedAt, JSON.stringify(raw)]);
 }
 
 /** Raw payloads kept small: the ledger is not an archive of Xendit's answers. */
@@ -158,8 +175,10 @@ export interface SyncResult { integrationId: string; ok: boolean; rows: number; 
 /** Sync one account's transactions changed since the last run (the first run: the last 35 days). */
 export async function syncTransactions(integrationId: string, now = new Date()): Promise<SyncResult> {
   return outsideRequestScope(async () => {
+    const dk = await duitkuOf(integrationId);
+    if (dk) return syncDuitku(integrationId, dk.r, dk.d, now);
     const g = await xenditOf(integrationId);
-    if (!g) return { integrationId, ok: false, rows: 0, complete: true, error: 'not a Xendit payments account' };
+    if (!g) return { integrationId, ok: false, rows: 0, complete: true, error: 'not a Xendit or Duitku payments account' };
     const st = await one<{ watermark: Date | null; resume_after_id: string | null; resume_from: Date | null }>(
       `SELECT watermark, resume_after_id, resume_from FROM gateway_sync_state WHERE integration_id = $1`, [integrationId]);
     const from = st?.resume_after_id
@@ -201,11 +220,85 @@ export async function syncTransactions(integrationId: string, now = new Date()):
   });
 }
 
+// ─────────────────────────────────────────── Duitku (v1.13.0): no ledger API, so the ledger is built from PlugSure's payments
+
+/** Duitku's settlement schedule (its dashboard documentation): QRIS and e-wallets D+2, cards 4 working days. */
+const DUITKU_SETTLE_DAYS: Record<string, number> = { QRIS: 2, DANA: 2, SHOPEEPAY: 2, LINKAJA: 2, CARD: 4 };
+/** `days` working days (Monday to Friday) after a moment: Duitku's expected settlement, public holidays aside. */
+export function addWorkingDays(from: Date, days: number): Date {
+  const d = new Date(from);
+  let left = days;
+  while (left > 0) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const wd = d.getUTCDay();
+    if (wd !== 0 && wd !== 6) left--;
+  }
+  return d;
+}
+
+/**
+ * One Duitku account: (1) its pending payments asked about (transactionStatus): one Duitku reports paid is applied as
+ * its lost callback would have been; (2) its paid payments of the last 35 days not in the ledger yet, added with Duitku's
+ * amount and fee; (3) the expected settlement (computed: Duitku reports none) passed → settled.
+ */
+async function syncDuitku(integrationId: string, r: Resolved, d: DuitkuProvider, now: Date): Promise<SyncResult> {
+  let rows = 0;
+  try {
+    const pending = await many<{ provider_ref: string }>(
+      `SELECT provider_ref FROM payment_intent WHERE integration_id = $1 AND provider = 'duitku' AND state = 'pending' AND provider_ref IS NOT NULL
+          AND created_at BETWEEN now() - interval '2 days' AND now() - interval '3 minutes' ORDER BY created_at LIMIT 100`, [integrationId]);
+    for (const p of pending) {
+      const st = await d.paymentStatus(p.provider_ref);
+      if (st?.status !== 'captured') continue;
+      await applyGatewayPayment(r, { providerRef: p.provider_ref, paid: true, status: `${st.acquirerStatus} (status check)`, amountMinor: st.amountMinor, paymentId: st.providerPaymentId, currency: LEGACY_CURRENCY });
+    }
+    const paid = await many<{ provider_ref: string; channel: string | null; paid_at: Date | null; created_at: Date }>(
+      `SELECT p.provider_ref, p.channel, p.paid_at, p.created_at FROM payment_intent p
+        WHERE p.integration_id = $1 AND p.provider = 'duitku' AND p.state IN ('captured', 'refunded') AND p.provider_ref IS NOT NULL
+          AND COALESCE(p.paid_at, p.created_at) > now() - make_interval(days => $2)
+          AND NOT EXISTS (SELECT 1 FROM gateway_transaction g WHERE g.integration_id = $1 AND g.external_id = p.provider_ref)
+        ORDER BY p.created_at LIMIT 200`, [integrationId, LOOKBACK_DAYS]);
+    for (const p of paid) {
+      const st = await d.paymentStatus(p.provider_ref);
+      if (!st) continue; // unknown at Duitku: the reconciliation reports it (missing at the gateway)
+      const raw = (st.raw ?? {}) as { fee?: unknown; reference?: unknown };
+      const amount = st.amountMinor ?? 0, fee = num(raw.fee);
+      const at = p.paid_at ?? p.created_at;
+      const ch = String(p.channel ?? 'QRIS').toUpperCase();
+      const expected = addWorkingDays(at, DUITKU_SETTLE_DAYS[ch] ?? 2);
+      await upsertRow(r, {
+        externalId: p.provider_ref, kind: 'payment', gatewayType: 'PAYMENT', status: st.status === 'captured' ? 'success' : st.status === 'pending' ? 'pending' : 'failed',
+        cashflow: 'in', channelCategory: ch === 'QRIS' ? 'QR_CODE' : ch === 'CARD' ? 'CARDS' : 'EWALLET', channelCode: ch, referenceId: p.provider_ref,
+        productId: raw.reference ? String(raw.reference) : null, currency: LEGACY_CURRENCY, amount, fee, vat: 0, wht: 0, net: amount - fee,
+        settlement: expected <= now ? 'settled' : 'pending', estimatedSettlementAt: expected, createdAt: at, updatedAt: now,
+      }, { source: 'transactionStatus', ...(st.raw as Record<string, unknown>) });
+      rows++;
+    }
+    // The expected time passed: settled (computed from Duitku's schedule, Duitku reports no settlement).
+    await query(`UPDATE gateway_transaction SET settlement_status = 'settled', settled_seen_at = COALESCE(settled_seen_at, now())
+                  WHERE integration_id = $1 AND settlement_status = 'pending' AND estimated_settlement_at <= now()`, [integrationId]);
+    await match(integrationId);
+    await query(
+      `INSERT INTO gateway_sync_state (integration_id, org_id, watermark, last_run_at, last_ok, last_error, last_rows) VALUES ($1, $2, now(), now(), true, NULL, $3)
+       ON CONFLICT (integration_id) DO UPDATE SET watermark = now(), last_run_at = now(), last_ok = true, last_error = NULL, last_rows = EXCLUDED.last_rows`,
+      [integrationId, r.orgId, rows]);
+    return { integrationId, ok: true, rows, complete: true };
+  } catch (e) {
+    const msg = (e as Error).message.slice(0, 500);
+    await query(
+      `INSERT INTO gateway_sync_state (integration_id, org_id, last_run_at, last_ok, last_error, last_rows) VALUES ($1, $2, now(), false, $3, $4)
+       ON CONFLICT (integration_id) DO UPDATE SET last_run_at = now(), last_ok = false, last_error = EXCLUDED.last_error, last_rows = EXCLUDED.last_rows`,
+      [integrationId, r.orgId, msg, rows]);
+    logger.warn({ integrationId, err: msg }, 'finance: Duitku sync failed');
+    return { integrationId, ok: false, rows, complete: false, error: msg };
+  }
+}
+
 /** Every Xendit payments account in use (and those archived recently, whose money is still settling). */
 async function syncedAccounts(): Promise<string[]> {
   const rows = await outsideRequestScope(() => many<{ id: string }>(
-    `SELECT id FROM integration WHERE kind = 'payments' AND provider = ANY($1::text[]) AND secrets_sealed IS NOT NULL
-        AND ((enabled AND archived_at IS NULL) OR archived_at > now() - interval '60 days')`, [[...FINANCE_PROVIDERS]]));
+    `SELECT id FROM integration WHERE kind = ANY($2::text[]) AND provider = ANY($1::text[]) AND secrets_sealed IS NOT NULL
+        AND ((enabled AND archived_at IS NULL) OR archived_at > now() - interval '60 days')`, [[...FINANCE_PROVIDERS], FINANCE_KINDS]));
   return rows.map((r) => r.id);
 }
 
@@ -217,6 +310,18 @@ export async function syncAll(): Promise<SyncResult[]> {
 
 export async function snapshotBalance(integrationId: string): Promise<number | null> {
   return outsideRequestScope(async () => {
+    const dk = await duitkuOf(integrationId);
+    if (dk) {
+      try {
+        const b = await dk.d.accountBalance();
+        if (!b) return null;
+        await query(`INSERT INTO gateway_balance_snapshot (integration_id, org_id, account_type, currency, balance) VALUES ($1, $2, 'EFFECTIVE', $4, $3)`, [integrationId, dk.r.orgId, b.effective, LEGACY_CURRENCY]);
+        return b.effective;
+      } catch (e) {
+        logger.warn({ integrationId, err: (e as Error).message }, 'finance: Duitku balance not read');
+        return null;
+      }
+    }
     const g = await xenditOf(integrationId);
     if (!g) return null;
     try {

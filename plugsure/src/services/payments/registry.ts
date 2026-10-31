@@ -11,6 +11,7 @@ import { MidtransProvider } from './midtrans.js';
 import { XenditProvider } from './xendit.js';
 import { SnapQrisProvider } from './snap-qris.js';
 import { StripeProvider } from './stripe.js';
+import { DuitkuProvider } from './duitku.js';
 import { CHANNELS, CHANNEL_LABEL, channelTakes, methodOf, WalletLinkEnded, currenciesOf, type Channel, type MethodKind, type PaymentProvider, type SavedCardInfo } from './provider.js';
 
 /**
@@ -94,6 +95,17 @@ export function providerFor(r: Resolved): PaymentProvider {
       bankPublicKeyPem: s.bankPublicKeyPem, merchantId: s.merchantId, terminalId: s.terminalId, channelId: s.channelId,
       paths: { accessToken: s.accessTokenPath, generateQr: s.generateQrPath },
     }); break;
+    case 'duitku': {
+      // (v1.13.0) Duitku is told where to call back with every payment: the account's notification URL.
+      if (!config.console.publicBaseUrl || !r.webhookKey) throw new PaymentsUnavailable('Duitku needs PUBLIC_BASE_URL (its callback URL) and a saved account.');
+      p = new DuitkuProvider({
+        environment: s.environment === 'production' ? 'production' : 'sandbox', merchantCode: String(s.merchantCode ?? ''), apiKey: k.apiKey ?? '',
+        qrisMethod: s.qrisMethod, signature: s.signature === 'hmac' ? 'hmac' : 'md5', baseUrl: s.baseUrl,
+        callbackUrl: `${config.console.publicBaseUrl}/pay/notify/${r.webhookKey}`,
+        disbursementUserId: s.disbursementUserId, disbursementEmail: s.disbursementEmail, disbursementSecretKey: k.disbursementSecretKey,
+      });
+      break;
+    }
     default: throw new PaymentsUnavailable(`unknown payment provider ${r.provider}`);
   }
   instances.set(key, { sig, p });
@@ -247,6 +259,8 @@ export interface StartedPayment {
 export interface PreparedPayment {
   /** The acquirer's reference the payment will have; null when it is only known from the answer (the sandbox). */
   providerRef: string | null;
+  /** (v1.13.0) The account that takes it: the one asked, which is the fallback after the main one failed. */
+  account?: { provider: string; integrationId: string | null };
   mode: StartedPayment['mode'];
   method: MethodKind;
   channel: Channel;
@@ -301,7 +315,8 @@ export async function startPayment(
   const cx = currency === LEGACY_CURRENCY ? {} : { currency };
   const base = { immediate: null, savedCardId: null, saveCard: false, mode: 'prepurchase' as 'prepurchase' | 'preauth' | 'postpay' };
   const ref = extras(acq.provider).orderRef?.(a.referenceId) ?? null;
-  const prepare = (p: Omit<PreparedPayment, 'providerRef'> & { providerRef?: string | null }) => a.prepare?.({ ...p, providerRef: p.providerRef ?? ref }) ?? Promise.resolve();
+  const account = { provider: acq.provider.name, integrationId: acq.resolved.integrationId };
+  const prepare = (p: Omit<PreparedPayment, 'providerRef'> & { providerRef?: string | null }) => a.prepare?.({ ...p, providerRef: p.providerRef ?? ref, account }) ?? Promise.resolve();
   if (a.walletId) {
     // A linked e-wallet: charged in one tap for the chosen amount; unused balance is refunded automatically.
     if (!a.appDriverId || !acq.provider.chargeWallet) throw new MethodUnavailable('E-wallet terhubung tidak bisa dipakai di operator ini.');
@@ -399,6 +414,52 @@ export async function startPayment(
   const c = await acq.provider.createCheckout({ referenceId: a.referenceId, amountMinor: a.amountMinor, channel, returnUrl: a.returnUrl, description: a.description, customerPhone: phone, ...cx });
   // PayNow: a QR (its SGQR payload) shown like a QRIS code; FPX / GrabPay: a redirect.
   return { ...base, providerRef: c.providerRef, channel, method: methodOf(channel), action: c.action, qrString: c.qrString ?? null, checkoutUrl: c.checkoutUrl, expiresAt: c.expiresAt, providerPaymentId: c.providerPaymentId ?? null };
+}
+
+/** (v1.13.0) The organisation's fallback payments account (its own, else the platform's); null when there is none. */
+export async function paymentsFallbackFor(orgId: string): Promise<{ provider: PaymentProvider; resolved: Resolved } | null> {
+  const r = await resolve('payments_fallback', orgId).catch(() => null);
+  if (!r) return null;
+  try { return { provider: providerFor(r), resolved: r }; } catch (e) {
+    logger.warn({ orgId, err: (e as Error).message }, 'fallback payments account not usable');
+    return null;
+  }
+}
+
+/** The channels a payment may move to the fallback with: one-off payments the driver completes, never a push to a phone. */
+const FALLBACK_CHANNELS = new Set<Channel>(['QRIS', 'DANA', 'SHOPEEPAY', 'LINKAJA', 'CARD']);
+
+/**
+ * (v1.13.0) startPayment through the main account, and when it does not answer (an error that is not a refusal: the
+ * acquirer down, a timeout, a 5xx, a rejected key), through the fallback account (Duitku) instead, for the same payment:
+ * `prepare` is called again with the fallback's reference and account, so the record names the account that took it.
+ * Only a one-off payment moves: not a saved card, a linked e-wallet, post-pay or OVO (pushed to the driver's phone, which
+ * the main acquirer may already have done). The operator is alerted that the main acquirer is failing.
+ */
+export async function startPaymentWithFallback(
+  acq: { provider: PaymentProvider; resolved: Resolved },
+  orgId: string,
+  a: Parameters<typeof startPayment>[1],
+): Promise<StartedPayment & { fallback?: boolean }> {
+  try {
+    return await startPayment(acq, a);
+  } catch (e) {
+    if (e instanceof MethodUnavailable || e instanceof PaymentsUnavailable) throw e;
+    const offered = availableMethods(acq.resolved, acq.provider, a.currency ?? LEGACY_CURRENCY);
+    const channel = String(a.channel || (offered.includes('QRIS') || !offered.length ? 'QRIS' : offered[0])).toUpperCase() as Channel;
+    if (a.savedCardId || a.walletId || !FALLBACK_CHANNELS.has(channel) || (a.currency && a.currency !== LEGACY_CURRENCY)) throw e;
+    const fb = await paymentsFallbackFor(orgId);
+    if (!fb || fb.resolved.integrationId === acq.resolved.integrationId || !availableMethods(fb.resolved, fb.provider, LEGACY_CURRENCY).includes(channel)) throw e;
+    logger.warn({ orgId, main: acq.resolved.provider, fallback: fb.resolved.provider, channel, err: (e as Error).message }, 'main acquirer did not answer; the payment goes to the fallback account');
+    await logEvent(acq.resolved, orgId, 'payment', 'fallback', { channel, to: fb.resolved.provider, error: (e as Error).message.slice(0, 300) });
+    bus.emit('alert.raised', {
+      orgId, kind: 'payment.acquirer_fallback', severity: 'warning', targetType: 'integration', targetId: acq.resolved.integrationId ?? `env:${acq.resolved.provider}`,
+      message: `${CHANNEL_LABEL[channel] ?? channel} payments are going to the fallback acquirer (${fb.resolved.provider}) because ${acq.resolved.provider} did not answer: ${(e as Error).message.slice(0, 200)}`,
+    });
+    const started = await startPayment(fb, { ...a, channel, allowHold: false, saveCard: false });
+    await logEvent(fb.resolved, orgId, 'payment', 'created_as_fallback', { channel, providerRef: started.providerRef });
+    return { ...started, fallback: true };
+  }
 }
 
 /**
