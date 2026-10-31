@@ -639,4 +639,37 @@ export const ops: Op[] = [
     responses: { 200: { description: 'Saved', schema: { type: 'object' } } },
     errors: [422],
   },
+  // (v1.24.0) credit limits and prepay
+  {
+    method: 'GET', path: '/v1/fleet-credit', tag: T, summary: 'Fleet accounts with a credit limit or deposit',
+    description: '(v1.24.0) Each account in credit or prepaid mode: owed (invoices open and charging not invoiced), deposit, available, % used, cards blocked for credit.',
+    responses: { 200: { description: 'Accounts', schema: { type: 'object', properties: { accounts: arrayOf({ type: 'object' }) } } } },
+  },
+  {
+    method: 'GET', path: '/v1/fleet-accounts/:id/credit', tag: T, summary: 'A fleet account\'s credit position', pathParams: ID,
+    description: '(v1.24.0) Mode, limit, deposit, owed, available, % used, cards blocked for credit, and the deposit\'s last 50 entries.',
+    responses: { 200: { description: 'Position', schema: { type: 'object', properties: { mode: { type: 'string', enum: ['none', 'credit', 'prepaid'] }, currency: { type: 'string' }, limit: money(), deposit: money(), owed: money(), available: { type: ['integer', 'null'] }, usedPct: { type: ['number', 'null'] }, over: { type: 'boolean' }, entries: arrayOf({ type: 'object' }) } } } },
+    errors: [404],
+  },
+  {
+    method: 'PUT', path: '/v1/fleet-accounts/:id/credit', tag: T, summary: 'Set a fleet account\'s credit limit or prepay', pathParams: ID,
+    description: '(v1.24.0) mode none, credit (limit) or prepaid (deposit); currency; block (the cards while over); autoApply (pay issued invoices from the deposit). Checked at once. Audited.',
+    body: { required: true, schema: { type: 'object', properties: { mode: { type: 'string', enum: ['none', 'credit', 'prepaid'] }, limit: { type: 'integer', minimum: 0 }, currency: { type: 'string' }, block: { type: 'boolean' }, autoApply: { type: 'boolean' } } }, example: { mode: 'credit', limit: 50000000, currency: 'IDR', block: true } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object' } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/fleet-accounts/:id/credit/entries', tag: T, summary: 'Record a deposit top-up or adjustment', pathParams: ID,
+    description: '(v1.24.0) Prepaid accounts: kind topup (amount above 0, the bank reference) or adjustment (a non-zero amount and a note). Audited.',
+    body: { required: true, schema: { type: 'object', required: ['amount'], properties: { kind: { type: 'string', enum: ['topup', 'adjustment'] }, amount: { type: 'integer' }, reference: { type: 'string' }, note: { type: 'string' } } } },
+    responses: { 201: { description: 'Recorded', schema: { type: 'object' } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/fleet-invoices/:id/pay-from-deposit', tag: T, summary: 'Pay an invoice from the deposit',
+    description: '(v1.24.0) A prepaid account\'s issued invoice, when the deposit covers what is owed on it: debited from the deposit and marked paid. Audited.',
+    pathParams: { id: 'The invoice id.' },
+    responses: { 200: { description: 'Paid', schema: { type: 'object', properties: { invoiceId: { type: 'string' }, number: { type: 'string' }, paid: money(), depositLeft: money() } } } },
+    errors: [404, 409],
+  },
 ];

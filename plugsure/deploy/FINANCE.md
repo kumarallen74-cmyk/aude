@@ -440,6 +440,56 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 
   Alerts: `finance.settlement_late`, `finance.withdrawal_missing`.
 
+## Driver refunds, fleet credit, data export and year end (v1.24.0)
+
+- **Driver refund requests** (Refunds → Driver requests). From a charge's
+  receipt in the app, a driver asks for money back and gives a reason:
+  - unused balance;
+  - charging failed;
+  - overcharged;
+  - other.
+
+  The amount can be up to what is left on the payment (captured − the
+  charge − already refunded). *Overcharged* and *other* can go up to what was
+  paid, and need a message. With the **Policy**, unused balance and failed
+  charges up to an amount are approved at once. The rest wait here
+  (`finance.driver_refund_request`): approve, possibly for less, or reject
+  with a note the driver sees.
+
+  An approved request makes the payment's refund due in the list below, paid
+  as any refund. Drivers can ask within the policy's days of the payment,
+  once per payment.
+- **Fleet credit** (Fleet billing → an account → **Credit**). Choose one:
+  - **Credit limit:** what the account owes (invoices not paid + charging
+    not invoiced yet) against the limit.
+  - **Prepaid deposit:** record top-ups. Issued invoices are paid from the
+    deposit automatically (or by hand), and marked paid.
+
+  Warnings at 80% and 100% (`fleet.credit_limit`). With *Block the cards*,
+  the account's cards are blocked while it is over, and unblocked when it is
+  back under: only the cards blocked for credit, never a card the customer
+  or you blocked.
+- **Data export** (Settings). Each night, the day before's finance data as
+  gzipped CSV or JSON Lines, laid out `<prefix>/<dataset>/date=<day>/` for a
+  BI tool or a warehouse:
+  - payments, charges, refunds, statement payments, fleet invoices and
+    credit notes;
+  - snapshots of statements, shared costs, investments, PPh 23 and sites.
+
+  The target is either an S3-compatible bucket (AWS S3, Cloudflare R2, MinIO,
+  Wasabi; Signature V4, the secret kept sealed; give it a key that can only
+  write to that bucket) or the server's storage. Any day can be exported
+  again, or downloaded as a ZIP. Each run is logged with its files' SHA-256.
+- **Year end** (tab). A year's months and sites, with:
+  - revenue, energy, shared costs, depreciation and contribution;
+  - each owner's share, paid and still due;
+  - the PPh 23 withheld, with records missing a bukti potong flagged;
+  - the tax filings marked.
+
+  *Close the year* locks every month (Close). The *Year-end pack* is one ZIP
+  for the accountant: the workbook, each table as CSV, a README and a
+  manifest of SHA-256s.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

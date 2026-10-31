@@ -30,6 +30,9 @@ import * as taxCal from '../services/tax-calendar.js';
 import * as disputes from '../services/owner-disputes.js';
 import * as sharedCosts from '../services/shared-costs.js';
 import * as settle from '../services/settlement-tracking.js';
+import * as driverRefunds from '../services/driver-refunds.js';
+import * as warehouse from '../services/finance-warehouse.js';
+import * as yearEnd from '../services/year-end.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -1082,6 +1085,89 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, 'finance.settlement_tracking_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
       return r;
     } catch (e) { return p12Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.24.0) driver refund requests, data export, year end
+
+  const p13Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof driverRefunds.DriverRefundError || e instanceof warehouse.WarehouseError || e instanceof yearEnd.YearEndError) return reply.status(e.statusCode).send({ error: e.message });
+    return p12Failed(reply, e);
+  };
+
+  app.get('/v1/finance/driver-refunds', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await driverRefunds.list(req.principal.orgId); } catch (e) { return p13Failed(reply, e); }
+  });
+  app.post('/v1/finance/driver-refunds/:qid/:decision', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    const decision = prm(req, 'decision');
+    if (decision !== 'approve' && decision !== 'reject') return reply.status(404).send({ error: 'Not found' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await driverRefunds.decide(req.principal.orgId, prm(req, 'qid'), decision === 'approve', b, userUuid(req));
+      await auditPay(req, `finance.driver_refund_${r.state}`, 'driver_refund_request', r.id, { payment: r.paymentId, amount: r.amount, note: b.note ?? null });
+      return r;
+    } catch (e) { return p13Failed(reply, e); }
+  });
+  app.put('/v1/finance/driver-refunds/policy', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await driverRefunds.savePolicy(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.driver_refund_policy_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p13Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/warehouse', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { settings: await warehouse.settings(req.principal.orgId), runs: await warehouse.runs(req.principal.orgId), datasets: { daily: warehouse.DAILY, snapshots: warehouse.SNAPSHOTS } }; } catch (e) { return p13Failed(reply, e); }
+  });
+  app.put('/v1/finance/warehouse/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await warehouse.saveSettings(req.principal.orgId, b, userUuid(req));
+      await auditPay(req, 'finance.warehouse_settings_saved', 'organisation', req.principal.orgId, { enabled: r.enabled, target: r.target, format: r.format, endpoint: r.endpoint, bucket: r.bucket, prefix: r.prefix, secretChanged: Boolean(b.secretAccessKey) });
+      return r;
+    } catch (e) { return p13Failed(reply, e); }
+  });
+  app.post('/v1/finance/warehouse/run', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await warehouse.run(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).day, { userId: userUuid(req) });
+      await auditPay(req, 'finance.warehouse_exported', 'finance_export_run', r.id, { day: r.day, target: r.target, files: r.files.length });
+      return r;
+    } catch (e) { return p13Failed(reply, e); }
+  });
+  app.get('/v1/finance/warehouse/days/:day', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const day = prm(req, 'day').replace(/\.zip$/, '');
+      const body = await warehouse.zipDay(req.principal.orgId, day);
+      await audit(req, 'finance.warehouse_downloaded', req.principal.orgId, { day });
+      return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="plugsure-finance-${day}.zip"`).send(body);
+    } catch (e) { return p13Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/year-end', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await yearEnd.summary(req.principal.orgId, ((req.query ?? {}) as Record<string, string>).year ?? new Date().getFullYear() - 1); } catch (e) { return p13Failed(reply, e); }
+  });
+  app.post('/v1/finance/year-end/:year/close', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await yearEnd.closeYear(req.principal.orgId, prm(req, 'year'), userUuid(req));
+      await auditPay(req, 'finance.year_closed', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p13Failed(reply, e); }
+  });
+  app.get('/v1/finance/year-end/:year/pack', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const r = await yearEnd.pack(req.principal.orgId, prm(req, 'year'));
+      await audit(req, 'finance.year_end_pack_exported', req.principal.orgId, { year: r.year, manifestSha256: r.manifestSha256 });
+      return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="plugsure-year-end-${r.year}.zip"`).header('x-manifest-sha256', r.manifestSha256).send(r.body);
+    } catch (e) { return p13Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

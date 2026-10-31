@@ -759,7 +759,7 @@ async function paidInAppOf(intentId: string, holdError: string | null) {
     `SELECT channel, amount_captured_minor AS paid FROM payment_intent WHERE id = $1 AND settles_intent_id = $2`, [m[1], intentId]);
   return s ? { amountMinor: Number(s.paid), channel: s.channel } : null;
 }
-interface ChargeRow {
+export interface ChargeRow {
   id: string;
   device_id: string;
   app_driver_id: string | null;
@@ -773,7 +773,7 @@ interface ChargeRow {
   created_at: Date;
 }
 
-async function ownedCharge(principal: DriverPrincipal, chargeId: string): Promise<ChargeRow | null> {
+export async function ownedCharge(principal: DriverPrincipal, chargeId: string): Promise<ChargeRow | null> {
   const dc = await one<ChargeRow>(`SELECT * FROM driver_charge WHERE id = $1`, [chargeId]);
   if (!dc) return null;
   // A charge belongs to the device that created it, or to the account it is

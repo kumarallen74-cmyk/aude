@@ -515,6 +515,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      settlement tracking (Finance → Settlements), and route
      finance.tax_due, finance.owner_dispute, finance.settlement_late and
      finance.withdrawal_missing ([FINANCE.md](FINANCE.md)).
+  17. (v1.24.0) Optionally set the driver refund policy (Refunds → Driver
+     requests → Policy), fleet credit limits or deposits (Fleet billing →
+     an account → Credit), the nightly data export (Finance → Settings → Data
+     export; an S3-compatible bucket and an access key that can only write to
+     it), and route finance.driver_refund_request and fleet.credit_limit
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The
