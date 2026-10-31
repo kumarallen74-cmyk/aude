@@ -31,6 +31,7 @@ import './views/billing.js';
 import './views/fleet-billing.js';
 import './views/pricing.js';
 import './views/owners.js';
+import './views/owner-payouts.js';
 import './views/fleet-portal.js';
 import './views/roaming.js';
 import './views/rfid.js';

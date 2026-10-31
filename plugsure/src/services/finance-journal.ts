@@ -2,7 +2,7 @@ import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { config } from '../config.js';
 import { LEGACY_CURRENCY } from '../domain/money.js';
 import { xlsx, type Sheet } from './xlsx.js';
-import { FinanceError, type Account, type Period } from './finance.js';
+import { FinanceError, methodName, type Account, type Period } from './finance.js';
 
 /**
  * The accounting journal (v1.17.0): one gateway account's period as double-entry journal entries, for the operator's
@@ -42,10 +42,43 @@ export const JOURNAL_LABELS: Record<JournalKey, string> = {
 
 export interface FinanceSettings {
   journalAccounts: ChartOfAccounts;
+  contractRates: ContractRates;
+  accountingPackage: AccountingPackage | null;
   closeEmail: { enabled: boolean; recipients: string[]; sentPeriod: string | null; lastError: string | null; lastAt: string | null };
 }
 
 const EMAIL_RE = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
+
+/** (v1.19.0) A rate agreed with the gateway for a method: pct of the amount plus a fixed fee (excluding VAT), with an
+ * optional minimum, and the amount up to which the method is free (QRIS: 0% up to Rp 100,000 from October 2026). */
+export interface ContractRate { pct: number; fixed?: number; min?: number; freeUpTo?: number }
+export type ContractRates = Record<string, ContractRate>;
+export const ACCOUNTING_PACKAGES = ['jurnal', 'accurate', 'generic'] as const;
+export type AccountingPackage = typeof ACCOUNTING_PACKAGES[number];
+
+function validRates(raw: unknown): ContractRates {
+  if (raw == null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new FinanceError(422, 'contractRates is an object of { pct, fixed, min, freeUpTo } by method.');
+  const out: ContractRates = {};
+  const entries = Object.entries(raw as Record<string, any>);
+  if (entries.length > 40) throw new FinanceError(422, 'At most 40 methods.');
+  for (const [k, v] of entries) {
+    const m = methodName(k);
+    if (!/^[A-Z0-9_]{2,40}$/.test(m)) throw new FinanceError(422, `"${k.slice(0, 40)}" is not a payment method code (e.g. QRIS, DANA, CARD).`);
+    const n = (x: unknown, what: string, max: number) => {
+      if (x == null || x === '') return undefined;
+      const y = Number(x);
+      if (!Number.isFinite(y) || y < 0 || y > max) throw new FinanceError(422, `${m}: ${what} is a number from 0 to ${max}.`);
+      return y;
+    };
+    const pct = n(v?.pct, 'the percentage', 20);
+    if (pct === undefined) throw new FinanceError(422, `${m}: the percentage (pct) is required (0 for a fixed fee only).`);
+    out[m] = { pct, ...(n(v?.fixed, 'the fixed fee', 100_000) !== undefined ? { fixed: n(v?.fixed, 'the fixed fee', 100_000)! } : {}),
+      ...(n(v?.min, 'the minimum fee', 100_000) !== undefined ? { min: n(v?.min, 'the minimum fee', 100_000)! } : {}),
+      ...(n(v?.freeUpTo, 'the free-up-to amount', 100_000_000) !== undefined ? { freeUpTo: n(v?.freeUpTo, 'the free-up-to amount', 100_000_000)! } : {}) };
+  }
+  return out;
+}
 
 export async function settingsFor(a: Account): Promise<FinanceSettings> {
   const r = await outsideRequestScope(() => one<any>(`SELECT * FROM gateway_account_settings WHERE integration_id = $1`, [a.id]));
@@ -53,6 +86,9 @@ export async function settingsFor(a: Account): Promise<FinanceSettings> {
   const journalAccounts = Object.fromEntries(JOURNAL_KEYS.map((k) => [k, saved[k]?.code ? { code: String(saved[k]!.code), name: String(saved[k]!.name || DEFAULT_ACCOUNTS[k].name) } : DEFAULT_ACCOUNTS[k]])) as ChartOfAccounts;
   return {
     journalAccounts,
+    // (v1.19.0) The rates agreed with the gateway, per method (services/fee-audit.ts), and the accounting package.
+    contractRates: (r?.contract_rates ?? {}) as ContractRates,
+    accountingPackage: (r?.accounting_package ?? null) as AccountingPackage | null,
     closeEmail: {
       enabled: Boolean(r?.close_email_enabled), recipients: r?.close_email_recipients ?? [], sentPeriod: r?.close_email_sent_period ?? null,
       lastError: r?.close_email_last_error ?? null, lastAt: r?.close_email_last_at ? new Date(r.close_email_last_at).toISOString() : null,
@@ -61,7 +97,7 @@ export async function settingsFor(a: Account): Promise<FinanceSettings> {
 }
 
 /** Save the chart of accounts and the close e-mail. `channelOrgId`: whose e-mail channel sends it (the saver's organisation). */
-export async function saveSettings(a: Account, b: { journalAccounts?: unknown; closeEmail?: unknown }, channelOrgId: string, userId: string | null): Promise<FinanceSettings> {
+export async function saveSettings(a: Account, b: { journalAccounts?: unknown; closeEmail?: unknown; contractRates?: unknown; accountingPackage?: unknown }, channelOrgId: string, userId: string | null): Promise<FinanceSettings> {
   const cur = await settingsFor(a);
   let accounts = cur.journalAccounts;
   if (b.journalAccounts !== undefined) {
@@ -89,12 +125,21 @@ export async function saveSettings(a: Account, b: { journalAccounts?: unknown; c
     if (c.enabled !== undefined) enabled = c.enabled === true;
     if (enabled && !recipients.length) throw new FinanceError(422, 'Add at least one recipient for the monthly close e-mail.');
   }
+  const rates = b.contractRates !== undefined ? validRates(b.contractRates) : cur.contractRates;
+  let pkg = cur.accountingPackage;
+  if (b.accountingPackage !== undefined) {
+    if (b.accountingPackage !== null && b.accountingPackage !== '' && !ACCOUNTING_PACKAGES.includes(b.accountingPackage as AccountingPackage)) {
+      throw new FinanceError(422, `accountingPackage is one of ${ACCOUNTING_PACKAGES.join(', ')} (or null).`);
+    }
+    pkg = (b.accountingPackage || null) as AccountingPackage | null;
+  }
   await outsideRequestScope(() => query(
-    `INSERT INTO gateway_account_settings (integration_id, org_id, journal_accounts, close_email_enabled, close_email_recipients, channel_org_id, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+    `INSERT INTO gateway_account_settings (integration_id, org_id, journal_accounts, close_email_enabled, close_email_recipients, channel_org_id, updated_by, updated_at, contract_rates, accounting_package)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9)
      ON CONFLICT (integration_id) DO UPDATE SET journal_accounts = EXCLUDED.journal_accounts, close_email_enabled = EXCLUDED.close_email_enabled,
-       close_email_recipients = EXCLUDED.close_email_recipients, channel_org_id = EXCLUDED.channel_org_id, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [a.id, a.orgId, JSON.stringify(accounts), enabled, recipients, channelOrgId, userId]));
+       close_email_recipients = EXCLUDED.close_email_recipients, channel_org_id = EXCLUDED.channel_org_id, updated_by = EXCLUDED.updated_by, updated_at = now(),
+       contract_rates = EXCLUDED.contract_rates, accounting_package = EXCLUDED.accounting_package`,
+    [a.id, a.orgId, JSON.stringify(accounts), enabled, recipients, channelOrgId, userId, JSON.stringify(rates), pkg]));
   return settingsFor(a);
 }
 

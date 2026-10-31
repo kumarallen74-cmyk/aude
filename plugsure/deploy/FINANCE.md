@@ -258,6 +258,41 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   The tax treatment is the operator's and its adviser's: Finance prepares
   the figures and files nothing.
 
+## Forecast, fee audit, accounting export and the owner portal (v1.19.0)
+
+- **Forecast** (tab). The next 30, 60 or 90 days.
+  - *Opening position:* the gateway's last balance plus the bank balance on
+    the last uploaded statement.
+  - *In:* expected settlements, fleet invoices, Hub positions and post-pay
+    sessions.
+  - *Out:* refunds due, owners' shares and PlugSure's statements not paid in
+    full, due at finalisation plus the payment terms (14 days by default).
+  - *Result:* the position by day and the first shortfall. *Add the run rate*
+    includes the last 28 days' average collections as an estimate.
+- **Fee audit** (Fees tab). First enter the rates agreed with the gateway
+  under Settings → *Contracted rates*: per method, a percentage, a fixed
+  fee, a minimum and the amount up to which it is free. Every payment's fee
+  (excluding VAT) is then checked against them:
+
+  | Case | Expected fee |
+  |---|---|
+  | amount ≤ free-up-to | 0 |
+  | otherwise | max(minimum, amount × % + fixed) |
+
+  An overcharge counts above 1 rupiah. *Claim (CSV)* lists the overcharged
+  payments with the gateway's ids.
+- **Accounting software** (Settings). Choose Jurnal.id, Accurate Online or a
+  generic CSV; **Export** turns a closed month's journal into the package's
+  import file. Each export is logged. Check the first import against the
+  package's template.
+- **Owner portal.** Site Owner users see **Payouts**: what was paid against
+  each statement and what is still due, and the bank account on file
+  (masked). They can ask for a new account. The request is sealed until
+  someone in **Finance → Payables → Bank detail changes** approves it (the
+  account on file is then replaced) or rejects it with a reason. Confirm
+  every change with the owner by phone first: changed bank details are how
+  payouts get stolen.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

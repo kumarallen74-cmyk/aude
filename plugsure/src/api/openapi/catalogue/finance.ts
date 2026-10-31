@@ -7,6 +7,7 @@ import { type Op, type Schema, ref, arrayOf, nullable } from '../types.js';
  */
 
 const T = 'Finance' as const;
+const OWNER_PORTAL = "Site Owner portal: the console sign-in of a site owner's staff (role site_owner); API keys have no owner grant.";
 const DT = { type: 'string', format: 'date-time' };
 const money: Schema = { type: 'number' };
 const count: Schema = { type: 'integer', minimum: 0 };
@@ -525,5 +526,78 @@ export const ops: Op[] = [
       { name: 'itemCode', required: true, schema: { type: 'string', pattern: '^\\d{6}$' } }, { name: 'unitCode', required: true, schema: { type: 'string', pattern: '^UM\\.\\d{4}$' } }],
     responses: { 200: { description: 'e-Faktur XML.', contentType: 'application/xml', schema: { type: 'string' } } },
     errors: [403, 409, 422],
+  },
+  // ─────────────────────────── (v1.19.0) forecast, fee audit, accounting export, owner bank changes, owner portal
+  acct('Cash-flow forecast', '(v1.19.0) The next 30, 60 or 90 days: the opening position (the gateway\'s last balance plus the bank balance on the last uploaded statement), settlements, fleet invoices, Hub positions and post-pay sessions in; refunds due, owner shares and PlugSure\'s statements (finalisation + termsDays, default 14) and Hub positions out; per day the flows and the running position; the first shortfall. runRate=true adds the last 28 days\' average daily collections as an estimate. format=csv: the flows.',
+    '/forecast', { type: 'object', properties: {
+      days: count, termsDays: count, runRate: { type: 'boolean' }, from: { type: 'string', format: 'date' }, to: { type: 'string', format: 'date' },
+      opening: { type: 'object', properties: { total: money, gateway: { type: ['number', 'null'] }, gatewayAt: nullable('string', { format: 'date-time' }), bank: { type: ['number', 'null'] }, bankAsOf: nullable('string', { format: 'date' }) } },
+      totals: { type: 'object', properties: { in: money, out: money, estimate: money } }, closing: money,
+      lowest: { type: 'object', properties: { day: { type: 'string', format: 'date' }, position: money } },
+      shortfall: { type: ['object', 'null'], properties: { day: { type: 'string', format: 'date' }, position: money } },
+      dailyRunRate: money,
+      series: arrayOf({ type: 'object', properties: { day: { type: 'string', format: 'date' }, in: money, out: money, estimate: money, position: money } }),
+      flows: arrayOf({ type: 'object', properties: { day: { type: 'string', format: 'date' }, kind: { type: 'string', enum: ['settlement', 'fleet_invoice', 'hub_in', 'postpay', 'refund', 'owner_payout', 'platform_statement', 'hub_out'] }, label: { type: 'string' }, amount: money } }),
+    } }, { query: [{ name: 'days', schema: { type: 'integer', enum: [30, 60, 90] } }, { name: 'termsDays', schema: { type: 'integer', minimum: 0, maximum: 120 } }, { name: 'runRate', schema: { type: 'boolean' } }, { name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }], errors: [400, 404] }),
+  acct('Gateway fee audit', '(v1.19.0) Every payment\'s fee (excluding VAT) against the rate agreed for its method (Finance settings, contractRates): expected = 0 up to freeUpTo, else max(min, amount × pct / 100 + fixed); an overcharge counts above 1 rupiah. By month and method; methods without a rate are listed, not judged. format=csv: the overcharged payments with the gateway\'s ids, for the claim (audited as finance.fee_audit_exported).',
+    '/fee-audit', { type: 'object', properties: {
+      rates: { type: 'object', additionalProperties: { type: 'object', properties: { pct: { type: 'number' }, fixed: { type: 'number' }, min: { type: 'number' }, freeUpTo: { type: 'number' } } } },
+      tolerance: money, rated: { type: 'boolean' }, unrated: arrayOf({ type: 'string' }),
+      totals: { type: 'object', properties: { payments: count, overcharge: money, overcharged: count } },
+      byMonth: arrayOf({ type: 'object', properties: { month: { type: 'string' }, method: { type: 'string' }, payments: count, amount: money, charged: money, expected: { type: ['number', 'null'] }, over: money, overCount: count, effectiveRate: { type: ['number', 'null'] } } }),
+      overcharged: arrayOf({ type: 'object', properties: { id: { type: 'string' }, externalId: { type: 'string' }, reference: nullable('string'), at: DT, method: { type: 'string' }, amount: money, charged: money, expected: money, over: money } }),
+    } }, { query: [...PERIOD, { name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }] }),
+  acct('Accounting exports', '(v1.19.0) The accounting package set in the settings, the packages offered, the last 12 months (exported or not) and every export (month, package, entries, total debit, who, when).',
+    '/accounting-exports', { type: 'object', properties: {
+      package: nullable('string'), packages: arrayOf({ type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' } } }),
+      months: arrayOf({ type: 'object', properties: { month: { type: 'string' }, exported: { type: 'boolean' }, lastAt: nullable('string', { format: 'date-time' }), lastPackage: nullable('string') } }),
+      exports: arrayOf({ type: 'object', properties: { id: { type: 'string' }, month: { type: 'string' }, package: { type: 'string' }, packageLabel: { type: 'string' }, filename: { type: 'string' }, entries: count, totalDebit: money, by: nullable('string'), at: DT } }),
+    } }),
+  {
+    method: 'POST', path: '/v1/finance/accounts/:id/accounting-exports', tag: T, summary: 'Export a closed month to the accounting package',
+    description: '(v1.19.0) The month\'s journal as the import CSV of jurnal (Jurnal.id), accurate (Accurate Online) or generic; package defaults to the one in the settings. Only closed months (409 for the current one, or an empty journal). Logged and audited as finance.accounting_exported.',
+    pathParams: ID,
+    body: { required: true, schema: { type: 'object', required: ['month'], properties: { month: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, package: { type: 'string', enum: ['jurnal', 'accurate', 'generic'] } } }, example: { month: '2026-09', package: 'jurnal' } },
+    responses: { 200: { description: 'The import file (CSV).', contentType: 'text/csv', schema: { type: 'string' } } },
+    errors: [400, 404, 409],
+  },
+  {
+    method: 'GET', path: '/v1/finance/owner-bank-requests', tag: T, summary: 'Site owners\' bank detail change requests',
+    description: '(v1.19.0) Pending requests from the Site Owner portal, with the account on file (masked) beside the requested one (masked). The number stays sealed until approved.',
+    responses: { 200: { description: 'Pending requests', schema: { type: 'object', required: ['requests'], properties: { requests: arrayOf({ type: 'object', properties: {
+      id: { type: 'string' }, ownerId: { type: 'string', format: 'uuid' }, owner: { type: 'string' }, bankName: { type: 'string' }, bankCode: nullable('string'), holderName: { type: 'string' }, accountMasked: { type: 'string' },
+      note: nullable('string'), state: { type: 'string' }, requestedAt: DT, requestedBy: nullable('string'),
+      current: { type: ['object', 'null'], properties: { bankName: { type: 'string' }, holderName: { type: 'string' }, accountMasked: { type: 'string' } } },
+    } }) } } } },
+  },
+  {
+    method: 'POST', path: '/v1/finance/owner-bank-requests/:rid/:decision', tag: T, summary: 'Approve or reject a site owner\'s bank detail change',
+    description: '(v1.19.0) decision: approve (the requested account replaces the one on file) or reject (note required; the owner sees it). Not by the person who asked. Audited as finance.owner_bank_change_approved / _rejected.',
+    pathParams: { rid: 'The request id.', decision: 'approve or reject.' },
+    body: { required: false, schema: { type: 'object', properties: { note: { type: 'string', maxLength: 300 } } }, example: { note: 'Confirmed by phone with the owner' } },
+    responses: { 200: { description: 'Decided', schema: { type: 'object', properties: { ok: { type: 'boolean' }, state: { type: 'string', enum: ['approved', 'rejected'] }, ownerId: { type: 'string', format: 'uuid' } } } } },
+    errors: [403, 404, 409, 422],
+  },
+  {
+    method: 'GET', path: '/v1/owner-portal/payouts', tag: T, summary: 'Owner portal: payouts against my statements', internal: OWNER_PORTAL,
+    responses: { 200: { description: 'Finalised statements with the share, payments recorded, outstanding', schema: { type: 'object', properties: { statements: arrayOf({ type: 'object' }), totals: { type: 'object' } } } } },
+    errors: [404],
+  },
+  {
+    method: 'GET', path: '/v1/owner-portal/bank', tag: T, summary: 'Owner portal: my bank details and change request', internal: OWNER_PORTAL,
+    responses: { 200: { description: 'The account on file (masked) and the latest request', schema: { type: 'object', properties: { onFile: { type: ['object', 'null'] }, request: { type: ['object', 'null'] } } } } },
+    errors: [404],
+  },
+  {
+    method: 'POST', path: '/v1/owner-portal/bank/change-request', tag: T, summary: 'Owner portal: ask to change my bank details', internal: OWNER_PORTAL,
+    body: { required: true, schema: { type: 'object', required: ['bankName', 'holderName', 'accountNumber'], properties: { bankName: { type: 'string' }, bankCode: { type: 'string' }, holderName: { type: 'string' }, accountNumber: { type: 'string' }, note: { type: 'string' } } } },
+    responses: { 201: { description: 'Sent to the operator', schema: { type: 'object', properties: { id: { type: 'string' }, state: { type: 'string' } } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/owner-portal/bank/change-request/:rid/withdraw', tag: T, summary: 'Owner portal: withdraw my pending change', internal: OWNER_PORTAL,
+    pathParams: { rid: 'The request id.' },
+    responses: { 200: { description: 'Withdrawn', schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } },
+    errors: [404],
   },
 ];

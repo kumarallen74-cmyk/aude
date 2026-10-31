@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.18.0",
+    "version": "1.19.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -32898,6 +32898,922 @@
         },
         "x-permissions": [
           "platform:admin"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/forecast": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Cash-flow forecast",
+        "operationId": "cashFlowForecast",
+        "description": "(v1.19.0) The next 30, 60 or 90 days: the opening position (the gateway's last balance plus the bank balance on the last uploaded statement), settlements, fleet invoices, Hub positions and post-pay sessions in; refunds due, owner shares and PlugSure's statements (finalisation + termsDays, default 14) and Hub positions out; per day the flows and the running position; the first shortfall. runRate=true adds the last 28 days' average daily collections as an estimate. format=csv: the flows.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                30,
+                60,
+                90
+              ]
+            }
+          },
+          {
+            "name": "termsDays",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 120
+            }
+          },
+          {
+            "name": "runRate",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cash-flow forecast",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "days": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "termsDays": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "runRate": {
+                      "type": "boolean"
+                    },
+                    "from": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "to": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "opening": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "number"
+                        },
+                        "gateway": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "gatewayAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "bank": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "bankAsOf": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date"
+                        }
+                      }
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "in": {
+                          "type": "number"
+                        },
+                        "out": {
+                          "type": "number"
+                        },
+                        "estimate": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "closing": {
+                      "type": "number"
+                    },
+                    "lowest": {
+                      "type": "object",
+                      "properties": {
+                        "day": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "position": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "shortfall": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "day": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "position": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "dailyRunRate": {
+                      "type": "number"
+                    },
+                    "series": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "in": {
+                            "type": "number"
+                          },
+                          "out": {
+                            "type": "number"
+                          },
+                          "estimate": {
+                            "type": "number"
+                          },
+                          "position": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "flows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "settlement",
+                              "fleet_invoice",
+                              "hub_in",
+                              "postpay",
+                              "refund",
+                              "owner_payout",
+                              "platform_statement",
+                              "hub_out"
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "amount": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/fee-audit": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Gateway fee audit",
+        "operationId": "gatewayFeeAudit",
+        "description": "(v1.19.0) Every payment's fee (excluding VAT) against the rate agreed for its method (Finance settings, contractRates): expected = 0 up to freeUpTo, else max(min, amount × pct / 100 + fixed); an overcharge counts above 1 rupiah. By month and method; methods without a rate are listed, not judged. format=csv: the overcharged payments with the gateway's ids, for the claim (audited as finance.fee_audit_exported).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (platform time zone). Default: the first of the current month.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive. Default: today. At most 400 days.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Gateway fee audit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rates": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "pct": {
+                            "type": "number"
+                          },
+                          "fixed": {
+                            "type": "number"
+                          },
+                          "min": {
+                            "type": "number"
+                          },
+                          "freeUpTo": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "tolerance": {
+                      "type": "number"
+                    },
+                    "rated": {
+                      "type": "boolean"
+                    },
+                    "unrated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "payments": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "overcharge": {
+                          "type": "number"
+                        },
+                        "overcharged": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "byMonth": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "month": {
+                            "type": "string"
+                          },
+                          "method": {
+                            "type": "string"
+                          },
+                          "payments": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "amount": {
+                            "type": "number"
+                          },
+                          "charged": {
+                            "type": "number"
+                          },
+                          "expected": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "over": {
+                            "type": "number"
+                          },
+                          "overCount": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "effectiveRate": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "overcharged": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "externalId": {
+                            "type": "string"
+                          },
+                          "reference": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "method": {
+                            "type": "string"
+                          },
+                          "amount": {
+                            "type": "number"
+                          },
+                          "charged": {
+                            "type": "number"
+                          },
+                          "expected": {
+                            "type": "number"
+                          },
+                          "over": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/accounting-exports": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Accounting exports",
+        "operationId": "accountingExports",
+        "description": "(v1.19.0) The accounting package set in the settings, the packages offered, the last 12 months (exported or not) and every export (month, package, entries, total debit, who, when).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accounting exports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "package": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "packages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "months": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "month": {
+                            "type": "string"
+                          },
+                          "exported": {
+                            "type": "boolean"
+                          },
+                          "lastAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "lastPackage": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "exports": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "month": {
+                            "type": "string"
+                          },
+                          "package": {
+                            "type": "string"
+                          },
+                          "packageLabel": {
+                            "type": "string"
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "entries": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "totalDebit": {
+                            "type": "number"
+                          },
+                          "by": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Export a closed month to the accounting package",
+        "operationId": "exportClosedMonthToAccountingPackage",
+        "description": "(v1.19.0) The month's journal as the import CSV of jurnal (Jurnal.id), accurate (Accurate Online) or generic; package defaults to the one in the settings. Only closed months (409 for the current one, or an empty journal). Logged and audited as finance.accounting_exported.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "month"
+                ],
+                "properties": {
+                  "month": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                  },
+                  "package": {
+                    "type": "string",
+                    "enum": [
+                      "jurnal",
+                      "accurate",
+                      "generic"
+                    ]
+                  }
+                }
+              },
+              "example": {
+                "month": "2026-09",
+                "package": "jurnal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The import file (CSV).",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/owner-bank-requests": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Site owners' bank detail change requests",
+        "operationId": "siteOwnersBankDetailChangeRequests",
+        "description": "(v1.19.0) Pending requests from the Site Owner portal, with the account on file (masked) beside the requested one (masked). The number stays sealed until approved.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "Pending requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "requests"
+                  ],
+                  "properties": {
+                    "requests": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "ownerId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "owner": {
+                            "type": "string"
+                          },
+                          "bankName": {
+                            "type": "string"
+                          },
+                          "bankCode": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "holderName": {
+                            "type": "string"
+                          },
+                          "accountMasked": {
+                            "type": "string"
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "requestedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "requestedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "current": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "bankName": {
+                                "type": "string"
+                              },
+                              "holderName": {
+                                "type": "string"
+                              },
+                              "accountMasked": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/owner-bank-requests/{rid}/{decision}": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Approve or reject a site owner's bank detail change",
+        "operationId": "approveOrRejectSiteOwnerBankDetailChange",
+        "description": "(v1.19.0) decision: approve (the requested account replaces the one on file) or reject (note required; the owner sees it). Not by the person who asked. Audited as finance.owner_bank_change_approved / _rejected.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "description": "The request id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "decision",
+            "in": "path",
+            "required": true,
+            "description": "approve or reject.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "note": "Confirmed by phone with the owner"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "approved",
+                        "rejected"
+                      ]
+                    },
+                    "ownerId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
         ]
       }
     }

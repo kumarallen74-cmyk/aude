@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.18.0";
+export const API_VERSION = "1.19.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4897,6 +4897,31 @@ export type AcceptHeldPartnerChargeRecordResponse = {
   status: "accepted";
 };
 
+export type AccountingExportsResponse = {
+  package?: string | null;
+  packages?: {
+    id?: string;
+    label?: string;
+  }[];
+  months?: {
+    month?: string;
+    exported?: boolean;
+    lastAt?: string | null;
+    lastPackage?: string | null;
+  }[];
+  exports?: {
+    id?: string;
+    month?: string;
+    package?: string;
+    packageLabel?: string;
+    filename?: string;
+    entries?: number;
+    totalDebit?: number;
+    by?: string | null;
+    at?: string;
+  }[];
+};
+
 export type AccountingJournalResponse = {
   lines?: {
     date?: string;
@@ -5044,6 +5069,16 @@ export type ApproveAndSendRefundTransferResponse = {
   transfer: RefundTransfer;
 };
 
+export type ApproveOrRejectSiteOwnerBankDetailChangeBody = {
+  note?: string;
+};
+
+export type ApproveOrRejectSiteOwnerBankDetailChangeResponse = {
+  ok?: boolean;
+  state?: "approved" | "rejected";
+  ownerId?: string;
+};
+
 export type ArchiveFirmwareImageResponse = {
   ok: true;
 };
@@ -5157,6 +5192,49 @@ export type CardHoldsAndPostPayEWalletChargesResponse = {
     /** Deprecated: the v1.6 name of `expiredMinor`, present while the amount is in IDR. */
     expiredIdr?: number;
   };
+};
+
+export type CashFlowForecastResponse = {
+  days?: number;
+  termsDays?: number;
+  runRate?: boolean;
+  from?: string;
+  to?: string;
+  opening?: {
+    total?: number;
+    gateway?: number | null;
+    gatewayAt?: string | null;
+    bank?: number | null;
+    bankAsOf?: string | null;
+  };
+  totals?: {
+    in?: number;
+    out?: number;
+    estimate?: number;
+  };
+  closing?: number;
+  lowest?: {
+    day?: string;
+    position?: number;
+  };
+  shortfall?: {
+    day?: string;
+    position?: number;
+  } | null;
+  dailyRunRate?: number;
+  series?: {
+    day?: string;
+    in?: number;
+    out?: number;
+    estimate?: number;
+    position?: number;
+  }[];
+  flows?: {
+    day?: string;
+    kind?: "settlement" | "fleet_invoice" | "hub_in" | "postpay" | "refund" | "owner_payout" | "platform_statement" | "hub_out";
+    label?: string;
+    amount?: number;
+  }[];
 };
 
 export type ChangeApiKeyNameOrRateLimitBody = {
@@ -5627,6 +5705,11 @@ export type EscalateRejectedDisputeToPlatformEMSPSideResponse = {
   };
 };
 
+export type ExportClosedMonthToAccountingPackageBody = {
+  month: string;
+  package?: "jurnal" | "accurate" | "generic";
+};
+
 export type FetchPkiRootCertificatesResponse = {
   anchors: PncTrustAnchor[];
   received: number;
@@ -5711,6 +5794,45 @@ export type FinanceSettingsResponse = {
     name?: string;
   }>;
   labels?: Record<string, string>;
+};
+
+export type GatewayFeeAuditResponse = {
+  rates?: Record<string, {
+    pct?: number;
+    fixed?: number;
+    min?: number;
+    freeUpTo?: number;
+  }>;
+  tolerance?: number;
+  rated?: boolean;
+  unrated?: string[];
+  totals?: {
+    payments?: number;
+    overcharge?: number;
+    overcharged?: number;
+  };
+  byMonth?: {
+    month?: string;
+    method?: string;
+    payments?: number;
+    amount?: number;
+    charged?: number;
+    expected?: number | null;
+    over?: number;
+    overCount?: number;
+    effectiveRate?: number | null;
+  }[];
+  overcharged?: {
+    id?: string;
+    externalId?: string;
+    reference?: string | null;
+    at?: string;
+    method?: string;
+    amount?: number;
+    charged?: number;
+    expected?: number;
+    over?: number;
+  }[];
 };
 
 export type GatewayFeesResponse = {
@@ -7455,6 +7577,27 @@ export type SiteOwnerBankDetailsResponse = {
   account: OwnerBankAccount;
 };
 
+export type SiteOwnersBankDetailChangeRequestsResponse = {
+  requests: {
+    id?: string;
+    ownerId?: string;
+    owner?: string;
+    bankName?: string;
+    bankCode?: string | null;
+    holderName?: string;
+    accountMasked?: string;
+    note?: string | null;
+    state?: string;
+    requestedAt?: string;
+    requestedBy?: string | null;
+    current?: {
+      bankName?: string;
+      holderName?: string;
+      accountMasked?: string;
+    } | null;
+  }[];
+};
+
 export type SiteOwnersSharesAndTheirPayoutsResponse = {
   shares: OwnerShare[];
   payoutsAvailable?: boolean;
@@ -7889,6 +8032,20 @@ export class Operations {
   }
 
   /**
+   * Accounting exports
+   *
+   * (v1.19.0) The accounting package set in the settings, the packages offered, the last 12 months (exported or not) and every export (month, package, entries, total debit, who, when).
+   *
+   * `GET /v1/finance/accounts/{id}/accounting-exports` · needs `payment:read`
+   */
+  accountingExports(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+  }, options?: RequestOptions): Promise<AccountingExportsResponse> {
+    return this.transport.request<AccountingExportsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/accounting-exports", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Accounting journal
    *
    * (v1.17.0) The period as double-entry journal entries, one per day and kind (collections, gateway fees and VAT on fees, withholding tax, refunds, withdrawals to the bank, owner payouts), every entry balanced, with the account codes from the settings. format: xlsx (default; Journal, By account, About), csv, or json. Audited as finance.journal_exported.
@@ -8122,6 +8279,23 @@ export class Operations {
     tid: string;
   }, options?: RequestOptions): Promise<ApproveAndSendRefundTransferResponse> {
     return this.transport.request<ApproveAndSendRefundTransferResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/approve", pathParams: { tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
+   * Approve or reject a site owner's bank detail change
+   *
+   * (v1.19.0) decision: approve (the requested account replaces the one on file) or reject (note required; the owner sees it). Not by the person who asked. Audited as finance.owner_bank_change_approved / _rejected.
+   *
+   * `POST /v1/finance/owner-bank-requests/{rid}/{decision}` · needs `payment:write`
+   */
+  approveOrRejectSiteOwnerBankDetailChange(params: {
+    /** The request id. */
+    rid: string;
+    /** approve or reject. */
+    decision: string;
+    body?: ApproveOrRejectSiteOwnerBankDetailChangeBody;
+  }, options?: RequestOptions): Promise<ApproveOrRejectSiteOwnerBankDetailChangeResponse> {
+    return this.transport.request<ApproveOrRejectSiteOwnerBankDetailChangeResponse>({ method: "POST", path: "/v1/finance/owner-bank-requests/{rid}/{decision}", pathParams: { rid: params.rid, decision: params.decision }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -8371,6 +8545,26 @@ export class Operations {
    */
   cardHoldsAndPostPayEWalletCharges(options?: RequestOptions): Promise<CardHoldsAndPostPayEWalletChargesResponse> {
     return this.transport.request<CardHoldsAndPostPayEWalletChargesResponse>({ method: "GET", path: "/v1/card-holds", accept: "json" }, options);
+  }
+
+  /**
+   * Cash-flow forecast
+   *
+   * (v1.19.0) The next 30, 60 or 90 days: the opening position (the gateway's last balance plus the bank balance on the last uploaded statement), settlements, fleet invoices, Hub positions and post-pay sessions in; refunds due, owner shares and PlugSure's statements (finalisation + termsDays, default 14) and Hub positions out; per day the flows and the running position; the first shortfall. runRate=true adds the last 28 days' average daily collections as an estimate. format=csv: the flows.
+   *
+   * `GET /v1/finance/accounts/{id}/forecast` · needs `payment:read`
+   */
+  cashFlowForecast(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      days?: 30 | 60 | 90;
+      termsDays?: number;
+      runRate?: boolean;
+      format?: "json" | "csv";
+    };
+  }, options?: RequestOptions): Promise<CashFlowForecastResponse> {
+    return this.transport.request<CashFlowForecastResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/forecast", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -9232,6 +9426,21 @@ export class Operations {
   }
 
   /**
+   * Export a closed month to the accounting package
+   *
+   * (v1.19.0) The month's journal as the import CSV of jurnal (Jurnal.id), accurate (Accurate Online) or generic; package defaults to the one in the settings. Only closed months (409 for the current one, or an empty journal). Logged and audited as finance.accounting_exported.
+   *
+   * `POST /v1/finance/accounts/{id}/accounting-exports` · needs `payment:read`
+   */
+  exportClosedMonthToAccountingPackage(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    body: ExportClosedMonthToAccountingPackageBody;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "POST", path: "/v1/finance/accounts/{id}/accounting-exports", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "text" }, options);
+  }
+
+  /**
    * Export e-Faktur (Coretax XML) for a month
    *
    * The bulk-import XML for DJP Coretax (Faktur Pajak → Impor Data): one faktur per live invoice with PPN, transaction code 04 (PPN 12% on DPP nilai lain), one line per site. Refused (409) until the seller NPWP/NITKU and the e-Faktur item settings are saved and confirmed. Invoices whose buyer has no NPWP/NIK are skipped; the included and skipped invoices are in the X-PlugSure-Included and X-PlugSure-Skipped headers. Import, check the drafts in Coretax, then approve there.
@@ -9389,6 +9598,27 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<FinanceSettingsResponse> {
     return this.transport.request<FinanceSettingsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/settings", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Gateway fee audit
+   *
+   * (v1.19.0) Every payment's fee (excluding VAT) against the rate agreed for its method (Finance settings, contractRates): expected = 0 up to freeUpTo, else max(min, amount × pct / 100 + fixed); an overcharge counts above 1 rupiah. By month and method; methods without a rate are listed, not judged. format=csv: the overcharged payments with the gateway's ids, for the claim (audited as finance.fee_audit_exported).
+   *
+   * `GET /v1/finance/accounts/{id}/fee-audit` · needs `payment:read`
+   */
+  gatewayFeeAudit(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+      format?: "json" | "csv";
+    };
+  }, options?: RequestOptions): Promise<GatewayFeeAuditResponse> {
+    return this.transport.request<GatewayFeeAuditResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/fee-audit", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -12666,6 +12896,17 @@ export class Operations {
     oid: string;
   }, options?: RequestOptions): Promise<SiteOwnerBankDetailsResponse> {
     return this.transport.request<SiteOwnerBankDetailsResponse>({ method: "GET", path: "/v1/finance/owners/{oid}/bank-account", pathParams: { oid: params.oid }, accept: "json" }, options);
+  }
+
+  /**
+   * Site owners' bank detail change requests
+   *
+   * (v1.19.0) Pending requests from the Site Owner portal, with the account on file (masked) beside the requested one (masked). The number stays sealed until approved.
+   *
+   * `GET /v1/finance/owner-bank-requests` · needs `payment:read`
+   */
+  siteOwnersBankDetailChangeRequests(options?: RequestOptions): Promise<SiteOwnersBankDetailChangeRequestsResponse> {
+    return this.transport.request<SiteOwnersBankDetailChangeRequestsResponse>({ method: "GET", path: "/v1/finance/owner-bank-requests", accept: "json" }, options);
   }
 
   /**
