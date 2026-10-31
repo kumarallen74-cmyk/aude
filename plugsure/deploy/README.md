@@ -480,6 +480,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   7. (v1.14.0) In **Commercial → Finance → Payables**, enter the site owners'
      bank details and record each payout your bank makes
      ([FINANCE.md](FINANCE.md)).
+  8. (v1.15.0) With Duitku's Disbursement credentials saved, refunds of Duitku
+     payments can be sent from the Refunds page (two people) and owners' bank
+     accounts checked by name ([DUITKU.md](DUITKU.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

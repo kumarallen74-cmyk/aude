@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.14.0",
+    "version": "1.15.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -6942,7 +6942,7 @@
         ],
         "summary": "List refunds owed to drivers",
         "operationId": "listRefundsOwedToDrivers",
-        "description": "Prepaid payments in the refund flow (due, processing, refunded, failed) with a summary: amount and count outstanding, failed count and amount refunded in the last 30 days. Outstanding refunds come first; at most 500 rows.\n\n**Permissions checked:** `payment:read`.",
+        "description": "Prepaid payments in the refund flow (due, processing, refunded, failed) with a summary: amount and count outstanding, failed count and amount refunded in the last 30 days. Outstanding refunds come first, those whose gateway refund window closes soonest leading (v1.15.0); at most 500 rows.\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "state",
@@ -28028,7 +28028,7 @@
         ],
         "summary": "Receivables",
         "operationId": "receivables",
-        "description": "Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator's own account, its fleet invoices issued and not paid.\n\n**Permissions checked:** `payment:read`.",
+        "description": "Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator's own account, its fleet invoices issued and not paid. (v1.15.0) Also post-pay sessions not charged yet; for the platform's account PlugSure Hub's unpaid fee invoices, for an operator's the Hub settlement positions it is owed (hubPositions).\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "id",
@@ -28125,6 +28125,84 @@
                           }
                         }
                       }
+                    },
+                    "postpay": {
+                      "type": "object",
+                      "description": "(v1.15.0) Post-pay sessions on this account not charged yet (and how many failed).",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "amount": {
+                          "type": "number"
+                        },
+                        "failed": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "hubFeeInvoices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "description": "(v1.15.0) The platform's account: PlugSure Hub fee invoices issued and not paid.",
+                        "properties": {
+                          "number": {
+                            "type": "string"
+                          },
+                          "member": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "total": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "dueDate": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "overdue": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    },
+                    "hubPositions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "counterparty": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "outstanding": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "dueDate": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -28162,7 +28240,7 @@
         ],
         "summary": "Payables",
         "operationId": "payables",
-        "description": "Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).\n\n**Permissions checked:** `payment:read`.",
+        "description": "Refunds due on payments this account took (with the gateway's refund window and days left), (v1.15.0) for an operator's own account the PlugSure Hub settlement positions it owes, and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "id",
@@ -28293,6 +28371,200 @@
                               "partial",
                               "paid"
                             ]
+                          }
+                        }
+                      }
+                    },
+                    "hubPositions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "counterparty": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "outstanding": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "dueDate": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/breakdown": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Period by operator and site",
+        "operationId": "periodByOperatorAndSite",
+        "description": "(v1.15.0) The accountant's month close: collected, payments, fees, VAT on fees, refunds and net from the gateway's ledger, attributed through PlugSure's payment to its session's site and operator (rows without one under site null); per operator also the site owners' shares on statements finalised for months starting in the period, and what was paid against them.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (platform time zone). Default: the first of the current month.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive. Default: today. At most 400 days.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Period by operator and site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "bySite",
+                    "byOperator"
+                  ],
+                  "properties": {
+                    "bySite": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "operator": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "payments": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "collected": {
+                            "type": "number"
+                          },
+                          "fees": {
+                            "type": "number"
+                          },
+                          "vat": {
+                            "type": "number"
+                          },
+                          "refunds": {
+                            "type": "number"
+                          },
+                          "net": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "byOperator": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "orgId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "operator": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "payments": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "collected": {
+                            "type": "number"
+                          },
+                          "fees": {
+                            "type": "number"
+                          },
+                          "vat": {
+                            "type": "number"
+                          },
+                          "refunds": {
+                            "type": "number"
+                          },
+                          "net": {
+                            "type": "number"
+                          },
+                          "ownerShares": {
+                            "type": "number"
+                          },
+                          "ownerSharesPaid": {
+                            "type": "number"
                           }
                         }
                       }
@@ -29520,6 +29792,524 @@
           "payment:write"
         ]
       }
+    },
+    "/v1/finance/owners/{oid}/bank-account/check": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Check a site owner's bank account by name",
+        "operationId": "checkSiteOwnerBankAccountByName",
+        "description": "(v1.15.0) Duitku Disbursement's inquiry (the operator's Duitku account, else the platform's): the holder's name the bank has, compared with the name saved. Nothing is transferred. Needs the bank code. payment:write; audited as finance.owner_bank_account_checked.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "oid",
+            "in": "path",
+            "required": true,
+            "description": "The site owner id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "check",
+                    "account"
+                  ],
+                  "properties": {
+                    "check": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "mismatch",
+                            "failed"
+                          ]
+                        },
+                        "bankName": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "error": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "account": {
+                      "$ref": "#/components/schemas/OwnerBankAccount"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/refund-transfers": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Refund transfers through Duitku Disbursement",
+        "operationId": "refundTransfersThroughDuitkuDisbursement",
+        "description": "(v1.15.0) The organisation's refund transfers, newest first (at most 300); open=true: only those not settled (awaiting approval, sending, sent).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "open",
+            "in": "query",
+            "required": false,
+            "description": "Only open transfers.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transfers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfers"
+                  ],
+                  "properties": {
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RefundTransfer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/refunds/{id}/disbursement": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Request a refund transfer through Duitku Disbursement",
+        "operationId": "requestRefundTransferThroughDuitkuDisbursement",
+        "description": "(v1.15.0) For a due (or failed) refund of a Duitku payment whose account has Disbursement: the driver's bank account is checked by Duitku's inquiry (the holder's name the bank has) and the transfer waits for a SECOND person's approval. The refund is held (processing) meanwhile. Refused above the largest transfer allowed. payment:write; audited as refund.transfer_requested.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payment id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "bankCode",
+                  "accountNumber",
+                  "holderName"
+                ],
+                "properties": {
+                  "bankCode": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9]{2,12}$",
+                    "description": "Duitku's bank code (e.g. 014 BCA)."
+                  },
+                  "accountNumber": {
+                    "type": "string",
+                    "pattern": "^[0-9 .-]{5,24}$"
+                  },
+                  "holderName": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                }
+              },
+              "example": {
+                "bankCode": "014",
+                "accountNumber": "1234567890",
+                "holderName": "Budi Santoso"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Requested, awaiting approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/RefundTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/refund-transfers/{tid}/approve": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Approve and send a refund transfer",
+        "operationId": "approveAndSendRefundTransfer",
+        "description": "(v1.15.0) By a second person with payment:write (never the requester: 403). Within the limits (one transfer; all approved that day), a fresh inquiry is made (the bank's name must not have changed) and the transfer sent, once. succeeded: the refund is recorded refunded (method disbursement); failed: due again; sent: not confirmed yet, checked automatically. Audited as refund.transfer_approved.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The transfer id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The transfer after sending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/RefundTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/refund-transfers/{tid}/reject": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Reject a refund transfer before it is sent",
+        "operationId": "rejectRefundTransferBeforeItIsSent",
+        "description": "(v1.15.0) Awaiting approval only, with a reason (the requester withdrawing it, or another person refusing it). The refund is due again. Audited as refund.transfer_rejected.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The transfer id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "reason": "The bank names someone else"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/RefundTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/refund-transfers/{tid}/resolve": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Settle a refund transfer whose result Duitku never confirmed",
+        "operationId": "settleRefundTransferWhoseResultDuitkuNeverConfirmed",
+        "description": "(v1.15.0) For a transfer sent (or stuck sending) without a confirmed result, after checking Duitku's dashboard: succeeded records the refund refunded; failed makes it due again. Audited as refund.transfer_resolved.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The transfer id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome",
+                  "note"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "succeeded",
+                      "failed"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "outcome": "succeeded",
+                "note": "Duitku dashboard: transfer 88123 success"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/RefundTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
     }
   },
   "webhooks": {
@@ -30577,7 +31367,8 @@
                         "type": "string",
                         "enum": [
                           "provider",
-                          "manual"
+                          "manual",
+                          "disbursement"
                         ]
                       },
                       "reference": {
@@ -36347,6 +37138,10 @@
           "refunded_30d_minor": {
             "type": "integer"
           },
+          "closing_soon_count": {
+            "type": "integer",
+            "description": "(v1.15.0) Outstanding refunds whose gateway refund window closes within 7 days."
+          },
           "by_currency": {
             "type": "array",
             "items": {
@@ -36434,8 +37229,10 @@
             "enum": [
               "provider",
               "manual",
+              "disbursement",
               null
-            ]
+            ],
+            "description": "disbursement (v1.15.0): sent through Duitku Disbursement."
           },
           "refund_ref": {
             "type": [
@@ -36521,6 +37318,55 @@
               "string",
               "null"
             ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refund_window_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "(v1.15.0) Days after the payment the gateway refunds it to the payer's method (Xendit e-wallets and QRIS); null: no gateway refund, or not known."
+          },
+          "refund_days_left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "(v1.15.0) What is left of the window; negative: closed, a bank transfer only. Null once refunded."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "(v1.15.0) Less than the payment is refunded."
+          },
+          "gateway_refund_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "(v1.15.0) The refund in Finance's ledger of the gateway: success, pending, failed."
+          },
+          "gateway_refund_fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "(v1.15.0) The refund fee and VAT the gateway charged, from its ledger."
+          },
+          "fee_kept": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "(v1.15.0) The payment's own fee and VAT, which Xendit does not return on a partial refund or one made more than 24 hours after the payment."
+          },
+          "disbursement_available": {
+            "type": "boolean",
+            "description": "(v1.15.0) A Duitku payment whose account has Disbursement: the refund can be sent with POST /v1/refunds/{id}/disbursement."
           },
           "refund_due_idr": {
             "type": [
@@ -38349,6 +39195,34 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "mdrBasis": {
+            "type": "object",
+            "description": "(v1.15.0) How the QRIS MDR was arrived at, public sites: the gateway's actual fee and VAT on it where Finance has the payment in its ledger, else PlugSure's estimate. Absent on statements finalised before v1.15.0 (estimated).",
+            "properties": {
+              "actualMinor": {
+                "type": "integer"
+              },
+              "estimatedMinor": {
+                "type": "integer"
+              },
+              "actualPayments": {
+                "type": "integer"
+              },
+              "estimatedPayments": {
+                "type": "integer"
+              },
+              "actualIdr": {
+                "type": "integer",
+                "deprecated": true,
+                "description": "Deprecated: the v1.6 name of `actualMinor`, present while the amount is in IDR."
+              },
+              "estimatedIdr": {
+                "type": "integer",
+                "deprecated": true,
+                "description": "Deprecated: the v1.6 name of `estimatedMinor`, present while the amount is in IDR."
+              }
             }
           },
           "org": {
@@ -48364,6 +49238,152 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "nameCheck": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "(v1.15.0) The last name check (Duitku Disbursement inquiry); cleared when the account, bank code or holder changes.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "matched",
+                  "mismatch",
+                  "failed"
+                ]
+              },
+              "bankName": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The holder's name the bank returned."
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "RefundTransfer": {
+        "type": "object",
+        "required": [
+          "id",
+          "paymentId",
+          "state",
+          "amount",
+          "currency",
+          "bankCode",
+          "accountMasked",
+          "holderName",
+          "namesMatch",
+          "requestedAt"
+        ],
+        "description": "(v1.15.0) A refund paid to the driver's bank account through Duitku Disbursement, approved by a second person.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_approval",
+              "sending",
+              "sent",
+              "succeeded",
+              "failed",
+              "rejected"
+            ],
+            "description": "sent: accepted, the result not confirmed yet (checked automatically)."
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "accountMasked": {
+            "type": "string"
+          },
+          "holderName": {
+            "type": "string",
+            "description": "The name entered."
+          },
+          "checkedName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The holder's name the bank returned (inquiry)."
+          },
+          "namesMatch": {
+            "type": "boolean"
+          },
+          "requestedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approvedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approvedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "responseCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Duitku's responseCode (00 paid)."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

@@ -51,7 +51,26 @@ export const schemas: Record<string, Schema> = {
   },
   OwnerBankAccount: {
     type: 'object', required: ['ownerId', 'bankName', 'holderName', 'accountMasked'],
-    properties: { ownerId: { type: 'string', format: 'uuid' }, bankName: { type: 'string' }, bankCode: nullable('string'), holderName: { type: 'string' }, accountMasked: { type: 'string', description: '••••7890' }, updatedAt: DT },
+    properties: {
+      ownerId: { type: 'string', format: 'uuid' }, bankName: { type: 'string' }, bankCode: nullable('string'), holderName: { type: 'string' }, accountMasked: { type: 'string', description: '••••7890' }, updatedAt: DT,
+      nameCheck: {
+        type: ['object', 'null'], description: '(v1.15.0) The last name check (Duitku Disbursement inquiry); cleared when the account, bank code or holder changes.',
+        properties: { status: { type: 'string', enum: ['matched', 'mismatch', 'failed'] }, bankName: nullable('string', { description: 'The holder\'s name the bank returned.' }), checkedAt: DT },
+      },
+    },
+  },
+  RefundTransfer: {
+    type: 'object', required: ['id', 'paymentId', 'state', 'amount', 'currency', 'bankCode', 'accountMasked', 'holderName', 'namesMatch', 'requestedAt'],
+    description: '(v1.15.0) A refund paid to the driver\'s bank account through Duitku Disbursement, approved by a second person.',
+    properties: {
+      id: { type: 'string' }, paymentId: { type: 'string', format: 'uuid' },
+      state: { type: 'string', enum: ['awaiting_approval', 'sending', 'sent', 'succeeded', 'failed', 'rejected'], description: 'sent: accepted, the result not confirmed yet (checked automatically).' },
+      amount: count, currency: { type: 'string' }, bankCode: { type: 'string' }, accountMasked: { type: 'string' },
+      holderName: { type: 'string', description: 'The name entered.' }, checkedName: nullable('string', { description: 'The holder\'s name the bank returned (inquiry).' }),
+      namesMatch: { type: 'boolean' }, requestedBy: nullable('string'), requestedByName: nullable('string'), requestedAt: DT,
+      approvedBy: nullable('string'), approvedByName: nullable('string'), approvedAt: nullable('string', { format: 'date-time' }),
+      reason: nullable('string'), responseCode: nullable('string', { description: 'Duitku\'s responseCode (00 paid).' }), error: nullable('string'),
+    },
   },
   FinanceAccount: {
     type: 'object', required: ['id', 'provider', 'label'],
@@ -121,17 +140,26 @@ export const ops: Op[] = [
       { name: 'settlement', schema: { type: 'string', enum: ['pending', 'settled', 'early_settled', 'none'] } }, { name: 'channel', schema: { type: 'string' } },
       { name: 'matched', schema: { type: 'boolean' } }, { name: 'q', schema: { type: 'string', maxLength: 100 } }, { name: 'before', schema: { type: 'string' } },
       { name: 'limit', schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 } }] }),
-  acct('Receivables', 'Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator\'s own account, its fleet invoices issued and not paid.',
+  acct('Receivables', 'Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator\'s own account, its fleet invoices issued and not paid. (v1.15.0) Also post-pay sessions not charged yet; for the platform\'s account PlugSure Hub\'s unpaid fee invoices, for an operator\'s the Hub settlement positions it is owed (hubPositions).',
     '/receivables', { type: 'object', required: ['byDay', 'total', 'rows', 'fleetInvoices'], properties: {
       byDay: arrayOf({ type: 'object', properties: { day: nullable('string', { format: 'date' }), net: money, gross: money, count, overdue: { type: 'boolean' } } }), total: money,
       rows: arrayOf(ref('GatewayTransaction')),
       fleetInvoices: arrayOf({ type: 'object', properties: { id: { type: 'string' }, number: { type: 'string' }, period: { type: 'string' }, total: money, currency: { type: 'string' }, dueDate: { type: 'string' }, account: nullable('string'), overdue: { type: 'boolean' } } }),
+      postpay: { type: 'object', description: '(v1.15.0) Post-pay sessions on this account not charged yet (and how many failed).', properties: { count, amount: money, failed: count } },
+      hubFeeInvoices: arrayOf({ type: 'object', description: '(v1.15.0) The platform\'s account: PlugSure Hub fee invoices issued and not paid.', properties: { number: { type: 'string' }, member: nullable('string'), total: money, currency: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, overdue: { type: 'boolean' } } }),
+      hubPositions: arrayOf({ type: 'object', properties: { id: { type: 'string' }, counterparty: nullable('string'), outstanding: money, currency: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, status: { type: 'string' } } }),
     } }),
-  acct('Payables', 'Refunds due on payments this account took (with the e-wallet\'s refund window and days left), and site owners\' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).',
+  acct('Payables', 'Refunds due on payments this account took (with the gateway\'s refund window and days left), (v1.15.0) for an operator\'s own account the PlugSure Hub settlement positions it owes, and site owners\' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).',
     '/payables', { type: 'object', required: ['refunds', 'ownerShares'], properties: {
       refunds: arrayOf({ type: 'object', properties: { paymentId: { type: 'string' }, state: { type: 'string' }, amount: money, currency: { type: 'string' }, reason: nullable('string'), requestedAt: nullable('string', { format: 'date-time' }), channel: nullable('string'), paidAt: nullable('string', { format: 'date-time' }), reference: nullable('string'), operator: nullable('string'), refundWindowDays: { type: ['integer', 'null'] }, daysLeft: { type: ['integer', 'null'] } } }),
       ownerShares: arrayOf({ type: 'object', properties: { statementId: { type: 'string' }, period: { type: 'string' }, owner: { type: 'string' }, operator: { type: 'string' }, amount: money, paid: money, currency: { type: 'string' }, finalisedAt: DT, status: { type: 'string', enum: ['due', 'partial', 'paid'] } } }),
+      hubPositions: arrayOf({ type: 'object', properties: { id: { type: 'string' }, counterparty: nullable('string'), outstanding: money, currency: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, status: { type: 'string' } } }),
     } }),
+  acct('Period by operator and site', '(v1.15.0) The accountant\'s month close: collected, payments, fees, VAT on fees, refunds and net from the gateway\'s ledger, attributed through PlugSure\'s payment to its session\'s site and operator (rows without one under site null); per operator also the site owners\' shares on statements finalised for months starting in the period, and what was paid against them.',
+    '/breakdown', { type: 'object', required: ['bySite', 'byOperator'], properties: {
+      bySite: arrayOf({ type: 'object', properties: { operator: nullable('string'), site: nullable('string'), payments: count, collected: money, fees: money, vat: money, refunds: money, net: money } }),
+      byOperator: arrayOf({ type: 'object', properties: { orgId: nullable('string'), operator: nullable('string'), payments: count, collected: money, fees: money, vat: money, refunds: money, net: money, ownerShares: money, ownerSharesPaid: money } }),
+    } }, { query: PERIOD }),
   acct('Gateway fees', 'Fees, VAT and withholding tax on payments by month and channel with the effective rate; and the QRIS fees Xendit charged against PlugSure\'s estimate (the one on owner statements).',
     '/fees', { type: 'object', required: ['rows', 'qris'], properties: {
       rows: arrayOf({ type: 'object', properties: { month: { type: 'string' }, channel: { type: 'string' }, count, amount: money, fee: money, vat: money, withholdingTax: money, total: money, rate: { type: ['number', 'null'] } } }),
@@ -233,5 +261,52 @@ export const ops: Op[] = [
     } }, example: { bankName: 'BCA', bankCode: '014', holderName: 'PT Hotel Nusantara', accountNumber: '1234567890' } },
     responses: { 200: { description: 'Saved', schema: { type: 'object', required: ['account'], properties: { account: ref('OwnerBankAccount') } } } },
     errors: [404, 422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/owners/:oid/bank-account/check', tag: T, summary: 'Check a site owner\'s bank account by name',
+    description: '(v1.15.0) Duitku Disbursement\'s inquiry (the operator\'s Duitku account, else the platform\'s): the holder\'s name the bank has, compared with the name saved. Nothing is transferred. Needs the bank code. payment:write; audited as finance.owner_bank_account_checked.',
+    pathParams: { oid: 'The site owner id.' },
+    responses: { 200: { description: 'Checked', schema: { type: 'object', required: ['check', 'account'], properties: {
+      check: { type: 'object', properties: { status: { type: 'string', enum: ['matched', 'mismatch', 'failed'] }, bankName: nullable('string'), error: nullable('string') } }, account: ref('OwnerBankAccount') } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'GET', path: '/v1/refund-transfers', tag: T, summary: 'Refund transfers through Duitku Disbursement',
+    description: '(v1.15.0) The organisation\'s refund transfers, newest first (at most 300); open=true: only those not settled (awaiting approval, sending, sent).',
+    query: [{ name: 'open', schema: { type: 'string', enum: ['true'] }, description: 'Only open transfers.' }],
+    responses: { 200: { description: 'Transfers', schema: { type: 'object', required: ['transfers'], properties: { transfers: arrayOf(ref('RefundTransfer')) } } } },
+  },
+  {
+    method: 'POST', path: '/v1/refunds/:id/disbursement', tag: T, summary: 'Request a refund transfer through Duitku Disbursement',
+    description: '(v1.15.0) For a due (or failed) refund of a Duitku payment whose account has Disbursement: the driver\'s bank account is checked by Duitku\'s inquiry (the holder\'s name the bank has) and the transfer waits for a SECOND person\'s approval. The refund is held (processing) meanwhile. Refused above the largest transfer allowed. payment:write; audited as refund.transfer_requested.',
+    pathParams: { id: 'The payment id.' },
+    body: { required: true, schema: { type: 'object', required: ['bankCode', 'accountNumber', 'holderName'], properties: {
+      bankCode: { type: 'string', pattern: '^[A-Za-z0-9]{2,12}$', description: 'Duitku\'s bank code (e.g. 014 BCA).' }, accountNumber: { type: 'string', pattern: '^[0-9 .-]{5,24}$' }, holderName: { type: 'string', maxLength: 120 },
+    } }, example: { bankCode: '014', accountNumber: '1234567890', holderName: 'Budi Santoso' } },
+    responses: { 201: { description: 'Requested, awaiting approval', schema: { type: 'object', required: ['transfer'], properties: { transfer: ref('RefundTransfer') } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/refund-transfers/:tid/approve', tag: T, summary: 'Approve and send a refund transfer',
+    description: '(v1.15.0) By a second person with payment:write (never the requester: 403). Within the limits (one transfer; all approved that day), a fresh inquiry is made (the bank\'s name must not have changed) and the transfer sent, once. succeeded: the refund is recorded refunded (method disbursement); failed: due again; sent: not confirmed yet, checked automatically. Audited as refund.transfer_approved.',
+    pathParams: { tid: 'The transfer id.' },
+    responses: { 200: { description: 'The transfer after sending', schema: { type: 'object', required: ['transfer'], properties: { transfer: ref('RefundTransfer') } } } },
+    errors: [403, 404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/refund-transfers/:tid/reject', tag: T, summary: 'Reject a refund transfer before it is sent',
+    description: '(v1.15.0) Awaiting approval only, with a reason (the requester withdrawing it, or another person refusing it). The refund is due again. Audited as refund.transfer_rejected.',
+    pathParams: { tid: 'The transfer id.' },
+    body: { required: true, schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 1, maxLength: 300 } } }, example: { reason: 'The bank names someone else' } },
+    responses: { 200: { description: 'Rejected', schema: { type: 'object', required: ['transfer'], properties: { transfer: ref('RefundTransfer') } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/refund-transfers/:tid/resolve', tag: T, summary: 'Settle a refund transfer whose result Duitku never confirmed',
+    description: '(v1.15.0) For a transfer sent (or stuck sending) without a confirmed result, after checking Duitku\'s dashboard: succeeded records the refund refunded; failed makes it due again. Audited as refund.transfer_resolved.',
+    pathParams: { tid: 'The transfer id.' },
+    body: { required: true, schema: { type: 'object', required: ['outcome', 'note'], properties: { outcome: { type: 'string', enum: ['succeeded', 'failed'] }, note: { type: 'string', minLength: 1, maxLength: 300 } } }, example: { outcome: 'succeeded', note: 'Duitku dashboard: transfer 88123 success' } },
+    responses: { 200: { description: 'Settled', schema: { type: 'object', required: ['transfer'], properties: { transfer: ref('RefundTransfer') } } } },
+    errors: [404, 409, 422],
   },
 ];

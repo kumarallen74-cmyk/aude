@@ -103,6 +103,7 @@ export function providerFor(r: Resolved): PaymentProvider {
         qrisMethod: s.qrisMethod, signature: s.signature === 'hmac' ? 'hmac' : 'md5', baseUrl: s.baseUrl,
         callbackUrl: `${config.console.publicBaseUrl}/pay/notify/${r.webhookKey}`,
         disbursementUserId: s.disbursementUserId, disbursementEmail: s.disbursementEmail, disbursementSecretKey: k.disbursementSecretKey,
+        disbursementMaxPerTransfer: s.disbursementMaxPerTransfer, disbursementMaxPerDay: s.disbursementMaxPerDay,
       });
       break;
     }

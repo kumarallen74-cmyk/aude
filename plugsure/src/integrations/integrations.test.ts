@@ -184,8 +184,22 @@ describe('Xendit (e-wallets, cards)', () => {
     assert.equal(last().headers['idempotency-key'], 'refund-9');
     assert.equal(JSON.parse(last().body).amount, 12_000);
     assert.equal(x().canRefund('OVO'), true);
-    assert.equal(x().canRefund('QRIS'), false);
+    assert.equal(x().canRefund('QRIS'), true, 'v1.15.0: QRIS by API');
     assert.equal(x().canRefund('CARD'), false);
+  });
+  test('(v1.15.0) QRIS refunds: the QR payment (qrpy_), full or partial; the issuer\'s refusal leaves it for bank transfer', async () => {
+    answers.delete('/qr_codes'); // the fake answers by path prefix
+    answers.set('/qr_codes/payments/qrpy_1/refunds', { status: 200, body: { id: 'qrr_1', status: 'PENDING' } });
+    const r = await x().refund({ providerRef: 'ps-q', providerPaymentId: 'qrpy_1', channel: 'QRIS', amountMinor: 7_000, reason: 'unused', idempotencyKey: 'refund-q1' });
+    assert.deepEqual({ s: r.status, ref: r.refundRef }, { s: 'pending', ref: 'qrr_1' });
+    assert.equal(last().path, '/qr_codes/payments/qrpy_1/refunds');
+    assert.equal(JSON.parse(last().body).amount, 7_000);
+    assert.equal(last().headers['idempotency-key'], 'refund-q1');
+    answers.set('/qr_codes/payments/qrpy_2/refunds', { status: 400, body: { error_code: 'PARTIAL_REFUND_NOT_SUPPORTED' } });
+    const no = await x().refund({ providerRef: 'ps-q2', providerPaymentId: 'qrpy_2', channel: 'QRIS', amountMinor: 3_000, reason: 'unused', idempotencyKey: 'refund-q2' });
+    assert.deepEqual({ s: no.status, e: (no.raw as any).error }, { s: 'failed', e: 'PARTIAL_REFUND_NOT_SUPPORTED' });
+    const n = (await x().refund({ providerRef: 'ps-q3', providerPaymentId: 'qr_abc', channel: 'QRIS', amountMinor: 3_000, reason: 'unused', idempotencyKey: 'refund-q3' }));
+    assert.equal(n.status, 'failed', 'only the QR code known (no qr.payment callback): bank transfer');
   });
 });
 

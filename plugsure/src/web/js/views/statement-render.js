@@ -44,6 +44,10 @@ export function renderStatement(box, st, opts = {}) {
   const isOwner = !!st.owner && t.ownerShareMinor != null;
   const ownerLabel = opts.ownerView ? 'Your share' : 'Owner share';
   const opName = st.owner ? (st.issuer?.name || 'Operator') : 'Platform';
+  // (v1.15.0) The gateway's actual fee where Finance has the payment, else estimated. Statements before v1.15: estimated.
+  const mb = st.mdrBasis;
+  const mdrWord = !mb || !mb.actualPayments ? 'estimated' : !mb.estimatedPayments ? 'actual, from the gateway' : 'actual where the gateway reported it, else estimated';
+  const mdrNote = mb && mb.actualPayments && mb.estimatedPayments ? `<div class="cell-sub">actual ${esc(fmt.idr(mb.actualMinor))} (${fmt.num(mb.actualPayments)} payments) · estimated ${esc(fmt.idr(mb.estimatedMinor))} (${fmt.num(mb.estimatedPayments)})</div>` : '';
   box.innerHTML = `
     <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       ${st.status === 'final' ? tag('t-ok', `final · ${st.number}`) : tag('t-info', st.projected ? 'draft · projected to month end' : 'draft')}
@@ -69,7 +73,7 @@ export function renderStatement(box, st, opts = {}) {
         <tr><td>Commission</td><td class="num">${esc(fmt.idr(t.commissionMinor))}</td></tr>
         <tr><td>Minimum top-up (quiet chargers)</td><td class="num">${esc(fmt.idr(t.minimumTopUpMinor))}</td></tr>
         <tr><td>Platform fee (private chargers)</td><td class="num">${esc(fmt.idr(t.privateFeeMinor))}</td></tr>
-        ${t.mdrCreditMinor ? `<tr><td>Less payment processing (QRIS MDR, estimated)</td><td class="num">− ${esc(fmt.idr(t.mdrCreditMinor))}</td></tr>` : ''}
+        ${t.mdrCreditMinor ? `<tr><td>Less payment processing (QRIS MDR, ${esc(mdrWord)})${mdrNote}</td><td class="num">− ${esc(fmt.idr(t.mdrCreditMinor))}</td></tr>` : ''}
         <tr><td><b>Fee before tax</b></td><td class="num"><b>${esc(fmt.idr(t.netMinor))}</b></td></tr>
         ${id ? `<tr><td class="cell-sub">DPP nilai lain (11/12)</td><td class="num cell-sub">${esc(fmt.idr(t.taxBaseMinor))}</td></tr>
         <tr><td>PPN</td><td class="num">${esc(fmt.idr(t.taxMinor))}</td></tr>` : `<tr><td>Tax on the fee — not charged<div class="cell-sub">${esc(st.taxNote ?? 'Issued without tax until the tax on the platform fee outside Indonesia is settled.')}</div></td><td class="num">${esc(fmt.idr(0))}</td></tr>`}
@@ -79,7 +83,7 @@ export function renderStatement(box, st, opts = {}) {
         <tr><td colspan="2"><b>How the commission base is shared</b></td></tr>
         <tr><td>${esc(ownerLabel)}</td><td class="num"><b>${esc(fmt.idr(t.ownerShareMinor))}</b></td></tr>
         <tr><td>${esc(opName)} share (fee before tax)</td><td class="num">${esc(fmt.idr(t.platformShareMinor))}</td></tr>
-        <tr><td class="cell-sub">Payment processing (QRIS MDR, estimated, kept by the gateway)</td><td class="num cell-sub">${esc(fmt.idr(t.mdrEstimateMinor))}</td></tr>` : ''}
+        <tr><td class="cell-sub">Payment processing (QRIS MDR, ${esc(mdrWord)}, kept by the gateway)${mdrNote}</td><td class="num cell-sub">${esc(fmt.idr(t.mdrEstimateMinor))}</td></tr>` : ''}
       </tbody></table>
       <p class="cell-sub" style="margin:0;padding:10px 16px 14px">${esc(planText(st.plan, st.currency))}${id ? '' : ` All amounts in ${esc(st.currency)}.`} Sessions count in the month their charge record was issued.</p>
     </div>`;

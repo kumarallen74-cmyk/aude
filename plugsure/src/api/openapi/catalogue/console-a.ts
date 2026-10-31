@@ -247,6 +247,7 @@ export const schemas: Record<string, Schema> = {
   // ---- refunds
   RefundSummary: obj(
     { due_count: int, due_minor: { ...int, description: 'Rupiah (IDR); other currencies are in by_currency.' }, failed_count: int, refunded_30d_minor: int,
+      closing_soon_count: { ...int, description: '(v1.15.0) Outstanding refunds whose gateway refund window closes within 7 days.' },
       by_currency: arrayOf(obj({ currency: str, due_minor: int, refunded_30d_minor: int })) },
     ['due_count', 'due_minor', 'failed_count', 'refunded_30d_minor'],
   ),
@@ -257,7 +258,7 @@ export const schemas: Record<string, Schema> = {
       refund_due_minor: intN,
       refunded_minor: intN,
       refund_reason: strN,
-      refund_method: { type: ['string', 'null'], enum: ['provider', 'manual', null] },
+      refund_method: { type: ['string', 'null'], enum: ['provider', 'manual', 'disbursement', null], description: 'disbursement (v1.15.0): sent through Duitku Disbursement.' },
       refund_ref: strN,
       refund_error: strN,
       refund_requested_at: dtN,
@@ -273,6 +274,14 @@ export const schemas: Record<string, Schema> = {
       connector_no: intN,
       driver_phone: strN,
       refunded_by_name: strN,
+      channel: strN,
+      refund_window_days: { ...intN, description: '(v1.15.0) Days after the payment the gateway refunds it to the payer\'s method (Xendit e-wallets and QRIS); null: no gateway refund, or not known.' },
+      refund_days_left: { ...intN, description: '(v1.15.0) What is left of the window; negative: closed, a bank transfer only. Null once refunded.' },
+      partial: { type: 'boolean', description: '(v1.15.0) Less than the payment is refunded.' },
+      gateway_refund_status: { ...strN, description: '(v1.15.0) The refund in Finance\'s ledger of the gateway: success, pending, failed.' },
+      gateway_refund_fee: { ...intN, description: '(v1.15.0) The refund fee and VAT the gateway charged, from its ledger.' },
+      fee_kept: { ...intN, description: '(v1.15.0) The payment\'s own fee and VAT, which Xendit does not return on a partial refund or one made more than 24 hours after the payment.' },
+      disbursement_available: { type: 'boolean', description: '(v1.15.0) A Duitku payment whose account has Disbursement: the refund can be sent with POST /v1/refunds/{id}/disbursement.' },
     },
     ['id', 'refund_state', 'provider', 'method', 'paid_at'],
   ),
@@ -637,6 +646,11 @@ export const schemas: Record<string, Schema> = {
       sites: arrayOf(ref('StatementSiteLine')),
       totals: ref('StatementTotals'),
       warnings: arrayOf(str),
+      mdrBasis: {
+        type: 'object',
+        description: '(v1.15.0) How the QRIS MDR was arrived at, public sites: the gateway\'s actual fee and VAT on it where Finance has the payment in its ledger, else PlugSure\'s estimate. Absent on statements finalised before v1.15.0 (estimated).',
+        properties: { actualMinor: int, estimatedMinor: int, actualPayments: int, estimatedPayments: int },
+      },
       org: {
         ...nullable('object'),
         properties: { id: uuid, name: str, slug: str, npwp: strN, pkp: bool },
@@ -1098,7 +1112,7 @@ export const ops: Op[] = [
     summary: 'List refunds owed to drivers',
     description:
       'Prepaid payments in the refund flow (due, processing, refunded, failed) with a summary: amount and count outstanding, failed count and amount refunded in the last 30 days. ' +
-      'Outstanding refunds come first; at most 500 rows.',
+      'Outstanding refunds come first, those whose gateway refund window closes soonest leading (v1.15.0); at most 500 rows.',
     query: [
       {
         name: 'state',

@@ -22,8 +22,11 @@ import type { RefundStatusArgs } from './registry.js';
  *                 'qr.payment'      data.status SUCCEEDED
  *                 'ewallet.capture' data.status SUCCEEDED
  *                 invoice           status PAID / SETTLED (no event field)
- *   refunds     e-wallets: POST {base}/ewallets/charges/{id}/refunds; QRIS and cards by bank
- *               transfer from the Refunds page.
+ *   refunds     e-wallets: POST {base}/ewallets/charges/{id}/refunds; (v1.15.0) QRIS: POST
+ *               {base}/qr_codes/payments/{qrpy id}/refunds { amount, reason } — full, or partial where the issuer
+ *               allows it (DANA, ShopeePay, OVO; Xendit answers PARTIAL_REFUND_NOT_SUPPORTED otherwise), within
+ *               Xendit's QRIS refund window; the 'qr.refund' callback settles it. Cards by bank transfer from the
+ *               Refunds page. Confirm the QRIS refund fields and callback in Xendit's sandbox before live traffic.
  *   test        GET  {base}/balance
  *
  *   card holds  Payments API v3: a hosted Payment Session (mode PAYMENT_LINK, CARDS, capture_method
@@ -67,7 +70,7 @@ const PAYMENT_EVENTS = new Set([
   'payment.capture', 'payment.authorization', 'payment.failure', 'payment.expiry',
 ]);
 /** The callback events that report a refund. */
-const REFUND_EVENTS = new Set(['refund.succeeded', 'refund.failed', 'ewallet.refund']);
+const REFUND_EVENTS = new Set(['refund.succeeded', 'refund.failed', 'ewallet.refund', 'qr.refund']);
 /** (v1.12.0) A transaction as GET /transactions returns it (the fields PlugSure reads). */
 export interface XenditTransaction {
   id: string;
@@ -113,7 +116,7 @@ export class XenditProvider implements PaymentProvider {
   orderRef(referenceId: string): string { return `ps-${createHash('sha256').update(referenceId, 'utf8').digest('hex').slice(0, 32)}`; }
 
   channels(): Channel[] { return ['QRIS', 'GOPAY', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA', 'CARD']; }
-  canRefund(channel: string | null): boolean { return ['GOPAY', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA'].includes(String(channel)); }
+  canRefund(channel: string | null): boolean { return ['GOPAY', 'OVO', 'DANA', 'SHOPEEPAY', 'LINKAJA', 'QRIS'].includes(String(channel)); }
 
   async createQrisCharge(a: CreateQrisChargeArgs): Promise<QrisCharge> {
     const referenceId = this.orderRef(a.referenceId);
@@ -455,9 +458,21 @@ export class XenditProvider implements PaymentProvider {
   verifyWebhook(rawBody: string, headers: Record<string, string | string[] | undefined>): boolean { return this.parseNotification(rawBody, headers) !== null; }
   notificationAck(ok: boolean) { return { status: ok ? 200 : 401, body: ok ? { received: true } : { error: 'invalid callback token' } }; }
 
-  /** E-wallet charges only; QRIS and card payments are refunded by bank transfer. */
+  /** E-wallet charges and (v1.15.0) QRIS payments; card payments are refunded by bank transfer. */
   async refund(a: RefundArgs): Promise<RefundResult> {
     if (!this.canRefund(a.channel ?? null) || !a.providerPaymentId) return { status: 'failed', refundRef: '', raw: { error: 'refund this payment by bank transfer' } };
+    if (String(a.channel).toUpperCase() === 'QRIS') {
+      // The QR payment (qrpy_…, from the qr.payment callback), not the QR code: a payment recorded without it (before its
+      // callback, or recovered by reconciliation) is refunded by bank transfer.
+      if (!a.providerPaymentId.startsWith('qrpy_')) return { status: 'failed', refundRef: '', raw: { error: 'the QR payment id is unknown: refund by bank transfer' } };
+      const r = await providerFetch(`${this.base()}/qr_codes/payments/${encodeURIComponent(a.providerPaymentId)}/refunds`, {
+        method: 'POST', headers: { ...this.headers(), 'Idempotency-key': a.idempotencyKey },
+        body: JSON.stringify({ amount: Math.round(a.amountMinor), reason: 'REQUESTED_BY_CUSTOMER' }),
+      });
+      const j = r.body ?? {};
+      if (r.status >= 300) return { status: 'failed', refundRef: '', raw: { status: r.status, error: j.error_code ?? j.message ?? r.text.slice(0, 200) } };
+      return { status: j.status === 'SUCCEEDED' ? 'refunded' : 'pending', refundRef: String(j.id ?? a.idempotencyKey), raw: j };
+    }
     if (a.providerPaymentId.startsWith('pr-')) {
       // A linked e-wallet payment (a payment request): the Refunds API.
       const r = await providerFetch(`${this.base()}/refunds`, {
@@ -485,6 +500,8 @@ export class XenditProvider implements PaymentProvider {
     if (!a.refundRef || !a.providerPaymentId || a.refundRef === a.idempotencyKey) return null;
     const url = a.providerPaymentId.startsWith('pr-')
       ? `${this.base()}/refunds/${encodeURIComponent(a.refundRef)}`
+      : a.providerPaymentId.startsWith('qrpy_')
+      ? `${this.base()}/qr_codes/payments/${encodeURIComponent(a.providerPaymentId)}/refunds/${encodeURIComponent(a.refundRef)}`
       : `${this.base()}/ewallets/charges/${encodeURIComponent(a.providerPaymentId)}/refunds/${encodeURIComponent(a.refundRef)}`;
     const r = await providerFetch(url, { headers: this.headers() });
     if (r.status === 404) return null;
@@ -497,7 +514,7 @@ export class XenditProvider implements PaymentProvider {
     return s === 'SUCCEEDED' ? 'refunded' : s === 'FAILED' ? 'failed' : 'pending';
   }
 
-  /** A refund callback (refund.succeeded / refund.failed; ewallet.refund), verified like a payment callback. */
+  /** A refund callback (refund.succeeded / refund.failed; ewallet.refund; qr.refund), verified like a payment callback. */
   parseRefundEvent(rawBody: string, headers: Record<string, string | string[] | undefined>): { refundRef: string; status: 'refunded' | 'pending' | 'failed'; event: string } | null {
     if (!this.callbackOk(headers)) return null;
     let j: any;

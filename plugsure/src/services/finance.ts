@@ -6,6 +6,7 @@ import { providerFor, applyGatewayPayment } from './payments/registry.js';
 import { XenditProvider, type XenditTransaction } from './payments/xendit.js';
 import { DuitkuProvider } from './payments/duitku.js';
 import { estimateQrisMdrIdr } from './payments/provider.js';
+import { refundWindowDays, refundDaysLeft } from './refund-windows.js';
 import { LEGACY_CURRENCY } from '../domain/money.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { opsAlertOrgs } from './worker-health.js';
@@ -645,7 +646,25 @@ export async function receivables(integrationId: string, orgId: string | null) {
            FROM fleet_invoice f LEFT JOIN fleet_account a ON a.id = f.fleet_account_id
           WHERE f.org_id = $1 AND f.status = 'issued' ORDER BY f.due_date NULLS LAST LIMIT 200`, [orgId]) : Promise.resolve([]),
     ]);
+    // (v1.15.0) Also owed: post-pay sessions not charged yet (on this account); for the platform, PlugSure Hub's fee
+    // invoices issued and not paid; for an operator, Hub settlement positions where it is the payee.
+    const [postpay, hubFees, hubOwed] = await Promise.all([
+      one<any>(
+        `SELECT count(*)::int AS n, COALESCE(sum(COALESCE(pi.hold_capture_minor, d.total_minor, 0)), 0) AS amount,
+                count(*) FILTER (WHERE pi.hold_state = 'capture_failed')::int AS failed
+           FROM payment_intent pi LEFT JOIN cdr d ON d.session_id = pi.session_id
+          WHERE pi.integration_id = $1 AND pi.mode = 'postpay' AND (pi.state = 'authorised' OR pi.hold_state = 'capture_failed') AND pi.settled_at IS NULL`, [integrationId]),
+      orgId ? Promise.resolve([]) : many<any>(
+        `SELECT i.number, i.currency, i.total_minor, i.due_date, o.name AS member FROM hub_fee_invoice i LEFT JOIN organisation o ON o.id = i.org_id
+          WHERE i.status = 'issued' ORDER BY i.due_date LIMIT 200`),
+      orgId ? many<any>(
+        `SELECT p.id, p.currency, p.net_minor - p.paid_minor AS outstanding, p.due_date, p.status, o.name AS payer FROM hub_settlement_position p LEFT JOIN organisation o ON o.id = p.payer_org_id
+          WHERE p.payee_org_id = $1 AND p.status IN ('open', 'partially_paid', 'overdue') ORDER BY p.due_date LIMIT 200`, [orgId]) : Promise.resolve([]),
+    ]);
     return {
+      postpay: { count: postpay?.n ?? 0, amount: num(postpay?.amount), failed: postpay?.failed ?? 0 },
+      hubFeeInvoices: hubFees.map((h: any) => ({ number: h.number, member: h.member, total: num(h.total_minor), currency: h.currency, dueDate: h.due_date, overdue: h.due_date ? new Date(h.due_date) < new Date() : false })),
+      hubPositions: hubOwed.map((h: any) => ({ id: h.id, counterparty: h.payer, outstanding: num(h.outstanding), currency: h.currency, dueDate: h.due_date, status: h.status })),
       byDay: days.map((d) => ({ day: d.day, net: num(d.net), gross: num(d.gross), count: d.n, overdue: d.overdue === true })),
       total: days.reduce((a, d) => a + num(d.net), 0),
       rows: rows.map(txView),
@@ -659,11 +678,15 @@ export async function receivables(integrationId: string, orgId: string | null) {
  * owners' shares on finalised statements of the operators whose payments it took, with what was paid against each
  * (recorded from v1.14.0, services/payouts.ts).
  */
-export async function payables(integrationId: string) {
+export async function payables(integrationId: string, orgId: string | null = null) {
   return outsideRequestScope(async () => {
+    // (v1.15.0) An operator's own account: PlugSure Hub settlement positions where it is the payer.
+    const hubOwes = orgId ? await many<any>(
+      `SELECT p.id, p.currency, p.net_minor - p.paid_minor AS outstanding, p.due_date, p.status, o.name AS payee FROM hub_settlement_position p LEFT JOIN organisation o ON o.id = p.payee_org_id
+        WHERE p.payer_org_id = $1 AND p.status IN ('open', 'partially_paid', 'overdue') ORDER BY p.due_date LIMIT 200`, [orgId]) : [];
     const [refunds, owners] = await Promise.all([
       many<any>(
-        `SELECT p.id, p.refund_state, p.refund_due_minor, p.refund_reason, p.refund_requested_at, p.channel, p.paid_at, p.provider_ref, p.currency, o.name AS org_name
+        `SELECT p.id, p.provider, p.refund_state, p.refund_due_minor, p.refund_reason, p.refund_requested_at, p.channel, p.paid_at, p.provider_ref, p.currency, o.name AS org_name
            FROM payment_intent p LEFT JOIN organisation o ON o.id = p.org_id
           WHERE p.integration_id = $1 AND p.refund_state IN ('due', 'processing', 'failed') ORDER BY p.paid_at NULLS LAST LIMIT 500`, [integrationId]),
       many<any>(
@@ -676,14 +699,15 @@ export async function payables(integrationId: string) {
     ]);
     const now = Date.now();
     return {
+      hubPositions: hubOwes.map((h: any) => ({ id: h.id, counterparty: h.payee, outstanding: num(h.outstanding), currency: h.currency, dueDate: h.due_date, status: h.status })),
       refunds: refunds.map((r) => {
-        // Refund windows of the e-wallets at Xendit (days after the payment): past them, a refund goes by bank transfer.
-        const window = ({ OVO: 90, DANA: 30, SHOPEEPAY: 365, LINKAJA: 30, GOPAY: 30 } as Record<string, number>)[String(r.channel ?? '').toUpperCase()] ?? null;
-        const age = r.paid_at ? Math.floor((now - new Date(r.paid_at).getTime()) / 86_400_000) : null;
+        // The gateway's refund window for the channel (services/refund-windows.ts): past it, a refund goes by bank transfer.
+        const window = refundWindowDays(r.provider, r.channel);
+        const left = refundDaysLeft(window, r.paid_at, now);
         return {
           paymentId: r.id, state: r.refund_state, amount: num(r.refund_due_minor), currency: r.currency, reason: r.refund_reason, requestedAt: iso(r.refund_requested_at),
           channel: r.channel, paidAt: iso(r.paid_at), reference: r.provider_ref, operator: r.org_name,
-          refundWindowDays: window, daysLeft: window != null && age != null ? window - age : null,
+          refundWindowDays: window, daysLeft: left,
         };
       }),
       // (v1.14.0) Paid as recorded against the statement (services/payouts.ts).
@@ -724,6 +748,58 @@ export async function fees(integrationId: string, p: Period) {
 
 /** Everything for one month's close of an account: the summary, by channel, and every transaction. */
 export async function monthClose(integrationId: string, p: Period) {
-  const [o, tx, f] = await Promise.all([overview(integrationId, p), transactions(integrationId, p, { limit: 100_000 }), fees(integrationId, p)]);
-  return { overview: o, transactions: tx, fees: f };
+  const [o, tx, f, b] = await Promise.all([overview(integrationId, p), transactions(integrationId, p, { limit: 100_000 }), fees(integrationId, p), closeBreakdown(integrationId, p)]);
+  return { overview: o, transactions: tx, fees: f, ...b };
+}
+
+/**
+ * (v1.15.0) The accountant's month close by site and by operator: collected, fees, VAT on fees, refunds and net from the
+ * gateway's ledger (each row attributed through PlugSure's payment to its session's site and its operator), and per
+ * operator the site owners' shares on statements finalised for months in the period, with what was paid against them.
+ * Gateway rows with no PlugSure payment (or no session: passes) are listed under "no site".
+ */
+export async function closeBreakdown(integrationId: string, p: Period) {
+  return outsideRequestScope(async () => {
+    const rows = await many<any>(
+      `SELECT COALESCE(o.id::text, '') AS org_id, o.name AS operator, s.id AS site_id, s.name AS site,
+              COALESCE(sum(g.amount) FILTER (WHERE g.kind = 'payment' AND g.status = 'success' AND g.cashflow = 'in'), 0) AS collected,
+              count(*) FILTER (WHERE g.kind = 'payment' AND g.status = 'success' AND g.cashflow = 'in')::int AS payments,
+              COALESCE(sum(g.fee) FILTER (WHERE g.status = 'success'), 0) AS fees,
+              COALESCE(sum(g.vat) FILTER (WHERE g.status = 'success'), 0) AS vat,
+              COALESCE(sum(g.amount) FILTER (WHERE g.kind = 'refund' AND g.status = 'success'), 0) AS refunds
+         FROM gateway_transaction g
+         LEFT JOIN payment_intent pi ON pi.id = g.payment_intent_id
+         LEFT JOIN LATERAL (SELECT cs.site_id FROM charging_session cs WHERE cs.id = pi.session_id OR cs.payment_intent_id = pi.id LIMIT 1) ss ON true
+         LEFT JOIN site s ON s.id = ss.site_id
+         LEFT JOIN organisation o ON o.id = COALESCE(pi.org_id, g.org_id)
+        WHERE g.integration_id = $1 AND g.gateway_created_at >= $2 AND g.gateway_created_at < $3 AND g.kind IN ('payment', 'refund')
+        GROUP BY 1, 2, 3, 4 ORDER BY 2 NULLS LAST, 4 NULLS LAST`, [integrationId, p.from, p.to]);
+    const line = (r: any) => {
+      const collected = num(r.collected), fees = num(r.fees), vat = num(r.vat), refunds = num(r.refunds);
+      return { collected, payments: r.payments, fees, vat, refunds, net: Math.round((collected - fees - vat - refunds) * 100) / 100 };
+    };
+    const bySite = rows.map((r) => ({ operator: r.operator ?? null, site: r.site ?? null, ...line(r) }));
+    const ops = new Map<string, { orgId: string | null; operator: string | null; collected: number; payments: number; fees: number; vat: number; refunds: number; net: number }>();
+    for (const r of bySite.map((x, i) => ({ ...x, orgId: rows[i].org_id || null }))) {
+      const k = r.orgId ?? '';
+      const a = ops.get(k) ?? { orgId: r.orgId, operator: r.operator, collected: 0, payments: 0, fees: 0, vat: 0, refunds: 0, net: 0 };
+      for (const f of ['collected', 'payments', 'fees', 'vat', 'refunds', 'net'] as const) a[f] = Math.round((a[f] + r[f]) * 100) / 100;
+      ops.set(k, a);
+    }
+    const orgIds = [...ops.values()].map((o) => o.orgId).filter(Boolean) as string[];
+    // Months whose first day falls in the period (platform time zone).
+    const shares = orgIds.length ? await many<any>(
+      `SELECT s.org_id, COALESCE(sum(s.owner_share_minor), 0) AS share,
+              COALESCE(sum((SELECT sum(amount_minor) FROM statement_payment sp WHERE sp.statement_id = s.id AND sp.voided_at IS NULL)), 0) AS paid
+         FROM commission_statement s
+        WHERE s.org_id = ANY($1::uuid[]) AND s.owner_id IS NOT NULL AND s.finalised_at IS NOT NULL AND s.owner_share_minor > 0
+          AND (s.period::timestamp AT TIME ZONE $4) >= $2 AND (s.period::timestamp AT TIME ZONE $4) < $3
+        GROUP BY 1`, [orgIds, p.from, p.to, tz()]) : [];
+    const byShare = new Map(shares.map((x: any) => [x.org_id, x]));
+    const byOperator = [...ops.values()].map((o) => {
+      const sh = o.orgId ? byShare.get(o.orgId) : null;
+      return { ...o, ownerShares: num(sh?.share), ownerSharesPaid: num(sh?.paid) };
+    });
+    return { bySite, byOperator };
+  });
 }

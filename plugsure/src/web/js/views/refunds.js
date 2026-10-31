@@ -25,6 +25,22 @@ const STATE_TAG = {
 };
 const stateTag = (s) => tag(...(STATE_TAG[s] ?? ['t-mute', s]));
 
+/** (v1.15.0) The gateway's refund window for the payment's channel: days left, or closed (a bank transfer then). */
+const windowCell = (r) => {
+  if (r.refund_state === 'refunded') return r.partial ? '<span class="cell-sub">partial refund</span>' : '<span class="cell-sub">—</span>';
+  if (r.refund_window_days == null) return `<span class="cell-sub">${r.provider === 'duitku' ? `no gateway refund: ${r.disbursement_available ? 'Disbursement or ' : ''}bank transfer` : 'not known'}</span>`;
+  const left = r.refund_days_left;
+  const head = left < 0 ? tag('t-crit', 'closed: bank transfer') : left <= 7 ? tag('t-warn', `${left} day${left === 1 ? '' : 's'} left`) : esc(`${left} days left`);
+  return `${head}<div class="cell-sub">${esc(String(r.channel ?? 'QRIS').toUpperCase())} allows ${esc(String(r.refund_window_days))} days${r.partial ? ' · partial' : ''}</div>`;
+};
+/** (v1.15.0) The refund as the gateway's ledger has it (Finance's sync), and the fee the gateway keeps. */
+const gatewayLine = (r) => {
+  const bits = [];
+  if (r.gateway_refund_status) bits.push(`at the gateway: ${esc(r.gateway_refund_status)}${r.gateway_refund_fee ? ` · refund fee ${esc(fmt.money(r.gateway_refund_fee, r.currency))}` : ''}`);
+  if (r.fee_kept) bits.push(`the payment's fee (${esc(fmt.money(r.fee_kept, r.currency))}) is not returned`);
+  return bits.length ? `<div class="cell-sub">${bits.join('<br>')}</div>` : '';
+};
+
 registerView('refunds', {
   title: 'Refunds',
   icon: 'card',
@@ -42,6 +58,7 @@ registerView('refunds', {
         <option value="">Outstanding and recent</option><option value="due">Due</option><option value="processing">Processing</option>
         <option value="failed">Failed</option><option value="refunded">Refunded</option></select>`)}</div>
       <div data-note></div><div class="card" data-list></div>
+      <div class="section" data-transfers></div>
       <div class="section" data-holds></div>`;
 
     let rows = [];
@@ -53,12 +70,20 @@ registerView('refunds', {
           { label: 'Reason', render: (r) => `${esc(r.refund_reason ?? '—')}${r.session_id ? `<div class="cell-sub mono">session ${esc(String(r.session_id).slice(0, 8))}</div>` : '<div class="cell-sub">no session started</div>'}` },
           { label: 'Where', render: (r) => `${esc(r.site_name ?? '—')}<div class="cell-sub mono">${esc(r.ocpp_identity ?? '')}${r.connector_no ? ` #${esc(r.connector_no)}` : ''}</div>` },
           { label: 'Payer', render: (r) => `${esc(String(r.method ?? '').toUpperCase())}<div class="cell-sub">${r.driver_phone ? esc(r.driver_phone) : 'guest'} · <span class="mono">${esc(r.provider_ref ?? '')}</span></div>` },
-          { label: 'Status', render: (r) => `${stateTag(r.refund_state)}${r.refund_state === 'refunded' ? `<div class="cell-sub">${esc(r.refund_method === 'manual' ? 'bank transfer' : 'provider')} · <span class="mono">${esc(r.refund_ref ?? '')}</span>${r.refunded_by_name ? ` · ${esc(r.refunded_by_name)}` : ''}</div>` : ''}${r.refund_error ? `<div class="cell-sub" style="color:var(--crit)">${esc(r.refund_error)}</div>` : ''}` },
+          { label: 'Refund window', render: (r) => windowCell(r) },
+          { label: 'Status', render: (r) => `${stateTag(r.refund_state)}${gatewayLine(r)}${r.refund_state === 'refunded' ? `<div class="cell-sub">${esc(r.refund_method === 'manual' ? 'bank transfer' : r.refund_method === 'disbursement' ? 'Duitku Disbursement' : 'provider')} · <span class="mono">${esc(r.refund_ref ?? '')}</span>${r.refunded_by_name ? ` · ${esc(r.refunded_by_name)}` : ''}</div>` : ''}${r.refund_error ? `<div class="cell-sub"${r.refund_method === 'disbursement' && r.refund_state === 'processing' ? '' : ' style="color:var(--crit)"'}>${esc(r.refund_error)}</div>` : ''}` },
           {
             label: '',
-            render: (r) => canPay && r.refund_state !== 'refunded'
-              ? `<div class="row nowrap" style="gap:6px">${r.refund_state !== 'processing' ? `<button class="btn sm primary" type="button" data-pay="${esc(r.id)}">Refund via provider</button>` : ''}<button class="btn sm" type="button" data-manual="${esc(r.id)}">Record bank transfer</button></div>`
-              : '',
+            render: (r) => {
+              if (!canPay || r.refund_state === 'refunded') return '';
+              // (v1.15.0) Duitku has no refund API: a transfer through Disbursement (two people), or a bank transfer.
+              if (r.refund_state === 'processing' && r.refund_method === 'disbursement') return '<span class="cell-sub">see Transfers below</span>';
+              const open = r.refund_state !== 'processing';
+              const primary = r.provider === 'duitku'
+                ? (open && r.disbursement_available ? `<button class="btn sm primary" type="button" data-disb="${esc(r.id)}">Send via Disbursement</button>` : '')
+                : (open ? `<button class="btn sm primary" type="button" data-pay="${esc(r.id)}">Refund via provider</button>` : '');
+              return `<div class="row nowrap" style="gap:6px">${primary}<button class="btn sm" type="button" data-manual="${esc(r.id)}">Record bank transfer</button></div>`;
+            },
           },
         ],
         rows,
@@ -78,16 +103,127 @@ registerView('refunds', {
       const s = data.summary ?? {};
       $('[data-kpis]', root).innerHTML = [
         kpi('Refunds outstanding', fmt.num(s.due_count ?? 0), perCur(s, 'due_minor') + ' owed', Number(s.due_count) ? 'warn' : ''),
+        kpi('Window closing', fmt.num(s.closing_soon_count ?? 0), 'gateway refund window ends within 7 days', Number(s.closing_soon_count) ? 'warn' : ''),
         kpi('Failed', fmt.num(s.failed_count ?? 0), 'need a retry or a bank transfer', Number(s.failed_count) ? 'crit' : ''),
         kpi('Refunded, last 30 days', perCur(s, 'refunded_30d_minor'), 'paid back to drivers', 'ok'),
       ].join('');
       $('[data-note]', root).innerHTML = Number(s.due_count)
-        ? callout('warn', 'Drivers see "refund in progress" in the app until the refund is recorded here.')
+        ? callout('warn', `Drivers see "refund in progress" in the app until the refund is recorded here.${Number(s.closing_soon_count) ? ' Refunds whose gateway window closes soonest are listed first: after it closes, only a bank transfer is possible.' : ''}`)
         : '';
       draw();
     };
 
+    // (v1.15.0) Refund transfers through Duitku Disbursement: requested by one person, approved by another.
+    const XFER_TAG = {
+      awaiting_approval: ['t-warn', 'awaiting approval'], sending: ['t-info', 'sending'], sent: ['t-info', 'sent, not confirmed'],
+      succeeded: ['t-ok', 'paid'], failed: ['t-crit', 'failed'], rejected: ['t-mute', 'rejected'],
+    };
+    let transfers = [];
+    const loadTransfers = async () => {
+      const box = $('[data-transfers]', root);
+      try { transfers = (await api('/v1/refund-transfers')).transfers ?? []; } catch { box.innerHTML = ''; return; }
+      if (!transfers.length) { box.innerHTML = ''; return; }
+      const me = state.me?.user?.id;
+      const waiting = transfers.filter((t) => t.state === 'awaiting_approval').length;
+      box.innerHTML = `<div class="section-head"><h2>Transfers (Duitku Disbursement)</h2><div class="muted">Refunds of Duitku payments paid to the driver's bank account. The bank's name for the account is checked first; a second person approves each transfer.</div></div>
+        ${waiting ? callout('warn', `${fmt.num(waiting)} transfer${waiting === 1 ? '' : 's'} awaiting approval by someone other than the requester.`) : ''}
+        <div class="card" data-xferlist></div>`;
+      table($('[data-xferlist]', box), {
+        columns: [
+          { label: 'Requested', render: (t) => `${esc(fmt.time(t.requestedAt))}<div class="cell-sub">${esc(t.requestedByName ?? '—')}</div>` },
+          { label: 'Amount', num: true, render: (t) => `<b>${esc(fmt.money(t.amount, t.currency))}</b>` },
+          { label: 'Account', render: (t) => `<span class="mono">${esc(t.bankCode)} ${esc(t.accountMasked)}</span><div class="cell-sub">entered: ${esc(t.holderName)}</div><div class="cell-sub">bank: ${esc(t.checkedName ?? '—')} ${t.checkedName ? (t.namesMatch ? tag('t-ok', 'names match') : tag('t-warn', 'names differ')) : ''}</div>` },
+          { label: 'Status', render: (t) => `${tag(...(XFER_TAG[t.state] ?? ['t-mute', t.state]))}${t.approvedByName ? `<div class="cell-sub">approved by ${esc(t.approvedByName)}</div>` : ''}${t.reason ? `<div class="cell-sub">${esc(t.reason)}</div>` : ''}${t.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(t.error)}</div>` : ''}` },
+          {
+            label: '',
+            render: (t) => {
+              if (!canPay) return '';
+              if (t.state === 'awaiting_approval') {
+                const mine = t.requestedBy && t.requestedBy === me;
+                return `<div class="row nowrap" style="gap:6px">${mine ? '<span class="cell-sub">needs another person</span>' : `<button class="btn sm primary" type="button" data-approve="${esc(t.id)}">Approve and send</button>`}<button class="btn sm" type="button" data-reject="${esc(t.id)}">${mine ? 'Withdraw' : 'Reject'}</button></div>`;
+              }
+              if (t.state === 'sent') return `<button class="btn sm" type="button" data-settle="${esc(t.id)}">Settle by hand</button>`;
+              return '';
+            },
+          },
+        ],
+        rows: transfers,
+        empty: '',
+      });
+    };
+    $('[data-transfers]', root).addEventListener('click', async (ev) => {
+      const ap = ev.target.closest('[data-approve]'), rj = ev.target.closest('[data-reject]'), st = ev.target.closest('[data-settle]');
+      const t = transfers.find((x) => x.id === (ap ?? rj ?? st)?.dataset[ap ? 'approve' : rj ? 'reject' : 'settle']);
+      if (!t) return;
+      if (ap) {
+        const ok = await confirmDialog({
+          title: 'Approve and send the transfer',
+          message: `Send ${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName} (${t.bankCode} ${t.accountMasked}) through Duitku Disbursement?${t.namesMatch ? '' : ` The bank names the account ${t.checkedName ?? '—'}, not ${t.holderName}: approve only if you are sure it is the driver's.`}`,
+          confirmLabel: 'Approve and send',
+        });
+        if (!ok) return;
+        try {
+          const r = (await api(`/v1/refund-transfers/${t.id}/approve`, { method: 'POST' })).transfer;
+          toast(r.state === 'succeeded' ? 'Paid: the refund is recorded' : r.state === 'sent' ? 'Sent; its result is checked automatically' : `Not paid: ${r.error ?? r.state}`, r.state === 'failed' ? 'crit' : 'ok');
+        } catch (e) { toast(e.message, 'crit'); }
+        load(); loadTransfers();
+        return;
+      }
+      const settle = Boolean(st);
+      modal({
+        title: settle ? 'Settle a transfer by hand' : 'Reject the transfer',
+        subtitle: `${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName}`,
+        body: settle
+          ? `${callout('warn', 'Duitku has not confirmed this transfer. Check it in Duitku\'s dashboard first: marking a paid transfer as not paid lets the refund be paid twice.')}
+             <div class="form one" style="margin-top:12px">${field('Outcome', '<select name="outcome"><option value="succeeded">Paid (Duitku shows success)</option><option value="failed">Not paid (Duitku shows it failed)</option></select>')}${field('What the dashboard shows', '<input name="note" maxlength="300" autocomplete="off">')}</div>`
+          : `<div class="form one">${field('Reason', '<input name="note" maxlength="300" autocomplete="off" placeholder="e.g. the bank names someone else">')}</div>`,
+        actions: [
+          { label: 'Cancel' },
+          {
+            label: settle ? 'Settle' : 'Reject', kind: settle ? 'primary' : 'danger',
+            async onClick(ctx) {
+              const note = $('[name="note"]', ctx.body).value.trim();
+              if (!note) { $('[name="note"]', ctx.body).classList.add('invalid'); return false; }
+              try {
+                await api(`/v1/refund-transfers/${t.id}/${settle ? 'resolve' : 'reject'}`, { method: 'POST', body: settle ? { outcome: $('[name="outcome"]', ctx.body).value, note } : { reason: note } });
+                toast(settle ? 'Settled' : 'Rejected: the refund is due again', 'ok');
+                load(); loadTransfers();
+              } catch (e) { toast(e.message, 'crit'); return false; }
+            },
+          },
+        ],
+      });
+    });
+
     $('[data-list]', root).addEventListener('click', async (ev) => {
+      const disb = ev.target.closest('[data-disb]');
+      if (disb) {
+        const r = rows.find((x) => x.id === disb.dataset.disb);
+        modal({
+          title: 'Send the refund through Duitku Disbursement',
+          subtitle: `${fmt.money(r?.refund_due_minor, r?.currency)} to ${r?.driver_phone ?? 'the payer'}`,
+          body: `${callout('info', 'Enter the driver\'s bank account. Duitku checks it and returns the name the bank has; a second person then approves the transfer.')}
+            <div class="form" style="margin-top:12px">${field('Bank code', '<input name="bankCode" maxlength="12" autocomplete="off" placeholder="e.g. 014 (BCA)">')}${field('Account number', '<input name="accountNumber" inputmode="numeric" maxlength="24" autocomplete="off">')}</div>
+            <div class="form one">${field('Account holder', '<input name="holderName" maxlength="120" autocomplete="off">')}</div>`,
+          actions: [
+            { label: 'Cancel' },
+            {
+              label: 'Check and request', kind: 'primary',
+              async onClick(ctx) {
+                const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+                const body = { bankCode: v('bankCode'), accountNumber: v('accountNumber'), holderName: v('holderName') };
+                if (!body.bankCode || !body.accountNumber || !body.holderName) { for (const k of Object.keys(body)) if (!body[k]) $(`[name="${k}"]`, ctx.body).classList.add('invalid'); return false; }
+                try {
+                  const t = (await api(`/v1/refunds/${disb.dataset.disb}/disbursement`, { method: 'POST', body })).transfer;
+                  toast(t.namesMatch ? `The bank names it ${t.checkedName}. Awaiting approval.` : `The bank names it ${t.checkedName ?? '—'}, not ${t.holderName}. Awaiting approval.`, t.namesMatch ? 'ok' : 'warn');
+                  load(); loadTransfers();
+                } catch (e) { toast(e.message, 'crit'); return false; }
+              },
+            },
+          ],
+        });
+        return;
+      }
       const pay = ev.target.closest('[data-pay]');
       const manual = ev.target.closest('[data-manual]');
       if (pay) {
@@ -176,7 +312,7 @@ registerView('refunds', {
       loadHolds();
     });
     $('[data-state]', root).addEventListener('change', load);
-    $('[data-refresh]', root).addEventListener('click', () => { load(); loadHolds(); });
-    await Promise.all([load(), loadHolds()]);
+    $('[data-refresh]', root).addEventListener('click', () => { load(); loadHolds(); loadTransfers(); });
+    await Promise.all([load(), loadHolds(), loadTransfers()]);
   },
 });

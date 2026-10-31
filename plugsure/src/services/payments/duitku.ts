@@ -42,11 +42,22 @@ export interface DuitkuConfig {
   /** Where Duitku posts the callback: https://<public host>/pay/notify/<key>. */
   callbackUrl: string;
   baseUrl?: string;
-  /** Disbursement (Transfer Online), optional: the balance in Finance. */
+  /** Disbursement (Transfer Online), optional: the balance in Finance; (v1.15.0) refunds sent and accounts checked by name. */
   disbursementUserId?: string;
   disbursementEmail?: string;
   disbursementSecretKey?: string;
+  /** (v1.15.0) Limits on refunds sent through Disbursement, in rupiah: one transfer, and all transfers approved in a day. */
+  disbursementMaxPerTransfer?: string | number;
+  disbursementMaxPerDay?: string | number;
 }
+
+/** Duitku's Disbursement answer to an inquiry: the holder's name the bank has, and the id the transfer must quote. */
+export interface DisbursementInquiry { ok: boolean; accountName: string | null; disburseId: string | null; custRefNumber: string | null; responseCode: string; error: string | null }
+/** A transfer: paid ('00'), refused, or not known (a timeout or link down: asked again with inquirystatus). */
+export interface DisbursementResult { outcome: 'succeeded' | 'failed' | 'unknown'; responseCode: string; error: string | null }
+
+/** Disbursement codes that mean the result is not known yet (Duitku: TO timeout, LD link down, plus no answer). */
+const DISB_UNKNOWN = new Set(['TO', 'LD', '']);
 
 /** PlugSure's channel → Duitku's payment method code. */
 export const DUITKU_METHOD: Partial<Record<Channel, string>> = { DANA: 'DA', SHOPEEPAY: 'SA', LINKAJA: 'LA', CARD: 'VC' };
@@ -171,6 +182,94 @@ export class DuitkuProvider implements PaymentProvider {
     const b = Number(j.balance), e = Number(j.effectiveBalance);
     if (r.status >= 300 || !Number.isFinite(b)) throw new Error(`Duitku balance: ${r.status} ${j.responseCode ?? ''} ${j.responseDesc ?? r.text.slice(0, 160)}`.trim());
     return { balance: b, effective: Number.isFinite(e) ? e : b };
+  }
+
+  /** (v1.15.0) Disbursement credentials saved: refunds can be sent and accounts checked. */
+  hasDisbursement(): boolean { return Boolean(this.cfg.disbursementUserId && this.cfg.disbursementEmail && this.cfg.disbursementSecretKey); }
+  disbursementLimits(): { perTransfer: number; perDay: number } {
+    const n = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v)) : d);
+    return { perTransfer: n(this.cfg.disbursementMaxPerTransfer, 5_000_000), perDay: n(this.cfg.disbursementMaxPerDay, 25_000_000) };
+  }
+  /** Sandbox and production paths differ (inquirysandbox / transfersandbox). */
+  private disbPath(op: 'inquiry' | 'transfer') {
+    return `${this.base()}/webapi/api/disbursement/${op}${this.cfg.environment === 'production' ? '' : 'sandbox'}`;
+  }
+
+  /**
+   * (v1.15.0) Disbursement inquiry: the bank's name for the account, and a disburseId for the transfer.
+   *   POST {base}/webapi/api/disbursement/inquiry[sandbox]
+   *   { userId, amountTransfer, bankAccount, bankCode, email, purpose, timestamp, senderId, senderName,
+   *     signature = sha256(email + timestamp + bankCode + bankAccount + amountTransfer + purpose + secretKey) }
+   *   → { accountName, disburseId, custRefNumber, responseCode '00', responseDesc }
+   * Confirm the field names and signature with Duitku before live traffic (to confirm, deploy/DUITKU.md).
+   */
+  async disbursementInquiry(a: { bankCode: string; bankAccount: string; amount: number; purpose: string }): Promise<DisbursementInquiry> {
+    const { disbursementUserId: userId, disbursementEmail: email, disbursementSecretKey: secret } = this.cfg;
+    if (!userId || !email || !secret) return { ok: false, accountName: null, disburseId: null, custRefNumber: null, responseCode: '', error: 'Disbursement is not set up on the Duitku account.' };
+    const timestamp = Date.now();
+    const amountTransfer = Math.round(a.amount);
+    const purpose = a.purpose.slice(0, 40);
+    const r = await providerFetch(this.disbPath('inquiry'), {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: Number(userId), amountTransfer, bankAccount: a.bankAccount, bankCode: a.bankCode, email, purpose, timestamp,
+        senderId: Number(userId), senderName: 'PlugSure', signature: sha256(`${email}${timestamp}${a.bankCode}${a.bankAccount}${amountTransfer}${purpose}${secret}`) }),
+      timeoutMs: 20_000,
+    });
+    const j = r.body ?? {};
+    const code = String(j.responseCode ?? '');
+    if (r.status >= 300 || code !== '00') return { ok: false, accountName: null, disburseId: null, custRefNumber: null, responseCode: code, error: `${j.responseDesc ?? j.Message ?? r.text.slice(0, 160)}`.trim() || `HTTP ${r.status}` };
+    return { ok: true, accountName: j.accountName ? String(j.accountName) : null, disburseId: j.disburseId != null ? String(j.disburseId) : null, custRefNumber: j.custRefNumber != null ? String(j.custRefNumber) : null, responseCode: code, error: null };
+  }
+
+  /**
+   * (v1.15.0) The transfer, quoting the inquiry's disburseId:
+   *   POST {base}/webapi/api/disbursement/transfer[sandbox]
+   *   { disburseId, userId, email, bankCode, bankAccount, amountTransfer, accountName, custRefNumber, purpose, timestamp,
+   *     signature = sha256(email + timestamp + bankCode + bankAccount + accountName + custRefNumber + amountTransfer + purpose + disburseId + secretKey) }
+   *   → responseCode '00' paid. No answer, TO or LD: not known (asked with inquirystatus); anything else: refused.
+   */
+  async disbursementTransfer(a: { bankCode: string; bankAccount: string; amount: number; purpose: string; accountName: string; custRefNumber: string; disburseId: string }): Promise<DisbursementResult> {
+    const { disbursementUserId: userId, disbursementEmail: email, disbursementSecretKey: secret } = this.cfg;
+    if (!userId || !email || !secret) return { outcome: 'failed', responseCode: '', error: 'Disbursement is not set up on the Duitku account.' };
+    const timestamp = Date.now();
+    const amountTransfer = Math.round(a.amount);
+    const purpose = a.purpose.slice(0, 40);
+    let r;
+    try {
+      r = await providerFetch(this.disbPath('transfer'), {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ disburseId: Number(a.disburseId) || a.disburseId, userId: Number(userId), email, bankCode: a.bankCode, bankAccount: a.bankAccount, amountTransfer,
+          accountName: a.accountName, custRefNumber: a.custRefNumber, purpose, timestamp,
+          signature: sha256(`${email}${timestamp}${a.bankCode}${a.bankAccount}${a.accountName}${a.custRefNumber}${amountTransfer}${purpose}${a.disburseId}${secret}`) }),
+        timeoutMs: 30_000,
+      });
+    } catch (e) {
+      return { outcome: 'unknown', responseCode: '', error: `no answer from Duitku (${(e as Error).message})` };
+    }
+    const j = r.body ?? {};
+    const code = String(j.responseCode ?? '');
+    if (code === '00') return { outcome: 'succeeded', responseCode: code, error: null };
+    if (r.status >= 500 || DISB_UNKNOWN.has(code)) return { outcome: 'unknown', responseCode: code, error: `${j.responseDesc ?? `HTTP ${r.status}`}` };
+    return { outcome: 'failed', responseCode: code, error: `${j.responseDesc ?? j.Message ?? r.text.slice(0, 160)}`.trim() || `HTTP ${r.status}` };
+  }
+
+  /**
+   * (v1.15.0) Where a transfer stands: POST {base}/webapi/api/disbursement/inquirystatus
+   * { disburseId, userId, email, timestamp, signature = sha256(email + timestamp + disburseId + secretKey) } → '00' paid.
+   * Only '00' is taken as an outcome: anything else stays not known, for a person to settle after checking Duitku's
+   * dashboard (a transfer wrongly taken as failed could be paid twice).
+   */
+  async disbursementStatus(disburseId: string): Promise<DisbursementResult> {
+    const { disbursementUserId: userId, disbursementEmail: email, disbursementSecretKey: secret } = this.cfg;
+    if (!userId || !email || !secret) return { outcome: 'unknown', responseCode: '', error: 'Disbursement is not set up on the Duitku account.' };
+    const timestamp = Date.now();
+    const r = await providerFetch(`${this.base()}/webapi/api/disbursement/inquirystatus`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ disburseId: Number(disburseId) || disburseId, userId: Number(userId), email, timestamp, signature: sha256(`${email}${timestamp}${disburseId}${secret}`) }),
+      timeoutMs: 15_000,
+    });
+    const code = String(r.body?.responseCode ?? '');
+    return code === '00' ? { outcome: 'succeeded', responseCode: code, error: null } : { outcome: 'unknown', responseCode: code, error: String(r.body?.responseDesc ?? `HTTP ${r.status}`) };
   }
 
   async testConnection() {

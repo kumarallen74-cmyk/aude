@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.14.0";
+export const API_VERSION = "1.15.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -2348,6 +2348,13 @@ export interface OwnerBankAccount {
   /** ••••7890 */
   accountMasked: string;
   updatedAt?: string;
+  /** (v1.15.0) The last name check (Duitku Disbursement inquiry); cleared when the account, bank code or holder changes. */
+  nameCheck?: {
+    status?: "matched" | "mismatch" | "failed";
+    /** The holder's name the bank returned. */
+    bankName?: string | null;
+    checkedAt?: string;
+  } | null;
 }
 
 export interface OwnerInput {
@@ -2703,7 +2710,8 @@ export interface RefundRow {
   refund_due_minor?: number | null;
   refunded_minor?: number | null;
   refund_reason?: string | null;
-  refund_method?: "provider" | "manual" | null;
+  /** disbursement (v1.15.0): sent through Duitku Disbursement. */
+  refund_method?: "provider" | "manual" | "disbursement" | null;
   refund_ref?: string | null;
   refund_error?: string | null;
   refund_requested_at?: string | null;
@@ -2719,6 +2727,21 @@ export interface RefundRow {
   connector_no?: number | null;
   driver_phone?: string | null;
   refunded_by_name?: string | null;
+  channel?: string | null;
+  /** (v1.15.0) Days after the payment the gateway refunds it to the payer's method (Xendit e-wallets and QRIS); null: no gateway refund, or not known. */
+  refund_window_days?: number | null;
+  /** (v1.15.0) What is left of the window; negative: closed, a bank transfer only. Null once refunded. */
+  refund_days_left?: number | null;
+  /** (v1.15.0) Less than the payment is refunded. */
+  partial?: boolean;
+  /** (v1.15.0) The refund in Finance's ledger of the gateway: success, pending, failed. */
+  gateway_refund_status?: string | null;
+  /** (v1.15.0) The refund fee and VAT the gateway charged, from its ledger. */
+  gateway_refund_fee?: number | null;
+  /** (v1.15.0) The payment's own fee and VAT, which Xendit does not return on a partial refund or one made more than 24 hours after the payment. */
+  fee_kept?: number | null;
+  /** (v1.15.0) A Duitku payment whose account has Disbursement: the refund can be sent with POST /v1/refunds/{id}/disbursement. */
+  disbursement_available?: boolean;
   /** Deprecated: the v1.6 name of `refund_due_minor`, present while the amount is in IDR. */
   refund_due_idr?: number | null;
   /** Deprecated: the v1.6 name of `refunded_minor`, present while the amount is in IDR. */
@@ -2733,6 +2756,8 @@ export interface RefundSummary {
   due_minor: number;
   failed_count: number;
   refunded_30d_minor: number;
+  /** (v1.15.0) Outstanding refunds whose gateway refund window closes within 7 days. */
+  closing_soon_count?: number;
   by_currency?: {
     currency?: string;
     due_minor?: number;
@@ -2746,6 +2771,33 @@ export interface RefundSummary {
   due_idr?: number;
   /** Deprecated: the v1.6 name of `refunded_30d_minor`, present while the amount is in IDR. */
   refunded_30d_idr?: number;
+}
+
+/** (v1.15.0) A refund paid to the driver's bank account through Duitku Disbursement, approved by a second person. */
+export interface RefundTransfer {
+  id: string;
+  paymentId: string;
+  /** sent: accepted, the result not confirmed yet (checked automatically). */
+  state: "awaiting_approval" | "sending" | "sent" | "succeeded" | "failed" | "rejected";
+  amount: number;
+  currency: string;
+  bankCode: string;
+  accountMasked: string;
+  /** The name entered. */
+  holderName: string;
+  /** The holder's name the bank returned (inquiry). */
+  checkedName?: string | null;
+  namesMatch: boolean;
+  requestedBy?: string | null;
+  requestedByName?: string | null;
+  requestedAt: string;
+  approvedBy?: string | null;
+  approvedByName?: string | null;
+  approvedAt?: string | null;
+  reason?: string | null;
+  /** Duitku's responseCode (00 paid). */
+  responseCode?: string | null;
+  error?: string | null;
 }
 
 export interface RoamingAbroadCdr {
@@ -3763,6 +3815,17 @@ export interface Statement {
   sites: StatementSiteLine[];
   totals: StatementTotals;
   warnings: string[];
+  /** (v1.15.0) How the QRIS MDR was arrived at, public sites: the gateway's actual fee and VAT on it where Finance has the payment in its ledger, else PlugSure's estimate. Absent on statements finalised before v1.15.0 (estimated). */
+  mdrBasis?: {
+    actualMinor?: number;
+    estimatedMinor?: number;
+    actualPayments?: number;
+    estimatedPayments?: number;
+    /** Deprecated: the v1.6 name of `actualMinor`, present while the amount is in IDR. */
+    actualIdr?: number;
+    /** Deprecated: the v1.6 name of `estimatedMinor`, present while the amount is in IDR. */
+    estimatedIdr?: number;
+  };
   org?: {
     id?: string;
     name?: string;
@@ -4690,7 +4753,7 @@ export type Event_refund_completed = {
     paymentIntentId: string;
     amountMinor: number;
     currency: "IDR" | "MYR" | "SGD";
-    method: "provider" | "manual";
+    method: "provider" | "manual" | "disbursement";
     reference: string;
     /** Deprecated: the v1.6 name of `amountMinor`, present while the amount is in IDR. */
     amountIdr?: number;
@@ -4872,6 +4935,10 @@ export type ApplyPaymentPlugSureMissedResponse = {
   outcome: string;
 };
 
+export type ApproveAndSendRefundTransferResponse = {
+  transfer: RefundTransfer;
+};
+
 export type ArchiveFirmwareImageResponse = {
   ok: true;
 };
@@ -5036,6 +5103,15 @@ export type CheckAndroidNotificationsServiceAccountWithGoogleAgainResponse = Dri
 export type CheckChargingProfileDriftResponse = {
   checked: number;
   drift: number;
+};
+
+export type CheckSiteOwnerBankAccountByNameResponse = {
+  check: {
+    status?: "matched" | "mismatch" | "failed";
+    bankName?: string | null;
+    error?: string | null;
+  };
+  account: OwnerBankAccount;
 };
 
 export type ClearReviewAndBillSessionBody = {
@@ -6216,6 +6292,14 @@ export type PayablesResponse = {
     finalisedAt?: string;
     status?: "due" | "partial" | "paid";
   }[];
+  hubPositions?: {
+    id?: string;
+    counterparty?: string | null;
+    outstanding?: number;
+    currency?: string;
+    dueDate?: string;
+    status?: string;
+  }[];
 };
 
 export type PaymentsAccountsWithFinanceDataResponse = {
@@ -6243,6 +6327,31 @@ export type PaymentsOnMyPositionsResponse = {
 export type PaymentsRecordedAgainstStatementResponse = {
   statement: StatementDue;
   payments: StatementPayment[];
+};
+
+export type PeriodByOperatorAndSiteResponse = {
+  bySite: {
+    operator?: string | null;
+    site?: string | null;
+    payments?: number;
+    collected?: number;
+    fees?: number;
+    vat?: number;
+    refunds?: number;
+    net?: number;
+  }[];
+  byOperator: {
+    orgId?: string | null;
+    operator?: string | null;
+    payments?: number;
+    collected?: number;
+    fees?: number;
+    vat?: number;
+    refunds?: number;
+    net?: number;
+    ownerShares?: number;
+    ownerSharesPaid?: number;
+  }[];
 };
 
 export type PlugChargeExchangeLogResponse = {
@@ -6324,6 +6433,28 @@ export type ReceivablesResponse = {
     dueDate?: string;
     account?: string | null;
     overdue?: boolean;
+  }[];
+  /** (v1.15.0) Post-pay sessions on this account not charged yet (and how many failed). */
+  postpay?: {
+    count?: number;
+    amount?: number;
+    failed?: number;
+  };
+  hubFeeInvoices?: {
+    number?: string;
+    member?: string | null;
+    total?: number;
+    currency?: string;
+    dueDate?: string;
+    overdue?: boolean;
+  }[];
+  hubPositions?: {
+    id?: string;
+    counterparty?: string | null;
+    outstanding?: number;
+    currency?: string;
+    dueDate?: string;
+    status?: string;
   }[];
 };
 
@@ -6446,6 +6577,10 @@ export type RecordTaxRegistrationInCountryBody = {
   rateBps?: number | null;
 };
 
+export type RefundTransfersThroughDuitkuDisbursementResponse = {
+  transfers: RefundTransfer[];
+};
+
 export type RegisterChargePointBody = {
   ocppIdentity: string;
   /** The site the charger is installed at. */
@@ -6491,6 +6626,14 @@ export type RejectHeldPartnerChargeRecordBody = {
 export type RejectHeldPartnerChargeRecordResponse = {
   id: string;
   status: "rejected";
+};
+
+export type RejectRefundTransferBeforeItIsSentBody = {
+  reason: string;
+};
+
+export type RejectRefundTransferBeforeItIsSentResponse = {
+  transfer: RefundTransfer;
 };
 
 export type RemoveAndroidNotificationsServiceAccountResponse = {
@@ -6578,6 +6721,17 @@ export type ReplyToWhatsAppCustomerBody = {
 
 export type ReplyToWhatsAppCustomerResponse = {
   ok: boolean;
+};
+
+export type RequestRefundTransferThroughDuitkuDisbursementBody = {
+  /** Duitku's bank code (e.g. 014 BCA). */
+  bankCode: string;
+  accountNumber: string;
+  holderName: string;
+};
+
+export type RequestRefundTransferThroughDuitkuDisbursementResponse = {
+  transfer: RefundTransfer;
 };
 
 export type ReSendEverythingToPartnerResponse = {
@@ -6905,6 +7059,15 @@ export type SetSitePowerBudgetBody = {
   curtailed?: boolean;
   curtailedReason?: string;
   applyNow?: boolean;
+};
+
+export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody = {
+  outcome: "succeeded" | "failed";
+  note: string;
+};
+
+export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse = {
+  transfer: RefundTransfer;
 };
 
 export type SetVariableSetVariablesBody = {
@@ -7536,6 +7699,20 @@ export class Operations {
   }
 
   /**
+   * Approve and send a refund transfer
+   *
+   * (v1.15.0) By a second person with payment:write (never the requester: 403). Within the limits (one transfer; all approved that day), a fresh inquiry is made (the bank's name must not have changed) and the transfer sent, once. succeeded: the refund is recorded refunded (method disbursement); failed: due again; sent: not confirmed yet, checked automatically. Audited as refund.transfer_approved.
+   *
+   * `POST /v1/refund-transfers/{tid}/approve` · needs `payment:write`
+   */
+  approveAndSendRefundTransfer(params: {
+    /** The transfer id. */
+    tid: string;
+  }, options?: RequestOptions): Promise<ApproveAndSendRefundTransferResponse> {
+    return this.transport.request<ApproveAndSendRefundTransferResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/approve", pathParams: { tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
    * Archive a firmware image
    *
    * Archives the image: new campaigns cannot use it and an uploaded file stops being served to chargers. Audited as firmware.image_archived.
@@ -7924,6 +8101,20 @@ export class Operations {
    */
   checkIOSNotificationsKeyWithAppleAgain(options?: RequestOptions): Promise<DriverAppView> {
     return this.transport.request<DriverAppView>({ method: "POST", path: "/v1/driver-app/apns/check", accept: "json" }, options);
+  }
+
+  /**
+   * Check a site owner's bank account by name
+   *
+   * (v1.15.0) Duitku Disbursement's inquiry (the operator's Duitku account, else the platform's): the holder's name the bank has, compared with the name saved. Nothing is transferred. Needs the bank code. payment:write; audited as finance.owner_bank_account_checked.
+   *
+   * `POST /v1/finance/owners/{oid}/bank-account/check` · needs `payment:write`
+   */
+  checkSiteOwnerBankAccountByName(params: {
+    /** The site owner id. */
+    oid: string;
+  }, options?: RequestOptions): Promise<CheckSiteOwnerBankAccountByNameResponse> {
+    return this.transport.request<CheckSiteOwnerBankAccountByNameResponse>({ method: "POST", path: "/v1/finance/owners/{oid}/bank-account/check", pathParams: { oid: params.oid }, accept: "json" }, options);
   }
 
   /**
@@ -9959,7 +10150,7 @@ export class Operations {
   /**
    * List refunds owed to drivers
    *
-   * Prepaid payments in the refund flow (due, processing, refunded, failed) with a summary: amount and count outstanding, failed count and amount refunded in the last 30 days. Outstanding refunds come first; at most 500 rows.
+   * Prepaid payments in the refund flow (due, processing, refunded, failed) with a summary: amount and count outstanding, failed count and amount refunded in the last 30 days. Outstanding refunds come first, those whose gateway refund window closes soonest leading (v1.15.0); at most 500 rows.
    *
    * `GET /v1/refunds` · needs `payment:read`
    */
@@ -10367,7 +10558,7 @@ export class Operations {
   /**
    * Payables
    *
-   * Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).
+   * Refunds due on payments this account took (with the gateway's refund window and days left), (v1.15.0) for an operator's own account the PlugSure Hub settlement positions it owes, and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).
    *
    * `GET /v1/finance/accounts/{id}/payables` · needs `payment:read`
    */
@@ -10430,6 +10621,26 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<RefundOutcome> {
     return this.transport.request<RefundOutcome>({ method: "POST", path: "/v1/refunds/{id}/process", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Period by operator and site
+   *
+   * (v1.15.0) The accountant's month close: collected, payments, fees, VAT on fees, refunds and net from the gateway's ledger, attributed through PlugSure's payment to its session's site and operator (rows without one under site null); per operator also the site owners' shares on statements finalised for months starting in the period, and what was paid against them.
+   *
+   * `GET /v1/finance/accounts/{id}/breakdown` · needs `payment:read`
+   */
+  periodByOperatorAndSite(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<PeriodByOperatorAndSiteResponse> {
+    return this.transport.request<PeriodByOperatorAndSiteResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/breakdown", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -10638,7 +10849,7 @@ export class Operations {
   /**
    * Receivables
    *
-   * Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator's own account, its fleet invoices issued and not paid.
+   * Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator's own account, its fleet invoices issued and not paid. (v1.15.0) Also post-pay sessions not charged yet; for the platform's account PlugSure Hub's unpaid fee invoices, for an operator's the Hub settlement positions it is owed (hubPositions).
    *
    * `GET /v1/finance/accounts/{id}/receivables` · needs `payment:read`
    */
@@ -10780,6 +10991,22 @@ export class Operations {
   }
 
   /**
+   * Refund transfers through Duitku Disbursement
+   *
+   * (v1.15.0) The organisation's refund transfers, newest first (at most 300); open=true: only those not settled (awaiting approval, sending, sent).
+   *
+   * `GET /v1/refund-transfers` · needs `payment:read`
+   */
+  refundTransfersThroughDuitkuDisbursement(params?: {
+    query?: {
+      /** Only open transfers. */
+      open?: "true";
+    };
+  }, options?: RequestOptions): Promise<RefundTransfersThroughDuitkuDisbursementResponse> {
+    return this.transport.request<RefundTransfersThroughDuitkuDisbursementResponse>({ method: "GET", path: "/v1/refund-transfers", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Register a charge point
    *
    * Pre-registers a charge point before it dials in, optionally with its hardware profile and EVSE/connector topology. It is created in `pending_adoption`: it may connect but is answered Pending until activated. Returns 409 when the identity is already registered and 422 when the topology is invalid. Audited as charge_point.registered.
@@ -10845,6 +11072,21 @@ export class Operations {
     body?: RejectHeldPartnerChargeRecordBody;
   }, options?: RequestOptions): Promise<RejectHeldPartnerChargeRecordResponse> {
     return this.transport.request<RejectHeldPartnerChargeRecordResponse>({ method: "POST", path: "/v1/roaming/cdrs/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Reject a refund transfer before it is sent
+   *
+   * (v1.15.0) Awaiting approval only, with a reason (the requester withdrawing it, or another person refusing it). The refund is due again. Audited as refund.transfer_rejected.
+   *
+   * `POST /v1/refund-transfers/{tid}/reject` · needs `payment:write`
+   */
+  rejectRefundTransferBeforeItIsSent(params: {
+    /** The transfer id. */
+    tid: string;
+    body: RejectRefundTransferBeforeItIsSentBody;
+  }, options?: RequestOptions): Promise<RejectRefundTransferBeforeItIsSentResponse> {
+    return this.transport.request<RejectRefundTransferBeforeItIsSentResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/reject", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11133,6 +11375,21 @@ export class Operations {
     body?: DiagnosticsRequestBody;
   }, options?: RequestOptions): Promise<DiagnosticsRequested> {
     return this.transport.request<DiagnosticsRequested>({ method: "POST", path: "/v1/charge-points/{identity}/diagnostics", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Request a refund transfer through Duitku Disbursement
+   *
+   * (v1.15.0) For a due (or failed) refund of a Duitku payment whose account has Disbursement: the driver's bank account is checked by Duitku's inquiry (the holder's name the bank has) and the transfer waits for a SECOND person's approval. The refund is held (processing) meanwhile. Refused above the largest transfer allowed. payment:write; audited as refund.transfer_requested.
+   *
+   * `POST /v1/refunds/{id}/disbursement` · needs `payment:write`
+   */
+  requestRefundTransferThroughDuitkuDisbursement(params: {
+    /** The payment id. */
+    id: string;
+    body: RequestRefundTransferThroughDuitkuDisbursementBody;
+  }, options?: RequestOptions): Promise<RequestRefundTransferThroughDuitkuDisbursementResponse> {
+    return this.transport.request<RequestRefundTransferThroughDuitkuDisbursementResponse>({ method: "POST", path: "/v1/refunds/{id}/disbursement", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11653,6 +11910,21 @@ export class Operations {
     body: SetSitePowerBudgetBody;
   }, options?: RequestOptions): Promise<PowerSiteBudget> {
     return this.transport.request<PowerSiteBudget>({ method: "PUT", path: "/v1/sites/{siteId}/power/budget", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Settle a refund transfer whose result Duitku never confirmed
+   *
+   * (v1.15.0) For a transfer sent (or stuck sending) without a confirmed result, after checking Duitku's dashboard: succeeded records the refund refunded; failed makes it due again. Audited as refund.transfer_resolved.
+   *
+   * `POST /v1/refund-transfers/{tid}/resolve` · needs `payment:write`
+   */
+  settleRefundTransferWhoseResultDuitkuNeverConfirmed(params: {
+    /** The transfer id. */
+    tid: string;
+    body: SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody;
+  }, options?: RequestOptions): Promise<SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse> {
+    return this.transport.request<SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/resolve", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

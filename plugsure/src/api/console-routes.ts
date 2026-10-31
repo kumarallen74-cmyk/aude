@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { disbursementAvailable } from '../services/refund-transfers.js';
 import { limitParam, offsetParam } from './paging.js';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -522,7 +523,9 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
     assertCan(req.principal, { permission: 'payment:read' });
     const q = (req.query ?? {}) as Record<string, string>;
     const [summary, rows] = await Promise.all([refunds.refundSummary(req.principal.orgId), refunds.listRefunds(req.principal.orgId, q.state)]);
-    return { summary, rows };
+    // (v1.15.0) Duitku payments whose account has Disbursement: the refund can be sent from here (two people).
+    const disb = await disbursementAvailable(rows.filter((r: any) => r.provider === 'duitku' && r.refund_state !== 'refunded').map((r: any) => r.id));
+    return { summary, rows: rows.map((r: any) => ({ ...r, disbursement_available: disb.has(r.id) })) };
   });
 
   app.post('/v1/refunds/:id/process', async (req, reply) => {
