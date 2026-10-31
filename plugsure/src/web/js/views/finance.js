@@ -15,6 +15,9 @@ import { formatMoney, LEGACY_CURRENCY, CURRENCIES } from '../money.js';
  *   Reconciliation  differences between the gateway and PlugSure: apply a missed payment, or resolve with a note
  *   Bank            (v1.18.0) the bank's statement (CSV) matched to gateway payouts, owner payouts and manual refunds
  *   Tax             (v1.18.0) PPh 23 withheld on the gateway's fees and PlugSure's fee; the platform e-Faktur
+ *   Forecast        (v1.19.0) the next 30/60/90 days in and out, the running position and the first shortfall
+ *   (v1.19.0) Fees: the fee audit against the contracted rates; Settings: the rates and the accounting software export;
+ *   Payables: owners' bank detail changes to approve
  *
  * The period and the account apply to every tab; exports (CSV, Excel, PDF) cover the period. Every value from the
  * API is escaped before it reaches markup.
@@ -635,6 +638,156 @@ async function taxSection(el, canWrite, year = new Date().getFullYear()) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.19.0) forecast, fee audit, accounting export, owners' bank changes
+
+const FLOW_LABEL = { settlement: 'Settlement', fleet_invoice: 'Fleet invoice', hub_in: 'Hub (in)', postpay: 'Post-pay', refund: 'Refund', owner_payout: 'Owner share', platform_statement: 'PlugSure statement', hub_out: 'Hub (out)' };
+
+/** The running position as a small line chart (an area under zero shaded). */
+function positionChart(series) {
+  if (!series.length) return '';
+  const W = 720, H = 140, pad = 6;
+  const ys = series.map((d) => d.position);
+  const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
+  const x = (i) => pad + (i * (W - 2 * pad)) / Math.max(1, series.length - 1);
+  const y = (v) => H - pad - ((v - lo) * (H - 2 * pad)) / Math.max(1, hi - lo);
+  const pts = series.map((d, i) => `${x(i).toFixed(1)},${y(d.position).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="Position by day">
+    <line x1="${pad}" x2="${W - pad}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--line)" stroke-dasharray="4 4"/>
+    ${lo < 0 ? `<rect x="${pad}" y="${y(0).toFixed(1)}" width="${W - 2 * pad}" height="${(y(lo) - y(0)).toFixed(1)}" fill="var(--crit)" opacity="0.07"/>` : ''}
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>`;
+}
+
+async function forecastSection(el, base, label) {
+  const days = el.dataset.days ?? '30', terms = el.dataset.terms ?? '14', run = el.dataset.run === 'true';
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let f;
+  try { f = await api(`${base}/forecast?days=${days}&termsDays=${terms}&runRate=${run}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const o = f.opening;
+  el.innerHTML = `<div class="filters" style="margin-top:0">
+      ${field('Horizon', `<select data-fdays>${[30, 60, 90].map((d) => `<option value="${d}"${String(d) === days ? ' selected' : ''}>${d} days</option>`).join('')}</select>`)}
+      ${field('Statement terms', `<input data-fterms type="number" min="0" max="120" value="${esc(terms)}" style="width:90px">`, { help: 'days from finalisation' })}
+      <label class="check" style="align-self:flex-end"><input type="checkbox" data-frun${run ? ' checked' : ''}><span>Add the run rate (estimate)</span></label>
+      <div class="row" style="align-self:flex-end"><button class="btn" type="button" data-fcsv>${icon('download')} CSV</button></div></div>
+    ${f.shortfall ? callout('crit', `<b>Shortfall on ${esc(fmt.date(`${f.shortfall.day}T12:00:00Z`))}</b>: the position goes to ${esc(rp(f.shortfall.position))}. Collect what is owed or move a payout.`) : callout('ok', `No shortfall in the next ${f.days} days on what PlugSure knows of; the lowest point is ${esc(rp(f.lowest.position))} on ${esc(fmt.date(`${f.lowest.day}T12:00:00Z`))}.`)}
+    <div class="grid k4">${kpi('Opening', esc(rp(o.total)), esc([o.gateway != null ? `${label} ${rp(o.gateway)}` : `${label} balance unknown`, o.bank != null ? `bank ${rp(o.bank)} (${o.bankAsOf})` : 'no bank statement uploaded'].join(' · ')))}
+      ${kpi('In', esc(rp(f.totals.in)), f.runRate ? esc(`+ ${rp(f.totals.estimate)} estimated`) : 'committed')}
+      ${kpi('Out', esc(rp(-f.totals.out)), 'refunds, owner shares, statements')}
+      ${kpi(`In ${f.days} days`, esc(rp(f.closing)), f.runRate ? 'with the run rate' : 'committed only', f.closing < 0 ? 'crit' : '')}</div>
+    <div class="card section"><header><h3>Position by day</h3></header><div class="body">${positionChart(f.series)}</div></div>
+    <div class="card section"><header><h3>Flows</h3></header><div data-flows></div></div>
+    <p class="cell-sub">A forecast of what PlugSure knows: settlements the gateway expects, invoices and statements by their due dates. Payments not made yet are only in the run rate, an estimate from the last 28 days.</p>`;
+  table($('[data-flows]', el), {
+    columns: [
+      { label: 'Day', render: (x) => esc(fmt.date(`${x.day}T12:00:00Z`)) },
+      { label: 'What', render: (x) => `${tag(x.amount < 0 ? 't-warn' : 't-ok', FLOW_LABEL[x.kind] ?? x.kind)}<div class="cell-sub">${esc(x.label)}</div>` },
+      { label: 'Amount', num: true, render: (x) => `<b style="color:${x.amount < 0 ? 'var(--crit)' : 'inherit'}">${esc(rp(x.amount))}</b>` },
+      { label: 'Position', num: true, render: (x) => esc(rp(f.series.find((d) => d.day === x.day)?.position ?? 0)) },
+    ],
+    rows: f.flows, empty: 'Nothing due in or out in this period.',
+  });
+  const redo = () => forecastSection(el, base, label);
+  $('[data-fdays]', el).addEventListener('change', (e) => { el.dataset.days = e.target.value; redo(); });
+  $('[data-fterms]', el).addEventListener('change', (e) => { el.dataset.terms = e.target.value; redo(); });
+  $('[data-frun]', el).addEventListener('change', (e) => { el.dataset.run = String(e.target.checked); redo(); });
+  $('[data-fcsv]', el).addEventListener('click', async () => {
+    try { const res = await api(`${base}/forecast?days=${days}&termsDays=${terms}&runRate=${run}&format=csv`, { raw: true }); download(`plugsure-forecast-${f.from}-${f.days}d.csv`, await res.blob()); } catch (err) { toast(err.message, 'crit'); }
+  });
+}
+
+async function feeAuditSection(el, base, per, label) {
+  let r;
+  try { r = await api(`${base}/fee-audit?${per}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  el.innerHTML = `<div class="card"><header><h3>Fee audit</h3>${r.rated ? `<button class="btn sm right" type="button" data-fadl>${icon('download')} Claim (CSV)</button>` : ''}</header>
+    <div class="body">${!r.rated ? callout('info', `Enter the rates you agreed with ${esc(label)} under <b>Settings → Contracted rates</b>: every fee is then checked against them.`)
+      : r.totals.overcharge > 0 ? callout('warn', `<b>${esc(rp(r.totals.overcharge))} charged above the agreed rates</b> on ${esc(fmt.num(r.totals.overcharged))} payment${r.totals.overcharged === 1 ? '' : 's'} in this period. Download the claim for ${esc(label)}'s account manager.`)
+        : callout('ok', 'Every fee in this period is within the agreed rates.')}
+      ${r.unrated.length && r.rated ? `<p class="cell-sub">No agreed rate for ${r.unrated.map((m) => `<span class="mono">${esc(m)}</span>`).join(', ')}: not checked.</p>` : ''}</div>
+    <div data-fa></div></div>`;
+  table($('[data-fa]', el), {
+    columns: [
+      { label: 'Month', render: (x) => esc(x.month) },
+      { label: 'Method', render: (x) => `<span class="mono">${esc(x.method)}</span>${x.agreed ? `<div class="cell-sub">${esc(`${x.agreed.pct}%${x.agreed.fixed ? ` + ${rp(x.agreed.fixed)}` : ''}${x.agreed.freeUpTo ? `, free up to ${rp(x.agreed.freeUpTo)}` : ''}`)}</div>` : '<div class="cell-sub">no agreed rate</div>'}` },
+      { label: 'Payments', num: true, render: (x) => esc(fmt.num(x.payments)) },
+      { label: 'Charged', num: true, render: (x) => esc(rp(x.charged)) },
+      { label: 'Agreed', num: true, render: (x) => (x.expected == null ? '<span class="cell-sub">—</span>' : esc(rp(x.expected))) },
+      { label: 'Overcharge', num: true, render: (x) => (x.over > 0 ? `<b style="color:var(--crit)">${esc(rp(x.over))}</b><div class="cell-sub">${esc(fmt.num(x.overCount))} payment${x.overCount === 1 ? '' : 's'}</div>` : '<span class="cell-sub">—</span>') },
+    ],
+    rows: r.byMonth, empty: 'No payments in this period.',
+  });
+  $('[data-fadl]', el)?.addEventListener('click', async () => {
+    try { const res = await api(`${base}/fee-audit?${per}&format=csv`, { raw: true }); download('plugsure-fee-audit.csv', await res.blob()); } catch (err) { toast(err.message, 'crit'); }
+  });
+}
+
+const RATE_METHODS = ['QRIS', 'DANA', 'OVO', 'SHOPEEPAY', 'LINKAJA', 'GOPAY', 'CARD', 'VA'];
+
+async function accountingSection(el, base, canWrite, pkgSaved) {
+  let r;
+  try { r = await api(`${base}/accounting-exports`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const pkg = pkgSaved ?? r.package ?? 'generic';
+  el.innerHTML = `<div class="card"><header><h3>Accounting software</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">A closed month's journal as your package's import file, with your chart of accounts. Check the first import against the package's template.</p>
+      <div class="filters" style="margin-top:0">${field('Package', `<select data-apkg${canWrite ? '' : ' disabled'}>${r.packages.map((p) => `<option value="${esc(p.id)}"${p.id === pkg ? ' selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`)}</div></div>
+    <div data-amonths></div></div>`;
+  table($('[data-amonths]', el), {
+    columns: [
+      { label: 'Month', render: (m) => esc(m.month) },
+      { label: 'In the books', render: (m) => (m.exported ? `${tag('t-ok', 'exported')}<div class="cell-sub">${esc(fmt.time(m.lastAt))} · ${esc(r.packages.find((p) => p.id === m.lastPackage)?.label ?? m.lastPackage)}</div>` : tag('t-mute', 'not yet')) },
+      { label: '', render: (m) => `<button class="btn sm${m.exported ? '' : ' primary'}" type="button" data-aexp="${esc(m.month)}">${icon('download')} Export</button>` },
+    ],
+    rows: r.months, empty: '',
+  });
+  $('[data-apkg]', el).addEventListener('change', async (e) => {
+    try { await api(`${base}/settings`, { method: 'PUT', body: { accountingPackage: e.target.value } }); toast('Package saved.', 'ok'); } catch (err) { toast(err.message, 'crit'); }
+  });
+  $('[data-amonths]', el).addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-aexp]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const res = await api(`${base}/accounting-exports`, { method: 'POST', body: { month: b.dataset.aexp, package: $('[data-apkg]', el).value }, raw: true });
+      const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `plugsure-${b.dataset.aexp}.csv`;
+      download(name, await res.blob());
+      accountingSection(el, base, canWrite, $('[data-apkg]', el).value);
+    } catch (err) { toast(err.message, 'crit'); b.disabled = false; }
+  });
+}
+
+/** Payables: site owners' requests (from their portal) to change their bank details. */
+async function bankRequestsSection(el, canWrite) {
+  let list = [];
+  try { list = (await api('/v1/finance/owner-bank-requests')).requests ?? []; } catch { el.innerHTML = ''; return; }
+  if (!list.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="card"><header><h3>Bank detail changes from owners</h3></header><div class="body">${callout('warn', 'Confirm a change with the owner by phone before approving it: changed bank details are how payouts get stolen.')}</div><div data-br></div></div>`;
+  table($('[data-br]', el), {
+    columns: [
+      { label: 'Owner', render: (x) => `${esc(x.owner)}<div class="cell-sub">${esc(fmt.time(x.requestedAt))} · ${esc(x.requestedBy ?? '')}</div>` },
+      { label: 'On file', render: (x) => (x.current ? `${esc(x.current.bankName)} <span class="mono">${esc(x.current.accountMasked)}</span><div class="cell-sub">${esc(x.current.holderName)}</div>` : '<span class="cell-sub">none</span>') },
+      { label: 'Requested', render: (x) => `<b>${esc(x.bankName)}</b> ${x.bankCode ? `<span class="mono">${esc(x.bankCode)}</span> ` : ''}<span class="mono">${esc(x.accountMasked)}</span><div class="cell-sub">${esc(x.holderName)}${x.note ? ` · ${esc(x.note)}` : ''}</div>` },
+      { label: '', render: (x) => (canWrite ? `<div class="row nowrap" style="gap:6px"><button class="btn sm primary" type="button" data-bra="${esc(x.id)}">Approve</button><button class="btn sm" type="button" data-brr="${esc(x.id)}">Reject</button></div>` : '') },
+    ],
+    rows: list, empty: '',
+  });
+  $('[data-br]', el).addEventListener('click', (e) => {
+    const ap = e.target.closest('[data-bra]'), rj = e.target.closest('[data-brr]');
+    if (!ap && !rj) return;
+    const x = list.find((r) => r.id === (ap ?? rj).dataset[ap ? 'bra' : 'brr']);
+    modal({
+      title: ap ? 'Approve the new bank details' : 'Reject the change',
+      subtitle: `${x.owner}: ${x.bankName} ${x.accountMasked} (${x.holderName})`,
+      body: `${ap ? callout('warn', 'Payouts will go to this account from now on.') : ''}<div class="form one">${field(ap ? 'How you confirmed it' : 'Reason (the owner sees it)', '<input name="note" maxlength="300">', { opt: Boolean(ap) })}</div>`,
+      actions: [{ label: 'Cancel' }, {
+        label: ap ? 'Approve' : 'Reject', kind: ap ? 'primary' : 'danger',
+        async onClick(ctx) {
+          const note = $('[name="note"]', ctx.body).value.trim();
+          if (!ap && !note) { $('[name="note"]', ctx.body).classList.add('invalid'); return false; }
+          try { await api(`/v1/finance/owner-bank-requests/${x.id}/${ap ? 'approve' : 'reject'}`, { method: 'POST', body: { note: note || undefined } }); toast(ap ? 'Approved: the account on file is replaced.' : 'Rejected.', 'ok'); bankRequestsSection(el, canWrite); } catch (err) { toast(err.message, 'crit'); return false; }
+        },
+      }],
+    });
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -647,7 +800,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -832,6 +985,7 @@ registerView('finance', {
         <div class="grid k4">${kpi('Refunds due', esc(rp(r.refunds.reduce((a, x) => a + x.amount, 0))), esc(`${r.refunds.length} payments`), r.refunds.length ? 'warn' : '')}
           <div data-kpi-owners>${kpi('Owners\' shares outstanding', '…', 'site owners\' statements')}</div></div>
         <div class="card section"><header><h3>Refunds due</h3><a class="btn sm right" href="#/refunds">Open Refunds</a></header><div data-refunds></div></div>
+        <div class="section" data-bankreq></div>
         <div class="section" data-owner-shares></div>
         ${r.hubPositions?.length ? '<div class="card section"><header><h3>Owed through PlugSure Hub</h3></header><div data-hub-pay></div></div>' : ''}`;
       if (r.hubPositions?.length) table($('[data-hub-pay]', body), { columns: hubPositionColumns('To'), rows: r.hubPositions, empty: '' });
@@ -844,6 +998,7 @@ registerView('finance', {
           { label: 'Reason', render: (x) => `<span class="cell-sub wrap">${esc(x.reason ?? '')}</span>${x.operator ? `<div class="cell-sub">${esc(x.operator)}</div>` : ''}` },
         ], rows: r.refunds, empty: 'No refunds due.',
       });
+      bankRequestsSection($('[data-bankreq]', body), canWrite);
       const owed = await ownerSharesSection($('[data-owner-shares]', body), canWrite);
       if (owed) $('[data-kpi-owners]', body).innerHTML = kpi('Owners\' shares outstanding', esc(owed.text), esc(`${owed.count} statement${owed.count === 1 ? '' : 's'} not fully paid`), owed.count ? 'warn' : '');
     };
@@ -856,8 +1011,10 @@ registerView('finance', {
         <div class="grid k4">${kpi('QRIS fees charged', esc(rp(q.actual)), esc(`${fmt.num(q.payments)} QRIS payments`))}
           ${kpi('PlugSure\'s estimate', esc(rp(q.estimated)), 'the MDR on owner statements')}
           ${kpi('Difference', esc(rp(q.difference)), q.difference > 0 ? `${gw()} charged more than estimated` : q.difference < 0 ? `${gw()} charged less than estimated` : 'as estimated', Math.abs(q.difference) > 0 ? 'warn' : '')}</div>
+        <div class="section" data-feeaudit></div>
         <div class="card section"><header><h3>Fees by month and channel</h3></header><div data-rows></div></div>
         <p class="cell-sub">Fees, VAT on fees and withholding tax as ${gw()} reports them on each payment. The estimate is the Bank Indonesia QRIS MDR (0% up to ${esc(rp(100000))}); from v1.15.0 owner statements use the actual fee for every payment synced here, and the estimate only for the rest.</p>`;
+      feeAuditSection($('[data-feeaudit]', body), base(), per(), gw());
       table($('[data-rows]', body), {
         columns: [
           { label: 'Month', render: (x) => esc(x.month) },
@@ -967,12 +1124,26 @@ registerView('finance', {
           </div>
           <div class="cell-sub">${ce.sentPeriod ? `Last sent: ${esc(ce.sentPeriod)}` : 'Not sent yet.'}${ce.lastError ? ` <span style="color:var(--crit)">Last attempt failed: ${esc(ce.lastError)}</span>` : ''}</div>
         </div></div>
-        ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}`;
+        <div class="card section"><header><h3>Contracted rates</h3></header><div class="body">
+          <p class="cell-sub" style="margin-top:0">The fees you agreed with ${gw()} per method, excluding VAT: a percentage plus a fixed fee, an optional minimum, and the amount up to which the method is free (QRIS: ${esc(rp(100000))}). Every fee is checked against them under Fees → Fee audit. Leave a method's percentage empty to not check it.</p>
+          <table class="table" data-rates><thead><tr><th>Method</th><th class="num">%</th><th class="num">Fixed (Rp)</th><th class="num">Minimum (Rp)</th><th class="num">Free up to (Rp)</th></tr></thead><tbody>
+          ${[...new Set([...RATE_METHODS, ...Object.keys(st.contractRates ?? {})])].map((m) => { const v = st.contractRates?.[m] ?? {}; const inp = (k, w) => `<input name="r_${k}_${esc(m)}" value="${v[k] ?? ''}" inputmode="decimal" style="width:${w}px"${canWrite ? '' : ' disabled'}>`; return `<tr><td class="mono">${esc(m)}</td><td class="num">${inp('pct', 70)}</td><td class="num">${inp('fixed', 90)}</td><td class="num">${inp('min', 90)}</td><td class="num">${inp('freeUpTo', 110)}</td></tr>`; }).join('')}
+          </tbody></table></div></div>
+        ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}
+        <div class="section" data-acct-sw></div>`;
+      accountingSection($('[data-acct-sw]', body), base(), canWrite, st.accountingPackage);
       $('[data-jdl]', body).addEventListener('click', () => $('[data-journal]', bodyAll).click());
       $('[data-save]', body)?.addEventListener('click', async () => {
         const journalAccounts = Object.fromEntries(Object.keys(r.defaults).map((k) => [k, { code: $(`[name="code_${k}"]`, body).value.trim(), name: $(`[name="name_${k}"]`, body).value.trim() }]));
         try {
-          await api(`${base()}/settings`, { method: 'PUT', body: { journalAccounts, closeEmail: { enabled: $('[name="ce_on"]', body).checked, recipients: $('[name="ce_to"]', body).value } } });
+          const contractRates = {};
+          for (const tr of $$('[data-rates] tbody tr', body)) {
+            const m = tr.firstElementChild.textContent.trim();
+            const val = (k) => $(`[name="r_${k}_${m}"]`, tr)?.value.trim().replace(',', '.');
+            if (!val('pct')) continue;
+            contractRates[m] = Object.fromEntries(['pct', 'fixed', 'min', 'freeUpTo'].filter((k) => val(k)).map((k) => [k, Number(val(k))]));
+          }
+          await api(`${base()}/settings`, { method: 'PUT', body: { journalAccounts, contractRates, closeEmail: { enabled: $('[name="ce_on"]', body).checked, recipients: $('[name="ce_to"]', body).value } } });
           toast('Saved.', 'ok');
           drawSettings();
         } catch (e) { toast(e.message, 'crit'); }
@@ -985,7 +1156,8 @@ registerView('finance', {
     };
 
     const DRAW = { overview: drawOverview, payments: drawPayments, receivables: drawReceivables, payables: drawPayables, fees: drawFees, reconciliation: drawReconciliation, settings: drawSettings,
-      bank: () => bankSection(body, canWrite), tax: () => taxSection(body, canWrite) };
+      bank: () => bankSection(body, canWrite), tax: () => taxSection(body, canWrite),
+      forecast: () => { load(); return forecastSection(body, base(), gw()); } };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

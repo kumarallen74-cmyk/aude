@@ -76,6 +76,7 @@ import { registerRoamingRoutes } from './roaming-routes.js';
 import { registerSandboxRoutes } from './sandbox-routes.js';
 import { registerFleetRoutes } from './fleet-routes.js';
 import { registerFleetPortalRoutes } from './fleet-portal-routes.js';
+import { registerOwnerPortalRoutes } from './owner-portal-routes.js';
 import { registerPricingRoutes } from './pricing-routes.js';
 import { registerPncRoutes } from './pnc-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
@@ -1964,6 +1965,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerSandboxRoutes(app);
   await registerFleetRoutes(app);
   await registerFleetPortalRoutes(app);
+  await registerOwnerPortalRoutes(app);
   await registerPricingRoutes(app);
   await registerPncRoutes(app);
   await registerOnboardingRoutes(app);

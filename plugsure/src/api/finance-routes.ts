@@ -11,6 +11,10 @@ import * as pxfer from '../services/payout-transfers.js';
 import * as fj from '../services/finance-journal.js';
 import * as bank from '../services/bank-recon.js';
 import * as wht from '../services/withholding.js';
+import * as forecast from '../services/finance-forecast.js';
+import * as feeAudit from '../services/fee-audit.js';
+import * as acctx from '../services/accounting-export.js';
+import * as ownerPortal from '../services/owner-portal.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -131,6 +135,23 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     try { const a = await account(req); return await fin.receivables(a.id, a.orgId); } catch (e) { return failed(reply, e); }
   });
 
+  // (v1.19.0) The cash-flow forecast: committed flows over 30/60/90 days, the running position, the first shortfall.
+  app.get('/v1/finance/accounts/:id/forecast', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try {
+      const a = await account(req);
+      const f = await forecast.forecast(a, { days: q.days, termsDays: q.termsDays, runRate: q.runRate });
+      if (q.format === 'csv') {
+        return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="forecast-${f.from}-${f.days}d.csv"`).send(forecast.forecastCsv(f));
+      }
+      return f;
+    } catch (e) {
+      if (e instanceof forecast.ForecastError) return reply.status(e.statusCode).send({ error: e.message });
+      return failed(reply, e);
+    }
+  });
+
   app.get('/v1/finance/accounts/:id/transactions/:tid/trail', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     try { const a = await account(req); return await fin.trail(a.id, String((req.params as Record<string, string>).tid ?? '')); } catch (e) { return failed(reply, e); }
@@ -184,6 +205,23 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     } catch (e) { return failed(reply, e); }
   });
 
+  // (v1.19.0) The journal of a closed month as the accounting package's import file; the export log.
+  app.get('/v1/finance/accounts/:id/accounting-exports', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { const a = await account(req); return await acctx.log(a); } catch (e) { return failed(reply, e); }
+  });
+
+  app.post('/v1/finance/accounts/:id/accounting-exports', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const a = await account(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await acctx.exportMonth(a, b.month, b.package, userUuid(req));
+      await audit(req, 'finance.accounting_exported', a.id, { month: r.month, package: r.package, entries: r.entries, totalDebit: r.totalDebit });
+      return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="${r.filename}"`).send(r.csv);
+    } catch (e) { return failed(reply, e); }
+  });
+
   app.get('/v1/finance/accounts/:id/journal', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     const format = String(((req.query ?? {}) as Record<string, string>).format ?? 'xlsx');
@@ -221,6 +259,24 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.get('/v1/finance/accounts/:id/payables', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     try { const a = await account(req); return await fin.payables(a.id, a.orgId ?? null); } catch (e) { return failed(reply, e); }
+  });
+
+  // (v1.19.0) The gateway fee audit: every fee against the contracted rate; the overcharged payments as CSV.
+  app.get('/v1/finance/accounts/:id/fee-audit', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try {
+      const a = await account(req);
+      const p = period(req);
+      const r = await feeAudit.audit(a, p);
+      if (q.format === 'csv') {
+        await auditPay(req, 'finance.fee_audit_exported', 'integration', a.id, { from: p.from, to: p.to, overcharged: r.totals.overcharged, overcharge: r.totals.overcharge });
+        return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="fee-audit-${a.provider}.csv"`).send(feeAudit.auditCsv(r));
+      }
+      const { _all, ...view } = r;
+      void _all;
+      return view;
+    } catch (e) { return failed(reply, e); }
   });
 
   app.get('/v1/finance/accounts/:id/fees', async (req, reply) => {
@@ -594,6 +650,27 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       return reply.header('content-type', 'application/xml; charset=utf-8').header('content-disposition', `attachment; filename="efaktur-platform-${q.period}.xml"`)
         .header('x-efaktur-skipped', String(r.skipped.length)).send(r.xml);
     } catch (e) { return taxFailed(reply, e); }
+  });
+
+  // (v1.19.0) Site owners' requests (from the owner portal) to change their bank details: approve or reject.
+  app.get('/v1/finance/owner-bank-requests', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    return { requests: await ownerPortal.pendingRequests(req.principal.orgId) };
+  });
+
+  app.post('/v1/finance/owner-bank-requests/:rid/:decision', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    const { rid, decision } = req.params as Record<string, string>;
+    if (decision !== 'approve' && decision !== 'reject') return reply.status(404).send({ error: 'Not found' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await ownerPortal.decide(req.principal.orgId, String(rid ?? ''), decision === 'approve', b.note, userUuid(req));
+      await auditPay(req, decision === 'approve' ? 'finance.owner_bank_change_approved' : 'finance.owner_bank_change_rejected', 'owner_bank_change_request', String(rid), { ownerId: r.ownerId, note: b.note ?? null });
+      return r;
+    } catch (e) {
+      if (e instanceof ownerPortal.OwnerPortalError) return reply.status(e.statusCode).send({ error: e.message });
+      throw e;
+    }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

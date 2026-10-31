@@ -494,6 +494,10 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      Xendit's payout callback URL to the payments notification URL, and set
      `BILLING_ISSUER_NPWP` for the platform e-Faktur. Bank statements and
      PPh 23 are under Finance → Bank and Tax ([FINANCE.md](FINANCE.md)).
+  12. (v1.19.0) Optionally enter the contracted gateway rates and the
+     accounting package (Finance → Settings), and route
+     finance.owner_bank_change_requested to whoever looks after owners
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

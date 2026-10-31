@@ -674,6 +674,9 @@ export async function trail(integrationId: string, txId: string) {
   });
 }
 
+/** One name per payment method across gateways (Xendit says ID_DANA and CARDS; Duitku, DANA and CARD). */
+export const methodName = (c: string) => { const u = String(c).toUpperCase().replace(/^ID_/, ''); return ['CARDS', 'CREDIT_CARD', 'CARD'].includes(u) ? 'CARD' : u; };
+
 /**
  * (v1.16.0) What each payment method actually costs, per gateway account the caller may see, over the period: payments,
  * amount, fees and VAT on fees, the average fee, the effective rate and the cost per 100,000 rupiah collected. For a
@@ -699,8 +702,7 @@ export async function methodCosts(accounts: Account[], p: Period) {
     accounts: accounts.map((a) => ({
       id: a.id, label: a.label, provider: a.provider, fallback: a.fallback,
       methods: (() => {
-        // One name per method across gateways (Xendit says ID_DANA and CARDS; Duitku, DANA and CARD).
-        const norm = (c: string) => { const u = c.replace(/^ID_/, ''); return ['CARDS', 'CREDIT_CARD', 'CARD'].includes(u) ? 'CARD' : u; };
+        const norm = methodName;
         const by = new Map<string, { n: number; amount: number; fees: number }>();
         for (const x of rows.filter((y) => y.integration_id === a.id)) {
           const k = norm(String(x.channel));

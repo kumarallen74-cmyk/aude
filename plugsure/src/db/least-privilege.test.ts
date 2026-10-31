@@ -28,7 +28,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event', 'whatsapp_event', 'whatsapp_message',
       'whatsapp_conversation', 'whatsapp_chat_message', 'gateway_transaction', 'gateway_balance_snapshot', 'gateway_sync_state', 'reconciliation_exception',
       'owner_bank_account', 'statement_payment', 'refund_transfer', 'payout_transfer', 'gateway_report', 'gateway_account_settings',
-      'bank_statement', 'bank_statement_line', 'tax_withholding']]);
+      'bank_statement', 'bank_statement_line', 'tax_withholding', 'owner_bank_change_request', 'accounting_export']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -59,5 +59,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     bank_statement: 'INSERT,SELECT,UPDATE',
     bank_statement_line: 'INSERT,SELECT,UPDATE',
     tax_withholding: 'INSERT,SELECT,UPDATE',
+    owner_bank_change_request: 'INSERT,SELECT,UPDATE',
+    accounting_export: 'INSERT,SELECT,UPDATE',
   });
 });
