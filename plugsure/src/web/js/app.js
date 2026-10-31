@@ -26,6 +26,7 @@ import './views/driver-app.js';
 import './views/alert-routing.js';
 import './views/statements.js';
 import './views/platform-billing.js';
+import './views/platform-invoices.js';
 import './views/hub.js';
 import './views/billing.js';
 import './views/fleet-billing.js';

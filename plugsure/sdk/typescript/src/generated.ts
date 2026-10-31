@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.24.0";
+export const API_VERSION = "1.25.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4945,6 +4945,16 @@ export type AcknowledgeAlertResponse = {
   ok: true;
 };
 
+export type AcknowledgeControlFindingBody = {
+  key: string;
+  note: string;
+};
+
+export type AcknowledgeControlFindingResponse = {
+  ok?: boolean;
+  key?: string;
+};
+
 export type ActivateChargePointResponse = {
   ok: true;
   activated: boolean;
@@ -5899,6 +5909,34 @@ export type FetchMonthEcbReferenceRatesResponse = {
 export type FetchPkiRootCertificatesResponse = {
   anchors: PncTrustAnchor[];
   received: number;
+};
+
+export type FinaliseRoamingSettlementBody = {
+  month: string;
+  currency: string;
+};
+
+export type FinaliseRoamingSettlementResponse = {
+  id?: string;
+  number?: string;
+  net?: number;
+  direction?: string;
+  outstanding?: number;
+};
+
+export type FinanceChangeLogResponse = {
+  from?: string;
+  to?: string;
+  entries?: Record<string, unknown>[];
+  truncated?: boolean;
+};
+
+export type FinanceControlsResponse = {
+  month?: string;
+  settings?: Record<string, unknown>;
+  summary?: Record<string, unknown>[];
+  findings?: Record<string, unknown>[];
+  approvers?: Record<string, unknown>[];
 };
 
 export type FinanceDataExportResponse = {
@@ -7199,6 +7237,20 @@ export type RecordRefundPaidByBankTransferResponse = {
   refundRef: string;
 };
 
+export type RecordRoamingSettlementPaymentBody = {
+  amount: number;
+  paidOn: string;
+  reference: string;
+  note?: string;
+};
+
+export type RecordRoamingSettlementPaymentResponse = {
+  paymentId?: string;
+  recorded?: string;
+  status?: string;
+  outstanding?: number;
+};
+
 export type RecordSharedCostBody = {
   category: "rent" | "maintenance" | "connectivity" | "insurance" | "staff" | "other";
   description: string;
@@ -7516,6 +7568,13 @@ export type RevokeTestContractCertificateResponse = {
   revoked: boolean;
 };
 
+export type RoamingSettlementResponse = {
+  month?: string;
+  ended?: boolean;
+  rows?: Record<string, unknown>[];
+  totals?: Record<string, unknown>;
+};
+
 export type RotateSandboxApiKeyResponse = {
   apiKey: string;
 };
@@ -7773,6 +7832,14 @@ export type SetBudgetAlertThresholdResponse = {
 
 export type SetConnectorLoadManagementPrioritiesResponse = {
   ok: true;
+};
+
+export type SetControlsThresholdsBody = {
+  minApprovers?: number;
+  workingHours?: {
+    from?: number;
+    to?: number;
+  } | null;
 };
 
 export type SetDriverRefundPolicyBody = {
@@ -8389,6 +8456,10 @@ export type VoidRecordedPaymentResponse = {
   statement: StatementDue;
 };
 
+export type VoidRoamingSettlementPaymentBody = {
+  reason: string;
+};
+
 export type VoidSharedCostBody = {
   reason: string;
 };
@@ -8677,6 +8748,19 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<AcknowledgeAlertResponse> {
     return this.transport.request<AcknowledgeAlertResponse>({ method: "POST", path: "/v1/alerts/{id}/acknowledge", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Acknowledge a control finding
+   *
+   * (v1.25.0) A finding's key with a note on what was checked; recorded in the audit log (controls.finding_acknowledged). Needs finance:approve.
+   *
+   * `POST /v1/finance/controls/acknowledge` · needs `finance:approve`
+   */
+  acknowledgeControlFinding(params: {
+    body: AcknowledgeControlFindingBody;
+  }, options?: RequestOptions): Promise<AcknowledgeControlFindingResponse> {
+    return this.transport.request<AcknowledgeControlFindingResponse>({ method: "POST", path: "/v1/finance/controls/acknowledge", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10511,6 +10595,21 @@ export class Operations {
   }
 
   /**
+   * Finalise a roaming settlement
+   *
+   * (v1.25.0) Freezes an ended month's figures with the partner in a currency, numbered RS-…; once. Audited.
+   *
+   * `POST /v1/finance/roaming/partners/{pid}/settle` · needs `payment:write`
+   */
+  finaliseRoamingSettlement(params: {
+    /** The OCPI partner id. */
+    pid: string;
+    body: FinaliseRoamingSettlementBody;
+  }, options?: RequestOptions): Promise<FinaliseRoamingSettlementResponse> {
+    return this.transport.request<FinaliseRoamingSettlementResponse>({ method: "POST", path: "/v1/finance/roaming/partners/{pid}/settle", pathParams: { pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Finalise a site owner's statement
    *
    * Freezes the owner's statement for a month that has ended and gives it a number. A finalised statement never changes. Audited.
@@ -10523,6 +10622,41 @@ export class Operations {
     body: BillingFinaliseInput;
   }, options?: RequestOptions): Promise<BillingFinalised> {
     return this.transport.request<BillingFinalised>({ method: "POST", path: "/v1/billing/owners/{id}/finalise", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Finance change log
+   *
+   * (v1.25.0) The finance actions in the audit log (finance, billing, refunds, fleet invoices, credit notes and credit, site owners, controls) between two days (default the last 30), by person, action prefix or target, with what was recorded before and after. format=csv for a CSV (audited).
+   *
+   * `GET /v1/finance/change-log` · needs `audit:read`
+   */
+  financeChangeLog(params?: {
+    query?: {
+      from?: string;
+      to?: string;
+      actor?: string;
+      action?: string;
+      target?: string;
+      format?: "json" | "csv";
+    };
+  }, options?: RequestOptions): Promise<FinanceChangeLogResponse> {
+    return this.transport.request<FinanceChangeLogResponse>({ method: "GET", path: "/v1/finance/change-log", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Finance controls
+   *
+   * (v1.25.0) Segregation-of-duties checks for a month (default this month): bank details approved then paid by the same person; a payment recorded and matched by one person; a refund approved and paid by one person; a month reopened by who locked it; too few people with finance:approve; payments outside working hours; write-offs with no collection history. Each finding with its acknowledgement.
+   *
+   * `GET /v1/finance/controls` · needs `audit:read`
+   */
+  financeControls(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<FinanceControlsResponse> {
+    return this.transport.request<FinanceControlsResponse>({ method: "GET", path: "/v1/finance/controls", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -12074,6 +12208,21 @@ export class Operations {
   }
 
   /**
+   * Monthly controls report
+   *
+   * (v1.25.0) A workbook for the month: the controls, the findings, the change log and the actions per person. Audited.
+   *
+   * `GET /v1/finance/controls/report` · needs `audit:read`
+   */
+  monthlyControlsReport(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/controls/report", query: params?.query, accept: "text" }, options);
+  }
+
+  /**
    * My commission terms per currency
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -12886,6 +13035,21 @@ export class Operations {
   }
 
   /**
+   * Record a roaming settlement payment
+   *
+   * (v1.25.0) Money received from the partner (net positive) or paid to it (net negative), with the bank reference; more than is outstanding is refused. Matched on bank statements as roaming_payment. Audited.
+   *
+   * `POST /v1/finance/roaming/settlements/{id}/payments` · needs `payment:write`
+   */
+  recordRoamingSettlementPayment(params: {
+    /** The settlement id. */
+    id: string;
+    body: RecordRoamingSettlementPaymentBody;
+  }, options?: RequestOptions): Promise<RecordRoamingSettlementPaymentResponse> {
+    return this.transport.request<RecordRoamingSettlementPaymentResponse>({ method: "POST", path: "/v1/finance/roaming/settlements/{id}/payments", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a shared cost
    *
    * (v1.23.0) The amount per month, in the minor unit of the sites' currency; siteIds (optional: all the currency's sites). 409 when monthFrom is locked. Audited.
@@ -13607,6 +13771,41 @@ export class Operations {
   }
 
   /**
+   * A roaming partner's month
+   *
+   * (v1.25.0) The figures with the charge records behind them, both sides; the settlement and its payments. format=csv for the records as CSV (to send to the partner).
+   *
+   * `GET /v1/finance/roaming/partners/{pid}` · needs `payment:read`
+   */
+  roamingPartnerMonth(params: {
+    /** The OCPI partner id. */
+    pid: string;
+    query?: {
+      month?: string;
+      currency?: string;
+      format?: "json" | "csv";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/roaming/partners/{pid}", pathParams: { pid: params.pid }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Roaming settlement
+   *
+   * (v1.25.0) For a month (default last month), per roaming partner (eMSP or CPO; not hubs) and currency: what it owes us (our charge records of its drivers), what we owe it (its accepted charge records of ours), net; the settlement if finalised, with what is received or paid and outstanding, and the drift (records that arrived later). format=csv for a CSV.
+   *
+   * `GET /v1/finance/roaming` · needs `payment:read`
+   */
+  roamingSettlement(params?: {
+    query?: {
+      month?: string;
+      format?: "json" | "csv";
+    };
+  }, options?: RequestOptions): Promise<RoamingSettlementResponse> {
+    return this.transport.request<RoamingSettlementResponse>({ method: "GET", path: "/v1/finance/roaming", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Rotate a sandbox's API key
    *
    * Revokes every key of the sandbox and returns a new one (shown once).
@@ -13923,6 +14122,19 @@ export class Operations {
     body: CurtailPriorityList;
   }, options?: RequestOptions): Promise<SetConnectorLoadManagementPrioritiesResponse> {
     return this.transport.request<SetConnectorLoadManagementPrioritiesResponse>({ method: "PUT", path: "/v1/sites/{siteId}/power/priorities", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the controls' thresholds
+   *
+   * (v1.25.0) minApprovers (1–10, default 2) and workingHours ({ from, to } whole hours in the billing time zone, or null to not check). Needs finance:approve. Audited.
+   *
+   * `PUT /v1/finance/controls/settings` · needs `finance:approve`
+   */
+  setControlsThresholds(params: {
+    body: SetControlsThresholdsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/controls/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15041,6 +15253,21 @@ export class Operations {
     body: VoidRecordedPaymentBody;
   }, options?: RequestOptions): Promise<VoidRecordedPaymentResponse> {
     return this.transport.request<VoidRecordedPaymentResponse>({ method: "POST", path: "/v1/finance/statement-payments/{pid}/void", pathParams: { pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a roaming settlement payment
+   *
+   * (v1.25.0) With a reason; refused while it is matched to a bank line. Audited.
+   *
+   * `POST /v1/finance/roaming/payments/{id}/void` · needs `payment:write`
+   */
+  voidRoamingSettlementPayment(params: {
+    /** The payment id. */
+    id: string;
+    body: VoidRoamingSettlementPaymentBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/roaming/payments/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

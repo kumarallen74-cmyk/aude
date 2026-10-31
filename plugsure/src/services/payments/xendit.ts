@@ -421,6 +421,32 @@ export class XenditProvider implements PaymentProvider {
     return { providerRef: referenceId, action: a.channel === 'OVO' ? 'push' : 'redirect', checkoutUrl: a.channel === 'OVO' ? null : url, expiresAt, providerPaymentId: j.id };
   }
 
+  /**
+   * (v1.25.0) A payment link (Xendit invoice, any method the account offers) for an amount owed to the account's
+   * owner: PlugSure's fee invoices to operators. Polled with invoiceStatus; no callback is needed.
+   */
+  async createInvoiceLink(a: { externalId: string; amountMinor: number; currency: string; description: string; payerEmail?: string | null; durationS: number }):
+    Promise<{ id: string; url: string; expiresAt: string | null }> {
+    const r = await providerFetch(`${this.base()}/v2/invoices`, {
+      method: 'POST', headers: this.headers(),
+      body: JSON.stringify({
+        external_id: a.externalId, amount: Math.round(a.amountMinor), currency: a.currency, description: a.description.slice(0, 250),
+        invoice_duration: a.durationS, ...(a.payerEmail ? { payer_email: a.payerEmail } : {}),
+      }),
+    });
+    if (r.status >= 300 || !r.body?.invoice_url) throw new Error(`Xendit invoice failed: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? r.text.slice(0, 200)}`.trim());
+    return { id: String(r.body.id), url: String(r.body.invoice_url), expiresAt: r.body.expiry_date ? new Date(r.body.expiry_date).toISOString() : null };
+  }
+
+  /** (v1.25.0) A payment link's state: paid (PAID or SETTLED), expired, or still pending. */
+  async invoiceStatus(id: string): Promise<{ status: 'pending' | 'paid' | 'expired'; paidAt: string | null; paidAmount: number | null; method: string | null }> {
+    const r = await providerFetch(`${this.base()}/v2/invoices/${encodeURIComponent(id)}`, { method: 'GET', headers: this.headers() });
+    if (r.status >= 300) throw new Error(`Xendit invoice status failed: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? ''}`.trim());
+    const st = String(r.body?.status ?? '').toUpperCase();
+    const status = st === 'PAID' || st === 'SETTLED' ? 'paid' as const : st === 'EXPIRED' ? 'expired' as const : 'pending' as const;
+    return { status, paidAt: r.body?.paid_at ? new Date(r.body.paid_at).toISOString() : null, paidAmount: r.body?.paid_amount != null ? Number(r.body.paid_amount) : null, method: r.body?.payment_method ?? null };
+  }
+
   /** Xendit signs nothing: every callback carries the account's callback token. */
   private callbackOk(headers: Record<string, string | string[] | undefined>): boolean {
     const given = String(headers['x-callback-token'] ?? '');

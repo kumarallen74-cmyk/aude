@@ -77,7 +77,7 @@ export async function accountFor(orgId: string, platformAdmin: boolean, id: stri
   return a;
 }
 
-async function xenditOf(integrationId: string): Promise<{ r: Resolved; x: XenditProvider } | null> {
+export async function xenditOf(integrationId: string): Promise<{ r: Resolved; x: XenditProvider } | null> {
   const r = await byId(integrationId);
   if (!r || r.provider !== 'xendit') return null;
   const p = providerFor(r);
