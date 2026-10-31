@@ -15,6 +15,10 @@ import * as forecast from '../services/finance-forecast.js';
 import * as feeAudit from '../services/fee-audit.js';
 import * as acctx from '../services/accounting-export.js';
 import * as ownerPortal from '../services/owner-portal.js';
+import * as energy from '../services/energy-margin.js';
+import * as budgets from '../services/budgets.js';
+import * as collections from '../services/collections.js';
+import * as auditPack from '../services/audit-pack.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -671,6 +675,147 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       if (e instanceof ownerPortal.OwnerPortalError) return reply.status(e.statusCode).send({ error: e.message });
       throw e;
     }
+  });
+
+  // ─────────────────────────────────────────── (v1.20.0) energy and margin, budgets, collections, audit pack
+
+  const p9Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof energy.EnergyError || e instanceof budgets.BudgetError || e instanceof collections.CollectionsError) return reply.status(e.statusCode).send({ error: e.message });
+    throw e;
+  };
+  const prm = (req: FastifyRequest, k: string) => String((req.params as Record<string, string>)[k] ?? '');
+
+  app.get('/v1/finance/energy', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try { return await energy.month(req.principal.orgId, q.month, q.site || undefined); } catch (e) { return p9Failed(reply, e); }
+  });
+  app.get('/v1/finance/energy/trend', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try { return await energy.trend(req.principal.orgId, q.months, q.site || undefined); } catch (e) { return p9Failed(reply, e); }
+  });
+  app.put('/v1/finance/sites/:sid/energy-rate', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await energy.setRate(req.principal.orgId, prm(req, 'sid'), ((req.body ?? {}) as Record<string, unknown>).ratePerKwh, userUuid(req));
+      await auditPay(req, 'finance.energy_rate_saved', 'site', r.siteId, { ratePerKwh: r.ratePerKwh, currency: r.currency });
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/sites/:sid/energy-bills', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await energy.recordBill(req.principal.orgId, prm(req, 'sid'), b, userUuid(req));
+      await auditPay(req, 'finance.energy_bill_recorded', 'site_energy_cost', r.id, { site: prm(req, 'sid'), month: b.month, amount: b.amount, kwhBilled: b.kwhBilled ?? null });
+      return reply.status(201).send(r);
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/energy-bills/:bid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await energy.voidBill(req.principal.orgId, prm(req, 'bid'), b.reason, userUuid(req));
+      await auditPay(req, 'finance.energy_bill_voided', 'site_energy_cost', prm(req, 'bid'), { reason: String(b.reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/budgets', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await budgets.compare(req.principal.orgId, ((req.query ?? {}) as Record<string, string>).month); } catch (e) { return p9Failed(reply, e); }
+  });
+  app.put('/v1/finance/budgets', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await budgets.save(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.budget_saved', 'finance_budget', `${r.month}:${r.siteId ?? 'org'}:${r.currency}`, r);
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/budgets/copy', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await budgets.copyForward(req.principal.orgId, b.from, b.months, userUuid(req));
+      await auditPay(req, 'finance.budget_copied', 'finance_budget', String(b.from ?? ''), { months: b.months, copied: r.copied });
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.put('/v1/finance/budgets/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await budgets.saveAlertPct(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).budgetAlertPct, userUuid(req));
+      await auditPay(req, 'finance.budget_settings_saved', 'organisation', req.principal.orgId, r);
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/collections', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { ...(await collections.list(req.principal.orgId, platform(req))), writeOffsPending: await collections.pendingWriteOffs(req.principal.orgId) }; } catch (e) { return p9Failed(reply, e); }
+  });
+  app.get('/v1/finance/collections/:kind/:ref', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await collections.history(req.principal.orgId, platform(req), prm(req, 'kind'), prm(req, 'ref')); } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/collections/:kind/:ref/notes', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await collections.addNote(req.principal.orgId, platform(req), prm(req, 'kind'), prm(req, 'ref'), b, userUuid(req));
+      await auditPay(req, 'finance.collection_note_added', prm(req, 'kind'), prm(req, 'ref'), { promiseDate: b.promiseDate ?? null });
+      return reply.status(201).send(r);
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/collections/:kind/:ref/remind', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await collections.remindNow(req.principal.orgId, platform(req), prm(req, 'kind'), prm(req, 'ref'), (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.collection_reminder_sent', prm(req, 'kind'), prm(req, 'ref'), { destination: r.destination });
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/collections/:kind/:ref/write-off', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await collections.requestWriteOff(req.principal.orgId, platform(req), prm(req, 'kind'), prm(req, 'ref'), b, userUuid(req));
+      await auditPay(req, 'finance.write_off_requested', 'receivable_write_off', r.id, { kind: prm(req, 'kind'), ref: prm(req, 'ref'), amount: r.amount, reason: String(b.reason ?? '').slice(0, 300) });
+      return reply.status(201).send(r);
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.post('/v1/finance/write-offs/:wid/:decision', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    const decision = prm(req, 'decision');
+    if (decision !== 'approve' && decision !== 'reject') return reply.status(404).send({ error: 'Not found' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await collections.decideWriteOff(req.principal.orgId, prm(req, 'wid'), decision === 'approve', b.note, userUuid(req));
+      await auditPay(req, decision === 'approve' ? 'finance.write_off_approved' : 'finance.write_off_rejected', 'receivable_write_off', prm(req, 'wid'), { kind: r.kind, ref: r.ref, amount: r.amount, note: b.note ?? null });
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+  app.put('/v1/finance/collections/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await collections.saveDunning(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.dunning_settings_saved', 'organisation', req.principal.orgId, r);
+      return r;
+    } catch (e) { return p9Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/accounts/:id/audit-pack', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const a = await account(req);
+      const p = period(req);
+      const r = await auditPack.build(a, p, req.principal.orgId, platform(req));
+      await audit(req, 'finance.audit_pack_exported', a.id, { from: p.from.toISOString(), to: p.to.toISOString(), manifestSha256: r.manifestSha256, files: r.manifest.files.map((f) => `${f.name}:${f.rows}`) });
+      return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="plugsure-audit-pack-${p.from.toISOString().slice(0, 10)}.zip"`)
+        .header('x-manifest-sha256', r.manifestSha256).send(r.body);
+    } catch (e) { return failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
