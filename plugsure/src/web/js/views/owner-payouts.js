@@ -1,4 +1,5 @@
 import { $, esc, api, state, registerView, pageHead, table, tag, field, callout, kpi, toast, modal, fmt } from '../core.js';
+import { CURRENCIES } from '../money.js';
 
 /**
  * Payouts (v1.19.0), in the Site Owner portal only: what the operator recorded as paid against each of the owner's
@@ -24,12 +25,14 @@ registerView('owner-payouts', {
     const body = $('[data-body]', root);
     const draw = async () => {
       let p, b;
-      try { [p, b] = await Promise.all([api('/v1/owner-portal/payouts'), api('/v1/owner-portal/bank')]); } catch (e) { body.innerHTML = callout('crit', esc(e.message)); return; }
+      let q;
+      try { [p, b, q] = await Promise.all([api('/v1/owner-portal/payouts'), api('/v1/owner-portal/bank'), api('/v1/owner-portal/queries')]); } catch (e) { body.innerHTML = callout('crit', esc(e.message)); return; }
       const cur = Object.keys(p.totals)[0];
       const t = cur ? p.totals[cur] : { share: 0, paid: 0, outstanding: 0 };
       const rq = b.request;
       body.innerHTML = `<div class="grid k3">${kpi('Your share', esc(fmt.money(t.share, cur)), 'finalised statements')}${kpi('Paid', esc(fmt.money(t.paid, cur)), `recorded by ${esc(opName)}`)}${kpi('Still due', esc(fmt.money(t.outstanding, cur)), '', t.outstanding > 0 ? 'warn' : '')}</div>
         <div class="card section"><header><h3>By statement</h3></header><div data-st></div></div>
+        <div class="card section"><header><h3>Your queries</h3></header><div data-q></div></div>
         <div class="card section"><header><h3>Bank account</h3>${rq?.state === 'pending' ? '' : '<button class="btn sm right" type="button" data-change>Request a change</button>'}</header><div class="body">
           ${b.onFile ? `<p style="margin-top:0"><b>${esc(b.onFile.bankName)}</b> ${b.onFile.bankCode ? `<span class="mono">${esc(b.onFile.bankCode)}</span> ` : ''}<span class="mono">${esc(b.onFile.accountMasked)}</span> · ${esc(b.onFile.holderName)}</p>`
             : `<p style="margin-top:0">${esc(opName)} has no bank account on file for you yet.</p>`}
@@ -44,8 +47,43 @@ registerView('owner-payouts', {
           { label: 'Paid', num: true, render: (s) => `${esc(fmt.money(s.paid, s.currency))}${s.payments.map((x) => `<div class="cell-sub">${esc(x.paidOn ?? '')} · ${esc(fmt.money(x.amount, x.currency))}${x.reference ? ` · ${esc(x.reference)}` : ''}</div>`).join('')}` },
           { label: 'Still due', num: true, render: (s) => `<b>${esc(fmt.money(s.outstanding, s.currency))}</b>` },
           { label: 'Status', render: (s) => tag(...(STATUS[s.status] ?? ['t-mute', s.status])) },
+          { label: '', render: (s) => `<button class="btn sm" type="button" data-query="${esc(s.statementId)}">Query</button>` },
         ],
         rows: p.statements, empty: 'No finalised statements yet. Each month is finalised after it ends.',
+      });
+      // (v1.23.0) Queries on a statement, answered by the operator; an agreed adjustment comes on the next statement.
+      const QS = { open: ['t-info', 'waiting'], rejected: ['t-mute', 'statement stands'], resolved: ['t-ok', 'answered'], adjusted: ['t-ok', 'adjusted'], withdrawn: ['t-mute', 'withdrawn'] };
+      table($('[data-q]', body), {
+        columns: [
+          { label: 'Statement', render: (d) => `${esc(d.period)}<div class="cell-sub mono">${esc(d.statementNumber)}</div>` },
+          { label: 'Your query', render: (d) => `${d.line ? `<b>${esc(d.line)}</b> · ` : ''}<span class="wrap">${esc(d.message)}</span>${d.claimed != null ? `<div class="cell-sub">claimed ${esc(fmt.money(d.claimed, d.currency))}</div>` : ''}` },
+          { label: 'Answer', render: (d) => `${tag(...(QS[d.state] ?? ['t-mute', d.state]))}${d.answer ? `<div class="cell-sub wrap">${esc(d.answer)}</div>` : ''}${d.adjustment ? `<div class="cell-sub">${esc(fmt.money(d.adjustment.amount, d.currency))} ${d.adjustment.applied ? `on statement ${esc(d.adjustment.appliedTo ?? '')}` : 'on your next statement'}</div>` : ''}` },
+          { label: '', render: (d) => (d.state === 'open' ? `<button class="btn sm" type="button" data-qw="${esc(d.id)}">Withdraw</button>` : '') },
+        ],
+        rows: q.disputes, empty: 'No queries. Something wrong on a statement? Use Query beside it.',
+      });
+      $('[data-q]', body).addEventListener('click', async (e) => {
+        const w = e.target.closest('[data-qw]');
+        if (!w) return;
+        try { await api(`/v1/owner-portal/queries/${w.dataset.qw}/withdraw`, { method: 'POST' }); toast('Withdrawn.', 'ok'); draw(); } catch (err) { toast(err.message, 'crit'); }
+      });
+      $('[data-st]', body).addEventListener('click', (e) => {
+        const qb = e.target.closest('[data-query]');
+        if (!qb) return;
+        const st = q.statements.find((x) => x.id === qb.dataset.query);
+        if (!st) { toast('This statement cannot be queried.', 'warn'); return; }
+        modal({ title: `Query statement ${st.number}`, subtitle: `${st.period} · ${opName} answers it`,
+          body: `<div class="form">${field('About', `<select name="line"><option value="">The whole statement</option>${st.lines.map((l) => `<option>${esc(l)}</option>`).join('')}</select>`)}
+            ${field(`Amount you believe is owed (${esc(st.currency)})`, '<input name="claimed" inputmode="decimal">', { opt: true })}
+            ${field('What is wrong', '<textarea name="message" rows="4" maxlength="2000" placeholder="e.g. Two sessions on 12 September are missing for the lobby charger."></textarea>', { full: true })}</div>`,
+          actions: [{ label: 'Cancel' }, { label: 'Send', kind: 'primary', async onClick(ctx) {
+            const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+            const exp = CURRENCIES[st.currency]?.exponent ?? 0;
+            try {
+              await api('/v1/owner-portal/queries', { method: 'POST', body: { statementId: st.id, line: v('line') || undefined, message: v('message'), claimed: v('claimed') ? Math.round(Number(v('claimed').replace(',', '.')) * 10 ** exp) : undefined } });
+              toast(`Sent to ${opName}.`, 'ok'); draw();
+            } catch (err) { toast(err.message, 'crit'); return false; }
+          } }] });
       });
       $('[data-withdraw]', body)?.addEventListener('click', async (e) => {
         try { await api(`/v1/owner-portal/bank/change-request/${e.currentTarget.dataset.withdraw}/withdraw`, { method: 'POST' }); toast('Withdrawn.', 'ok'); draw(); } catch (err) { toast(err.message, 'crit'); }

@@ -510,6 +510,11 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      investments (Finance → Investments), turn on revenue drop alerts
      (Finance → Settings; route finance.revenue_drop) and automatic fleet
      statements of account (Fleet billing → Settings) ([FINANCE.md](FINANCE.md)).
+  16. (v1.23.0) Optionally check the tax calendar's due days and turn on its
+     reminders (Finance → Tax), enter shared costs (Finance → Site P&L), set
+     settlement tracking (Finance → Settlements), and route
+     finance.tax_due, finance.owner_dispute, finance.settlement_late and
+     finance.withdrawal_missing ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

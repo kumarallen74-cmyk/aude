@@ -1,11 +1,18 @@
 PlugSure CSMS
-Version:   1.22.0
-Package:   plugsure-v1.22.0
-Prepared:  2026-10-31  (v1.21.0 + finance phase 11 — see RELEASE-NOTES-v1.22.0.md)
+Version:   1.23.0
+Package:   plugsure-v1.23.0
+Prepared:  2026-10-31  (v1.22.0 + finance phase 12 — see RELEASE-NOTES-v1.23.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (434 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (447 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.22.0 = v1.21.0 + finance phase 11: month lock (a closed month's energy bills, exchange rates, budgets
+Status:    v1.23.0 = v1.22.0 + finance phase 12: a tax filing calendar (PPh 23, PPN and e-Faktur due dates, the
+           amounts recorded, filed with the reference, reminders), site owners' queries on their statements (answered,
+           an agreed adjustment added to the next statement), shared costs allocated by site with a site P&L, and
+           gateway settlement tracking (late settlements, withdrawals missing or short at the bank). Migration 091
+           (additive).
+
+v1.22.0 (2026-10-31):
+           v1.22.0 = v1.21.0 + finance phase 11: month lock (a closed month's energy bills, exchange rates, budgets
            and site investments locked; a Finance Manager reopens it with a reason; a close checklist), site
            investments with depreciation, net book value, payback and ROI, revenue drop alerts (a site's day against
            its weekday baseline), and fleet statements of account (PDF / Excel, e-mailed by hand or monthly).

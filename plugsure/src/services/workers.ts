@@ -191,6 +191,8 @@ export function startWorkers(): () => void {
   const financeReports = once('finance-reports', async () => { await (await import('./report-schedules.js')).sendDue(); });
   const financeRevenueDrops = once('finance-revenue-drops', async () => { await (await import('./revenue-anomalies.js')).sweep(); });
   const fleetStatements = once('fleet-statements', async () => { await (await import('./fleet-statements.js')).sweep(); });
+  const taxReminders = once('finance-tax-calendar', async () => { await (await import('./tax-calendar.js')).remind(); });
+  const settlementCheck = once('finance-settlements', async () => { await (await import('./settlement-tracking.js')).check(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -298,6 +300,8 @@ export function startWorkers(): () => void {
     every(financeReports, 60 * 60_000, 'finance-reports'),
     every(financeRevenueDrops, 3 * 60 * 60_000, 'finance-revenue-drops'),
     every(fleetStatements, 60 * 60_000, 'fleet-statements'),
+    every(taxReminders, 6 * 60 * 60_000, 'finance-tax-calendar'),
+    every(settlementCheck, 6 * 60 * 60_000, 'finance-settlements'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

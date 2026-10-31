@@ -98,9 +98,10 @@ if (DB_OK) {
       await query(`INSERT INTO cdr (session_id, org_id, issued_at, lines, subtotal_minor, local_tax_rate_bps, local_tax_minor, tax_base_minor, tax_rate_bps, tax_minor, total_minor, tariff_snapshot, currency)
                    VALUES ($1, $2, $3, '[]'::jsonb, $4, 0, 0, 0, 0, 0, $4, '{}'::jsonb, $5)`, [sess, org, at.toISOString(), sub, cur]);
     };
-    // This month: Rp 1 000 000 in Jakarta, RM 100.00 (10000 sen) in KL.
-    await s(a, siteId, 400_000, 1_000_000, 'IDR', new Date(now.getTime() - 3600_000));
-    await s(b, siteMy, 50_000, 10_000, 'MYR', new Date(now.getTime() - 3600_000));
+    // This month: Rp 1 000 000 in Jakarta, RM 100.00 (10000 sen) in KL. Issued now (not an hour ago: just after
+    // midnight on the 1st, that is last month in the billing zone).
+    await s(a, siteId, 400_000, 1_000_000, 'IDR', now);
+    await s(b, siteMy, 50_000, 10_000, 'MYR', now);
     await query(`INSERT INTO site_energy_rate (site_id, org_id, rate_per_kwh, currency) VALUES ($1, $2, 1500, 'IDR'), ($3, $2, 0.5, 'MYR')`, [siteId, org, siteMy]);
     fleet = (await one<{ id: string }>(`INSERT INTO fleet_account (org_id, name, billing_email) VALUES ($1, $2, 'ap@fleet.test') RETURNING id`, [org, `Fleet ${TAG}`]))!.id;
     inv = (await one<{ id: string }>(

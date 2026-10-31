@@ -3,6 +3,7 @@ import { upgradeLegacyKeys, moneyText, isCurrency, LEGACY_CURRENCY, CURRENCY_COD
 import { LOCALE_TAG } from '../domain/locale.js';
 import { config } from '../config.js';
 import { billingZone } from './org-timezone.js';
+import { pendingFor as pendingAdjustments, markApplied } from './owner-disputes.js';
 import { estimateQrisMdrIdr } from './payments/provider.js';
 import { DEFAULT_PLAN, DEFAULT_PLANS, computeStatement, normalisePlan, type ChargerInput, type Plan, type SiteInput, type Statement } from './commission-calc.js';
 
@@ -117,7 +118,7 @@ export interface MdrBasis { actualMinor: number; estimatedMinor: number; actualP
  * (ownerId undefined), for one owner's sites (ownerId), or for the sites that
  * have no owner (ownerId null — the operator's own sites).
  */
-export async function draftStatement(orgId: string, period: string, ownerId?: string | null, currency: CurrencyCode = LEGACY_CURRENCY): Promise<Statement & { mdrBasis: MdrBasis; status: 'draft'; projected: boolean }> {
+export async function draftStatement(orgId: string, period: string, ownerId?: string | null, currency: CurrencyCode = LEGACY_CURRENCY): Promise<Statement & { mdrBasis: MdrBasis; status: 'draft'; projected: boolean; adjustments: Array<{ id: string; amountMinor: number; note: string; disputeId: string | null }> }> {
   // The statement's month in the organisation's zone for its currency (services/org-timezone.ts; Indonesia as v1.6).
   const tz = await billingZone(orgId, currency);
   const b = await one<{ start: Date; end: Date; days: number; now: Date }>(
@@ -236,7 +237,12 @@ export async function draftStatement(orgId: string, period: string, ownerId?: st
     ? { ppnRateBps: config.tax.id.ppnRateBps, dppNum: config.tax.id.ppnDppNumerator, dppDen: config.tax.id.ppnDppDenominator }
     : null;
   const st = computeStatement(plan, period, b!.days, siteIn, chargers, tax, currency);
-  return { ...st, mdrBasis, status: 'draft', projected: new Date(b!.now).getTime() < end };
+  // (v1.23.0) An owner's statement adds the adjustments agreed on its queries (services/owner-disputes.ts) that no
+  // finalised statement has taken yet: to the owner's share, as lines of their own.
+  const adjustments = ownerId ? await pendingAdjustments(orgId, ownerId, currency) : [];
+  const adjustmentsMinor = adjustments.reduce((a, x) => a + x.amountMinor, 0);
+  const totals = adjustments.length ? { ...st.totals, ownerShareMinor: st.totals.ownerShareMinor + adjustmentsMinor, adjustmentsMinor } : st.totals;
+  return { ...st, totals, adjustments, mdrBasis, status: 'draft', projected: new Date(b!.now).getTime() < end };
 }
 
 export async function orgInfo(orgId: string) {
@@ -289,14 +295,15 @@ export async function finalise(orgId: string, period: string, actor: string | nu
   // A rupiah statement keeps its v1.6 number; another currency's says which.
   const number = `PSC-${period.replace('-', '')}-${code(org.slug) || org.id.slice(0, 8).toUpperCase()}${ownerId ? `-${ownerId.slice(0, 8).toUpperCase()}` : ''}${currency === LEGACY_CURRENCY ? '' : `-${currency}`}`;
   const data = { ...st, status: 'final', projected: false };
-  const row = await one<{ number: string }>(
+  const row = await one<{ number: string; id: string }>(
     `INSERT INTO commission_statement (org_id, owner_id, period, number, gtv_minor, commission_minor, minimum_topup_minor, private_fee_minor,
                                        mdr_credit_minor, net_minor, tax_minor, total_minor, owner_share_minor, data, finalised_by, currency)
      VALUES ($1, $14, ($2 || '-01')::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $15, $12, $13, $16)
-     ON CONFLICT (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), period, currency) DO NOTHING RETURNING number`,
+     ON CONFLICT (org_id, (COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)), period, currency) DO NOTHING RETURNING number, id`,
     [orgId, period, number, st.totals.gtvMinor, st.totals.commissionMinor, st.totals.minimumTopUpMinor, st.totals.privateFeeMinor,
      st.totals.mdrCreditMinor, st.totals.netMinor, st.totals.taxMinor, st.totals.totalMinor, JSON.stringify(data), actor, ownerId, st.totals.ownerShareMinor, currency],
   );
+  if (row && st.adjustments.length) await markApplied(st.adjustments.map((a) => a.id), row.id);
   return row ? { number: row.number } : { error: 'already finalised' };
 }
 
@@ -466,7 +473,8 @@ ${id ? `<tr><td class="muted">DPP nilai lain (${esc(dppFrac)} × fee)</td><td cl
 </tbody></table>
 ${st.owner && t.ownerShareMinor != null ? `<h2>Shares of the commission base</h2>
 <table><tbody>
-<tr><td>Your share (commission base less the fee before tax${t.mdrEstimateMinor ? ' and payment processing' : ''})</td><td class="n"><b>${idr(t.ownerShareMinor)}</b></td></tr>
+${(st.adjustments ?? []).map((a: any) => `<tr><td>Adjustment: ${esc(a.note)}</td><td class="n">${a.amountMinor < 0 ? '− ' : ''}${idr(Math.abs(a.amountMinor))}</td></tr>`).join('')}
+<tr><td>Your share (commission base less the fee before tax${t.mdrEstimateMinor ? ' and payment processing' : ''}${t.adjustmentsMinor ? ', with the adjustments above' : ''})</td><td class="n"><b>${idr(t.ownerShareMinor)}</b></td></tr>
 <tr><td>${esc(st.issuer?.name)} share (fee before tax)</td><td class="n">${idr(t.platformShareMinor)}</td></tr>
 ${t.mdrEstimateMinor ? `<tr><td class="muted">Payment processing (QRIS MDR, estimated)</td><td class="n muted">${idr(t.mdrEstimateMinor)}</td></tr>` : ''}
 <tr><td class="muted">Charging units</td><td class="n muted">${Number(t.sessions).toLocaleString(LOCALE_TAG.id)} sessions · ${Number(t.energyKwh).toLocaleString(LOCALE_TAG.id, { maximumFractionDigits: 2 })} kWh</td></tr>

@@ -399,6 +399,47 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   On that day every account with movements or a balance is e-mailed last
   month's statement, once.
 
+## Tax calendar, owner queries, site P&L and settlements (v1.23.0)
+
+- **Tax calendar** (Tax). Each period's obligations, and what PlugSure
+  recorded for each:
+  - PPh 23 payment and its SPT Masa Unifikasi;
+  - PPN payment and the SPT Masa PPN;
+  - the e-Faktur upload.
+
+  Each is due on a day of the following month. A weekend moves it to Monday;
+  public holidays aren't known. *Mark filed* takes the date, the NTPN or BPE,
+  and the amount. *Settings* sets the due days (confirm them with your
+  adviser: the rules change), turns obligations off, and turns on the
+  `finance.tax_due` reminders: a warning before the due date, critical
+  once overdue.
+- **Owner queries** (Payables). A site owner queries a finalised statement
+  from the portal (Payouts → *Query*). Answer it with one of:
+  - *reject*: the statement stands;
+  - *resolve*: explained;
+  - *adjust*: an amount added to the owner's share on its **next** statement
+    finalised (negative if the owner owes it back).
+
+  Finalised statements never change. The owner sees the answer and where the
+  adjustment went.
+- **Site P&L** (tab). Shared costs (rent, maintenance contracts, SIM cards,
+  insurance, staff) are entered once per month, from a month until a month or
+  ongoing. They are spread over the currency's sites, or the ones chosen, by
+  kWh, sessions, revenue or equally.
+
+  Each site's contribution = revenue − energy cost − its shared costs −
+  depreciation. A cost counting in a locked month can be ended later but not
+  voided.
+- **Settlements** (tab). Per payments account, from the gateway's ledger:
+  - what it said it would settle each day, and what it has;
+  - a day past the grace days (default 2) with payments still pending is
+    *late*;
+  - each withdrawal to the bank against the bank lines matched under Bank:
+    in the bank, short, not in the bank (statements cover the days after it,
+    default 3), or awaiting the statement.
+
+  Alerts: `finance.settlement_late`, `finance.withdrawal_missing`.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

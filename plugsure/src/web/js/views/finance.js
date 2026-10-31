@@ -545,7 +545,7 @@ async function taxSection(el, canWrite, year = new Date().getFullYear()) {
   const KIND = { gateway_fee: 'Gateway fees', platform_fee: 'PlugSure platform fee' };
   const admin = state.can('platform:admin');
   const thisYear = new Date().getFullYear();
-  el.innerHTML = `<div class="card"><header><h3>PPh 23 withheld</h3><div class="row nowrap" style="gap:6px"><select data-year>${[thisYear, thisYear - 1, thisYear - 2].map((v) => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select><button class="btn sm" type="button" data-csv>${icon('download')} CSV</button></div></header>
+  el.innerHTML = `<div data-taxcal></div><div class="card"><header><h3>PPh 23 withheld</h3><div class="row nowrap" style="gap:6px"><select data-year>${[thisYear, thisYear - 1, thisYear - 2].map((v) => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select><button class="btn sm" type="button" data-csv>${icon('download')} CSV</button></div></header>
       <div class="body">${callout('info', 'If your organisation withholds PPh 23, it withholds 2% of the services it pays for — the gateway\'s fees and PlugSure\'s platform fee — and gives the payee a bukti potong. Finance suggests each month\'s base; record what you withheld. Your tax adviser decides the treatment; Finance files nothing.')}</div>
       <div data-sug></div></div>
     <div class="card"><header><h3>Records</h3></header><div data-rec></div></div>
@@ -557,6 +557,7 @@ async function taxSection(el, canWrite, year = new Date().getFullYear()) {
       ${field('Unit (UM.nnnn)', '<input name="ef_unit" value="UM.0030" maxlength="7">')}
       <div class="row" style="align-self:flex-end"><button class="btn primary" type="button" data-ef>${icon('download')} XML</button></div></div>
       <p class="cell-sub">The month's finalised platform statements with PPN as Coretax's import XML: PlugSure the seller (BILLING_ISSUER_NPWP), each operator the buyer. Operators without an NPWP are left out.</p></div></div>` : ''}`;
+  taxCalendarCard($('[data-taxcal]', el), canWrite);
   table($('[data-sug]', el), {
     columns: [
       { label: 'Month', render: (s) => esc(s.period) },
@@ -1198,6 +1199,202 @@ async function phase11Settings(el, canWrite) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.23.0) tax calendar, owner queries, site P&L, settlements
+
+const TAX_ST = { filed: ['t-ok', 'filed'], overdue: ['t-crit', 'overdue'], due_soon: ['t-warn', 'due soon'], upcoming: ['t-mute', 'upcoming'] };
+async function taxCalendarCard(el, canWrite, all = false) {
+  let c;
+  try { c = await api('/v1/finance/tax/calendar'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => taxCalendarCard(el, canWrite, all);
+  const st = c.settings;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  // What needs attention: not filed and due within 45 days (or overdue), or filed in the last 60 days.
+  const shown = all ? c.items : c.items.filter((i) => (i.status !== 'filed' && i.daysLeft <= 45) || (i.status === 'filed' && i.daysLeft >= -60));
+  const open = c.items.filter((i) => i.status !== 'filed');
+  el.innerHTML = `<div class="card"><header><h3>Tax calendar</h3><span class="right cell-sub">${open.filter((i) => i.status === 'overdue').length} overdue · ${open.filter((i) => i.status === 'due_soon').length} due soon</span><button class="btn sm" type="button" data-tcall>${all ? 'Show what needs attention' : `Show all (${c.items.length})`}</button>${canWrite ? '<button class="btn sm" type="button" data-tcset>Settings</button>' : ''}</header>
+    <div class="body cell-sub" style="padding-bottom:0">Each period's obligations, due on a day of the following month (a weekend moved to Monday; check public holidays). The amounts are what PlugSure recorded — your accountant files the returns. ${st.reminders ? `Reminders ${st.reminderDays} days before (alert finance.tax_due).` : 'Reminders are off.'}</div><div data-tcl></div></div>`;
+  table($('[data-tcl]', el), {
+    columns: [
+      { label: 'Due', render: (i) => `<b>${esc(fmt.date(i.dueDate))}</b><div class="cell-sub">${i.status === 'filed' ? '' : i.daysLeft < 0 ? `${plural(-i.daysLeft, 'day')} ago` : i.daysLeft === 0 ? 'today' : `in ${plural(i.daysLeft, 'day')}`}</div>` },
+      { label: 'Obligation', render: (i) => `${esc(i.label)}<div class="cell-sub">period ${esc(i.period)} · ${esc(i.detail)}</div>` },
+      { label: 'Amount', num: true, render: (i) => (i.amount == null ? '<span class="cell-sub">—</span>' : esc(rp(i.amount))) },
+      { label: 'Status', render: (i) => `${tag(...TAX_ST[i.status])}${i.filing ? `<div class="cell-sub">${esc(fmt.date(i.filing.filedOn))} · ${esc(i.filing.reference)}${i.filing.by ? ` · ${esc(i.filing.by)}` : ''}</div>` : ''}` },
+      { label: '', render: (i) => (!canWrite ? '' : i.filing ? `<button class="btn sm" type="button" data-tcvoid="${esc(i.filing.id)}">Undo</button>` : `<button class="btn sm${i.status === 'overdue' || i.status === 'due_soon' ? ' primary' : ''}" type="button" data-tcfile="${esc(`${i.obligation}|${i.period}`)}">Mark filed</button>`) },
+    ],
+    rows: shown.slice().reverse(), empty: all ? 'No obligation enabled.' : 'Nothing due in the next 45 days.',
+  });
+  el.querySelector('[data-tcl]').addEventListener('click', (e) => {
+    const fb = e.target.closest('[data-tcfile]'), vb = e.target.closest('[data-tcvoid]');
+    if (fb) {
+      const [obligation, period] = fb.dataset.tcfile.split('|');
+      const it = c.items.find((x) => x.obligation === obligation && x.period === period);
+      modal({ title: `${it.label} — ${period}`, subtitle: `Due ${fmt.date(it.dueDate)}`,
+        body: `<div class="form">${field('Filed / paid on', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Reference (NTPN, BPE, receipt)', '<input name="ref" maxlength="80">')}
+          ${field('Amount (Rp)', `<input name="amount" inputmode="numeric" value="${it.amount != null ? esc(String(it.amount)) : ''}">`, { opt: true })}${field('Note', '<input name="note" maxlength="300">', { opt: true })}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Mark filed', kind: 'primary', async onClick(ctx) {
+          const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+          try { await api('/v1/finance/tax/filings', { method: 'POST', body: { obligation, period, filedOn: v('on'), reference: v('ref'), amount: v('amount') ? Number(v('amount').replace(/\D/g, '')) : undefined, note: v('note') || undefined } }); toast('Marked filed.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] });
+    }
+    if (vb) {
+      const reason = window.prompt('Why is this filing mark undone?');
+      if (!reason || !reason.trim()) return;
+      api(`/v1/finance/tax/filings/${vb.dataset.tcvoid}/void`, { method: 'POST', body: { reason: reason.trim() } }).then(() => { toast('Undone.', 'ok'); reload(); }, (err) => toast(err.message, 'crit'));
+    }
+  });
+  $('[data-tcall]', el).addEventListener('click', () => taxCalendarCard(el, canWrite, !all));
+  $('[data-tcset]', el)?.addEventListener('click', () => modal({ title: 'Tax calendar settings', subtitle: 'The due day in the month after the period (31 = its last day)', size: 'lg',
+    body: `<table class="table"><thead><tr><th>Obligation</th><th>Track</th><th class="num">Due day</th></tr></thead><tbody>${Object.entries(c.labels).map(([k, label]) => `<tr data-k="${k}"><td>${esc(label)}</td><td><input type="checkbox" name="on"${st.obligations[k].enabled ? ' checked' : ''}></td><td class="num"><input name="day" type="number" min="1" max="31" value="${st.obligations[k].day}" style="width:80px"></td></tr>`).join('')}</tbody></table>
+      <div class="filters"><label class="check" style="align-self:flex-end"><input type="checkbox" name="rem"${st.reminders ? ' checked' : ''}><span>Remind (alert finance.tax_due)</span></label>${field('Days before', `<input name="days" type="number" min="0" max="30" value="${st.reminderDays}" style="width:80px">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(ctx) {
+      const obligations = Object.fromEntries($$('tbody tr', ctx.body).map((tr) => [tr.dataset.k, { enabled: $('[name="on"]', tr).checked, day: Number($('[name="day"]', tr).value) }]));
+      try { await api('/v1/finance/tax/calendar/settings', { method: 'PUT', body: { obligations, reminders: $('[name="rem"]', ctx.body).checked, reminderDays: Number($('[name="days"]', ctx.body).value) } }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+}
+
+const OQ_ST = { open: ['t-warn', 'open'], rejected: ['t-mute', 'rejected'], resolved: ['t-ok', 'resolved'], adjusted: ['t-ok', 'adjusted'], withdrawn: ['t-mute', 'withdrawn'] };
+async function ownerQueriesSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  let r;
+  try { r = await api('/v1/finance/owner-queries'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  if (!r.disputes.length && !r.pendingAdjustments.length) { el.innerHTML = ''; return; }
+  const reload = () => ownerQueriesSection(host, canWrite);
+  el.innerHTML = `<div class="card"><header><h3>Owner queries</h3><span class="right cell-sub">${r.open} open</span></header>
+    ${r.pendingAdjustments.length ? `<div class="body cell-sub" style="padding-bottom:0">For the next statements: ${r.pendingAdjustments.map((p) => `${esc(p.owner)} ${esc(fmt.money(p.amount, p.currency))}`).join(' · ')}</div>` : ''}<div data-oql></div></div>`;
+  table($('[data-oql]', el), {
+    columns: [
+      { label: 'Owner', render: (d) => `${esc(d.owner)}<div class="cell-sub mono">${esc(d.statementNumber)}</div>` },
+      { label: 'Query', render: (d) => `${d.line ? `<b>${esc(d.line)}</b> · ` : ''}<span class="wrap">${esc(d.message)}</span><div class="cell-sub">${esc(fmt.ago(d.raisedAt))}${d.claimed != null ? ` · claims ${esc(fmt.money(d.claimed, d.currency))}` : ''}</div>` },
+      { label: 'Answer', render: (d) => `${tag(...OQ_ST[d.state])}${d.answer ? `<div class="cell-sub wrap">${esc(d.answer)}</div>` : ''}${d.adjustment ? `<div class="cell-sub">${esc(fmt.money(d.adjustment.amount, d.currency))} · ${d.adjustment.applied ? `on ${esc(d.adjustment.appliedTo ?? '')}` : 'next statement'}</div>` : ''}` },
+      { label: '', render: (d) => (canWrite && d.state === 'open' ? `<button class="btn sm primary" type="button" data-oqa="${esc(d.id)}">Answer</button>` : '') },
+    ],
+    rows: r.disputes, empty: '',
+  });
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-oqa]');
+    if (!b) return;
+    const d = r.disputes.find((x) => x.id === b.dataset.oqa);
+    const exp = CURRENCIES[d.currency]?.exponent ?? 0;
+    modal({ title: `Answer ${d.owner}`, subtitle: `Statement ${d.statementNumber}`, size: 'lg',
+      body: `<p class="wrap">${d.line ? `<b>${esc(d.line)}</b>: ` : ''}${esc(d.message)}</p>
+        <div class="form">${field('Decision', '<select name="dec"><option value="adjust">Adjust: add an amount to the next statement</option><option value="resolve">Resolve: explained, nothing to change</option><option value="reject">Reject: the statement stands</option></select>')}
+        ${field(`Adjustment (${esc(d.currency)}; negative if the owner owes it back)`, `<input name="amount" inputmode="decimal" value="${d.claimed != null ? esc(String(d.claimed / 10 ** exp)) : ''}">`)}
+        ${field('Answer the owner sees', '<textarea name="ans" rows="3" maxlength="2000"></textarea>', { full: true })}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Send answer', kind: 'primary', async onClick(ctx) {
+        const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+        const dec = v('dec');
+        try { await api(`/v1/finance/owner-queries/${d.id}/answer`, { method: 'POST', body: { decision: dec, answer: v('ans'), amount: dec === 'adjust' ? Math.round(Number(v('amount').replace(',', '.')) * 10 ** exp) : undefined } }); toast('Answered.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+      } }] });
+  });
+}
+
+const COST_CAT = { rent: 'Rent', maintenance: 'Maintenance', connectivity: 'Connectivity', insurance: 'Insurance', staff: 'Staff', other: 'Other' };
+const COST_BASIS = { kwh: 'by kWh', sessions: 'by sessions', revenue: 'by revenue', equal: 'equally' };
+async function pnlSection(host, canWrite, month = prevMonth()) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let p, c, sites;
+  try { [p, c, sites] = await Promise.all([api(`/v1/finance/site-pnl?month=${month}`), api('/v1/finance/shared-costs'), api('/v1/finance/energy').then((x) => x.sites)]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (m = month) => pnlSection(host, canWrite, m);
+  const totals = Object.entries(p.totals);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<select data-pm>${monthOptions(month)}</select>`)}</div>
+    ${totals.map(([cur, t]) => `<div class="grid k4">${kpi('Revenue', esc(fmt.money(t.revenue, cur)), 'before tax')}${kpi('Energy', esc(fmt.money(t.energyCost, cur)), 'bills and estimates')}${kpi('Shared costs', esc(fmt.money(t.shared, cur)), `+ depreciation ${fmt.money(t.depreciation, cur)}`)}${kpi('Contribution', esc(fmt.money(t.contribution, cur)), t.revenue ? `${Math.round((t.contribution / t.revenue) * 100)}% of revenue` : '', t.contribution < 0 ? 'crit' : '')}</div>`).join('')}
+    ${p.unallocated.length ? callout('warn', `Not allocated (no site of their currency): ${p.unallocated.map((u) => esc(u.description)).join(', ')}.`) : ''}
+    <div class="card section"><header><h3>By site</h3></header><div data-pl></div></div>
+    <div class="card section"><header><h3>Shared costs</h3>${canWrite ? '<button class="btn sm right primary" type="button" data-cnew>Add a cost</button>' : ''}</header><div data-cl></div></div>
+    <p class="cell-sub">A site's contribution: revenue − energy cost − its part of the shared costs − depreciation of its investments. Shared costs are spread over the sites each month by kWh, sessions, revenue or equally (equally when the sites had none that month).</p>`;
+  table($('[data-pl]', el), {
+    columns: [
+      { label: 'Site', render: (x) => `${esc(x.site)}<div class="cell-sub">${esc(fmt.num(x.sessions))} sessions · ${esc(fmt.num(Math.round(x.kwh)))} kWh</div>` },
+      { label: 'Revenue', num: true, render: (x) => esc(fmt.money(x.revenue, x.currency)) },
+      { label: 'Energy', num: true, render: (x) => (x.energyCost == null ? tag('t-warn', 'unknown') : esc(fmt.money(x.energyCost, x.currency))) },
+      { label: 'Shared', num: true, render: (x) => `${esc(fmt.money(x.sharedTotal, x.currency))}<div class="cell-sub">${Object.entries(x.shared).filter(([, v]) => v).map(([k, v]) => `${COST_CAT[k]} ${fmt.money(v, x.currency)}`).map(esc).join(' · ')}</div>` },
+      { label: 'Depreciation', num: true, render: (x) => esc(fmt.money(x.depreciation, x.currency)) },
+      { label: 'Contribution', num: true, render: (x) => `<b style="color:${x.contribution < 0 ? 'var(--crit)' : 'inherit'}">${esc(fmt.money(x.contribution, x.currency))}</b>` },
+    ],
+    rows: p.sites, empty: 'No sites.',
+  });
+  const name = (id) => sites.find((s) => s.siteId === id)?.site ?? id.slice(0, 8);
+  table($('[data-cl]', el), {
+    columns: [
+      { label: 'Cost', render: (x) => `${esc(COST_CAT[x.category])} · ${esc(x.description)}<div class="cell-sub">${esc(COST_BASIS[x.basis])} · ${x.siteIds ? x.siteIds.map(name).map(esc).join(', ') : `all ${esc(x.currency)} sites`}</div>` },
+      { label: 'Per month', num: true, render: (x) => esc(fmt.money(x.amount, x.currency)) },
+      { label: 'Months', render: (x) => `${esc(x.monthFrom)} → ${esc(x.monthTo ?? 'ongoing')}${x.voided ? ` ${tag('t-mute', 'voided')}` : ''}` },
+      { label: '', render: (x) => (canWrite && !x.voided ? `<div class="row nowrap" style="gap:6px"><button class="btn sm" type="button" data-cend="${esc(x.id)}">End</button><button class="btn sm" type="button" data-cvoid="${esc(x.id)}">Void</button></div>` : '') },
+    ],
+    rows: c.costs, empty: 'No shared costs yet: rent, maintenance contracts, SIM cards, insurance…',
+  });
+  $('[data-pm]', el).addEventListener('change', (e) => reload(e.target.value));
+  el.addEventListener('click', async (e) => {
+    const eb = e.target.closest('[data-cend]'), vb = e.target.closest('[data-cvoid]');
+    if (eb) {
+      const to = window.prompt('Last month it counts in (YYYY-MM):', month);
+      if (!to) return;
+      try { await api(`/v1/finance/shared-costs/${eb.dataset.cend}/end`, { method: 'POST', body: { monthTo: to.trim() } }); toast('Ended.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); }
+    }
+    if (vb) {
+      const reason = window.prompt('Why is this cost voided?');
+      if (!reason || !reason.trim()) return;
+      try { await api(`/v1/finance/shared-costs/${vb.dataset.cvoid}/void`, { method: 'POST', body: { reason: reason.trim() } }); toast('Voided.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); }
+    }
+  });
+  $('[data-cnew]', el)?.addEventListener('click', () => modal({ title: 'Add a shared cost', subtitle: 'An amount per month, spread over sites', size: 'lg',
+    body: `<div class="form">${field('Category', `<select name="cat">${Object.entries(COST_CAT).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>`)}
+      ${field('Spread', `<select name="basis">${Object.entries(COST_BASIS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>`)}
+      ${field('Description', '<input name="desc" maxlength="200" placeholder="Maintenance contract, all DC chargers">', { full: true })}
+      ${field('Amount per month', '<input name="amount" inputmode="decimal">')}${field('Currency', `<select name="cur">${[...new Set(sites.map((s) => s.currency))].map((x) => `<option>${esc(x)}</option>`).join('')}</select>`)}
+      ${field('From', `<input name="from" type="month" value="${month}">`)}${field('Until', '<input name="to" type="month">', { opt: true, help: 'Empty: ongoing.' })}</div>
+      <div class="cell-sub" style="margin:8px 0 4px">Sites (none ticked: every site of the currency)</div>
+      <div class="row" style="gap:12px;flex-wrap:wrap">${sites.map((s) => `<label class="check"><input type="checkbox" name="site" value="${esc(s.siteId)}"><span>${esc(s.site)}</span></label>`).join('')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(ctx) {
+      const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+      const siteIds = $$('[name="site"]:checked', ctx.body).map((x) => x.value);
+      try { await api('/v1/finance/shared-costs', { method: 'POST', body: { category: v('cat'), basis: v('basis'), description: v('desc'), amount: toMinor(v('amount').replace(',', '.'), v('cur')), currency: v('cur'), monthFrom: v('from'), monthTo: v('to') || undefined, siteIds: siteIds.length ? siteIds : undefined } }); toast('Added.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+}
+
+const SET_ST = { settled: ['t-ok', 'settled'], due: ['t-info', 'due'], upcoming: ['t-mute', 'upcoming'], late: ['t-crit', 'late'] };
+const WD_ST = { in_bank: ['t-ok', 'in the bank'], short: ['t-crit', 'short'], missing: ['t-crit', 'not in the bank'], awaiting_statement: ['t-mute', 'awaiting statement'] };
+async function settlementsSection(host, base, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let v;
+  try { v = await api(`${base}/settlements`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const late = Object.entries(v.summary.late.amount), up = Object.entries(v.summary.upcoming);
+  el.innerHTML = `<div class="grid k4">${kpi('Late', esc(late.length ? late.map(([c, x]) => fmt.money(x, c)).join(' · ') : '—'), `${v.summary.late.days} day(s) past ${v.settings.graceDays} days' grace`, v.summary.late.days ? 'crit' : '')}
+      ${kpi('To come', esc(up.length ? up.map(([c, x]) => fmt.money(x, c)).join(' · ') : '—'), 'pending, not late')}
+      ${kpi('Withdrawals not in the bank', esc(String(v.summary.missing)), v.bankStatementsTo ? `bank statements to ${fmt.date(v.bankStatementsTo)}` : 'no bank statement uploaded', v.summary.missing ? 'crit' : '')}
+      ${kpi('Arrived short', esc(String(v.summary.short)), 'bank line below the withdrawal', v.summary.short ? 'crit' : '')}</div>
+    <div class="grid two section"><div class="card"><header><h3>Settlements by day</h3></header><div data-sd></div></div><div class="card"><header><h3>Withdrawals to the bank</h3></header><div data-sw></div></div></div>
+    <div class="card section"><header><h3>Tracking</h3></header><div class="body"><div class="filters" style="margin-top:0">${field('Late after (days)', `<input name="g" type="number" min="0" max="14" value="${v.settings.graceDays}" style="width:80px"${canWrite ? '' : ' disabled'}>`)}
+      ${field('Withdrawal missing after (days)', `<input name="w" type="number" min="1" max="14" value="${v.settings.withdrawalDays}" style="width:80px"${canWrite ? '' : ' disabled'}>`)}
+      ${canWrite ? '<div class="row" style="align-self:flex-end"><button class="btn" type="button" data-sset>Save</button></div>' : ''}</div>
+      <p class="cell-sub">From the gateway's ledger: what it said it would settle each day, and what it has. Withdrawals are checked against the bank statement lines matched under Bank; alerts finance.settlement_late and finance.withdrawal_missing.</p></div></div>`;
+  table($('[data-sd]', el), {
+    columns: [
+      { label: 'Expected', render: (s) => `${esc(fmt.date(s.day))}<div class="cell-sub">${esc(fmt.num(s.payments))} payments</div>` },
+      { label: 'Net', num: true, render: (s) => esc(fmt.money(s.expected, s.currency)) },
+      { label: 'Pending', num: true, render: (s) => (s.pending ? `${esc(fmt.money(s.pending, s.currency))}<div class="cell-sub">${s.pendingPayments} payments</div>` : '<span class="cell-sub">—</span>') },
+      { label: '', render: (s) => tag(...SET_ST[s.state]) },
+    ],
+    rows: v.settlements.slice().reverse(), empty: 'No settlements in the last 45 days.',
+  });
+  table($('[data-sw]', el), {
+    columns: [
+      { label: 'Withdrawn', render: (w) => `${esc(fmt.date(w.day))}<div class="cell-sub mono">${esc(w.reference ?? '')}</div>` },
+      { label: 'Amount', num: true, render: (w) => `${esc(fmt.money(w.amount, w.currency))}${w.bankAmount != null ? `<div class="cell-sub">bank ${esc(fmt.money(w.bankAmount, w.currency))} · ${esc(fmt.date(w.bankDay))}</div>` : ''}` },
+      { label: '', render: (w) => tag(...WD_ST[w.state]) },
+    ],
+    rows: v.withdrawals, empty: 'No withdrawals in the last 45 days.',
+  });
+  $('[data-sset]', el)?.addEventListener('click', async () => {
+    try { await api('/v1/finance/settlement-tracking/settings', { method: 'PUT', body: { graceDays: Number($('[name="g"]', el).value), withdrawalDays: Number($('[name="w"]', el).value) } }); toast('Saved.', 'ok'); settlementsSection(host, base, canWrite); } catch (e) { toast(e.message, 'crit'); }
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -1211,7 +1408,7 @@ registerView('finance', {
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
       { id: 'payables', label: 'Payables' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'close', label: 'Close' }, { id: 'settings', label: 'Settings' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'close', label: 'Close' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -1397,6 +1594,7 @@ registerView('finance', {
           <div data-kpi-owners>${kpi('Owners\' shares outstanding', '…', 'site owners\' statements')}</div></div>
         <div class="card section"><header><h3>Refunds due</h3><a class="btn sm right" href="#/refunds">Open Refunds</a></header><div data-refunds></div></div>
         <div class="section" data-bankreq></div>
+        <div class="section" data-oq></div>
         <div class="section" data-owner-shares></div>
         ${r.hubPositions?.length ? '<div class="card section"><header><h3>Owed through PlugSure Hub</h3></header><div data-hub-pay></div></div>' : ''}`;
       if (r.hubPositions?.length) table($('[data-hub-pay]', body), { columns: hubPositionColumns('To'), rows: r.hubPositions, empty: '' });
@@ -1410,6 +1608,7 @@ registerView('finance', {
         ], rows: r.refunds, empty: 'No refunds due.',
       });
       bankRequestsSection($('[data-bankreq]', body), canWrite);
+      ownerQueriesSection($('[data-oq]', body), canWrite);
       const owed = await ownerSharesSection($('[data-owner-shares]', body), canWrite);
       if (owed) $('[data-kpi-owners]', body).innerHTML = kpi('Owners\' shares outstanding', esc(owed.text), esc(`${owed.count} statement${owed.count === 1 ? '' : 's'} not fully paid`), owed.count ? 'warn' : '');
     };
@@ -1575,7 +1774,8 @@ registerView('finance', {
       forecast: () => { load(); return forecastSection(body, base(), gw()); },
       summary: () => summarySection(body),
       margin: () => marginSection(body, canWrite), budgets: () => budgetsSection(body, canWrite), collections: () => collectionsSection(body, canWrite),
-      investments: () => investmentsSection(body, canWrite), close: () => closeSection(body, canWrite) };
+      investments: () => investmentsSection(body, canWrite), close: () => closeSection(body, canWrite),
+      pnl: () => pnlSection(body, canWrite), settlements: () => settlementsSection(body, base(), canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
