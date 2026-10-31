@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.16.0";
+export const API_VERSION = "1.17.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -2436,6 +2436,8 @@ export interface PayoutTransfer {
   statementId: string;
   number?: string | null;
   owner?: string | null;
+  /** (v1.17.0) Duitku Disbursement or Xendit Payouts. */
+  rail?: "duitku" | "xendit";
   state: "awaiting_approval" | "sending" | "sent" | "succeeded" | "failed" | "rejected";
   amount: number;
   currency: string;
@@ -2784,8 +2786,10 @@ export interface RefundRow {
   gateway_refund_fee?: number | null;
   /** (v1.15.0) The payment's own fee and VAT, which Xendit does not return on a partial refund or one made more than 24 hours after the payment. */
   fee_kept?: number | null;
-  /** (v1.15.0) A Duitku payment whose account has Disbursement: the refund can be sent with POST /v1/refunds/{id}/disbursement. */
+  /** (v1.15.0) The account that took the payment can send money (Duitku Disbursement; v1.17.0 Xendit payouts): the refund can be sent with POST /v1/refunds/{id}/disbursement. */
   disbursement_available?: boolean;
+  /** (v1.17.0) The rail it would go through. */
+  disbursement_rail?: "duitku" | "xendit" | null;
   /** Deprecated: the v1.6 name of `refund_due_minor`, present while the amount is in IDR. */
   refund_due_idr?: number | null;
   /** Deprecated: the v1.6 name of `refunded_minor`, present while the amount is in IDR. */
@@ -2821,6 +2825,8 @@ export interface RefundSummary {
 export interface RefundTransfer {
   id: string;
   paymentId: string;
+  /** (v1.17.0) Duitku Disbursement or Xendit Payouts (no name check: checkedName is null). */
+  rail?: "duitku" | "xendit";
   /** sent: accepted, the result not confirmed yet (checked automatically). */
   state: "awaiting_approval" | "sending" | "sent" | "succeeded" | "failed" | "rejected";
   amount: number;
@@ -4868,6 +4874,25 @@ export type AcceptHeldPartnerChargeRecordResponse = {
   status: "accepted";
 };
 
+export type AccountingJournalResponse = {
+  lines?: {
+    date?: string;
+    entry?: string;
+    kind?: string;
+    code?: string;
+    account?: string;
+    debit?: number;
+    credit?: number;
+    description?: string;
+  }[];
+  totals?: {
+    code?: string;
+    account?: string;
+    debit?: number;
+    credit?: number;
+  }[];
+};
+
 export type AcknowledgeAlertResponse = {
   ok: true;
 };
@@ -5613,6 +5638,27 @@ export type FinanceOverviewResponse = {
     complete?: boolean;
     lastReconciledAt?: string | null;
   } | null;
+};
+
+export type FinanceSettingsResponse = {
+  settings: {
+    journalAccounts?: Record<string, {
+      code?: string;
+      name?: string;
+    }>;
+    closeEmail?: {
+      enabled?: boolean;
+      recipients?: string[];
+      sentPeriod?: string | null;
+      lastError?: string | null;
+      lastAt?: string | null;
+    };
+  };
+  defaults?: Record<string, {
+    code?: string;
+    name?: string;
+  }>;
+  labels?: Record<string, string>;
 };
 
 export type GatewayFeesResponse = {
@@ -6804,6 +6850,8 @@ export type ReplyToWhatsAppCustomerResponse = {
 export type RequestOwnerPayoutThroughDuitkuDisbursementBody = {
   amount?: number;
   note?: string;
+  /** (v1.17.0) Default: the first available (Xendit first). */
+  rail?: "duitku" | "xendit";
 };
 
 export type RequestOwnerPayoutThroughDuitkuDisbursementResponse = {
@@ -6938,6 +6986,21 @@ export type SaveAlertChannelResponse = {
   ok: true;
 };
 
+export type SaveFinanceSettingsBody = {
+  journalAccounts?: Record<string, {
+    code?: string;
+    name?: string;
+  }>;
+  closeEmail?: {
+    enabled?: boolean;
+    recipients?: string[];
+  };
+};
+
+export type SaveFinanceSettingsResponse = {
+  settings: Record<string, unknown>;
+};
+
 export type SaveFleetBillingSettingsBody = {
   npwp?: string;
   nitku?: string;
@@ -7024,6 +7087,17 @@ export type SendCommandToPartnerBody = {
   countryCode?: string;
   /** The location owner’s party id, when the partner is a hub. */
   partyId?: string;
+};
+
+export type SendMonthCloseEMailNowBody = {
+  month?: string;
+};
+
+export type SendMonthCloseEMailNowResponse = {
+  ok: boolean;
+  month: string;
+  to: string[];
+  reference?: string | null;
 };
 
 export type SendTestAlertMessageBody = {
@@ -7281,6 +7355,7 @@ export type SiteOwnerBankDetailsResponse = {
 export type SiteOwnersSharesAndTheirPayoutsResponse = {
   shares: OwnerShare[];
   payoutsAvailable?: boolean;
+  payoutRails?: ("duitku" | "xendit")[];
 };
 
 export type StartSessionRemotelyBody = {
@@ -7652,6 +7727,27 @@ export class Operations {
     body?: AcceptHeldPartnerChargeRecordBody;
   }, options?: RequestOptions): Promise<AcceptHeldPartnerChargeRecordResponse> {
     return this.transport.request<AcceptHeldPartnerChargeRecordResponse>({ method: "POST", path: "/v1/roaming/cdrs/{id}/accept", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Accounting journal
+   *
+   * (v1.17.0) The period as double-entry journal entries, one per day and kind (collections, gateway fees and VAT on fees, withholding tax, refunds, withdrawals to the bank, owner payouts), every entry balanced, with the account codes from the settings. format: xlsx (default; Journal, By account, About), csv, or json. Audited as finance.journal_exported.
+   *
+   * `GET /v1/finance/accounts/{id}/journal` · needs `payment:read`
+   */
+  accountingJournal(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+      format?: "xlsx" | "csv" | "json";
+    };
+  }, options?: RequestOptions): Promise<AccountingJournalResponse> {
+    return this.transport.request<AccountingJournalResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/journal", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -9089,6 +9185,20 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<FinanceOverviewResponse> {
     return this.transport.request<FinanceOverviewResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/overview", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Finance settings
+   *
+   * (v1.17.0) The accounting journal's chart of accounts (code and name per line: gateway, bank, revenue, refunds, fees, vatInput, whtPayable, ownerPayable) and the monthly close e-mail, with PlugSure's defaults and the labels.
+   *
+   * `GET /v1/finance/accounts/{id}/settings` · needs `payment:read`
+   */
+  financeSettings(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+  }, options?: RequestOptions): Promise<FinanceSettingsResponse> {
+    return this.transport.request<FinanceSettingsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/settings", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -11843,6 +11953,21 @@ export class Operations {
   }
 
   /**
+   * Save the finance settings
+   *
+   * (v1.17.0) journalAccounts: codes (1–20 letters, digits, . - /) and names by key; closeEmail: enabled and up to 10 recipients (sent through the e-mail channel of the caller's organisation). payment:write; audited as finance.settings_saved.
+   *
+   * `PUT /v1/finance/accounts/{id}/settings` · needs `payment:write`
+   */
+  saveFinanceSettings(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    body: SaveFinanceSettingsBody;
+  }, options?: RequestOptions): Promise<SaveFinanceSettingsResponse> {
+    return this.transport.request<SaveFinanceSettingsResponse>({ method: "PUT", path: "/v1/finance/accounts/{id}/settings", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Save fleet billing settings
    *
    * Seller NPWP / NITKU / address, invoice prefix, payment instructions and the e-Faktur item settings. Changing the item type, code or unit clears the tax-adviser confirmation, which must be given again before the next export.
@@ -11931,6 +12056,21 @@ export class Operations {
     body: SendCommandToPartnerBody;
   }, options?: RequestOptions): Promise<RoamingCommandSent> {
     return this.transport.request<RoamingCommandSent>({ method: "POST", path: "/v1/roaming/commands", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Send a month's close e-mail now
+   *
+   * (v1.17.0) The finance export (Excel and PDF) and the journal (Excel) for month (YYYY-MM, default last month) to the saved recipients, through the e-mail channel. 409 without an e-mail channel; 422 without recipients; 502 when the e-mail server refuses. Audited as finance.close_email_sent.
+   *
+   * `POST /v1/finance/accounts/{id}/close-email/send` · needs `payment:write`
+   */
+  sendMonthCloseEMailNow(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    body?: SendMonthCloseEMailNowBody;
+  }, options?: RequestOptions): Promise<SendMonthCloseEMailNowResponse> {
+    return this.transport.request<SendMonthCloseEMailNowResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/close-email/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

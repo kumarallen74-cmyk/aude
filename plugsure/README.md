@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.16.0 (31 October 2026), the current release:** phase 5 of the finance review: a payment's whole trail, what each payment method costs, owners' shares paid through Duitku Disbursement (two people), and Xendit's reports from the console. Notes: [`RELEASE-NOTES-v1.16.0.md`](RELEASE-NOTES-v1.16.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.17.0 (31 October 2026), the current release:** finance phase 6: the accounting journal, the monthly close e-mail, and Xendit Payouts for refunds and owner payouts. Notes: [`RELEASE-NOTES-v1.17.0.md`](RELEASE-NOTES-v1.17.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.16.0 (31 October 2026):** phase 5 of the finance review: a payment's whole trail, what each payment method costs, owners' shares paid through Duitku Disbursement (two people), and Xendit's reports from the console. Notes: [`RELEASE-NOTES-v1.16.0.md`](RELEASE-NOTES-v1.16.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.15.0 (31 October 2026):** phase 4 of the finance review: refund windows and Xendit QRIS refunds, Duitku refunds through Disbursement with two people, owners' accounts checked by name, the actual MDR on statements, and the month close by operator and site. Notes: [`RELEASE-NOTES-v1.15.0.md`](RELEASE-NOTES-v1.15.0.md); guides: [`deploy/FINANCE.md`](deploy/FINANCE.md), [`deploy/DUITKU.md`](deploy/DUITKU.md).
 

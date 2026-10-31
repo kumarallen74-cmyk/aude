@@ -296,7 +296,7 @@ async function ownerSharesSection(el, canWrite) {
   el.innerHTML = `<div class="card"><header><h3>Site owners' shares</h3>
       <span class="cell-sub">${esc(open.length ? `${total(open)} outstanding on ${open.length} statement${open.length === 1 ? '' : 's'}` : 'nothing outstanding')}</span>
       ${canWrite && open.length ? `<button class="btn sm right" type="button" data-transfers>${icon('download')} Transfer list (CSV)</button>` : ''}</header><div data-list></div></div>
-    <p class="cell-sub">Pay owners from your bank, then record each transfer here. The transfer list has what is outstanding with each owner's bank details, for your bank's bulk transfer.${r.payoutsAvailable ? ' Or send a payout through Duitku Disbursement: a second person approves it, and it is recorded here once Duitku confirms it.' : ''}</p>
+    <p class="cell-sub">Pay owners from your bank, then record each transfer here. The transfer list has what is outstanding with each owner's bank details, for your bank's bulk transfer.${r.payoutsAvailable ? ' Or send a payout from PlugSure (Xendit Payouts or Duitku Disbursement): a second person approves it, and it is recorded here once the gateway confirms it.' : ''}</p>
     <div class="section" data-payouts></div>`;
   const reload = () => ownerSharesSection(el, canWrite);
   table($('[data-list]', el), {
@@ -306,7 +306,7 @@ async function ownerSharesSection(el, canWrite) {
       { label: 'Share', num: true, render: (x) => `<b>${esc(fmt.money(x.due, x.currency))}</b>` },
       { label: 'Paid', num: true, render: (x) => `${esc(fmt.money(x.paid, x.currency))}${x.lastPaidOn ? `<div class="cell-sub">${esc(fmt.date(`${x.lastPaidOn}T12:00:00Z`))}</div>` : ''}` },
       { label: 'Status', render: (x) => payTag(x.status) },
-      { label: '', render: (x) => `<div class="row nowrap" style="gap:6px">${canWrite && r.payoutsAvailable && x.status !== 'paid' && x.bank ? `<button class="btn sm primary" type="button" data-send="${esc(x.statementId)}">Send via Disbursement</button>` : ''}<button class="btn sm${canWrite && x.status !== 'paid' && !r.payoutsAvailable ? ' primary' : ''}" type="button" data-pay="${esc(x.statementId)}">${canWrite && x.status !== 'paid' ? 'Record payment' : 'Payments'}</button><button class="btn sm" type="button" data-bank="${esc(x.statementId)}">Bank</button></div>` },
+      { label: '', render: (x) => `<div class="row nowrap" style="gap:6px">${canWrite && r.payoutsAvailable && x.status !== 'paid' && x.bank ? `<button class="btn sm primary" type="button" data-send="${esc(x.statementId)}">Send payout</button>` : ''}<button class="btn sm${canWrite && x.status !== 'paid' && !r.payoutsAvailable ? ' primary' : ''}" type="button" data-pay="${esc(x.statementId)}">${canWrite && x.status !== 'paid' ? 'Record payment' : 'Payments'}</button><button class="btn sm" type="button" data-bank="${esc(x.statementId)}">Bank</button></div>` },
     ],
     rows: r.shares, empty: 'No owners\' shares on finalised statements yet (Billing → finalise an owner\'s statement).',
   });
@@ -321,10 +321,11 @@ async function ownerSharesSection(el, canWrite) {
     const x = byId(b.dataset.send);
     const ex = CURRENCIES[x.currency]?.exponent ?? 0;
     modal({
-      title: `Send ${x.owner}'s share through Duitku Disbursement`,
+      title: `Send ${x.owner}'s share to the bank account`,
       subtitle: `${x.number} · ${fmt.money(x.outstanding, x.currency)} outstanding · to ${x.bank.bankName} ${x.bank.accountMasked}`,
-      body: `${callout('info', 'Duitku checks the owner\'s saved account and returns the name the bank has. A second person then approves the payout; it is recorded against the statement once Duitku confirms it.')}
-        <div class="form" style="margin-top:12px">${field(`Amount (${esc(x.currency)})`, `<input name="amount" inputmode="decimal" value="${esc(String(toMajor(x.outstanding, x.currency)))}">`)}${field('Note', '<input name="note" maxlength="300" placeholder="e.g. October share">', { opt: true })}</div>`,
+      body: `${callout('info', 'A second person approves the payout; it is recorded against the statement once the gateway confirms it. Duitku Disbursement also returns the name the bank has for the account; Xendit Payouts does not check names.')}
+        <div class="form" style="margin-top:12px">${field(`Amount (${esc(x.currency)})`, `<input name="amount" inputmode="decimal" value="${esc(String(toMajor(x.outstanding, x.currency)))}">`)}${field('Note', '<input name="note" maxlength="300" placeholder="e.g. October share">', { opt: true })}
+        ${(r.payoutRails ?? []).length > 1 ? field('Send through', `<select name="rail">${r.payoutRails.map((k) => `<option value="${k}">${k === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}</option>`).join('')}</select>`) : ''}</div>`,
       actions: [
         { label: 'Cancel' },
         {
@@ -332,8 +333,8 @@ async function ownerSharesSection(el, canWrite) {
           async onClick(ctx) {
             const amount = Math.round(Number($('[name="amount"]', ctx.body).value.replace(/[^\d.]/g, '')) * 10 ** ex);
             try {
-              const t = (await api(`/v1/finance/statements/${encodeURIComponent(x.statementId)}/payout`, { method: 'POST', body: { amount, note: $('[name="note"]', ctx.body).value.trim() || undefined } })).transfer;
-              toast(t.namesMatch ? `The bank names it ${t.checkedName}. Awaiting approval.` : `The bank names it ${t.checkedName ?? '—'}, not ${t.holderName}. Awaiting approval.`, t.namesMatch ? 'ok' : 'warn');
+              const t = (await api(`/v1/finance/statements/${encodeURIComponent(x.statementId)}/payout`, { method: 'POST', body: { amount, note: $('[name="note"]', ctx.body).value.trim() || undefined, rail: $('[name="rail"]', ctx.body)?.value || undefined } })).transfer;
+              toast(t.rail === 'xendit' ? 'Requested. Awaiting approval by a second person.' : t.namesMatch ? `The bank names it ${t.checkedName}. Awaiting approval.` : `The bank names it ${t.checkedName ?? '—'}, not ${t.holderName}. Awaiting approval.`, t.rail === 'xendit' || t.namesMatch ? 'ok' : 'warn');
               reload();
             } catch (e) { toast(e.message, 'crit'); return false; }
           },
@@ -353,13 +354,13 @@ async function payoutsSection(el, canWrite, reload) {
   const me = state.me?.user?.id;
   const TAGS = { awaiting_approval: ['t-warn', 'awaiting approval'], sending: ['t-info', 'sending'], sent: ['t-info', 'sent, not confirmed'], succeeded: ['t-ok', 'paid'], failed: ['t-crit', 'failed'], rejected: ['t-mute', 'rejected'] };
   const waiting = list.filter((t) => t.state === 'awaiting_approval').length;
-  el.innerHTML = `<div class="card"><header><h3>Payouts (Duitku Disbursement)</h3></header>${waiting ? `<div class="body">${callout('warn', `${fmt.num(waiting)} payout${waiting === 1 ? '' : 's'} awaiting approval by someone other than the requester.`)}</div>` : ''}<div data-pl></div></div>`;
+  el.innerHTML = `<div class="card"><header><h3>Payouts sent from PlugSure</h3></header>${waiting ? `<div class="body">${callout('warn', `${fmt.num(waiting)} payout${waiting === 1 ? '' : 's'} awaiting approval by someone other than the requester.`)}</div>` : ''}<div data-pl></div></div>`;
   table($('[data-pl]', el), {
     columns: [
       { label: 'Requested', render: (t) => `${esc(fmt.time(t.requestedAt))}<div class="cell-sub">${esc(t.requestedByName ?? '—')}</div>` },
       { label: 'Statement', render: (t) => `${esc(t.owner ?? '')}<div class="cell-sub mono">${esc(t.number ?? '')}</div>` },
       { label: 'Amount', num: true, render: (t) => `<b>${esc(fmt.money(t.amount, t.currency))}</b>` },
-      { label: 'Account', render: (t) => `<span class="mono">${esc(t.bankCode)} ${esc(t.accountMasked)}</span><div class="cell-sub">bank: ${esc(t.checkedName ?? '—')} ${t.checkedName ? (t.namesMatch ? tag('t-ok', 'names match') : tag('t-warn', 'names differ')) : ''}</div>` },
+      { label: 'Account', render: (t) => `<span class="mono">${esc(t.bankCode)} ${esc(t.accountMasked)}</span><div class="cell-sub">${t.rail === 'xendit' ? 'Xendit Payouts · name not checked' : `bank: ${esc(t.checkedName ?? '—')} ${t.checkedName ? (t.namesMatch ? tag('t-ok', 'names match') : tag('t-warn', 'names differ')) : ''}`}</div>` },
       { label: 'Status', render: (t) => `${tag(...(TAGS[t.state] ?? ['t-mute', t.state]))}${t.approvedByName ? `<div class="cell-sub">approved by ${esc(t.approvedByName)}</div>` : ''}${t.reason ? `<div class="cell-sub">${esc(t.reason)}</div>` : ''}${t.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(t.error)}</div>` : ''}` },
       {
         label: '',
@@ -383,7 +384,7 @@ async function payoutsSection(el, canWrite, reload) {
     if (ap) {
       modal({
         title: 'Approve and send the payout',
-        body: `<p>Send <b>${esc(fmt.money(t.amount, t.currency))}</b> to ${esc(t.checkedName ?? t.holderName)} (${esc(t.bankCode)} ${esc(t.accountMasked)}) through Duitku Disbursement?</p>${t.namesMatch ? '' : callout('warn', `The bank names the account ${esc(t.checkedName ?? '—')}, not ${esc(t.holderName)}. Approve only if you are sure it is the owner's.`)}`,
+        body: `<p>Send <b>${esc(fmt.money(t.amount, t.currency))}</b> to ${esc(t.checkedName ?? t.holderName)} (${esc(t.bankCode)} ${esc(t.accountMasked)}) through ${t.rail === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}?</p>${t.rail === 'xendit' ? callout('info', 'Xendit does not check the name: approve only if the account is the owner\'s.') : t.namesMatch ? '' : callout('warn', `The bank names the account ${esc(t.checkedName ?? '—')}, not ${esc(t.holderName)}. Approve only if you are sure it is the owner's.`)}`,
         actions: [{ label: 'Cancel' }, {
           label: 'Approve and send', kind: 'primary',
           async onClick() {
@@ -402,7 +403,7 @@ async function payoutsSection(el, canWrite, reload) {
       title: settle ? 'Settle a payout by hand' : 'Reject the payout',
       subtitle: `${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName}`,
       body: settle
-        ? `${callout('warn', 'Duitku has not confirmed this payout. Check it in Duitku\'s dashboard first.')}<div class="form one" style="margin-top:12px">${field('Outcome', '<select name="outcome"><option value="succeeded">Paid (Duitku shows success)</option><option value="failed">Not paid (Duitku shows it failed)</option></select>')}${field('What the dashboard shows', '<input name="note" maxlength="300">')}</div>`
+        ? `${callout('warn', 'The gateway has not confirmed this payout. Check it in its dashboard first.')}<div class="form one" style="margin-top:12px">${field('Outcome', '<select name="outcome"><option value="succeeded">Paid (the dashboard shows success)</option><option value="failed">Not paid (the dashboard shows it failed)</option></select>')}${field('What the dashboard shows', '<input name="note" maxlength="300">')}</div>`
         : `<div class="form one">${field('Reason', '<input name="note" maxlength="300">')}</div>`,
       actions: [{ label: 'Cancel' }, {
         label: settle ? 'Settle' : 'Reject', kind: settle ? 'primary' : 'danger',
@@ -456,7 +457,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -488,6 +489,7 @@ registerView('finance', {
           <button class="btn" type="button" data-export="xlsx">${icon('download')} Excel</button>
           <button class="btn" type="button" data-export="csv">CSV</button>
           <button class="btn" type="button" data-export="pdf">PDF</button>
+          <button class="btn" type="button" data-journal>Journal</button>
           <button class="btn" type="button" data-reports>Xendit reports</button>
         </div>
       </div>
@@ -757,7 +759,41 @@ registerView('finance', {
       await draw();
     };
 
-    const DRAW = { overview: drawOverview, payments: drawPayments, receivables: drawReceivables, payables: drawPayables, fees: drawFees, reconciliation: drawReconciliation };
+    // (v1.17.0) The accounting journal's chart of accounts and the monthly close e-mail, per account.
+    const drawSettings = async () => {
+      load();
+      const r = await api(`${base()}/settings`);
+      const st = r.settings, ce = st.closeEmail;
+      body.innerHTML = `
+        <div class="card section" style="margin-top:0"><header><h3>Accounting journal</h3><button class="btn sm right" type="button" data-jdl>${icon('download')} Journal (Excel)</button></header>
+          <div class="body"><p class="cell-sub" style="margin-top:0">The Journal export turns the period into double-entry entries, one per day and kind: collections, gateway fees and VAT on fees, withholding tax, refunds, withdrawals to the bank, and owner payouts. Set your chart of accounts' codes; the rest keep PlugSure's defaults.</p>
+          <div class="form" data-accts>${Object.keys(r.defaults).map((k) => field(r.labels[k], `<div class="row" style="gap:6px"><input name="code_${k}" value="${esc(st.journalAccounts[k].code)}" maxlength="20" style="width:90px"${canWrite ? '' : ' disabled'}><input name="name_${k}" value="${esc(st.journalAccounts[k].name)}" maxlength="80" style="flex:1"${canWrite ? '' : ' disabled'}></div>`)).join('')}</div></div></div>
+        <div class="card section"><header><h3>Monthly close e-mail</h3></header><div class="body">
+          <p class="cell-sub" style="margin-top:0">On the 1st of each month, the previous month's finance export (Excel and PDF) and journal go to these addresses, through your e-mail channel (Govern → Alert routing → Channels).</p>
+          <div class="form one">
+            <label class="check"><input type="checkbox" name="ce_on"${ce.enabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}><span>Send the monthly close</span></label>
+            ${field('Recipients', `<input name="ce_to" value="${esc(ce.recipients.join(', '))}" placeholder="finance@yourcompany.co.id, accountant@firm.co.id"${canWrite ? '' : ' disabled'}>`, { help: 'Up to 10, separated by commas.' })}
+          </div>
+          <div class="cell-sub">${ce.sentPeriod ? `Last sent: ${esc(ce.sentPeriod)}` : 'Not sent yet.'}${ce.lastError ? ` <span style="color:var(--crit)">Last attempt failed: ${esc(ce.lastError)}</span>` : ''}</div>
+        </div></div>
+        ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}`;
+      $('[data-jdl]', body).addEventListener('click', () => $('[data-journal]', bodyAll).click());
+      $('[data-save]', body)?.addEventListener('click', async () => {
+        const journalAccounts = Object.fromEntries(Object.keys(r.defaults).map((k) => [k, { code: $(`[name="code_${k}"]`, body).value.trim(), name: $(`[name="name_${k}"]`, body).value.trim() }]));
+        try {
+          await api(`${base()}/settings`, { method: 'PUT', body: { journalAccounts, closeEmail: { enabled: $('[name="ce_on"]', body).checked, recipients: $('[name="ce_to"]', body).value } } });
+          toast('Saved.', 'ok');
+          drawSettings();
+        } catch (e) { toast(e.message, 'crit'); }
+      });
+      $('[data-send]', body)?.addEventListener('click', async (e) => {
+        e.currentTarget.disabled = true;
+        try { const x = await api(`${base()}/close-email/send`, { method: 'POST', body: {} }); toast(`Sent the close for ${x.month} to ${x.to.join(', ')}.`, 'ok'); } catch (err) { toast(err.message, 'crit'); }
+        e.currentTarget.disabled = false;
+      });
+    };
+
+    const DRAW = { overview: drawOverview, payments: drawPayments, receivables: drawReceivables, payables: drawPayables, fees: drawFees, reconciliation: drawReconciliation, settings: drawSettings };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
@@ -842,6 +878,12 @@ registerView('finance', {
         } catch (err) { toast(err.message, 'crit'); }
       });
       draw();
+    });
+    $('[data-journal]', bodyAll).addEventListener('click', async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      try { const res = await api(`${base()}/journal?format=xlsx&${per()}`, { raw: true }); download(`plugsure-journal-${from}-${to}.xlsx`, await res.blob()); } catch (err) { toast(err.message, 'crit'); }
+      finally { b.disabled = false; }
     });
     $$('[data-export]', bodyAll).forEach((b) => b.addEventListener('click', async () => {
       const f = b.dataset.export;

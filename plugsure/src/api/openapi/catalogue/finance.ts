@@ -64,6 +64,7 @@ export const schemas: Record<string, Schema> = {
     description: '(v1.16.0) An owner\'s share paid through Duitku Disbursement from the operator\'s own account, approved by a second person.',
     properties: {
       id: { type: 'string' }, statementId: { type: 'string', format: 'uuid' }, number: nullable('string'), owner: nullable('string'),
+      rail: { type: 'string', enum: ['duitku', 'xendit'], description: '(v1.17.0) Duitku Disbursement or Xendit Payouts.' },
       state: { type: 'string', enum: ['awaiting_approval', 'sending', 'sent', 'succeeded', 'failed', 'rejected'] },
       amount: count, currency: { type: 'string' }, bankCode: { type: 'string' }, accountMasked: { type: 'string' },
       holderName: { type: 'string' }, checkedName: nullable('string'), namesMatch: { type: 'boolean' }, note: nullable('string'),
@@ -88,6 +89,7 @@ export const schemas: Record<string, Schema> = {
     description: '(v1.15.0) A refund paid to the driver\'s bank account through Duitku Disbursement, approved by a second person.',
     properties: {
       id: { type: 'string' }, paymentId: { type: 'string', format: 'uuid' },
+      rail: { type: 'string', enum: ['duitku', 'xendit'], description: '(v1.17.0) Duitku Disbursement or Xendit Payouts (no name check: checkedName is null).' },
       state: { type: 'string', enum: ['awaiting_approval', 'sending', 'sent', 'succeeded', 'failed', 'rejected'], description: 'sent: accepted, the result not confirmed yet (checked automatically).' },
       amount: count, currency: { type: 'string' }, bankCode: { type: 'string' }, accountMasked: { type: 'string' },
       holderName: { type: 'string', description: 'The name entered.' }, checkedName: nullable('string', { description: 'The holder\'s name the bank returned (inquiry).' }),
@@ -229,7 +231,7 @@ export const ops: Op[] = [
     method: 'GET', path: '/v1/finance/owner-shares', tag: T, summary: 'Site owners\' shares and their payouts',
     description: 'The organisation\'s owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner\'s bank (masked). The operator\'s bank makes the transfers and they are recorded here; (v1.16.0) or, with Disbursement on the operator\'s own Duitku account (payoutsAvailable), they can be sent with POST /v1/finance/statements/{sid}/payout.',
     query: [{ name: 'status', schema: { type: 'string', enum: ['due', 'partial', 'paid'] } }],
-    responses: { 200: { description: 'Shares', schema: { type: 'object', required: ['shares'], properties: { shares: arrayOf(ref('OwnerShare')), payoutsAvailable: { type: 'boolean' } } } } },
+    responses: { 200: { description: 'Shares', schema: { type: 'object', required: ['shares'], properties: { shares: arrayOf(ref('OwnerShare')), payoutsAvailable: { type: 'boolean' }, payoutRails: arrayOf({ type: 'string', enum: ['duitku', 'xendit'] }) } } } },
     errors: [400],
   },
   {
@@ -370,7 +372,7 @@ export const ops: Op[] = [
     method: 'POST', path: '/v1/finance/statements/:sid/payout', tag: T, summary: 'Request an owner payout through Duitku Disbursement',
     description: '(v1.16.0) For an owner statement due or part-paid, to the owner\'s saved bank account (it needs the bank code): Duitku\'s inquiry returns the holder\'s name, and the payout waits for a SECOND person\'s approval. amount (minor units) defaults to what is outstanding; never more. Paid only from the operator\'s OWN Duitku account. payment:write; audited as finance.owner_payout_requested.',
     pathParams: { sid: 'The owner statement id.' },
-    body: { required: false, schema: { type: 'object', properties: { amount: { type: 'integer', minimum: 1 }, note: { type: 'string', maxLength: 300 } } }, example: { amount: 1250000, note: 'October share' } },
+    body: { required: false, schema: { type: 'object', properties: { amount: { type: 'integer', minimum: 1 }, note: { type: 'string', maxLength: 300 }, rail: { type: 'string', enum: ['duitku', 'xendit'], description: '(v1.17.0) Default: the first available (Xendit first).' } } }, example: { amount: 1250000, note: 'October share' } },
     responses: { 201: { description: 'Requested, awaiting approval', schema: { type: 'object', required: ['transfer'], properties: { transfer: ref('PayoutTransfer') } } } },
     errors: [404, 409, 422],
   },
@@ -396,5 +398,32 @@ export const ops: Op[] = [
     body: { required: true, schema: { type: 'object', required: ['outcome', 'note'], properties: { outcome: { type: 'string', enum: ['succeeded', 'failed'] }, note: { type: 'string', minLength: 1, maxLength: 300 } } }, example: { outcome: 'succeeded', note: 'Dashboard: success' } },
     responses: { 200: { description: 'Settled', schema: { type: 'object', required: ['transfer'], properties: { transfer: ref('PayoutTransfer') } } } },
     errors: [404, 409, 422],
+  },
+  acct('Finance settings', '(v1.17.0) The accounting journal\'s chart of accounts (code and name per line: gateway, bank, revenue, refunds, fees, vatInput, whtPayable, ownerPayable) and the monthly close e-mail, with PlugSure\'s defaults and the labels.',
+    '/settings', { type: 'object', required: ['settings'], properties: {
+      settings: { type: 'object', properties: { journalAccounts: { type: 'object', additionalProperties: { type: 'object', properties: { code: { type: 'string' }, name: { type: 'string' } } } }, closeEmail: { type: 'object', properties: { enabled: { type: 'boolean' }, recipients: arrayOf({ type: 'string' }), sentPeriod: nullable('string'), lastError: nullable('string'), lastAt: nullable('string', { format: 'date-time' }) } } } },
+      defaults: { type: 'object', additionalProperties: { type: 'object', properties: { code: { type: 'string' }, name: { type: 'string' } } } }, labels: { type: 'object', additionalProperties: { type: 'string' } },
+    } }),
+  {
+    method: 'PUT', path: '/v1/finance/accounts/:id/settings', tag: T, summary: 'Save the finance settings',
+    description: '(v1.17.0) journalAccounts: codes (1–20 letters, digits, . - /) and names by key; closeEmail: enabled and up to 10 recipients (sent through the e-mail channel of the caller\'s organisation). payment:write; audited as finance.settings_saved.',
+    pathParams: ID,
+    body: { required: true, schema: { type: 'object', properties: { journalAccounts: { type: 'object', additionalProperties: { type: 'object', properties: { code: { type: 'string' }, name: { type: 'string' } } } }, closeEmail: { type: 'object', properties: { enabled: { type: 'boolean' }, recipients: arrayOf({ type: 'string', format: 'email' }) } } } },
+      example: { journalAccounts: { revenue: { code: '4-1100', name: 'Pendapatan pengisian' } }, closeEmail: { enabled: true, recipients: ['finance@operator.co.id'] } } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object', required: ['settings'], properties: { settings: { type: 'object' } } } } },
+    errors: [404, 422],
+  },
+  acct('Accounting journal', '(v1.17.0) The period as double-entry journal entries, one per day and kind (collections, gateway fees and VAT on fees, withholding tax, refunds, withdrawals to the bank, owner payouts), every entry balanced, with the account codes from the settings. format: xlsx (default; Journal, By account, About), csv, or json. Audited as finance.journal_exported.',
+    '/journal', { type: 'object', properties: {
+      lines: arrayOf({ type: 'object', properties: { date: { type: 'string', format: 'date' }, entry: { type: 'string' }, kind: { type: 'string' }, code: { type: 'string' }, account: { type: 'string' }, debit: money, credit: money, description: { type: 'string' } } }),
+      totals: arrayOf({ type: 'object', properties: { code: { type: 'string' }, account: { type: 'string' }, debit: money, credit: money } }),
+    } }, { query: [...PERIOD, { name: 'format', schema: { type: 'string', enum: ['xlsx', 'csv', 'json'] } }] }),
+  {
+    method: 'POST', path: '/v1/finance/accounts/:id/close-email/send', tag: T, summary: 'Send a month\'s close e-mail now',
+    description: '(v1.17.0) The finance export (Excel and PDF) and the journal (Excel) for month (YYYY-MM, default last month) to the saved recipients, through the e-mail channel. 409 without an e-mail channel; 422 without recipients; 502 when the e-mail server refuses. Audited as finance.close_email_sent.',
+    pathParams: ID,
+    body: { required: false, schema: { type: 'object', properties: { month: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } } }, example: { month: '2026-10' } },
+    responses: { 200: { description: 'Sent', schema: { type: 'object', required: ['ok', 'month', 'to'], properties: { ok: { type: 'boolean' }, month: { type: 'string' }, to: arrayOf({ type: 'string' }), reference: nullable('string') } } } },
+    errors: [404, 409, 422, 502],
   },
 ];

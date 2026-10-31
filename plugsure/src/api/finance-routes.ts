@@ -8,6 +8,7 @@ import { render, type ExportFormat } from '../services/finance-export.js';
 import * as pay from '../services/payouts.js';
 import * as xfer from '../services/refund-transfers.js';
 import * as pxfer from '../services/payout-transfers.js';
+import * as fj from '../services/finance-journal.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -23,6 +24,9 @@ import * as pxfer from '../services/payout-transfers.js';
  *   GET  /v1/finance/accounts/:id/reports                   (v1.16.0) Xendit reports requested for the account
  *   POST /v1/finance/accounts/:id/reports                   ask Xendit to generate one (?from&to; body { type })
  *   GET  /v1/finance/accounts/:id/reports/:rid              its state (asked of Xendit while pending); ?link=true: the download link
+ *   (v1.17.0) GET/PUT /v1/finance/accounts/:id/settings     the journal's chart of accounts; the monthly close e-mail
+ *   GET  /v1/finance/accounts/:id/journal                   the period as double-entry journal entries (CSV, Excel, JSON)
+ *   POST /v1/finance/accounts/:id/close-email/send          send a month's close now (body { month }, default last month)
  *   (v1.16.0) owner payouts sent through Duitku Disbursement (two people)
  *   GET  /v1/finance/payout-transfers                       payouts (?open=true: not settled)
  *   POST /v1/finance/statements/:sid/payout                 request one: the owner's saved account, checked by name
@@ -152,6 +156,56 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     } catch (e) { return failed(reply, e); }
   });
 
+  // ─────────────────────────────────────────── (v1.17.0) the accounting journal and the monthly close e-mail
+
+  app.get('/v1/finance/accounts/:id/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const a = await account(req);
+      return { settings: await fj.settingsFor(a), defaults: fj.DEFAULT_ACCOUNTS, labels: fj.JOURNAL_LABELS };
+    } catch (e) { return failed(reply, e); }
+  });
+
+  app.put('/v1/finance/accounts/:id/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const a = await account(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const st = await fj.saveSettings(a, b, req.principal.orgId, /^[0-9a-f-]{36}$/i.test(String(req.principal.userId ?? '')) ? req.principal.userId! : null);
+      await audit(req, 'finance.settings_saved', a.id, { closeEmail: { enabled: st.closeEmail.enabled, recipients: st.closeEmail.recipients.length }, journalAccounts: b.journalAccounts !== undefined });
+      return { settings: st };
+    } catch (e) { return failed(reply, e); }
+  });
+
+  app.get('/v1/finance/accounts/:id/journal', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const format = String(((req.query ?? {}) as Record<string, string>).format ?? 'xlsx');
+    if (!['csv', 'xlsx', 'json'].includes(format)) throw bad('format must be csv, xlsx or json');
+    try {
+      const a = await account(req);
+      const p = period(req);
+      const j = await fj.journal(a, p);
+      await audit(req, 'finance.journal_exported', a.id, { format, from: p.from.toISOString(), to: p.to.toISOString(), lines: j.lines.length });
+      if (format === 'json') return j;
+      const name = `plugsure-journal-${p.from.toISOString().slice(0, 10)}`;
+      return format === 'csv'
+        ? reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="${name}.csv"`).header('cache-control', 'no-store').send(fj.journalCsv(j))
+        : reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="${name}.xlsx"`).header('cache-control', 'no-store').send(fj.journalXlsx(a, p, j));
+    } catch (e) { return failed(reply, e); }
+  });
+
+  app.post('/v1/finance/accounts/:id/close-email/send', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const a = await account(req);
+      const { sendClose, previousMonth } = await import('../services/finance-close-mail.js');
+      const month = String(((req.body ?? {}) as Record<string, unknown>).month ?? previousMonth());
+      const r = await sendClose(a, month);
+      await audit(req, 'finance.close_email_sent', a.id, { month, recipients: r.to.length });
+      return { ok: true, month, to: r.to, reference: r.reference };
+    } catch (e) { return failed(reply, e); }
+  });
+
   app.get('/v1/finance/accounts/:id/breakdown', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     try { const a = await account(req); return await fin.closeBreakdown(a.id, period(req)); } catch (e) { return failed(reply, e); }
@@ -258,7 +312,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/v1/finance/owner-shares', async (req) => {
     assertCan(req.principal, { permission: 'payment:read' });
-    return { shares: await pay.ownerShares(req.principal.orgId, { status: statusParam(req) }), payoutsAvailable: await pxfer.payoutsAvailable(req.principal.orgId, platform(req)) };
+    const rails = await pxfer.payoutRails(req.principal.orgId, platform(req));
+    return { shares: await pay.ownerShares(req.principal.orgId, { status: statusParam(req) }), payoutsAvailable: rails.length > 0, payoutRails: rails };
   });
 
   app.get('/v1/finance/owner-shares/transfer-list.csv', async (req, reply) => {

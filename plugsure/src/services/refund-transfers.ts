@@ -7,9 +7,11 @@ import { providerFor } from './payments/registry.js';
 import { DuitkuProvider } from './payments/duitku.js';
 import { completeRefund } from './refunds.js';
 import { persistAlert } from './alerts.js';
+import { railFor } from './payout-rails.js';
 
 /**
- * Refunds sent through Duitku Disbursement, with two people (v1.15.0).
+ * Refunds sent to the driver's bank account, with two people (v1.15.0: Duitku Disbursement; v1.17.0: also Xendit
+ * Payouts — services/payout-rails.ts; the rail is the one of the account that took the payment).
  *
  * Duitku has no refund API. With the Disbursement credentials saved on the Duitku account that took the payment, a
  * refund can be paid to the driver's bank account from the Refunds page:
@@ -56,28 +58,32 @@ export async function duitkuFor(integrationId: string | null): Promise<{ p: Duit
   return p instanceof DuitkuProvider ? { p, id: integrationId } : null;
 }
 
-/** Whether a payment's refund can be sent through Disbursement: a Duitku payment whose account has its credentials. */
-export async function disbursementAvailable(intentIds: string[]): Promise<Set<string>> {
-  if (!intentIds.length) return new Set();
+/**
+ * Whether a payment's refund can be sent to a bank account, and how: a Duitku payment whose account has Disbursement, or
+ * (v1.17.0) a Xendit payment whose account has payouts on. Payment id → rail.
+ */
+export async function disbursementAvailable(intentIds: string[]): Promise<Map<string, 'duitku' | 'xendit'>> {
+  const ok = new Map<string, 'duitku' | 'xendit'>();
+  if (!intentIds.length) return ok;
   const rows = await outsideRequestScope(() => many<{ id: string; integration_id: string | null }>(
-    `SELECT id, integration_id FROM payment_intent WHERE id = ANY($1::uuid[]) AND provider = 'duitku'`, [intentIds]));
-  const ok = new Set<string>();
-  const cache = new Map<string, boolean>();
+    `SELECT id, integration_id FROM payment_intent WHERE id = ANY($1::uuid[]) AND provider IN ('duitku', 'xendit')`, [intentIds]));
+  const cache = new Map<string, 'duitku' | 'xendit' | null>();
   for (const r of rows) {
     if (!r.integration_id) continue;
-    if (!cache.has(r.integration_id)) cache.set(r.integration_id, Boolean((await duitkuFor(r.integration_id).catch(() => null))?.p.hasDisbursement()));
-    if (cache.get(r.integration_id)) ok.add(r.id);
+    if (!cache.has(r.integration_id)) cache.set(r.integration_id, (await railFor(r.integration_id).catch(() => null))?.kind ?? null);
+    const k = cache.get(r.integration_id);
+    if (k) ok.set(r.id, k);
   }
   return ok;
 }
 
 export interface TransferView {
-  id: string; paymentId: string; state: string; amount: number; currency: string; bankCode: string; accountMasked: string;
+  id: string; paymentId: string; rail: 'duitku' | 'xendit'; state: string; amount: number; currency: string; bankCode: string; accountMasked: string;
   holderName: string; checkedName: string | null; namesMatch: boolean; requestedBy: string | null; requestedByName: string | null; requestedAt: string;
   approvedBy: string | null; approvedByName: string | null; approvedAt: string | null; reason: string | null; responseCode: string | null; error: string | null;
 }
 const view = (r: any): TransferView => ({
-  id: String(r.id), paymentId: r.payment_intent_id, state: r.state, amount: Number(r.amount_minor), currency: r.currency, bankCode: r.bank_code,
+  id: String(r.id), paymentId: r.payment_intent_id, rail: r.rail ?? 'duitku', state: r.state, amount: Number(r.amount_minor), currency: r.currency, bankCode: r.bank_code,
   accountMasked: `••••${r.account_last4}`, holderName: r.holder_name, checkedName: r.checked_name, namesMatch: namesMatch(r.holder_name, r.checked_name),
   requestedBy: r.requested_by, requestedByName: r.requested_by_name ?? null, requestedAt: iso(r.requested_at)!,
   approvedBy: r.approved_by, approvedByName: r.approved_by_name ?? null, approvedAt: iso(r.approved_at), reason: r.reason, responseCode: r.response_code, error: r.error,
@@ -103,30 +109,29 @@ async function transferRow(orgId: string, id: string) {
 export async function requestTransfer(orgId: string, intentId: string, b: { bankCode?: unknown; accountNumber?: unknown; holderName?: unknown }, userId: string | null): Promise<TransferView> {
   const bankCode = String(b.bankCode ?? '').trim(), holder = String(b.holderName ?? '').trim();
   const number = String(b.accountNumber ?? '').replace(/[\s.-]/g, '');
-  if (!/^[0-9A-Za-z]{2,12}$/.test(bankCode)) throw new TransferError(422, 'The bank code is 2 to 12 letters or digits (Duitku\'s bank codes, e.g. 014 for BCA).');
+  if (!/^[0-9A-Za-z_]{2,20}$/.test(bankCode)) throw new TransferError(422, 'The bank code is 2 to 20 letters, digits or _ (e.g. 014 for BCA, or Xendit\'s ID_BCA).');
   if (!/^\d{5,20}$/.test(number)) throw new TransferError(422, 'The account number is 5 to 20 digits.');
   if (!holder || holder.length > 120) throw new TransferError(422, 'The account holder\'s name is 1 to 120 characters.');
   const pi = await one<{ id: string; provider: string; integration_id: string | null; refund_state: string | null; due: string; currency: string }>(
     `SELECT id, provider, integration_id, refund_state, refund_due_minor AS due, currency FROM payment_intent WHERE id = $1 AND org_id = $2`, [intentId, orgId]);
   if (!pi) throw new TransferError(404, 'No such payment.');
-  if (pi.provider !== 'duitku') throw new TransferError(409, 'Only refunds of Duitku payments are sent through Disbursement.');
   if (!['due', 'failed'].includes(String(pi.refund_state))) throw new TransferError(409, `The refund is ${pi.refund_state ?? 'not due'}.`);
-  const d = await duitkuFor(pi.integration_id);
-  if (!d?.p.hasDisbursement()) throw new TransferError(409, 'Disbursement is not set up on the Duitku account that took this payment (Integrations → Payments — fallback).');
+  const d = await railFor(pi.integration_id);
+  if (!d) throw new TransferError(409, 'Sending refunds is not set up on the account that took this payment: Duitku Disbursement (Payments — fallback) or Xendit payouts (Payments).');
   const amount = Number(pi.due);
-  const lim = d.p.disbursementLimits();
+  const lim = d.limits('refund');
   if (amount > lim.perTransfer) throw new TransferError(422, `The refund is above the largest transfer allowed (${lim.perTransfer} rupiah): pay it by bank transfer.`);
-  const q = await d.p.disbursementInquiry({ bankCode, bankAccount: number, amount, purpose: 'PlugSure refund' });
-  if (!q.ok) throw new TransferError(422, `Duitku could not check the account: ${q.error ?? q.responseCode}.`);
+  const q = await d.check({ bankCode, account: number, amount, purpose: 'PlugSure refund' });
+  if (!q.ok) throw new TransferError(422, `${d.kind === 'duitku' ? 'Duitku could not check the account' : 'Xendit cannot pay this account'}: ${q.error}.`);
   // Hold the refund for the transfer (from due/failed only: a click elsewhere cannot overtake it).
   const held = await one(`UPDATE payment_intent SET refund_state = 'processing', refund_method = 'disbursement', refund_error = 'Awaiting approval of a Disbursement transfer.', updated_at = now()
      WHERE id = $1 AND refund_state IN ('due', 'failed') RETURNING id`, [intentId]);
   if (!held) throw new TransferError(409, 'The refund changed meanwhile. Reload.');
   try {
     const r = await one<any>(
-      `INSERT INTO refund_transfer (org_id, payment_intent_id, integration_id, amount_minor, currency, bank_code, account_number_sealed, account_last4, holder_name, checked_name, state, requested_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'awaiting_approval', $11) RETURNING *`,
-      [orgId, intentId, d.id, amount, pi.currency, bankCode, seal(number, AAD(orgId, intentId)), number.slice(-4), holder, q.accountName, userId]);
+      `INSERT INTO refund_transfer (org_id, payment_intent_id, integration_id, amount_minor, currency, bank_code, account_number_sealed, account_last4, holder_name, checked_name, state, requested_by, rail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'awaiting_approval', $11, $12) RETURNING *`,
+      [orgId, intentId, d.integrationId, amount, pi.currency, bankCode, seal(number, AAD(orgId, intentId)), number.slice(-4), holder, q.accountName, userId, d.kind]);
     return view(r);
   } catch (e) {
     await query(`UPDATE payment_intent SET refund_state = 'due', refund_method = NULL, refund_error = NULL, updated_at = now() WHERE id = $1 AND refund_state = 'processing' AND refund_method = 'disbursement'`, [intentId]);
@@ -158,9 +163,9 @@ export async function approveTransfer(orgId: string, id: string, userId: string 
   const t = await transferRow(orgId, id);
   if (t.state !== 'awaiting_approval') throw new TransferError(409, `The transfer is ${t.state}.`);
   if (!userId || t.requested_by === userId) throw new TransferError(403, 'A transfer is approved by a second person: not the one who requested it.');
-  const d = await duitkuFor(t.integration_id);
-  if (!d?.p.hasDisbursement()) throw new TransferError(409, 'Disbursement is no longer set up on the Duitku account.');
-  const lim = d.p.disbursementLimits();
+  const d = await railFor(t.integration_id);
+  if (!d) throw new TransferError(409, 'Sending refunds is no longer set up on that account.');
+  const lim = d.limits('refund');
   if (Number(t.amount_minor) > lim.perTransfer) throw new TransferError(422, `Above the largest transfer allowed (${lim.perTransfer} rupiah).`);
   const today = await one<{ sum: string }>(
     `SELECT COALESCE(sum(amount_minor), 0)::bigint AS sum FROM refund_transfer
@@ -174,30 +179,21 @@ export async function approveTransfer(orgId: string, id: string, userId: string 
     [id, orgId, userId]);
   if (!won) throw new TransferError(409, 'The transfer changed meanwhile. Reload.');
   const number = unseal(t.account_number_sealed, AAD(orgId, t.payment_intent_id));
-  const amount = Number(t.amount_minor);
-  // A fresh inquiry: Duitku's disburseId is short-lived, and the account must still be the one approved.
-  const q = await d.p.disbursementInquiry({ bankCode: t.bank_code, bankAccount: number, amount, purpose: 'PlugSure refund' }).catch((e) => ({ ok: false, error: (e as Error).message, responseCode: '' } as any));
-  if (!q.ok || !q.disburseId || (t.checked_name && q.accountName && !namesMatch(t.checked_name, q.accountName))) {
-    const err = !q.ok ? `Duitku could not check the account again: ${q.error ?? q.responseCode}` : !q.disburseId ? 'Duitku returned no disburseId' : `the bank now names the account ${q.accountName}`;
-    const r = await one<any>(`UPDATE refund_transfer SET state = 'failed', error = $2, updated_at = now() WHERE id = $1 RETURNING *`, [id, `${err}. Nothing was sent.`]);
-    await release(t.payment_intent_id, `Disbursement transfer not sent: ${err}.`);
-    return view(r);
-  }
-  await query(`UPDATE refund_transfer SET disburse_id = $2, cust_ref = $3, updated_at = now() WHERE id = $1`, [id, q.disburseId, q.custRefNumber]);
-  const res = await d.p.disbursementTransfer({ bankCode: t.bank_code, bankAccount: number, amount, purpose: 'PlugSure refund', accountName: q.accountName ?? t.checked_name ?? t.holder_name,
-    custRefNumber: q.custRefNumber ?? `ps-${t.id}`, disburseId: q.disburseId });
-  return settle(orgId, t, res.outcome, res.responseCode, res.error, userId);
+  const res = await d.send({ idempotencyKey: `ps-refund-${t.id}`, bankCode: t.bank_code, account: number, holderName: t.holder_name, checkedName: t.checked_name,
+    amount: Number(t.amount_minor), purpose: 'PlugSure refund' });
+  if (res.ref || res.cust) await query(`UPDATE refund_transfer SET disburse_id = COALESCE($2, disburse_id), cust_ref = COALESCE($3, cust_ref), updated_at = now() WHERE id = $1`, [id, res.ref, res.cust]);
+  return settle(orgId, { ...t, disburse_id: res.ref ?? t.disburse_id }, res.outcome, res.code, res.error, userId);
 }
 
 async function settle(orgId: string, t: any, outcome: 'succeeded' | 'failed' | 'unknown', code: string, error: string | null, actor: string | null): Promise<TransferView> {
   if (outcome === 'succeeded') {
     const r = await one<any>(`UPDATE refund_transfer SET state = 'succeeded', response_code = $2, error = NULL, updated_at = now() WHERE id = $1 AND state IN ('sending', 'sent') RETURNING *`, [t.id, code]);
-    await completeRefund(t.payment_intent_id, orgId, Number(t.amount_minor), 'disbursement', `duitku-disb-${(r ?? t).disburse_id ?? t.id}`, actor, ['processing']);
+    await completeRefund(t.payment_intent_id, orgId, Number(t.amount_minor), 'disbursement', `${(r ?? t).rail === 'xendit' ? 'xendit-payout' : 'duitku-disb'}-${(r ?? t).disburse_id ?? t.id}`, actor, ['processing']);
     return view(r ?? t);
   }
   if (outcome === 'failed') {
     const r = await one<any>(`UPDATE refund_transfer SET state = 'failed', response_code = $2, error = $3, updated_at = now() WHERE id = $1 AND state IN ('sending', 'sent') RETURNING *`, [t.id, code, error]);
-    await release(t.payment_intent_id, `Duitku refused the Disbursement transfer${code ? ` (${code})` : ''}: ${error ?? ''}. Pay it by bank transfer, or request another transfer.`.replace(': .', '.'));
+    await release(t.payment_intent_id, `The transfer was refused${code ? ` (${code})` : ''}: ${error ?? ''}. Pay it by bank transfer, or request another transfer.`.replace(': .', '.'));
     return view(r ?? t);
   }
   const r = await one<any>(`UPDATE refund_transfer SET state = 'sent', response_code = $2, error = $3, updated_at = now() WHERE id = $1 AND state IN ('sending', 'sent') RETURNING *`, [t.id, code, error]);
@@ -212,7 +208,7 @@ async function settle(orgId: string, t: any, outcome: 'succeeded' | 'failed' | '
 export async function resolveTransfer(orgId: string, id: string, outcomeRaw: unknown, noteRaw: unknown, userId: string | null): Promise<TransferView> {
   const outcome = String(outcomeRaw ?? ''), note = String(noteRaw ?? '').trim();
   if (!['succeeded', 'failed'].includes(outcome)) throw new TransferError(422, 'The outcome is succeeded or failed.');
-  if (!note || note.length > 300) throw new TransferError(422, 'Note what Duitku\'s dashboard shows (up to 300 characters).');
+  if (!note || note.length > 300) throw new TransferError(422, 'Note what the gateway\'s dashboard shows (up to 300 characters).');
   const t = await transferRow(orgId, id);
   if (!['sent', 'sending'].includes(t.state)) throw new TransferError(409, `The transfer is ${t.state}.`);
   if (t.state === 'sending' && Date.now() - new Date(t.updated_at).getTime() < 10 * 60_000) throw new TransferError(409, 'The transfer is being sent. Wait a few minutes.');
@@ -221,21 +217,45 @@ export async function resolveTransfer(orgId: string, id: string, outcomeRaw: unk
 }
 
 /** The worker: transfers sent without a known result are asked about (inquirystatus); after a day, a person is alerted. */
+/**
+ * Ask a transfer's rail where it stands. A Xendit payout whose answer was lost (no payout id) is sent again with the same
+ * idempotency key: Xendit returns the first payout, never a second.
+ */
+export async function askRail(t: any, keyPrefix: string): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; code: string; error: string | null; ref: string | null } | null> {
+  const d = await railFor(t.integration_id).catch(() => null);
+  if (!d) return null;
+  try {
+    if (!t.disburse_id) {
+      if (d.kind !== 'xendit') return null;
+      const number = unseal(t.account_number_sealed, t.payment_intent_id ? AAD(t.org_id, t.payment_intent_id) : `payout_transfer:${t.org_id}:${t.statement_id}`);
+      const r = await d.send({ idempotencyKey: `${keyPrefix}-${t.id}`, bankCode: t.bank_code, account: number, holderName: t.holder_name, checkedName: t.checked_name,
+        amount: Number(t.amount_minor), purpose: keyPrefix === 'ps-refund' ? 'PlugSure refund' : 'PlugSure owner share' });
+      return { outcome: r.outcome, code: r.code, error: r.error, ref: r.ref };
+    }
+    const st = await d.status(t.disburse_id);
+    return { ...st, ref: t.disburse_id };
+  } catch (e) {
+    return { outcome: 'unknown', code: '', error: (e as Error).message, ref: t.disburse_id ?? null };
+  }
+}
+
 export async function sweepTransfers(): Promise<number> {
   const rows = await outsideRequestScope(() => many<any>(
-    `SELECT * FROM refund_transfer WHERE state = 'sent' AND disburse_id IS NOT NULL AND updated_at < now() - interval '5 minutes' ORDER BY updated_at LIMIT 50`));
+    `SELECT * FROM refund_transfer WHERE state = 'sent' AND (disburse_id IS NOT NULL OR rail = 'xendit') AND updated_at < now() - interval '5 minutes' ORDER BY updated_at LIMIT 50`));
   let n = 0;
   for (const t of rows) {
     await outsideRequestScope(async () => {
-      const d = await duitkuFor(t.integration_id).catch(() => null);
-      const st = d ? await d.p.disbursementStatus(t.disburse_id).catch((e) => ({ outcome: 'unknown' as const, responseCode: '', error: (e as Error).message })) : null;
-      if (st?.outcome === 'succeeded') { await settle(t.org_id, t, 'succeeded', st.responseCode, null, null); n++; return; }
+      const st = await askRail(t, 'ps-refund');
+      if (st?.ref && st.ref !== t.disburse_id) { await query(`UPDATE refund_transfer SET disburse_id = $2 WHERE id = $1`, [t.id, st.ref]); t.disburse_id = st.ref; }
+      if (st?.outcome === 'succeeded') { await settle(t.org_id, t, 'succeeded', st.code, null, null); n++; return; }
+      // Xendit's refusal is final (FAILED / CANCELLED / REVERSED): the refund is due again. Duitku never answers 'failed' here.
+      if (st?.outcome === 'failed') { await settle(t.org_id, t, 'failed', st.code, st.error, null); return; }
       const checks = Number(t.checks) + 1;
       await query(`UPDATE refund_transfer SET checks = $2, updated_at = now() WHERE id = $1 AND state = 'sent'`, [t.id, checks]);
       if (Date.now() - new Date(t.approved_at ?? t.requested_at).getTime() > 86_400_000 && checks % 24 === 1) {
         await persistAlert({
           orgId: t.org_id, kind: 'refund.disbursement_unconfirmed', severity: 'warning',
-          message: `A Duitku Disbursement refund transfer (${t.id}) has had no confirmed result for over a day. Check it in Duitku's dashboard and settle it on the Refunds page.`,
+          message: `A refund transfer (${t.id}, ${t.rail === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}) has had no confirmed result for over a day. Check it in the gateway's dashboard and settle it on the Refunds page.`,
           targetType: 'payment_intent', targetId: t.payment_intent_id,
         }).catch((e: unknown) => logger.warn({ err: (e as Error).message }, 'refund transfer alert failed'));
       }
