@@ -5,6 +5,7 @@ import { writeAudit } from '../services/audit.js';
 import { TokenBuckets } from '../services/ratelimit.js';
 import * as fin from '../services/finance.js';
 import { render, type ExportFormat } from '../services/finance-export.js';
+import * as pay from '../services/payouts.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -20,6 +21,15 @@ import { render, type ExportFormat } from '../services/finance-export.js';
  *   POST /v1/finance/accounts/:id/exceptions/:eid/resolve   close one with a note
  *   POST /v1/finance/accounts/:id/sync                      sync, take the balance and reconcile now
  *   GET  /v1/finance/accounts/:id/export                    the period as CSV, Excel or PDF
+ *   (v1.14.0) payouts and statement payments, recorded (PlugSure moves no money: the operator's bank does)
+ *   GET  /v1/finance/owner-shares                           owners' shares on finalised statements: due, part-paid, paid
+ *   GET  /v1/finance/owner-shares/transfer-list.csv         what is owed, with the owners' bank details, for the bank
+ *   GET  /v1/finance/operator-statements                    operators' statements to PlugSure (platform:admin)
+ *   GET  /v1/finance/statements/:sid/payments               the payments recorded against a statement
+ *   POST /v1/finance/statements/:sid/payments               record a transfer (amount, date, bank reference)
+ *   POST /v1/finance/statement-payments/:pid/void           void a mistaken one, with a reason
+ *   GET  /v1/finance/owners/:oid/bank-account               an owner's bank details (the number masked)
+ *   PUT  /v1/finance/owners/:oid/bank-account               set them (the number sealed)
  *
  * Reading is payment:read, changing is payment:write. An operator sees its own account(s); the platform's account
  * (org NULL) needs platform:admin as well. Every action is audited.
@@ -160,5 +170,90 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       const name = `plugsure-finance-${(q.from ?? p.from.toISOString().slice(0, 10))}-${(q.to ?? '').slice(0, 10) || 'to-date'}.${out.ext}`;
       return reply.header('content-type', out.type).header('content-disposition', `attachment; filename="${name}"`).header('cache-control', 'no-store').send(out.body);
     } catch (e) { return failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.14.0) payouts and statement payments, recorded
+
+  const PAY_STATUSES = ['due', 'partial', 'paid'];
+  const payFailed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof pay.PayoutError) return reply.status(e.statusCode).send({ error: e.message });
+    throw e;
+  };
+  const uuidParam = (req: FastifyRequest, name: string, what: string) => {
+    const v = String((req.params as Record<string, string>)[name] ?? '');
+    if (!/^[0-9a-f-]{36}$/i.test(v)) throw Object.assign(new Error(`No such ${what}.`), { statusCode: 404 });
+    return v;
+  };
+  const statusParam = (req: FastifyRequest) => {
+    const st = String(((req.query ?? {}) as Record<string, string>).status ?? '');
+    if (st && !PAY_STATUSES.includes(st)) throw bad(`status must be one of ${PAY_STATUSES.join(', ')}`);
+    return (st || null) as pay.PayStatus | null;
+  };
+  const auditPay = (req: FastifyRequest, action: string, targetType: string, targetId: string, after: Record<string, unknown>) => writeAudit({
+    orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action, targetType, targetId, ip: req.ip, after,
+  });
+
+  app.get('/v1/finance/owner-shares', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    return { shares: await pay.ownerShares(req.principal.orgId, { status: statusParam(req) }) };
+  });
+
+  app.get('/v1/finance/owner-shares/transfer-list.csv', async (req, reply) => {
+    // The full account numbers: only those who may record payouts, and audited.
+    assertCan(req.principal, { permission: 'payment:write' });
+    const csv = await pay.transferList(req.principal.orgId);
+    await auditPay(req, 'finance.transfer_list_exported', 'organisation', req.principal.orgId, { lines: Math.max(0, csv.split('\r\n').length - 2) });
+    return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', 'attachment; filename="plugsure-owner-transfers.csv"').header('cache-control', 'no-store').send(csv);
+  });
+
+  app.get('/v1/finance/operator-statements', async (req) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    return { statements: await pay.platformStatements({ status: statusParam(req) }) };
+  });
+
+  app.get('/v1/finance/statements/:sid/payments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await pay.payments(uuidParam(req, 'sid', 'statement'), req.principal.orgId, platform(req)); } catch (e) { return payFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/statements/:sid/payments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const sid = uuidParam(req, 'sid', 'statement');
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await pay.recordPayment(sid, req.principal.orgId, platform(req), b, req.principal.userId ?? null);
+      await auditPay(req, r.statement.kind === 'owner_payout' ? 'finance.owner_payout_recorded' : 'finance.platform_fee_recorded', 'commission_statement', sid,
+        { payment: r.paymentId, amount: Number(b.amount), paidOn: b.paidOn, reference: String(b.reference ?? '').slice(0, 120), operator: r.orgId });
+      return reply.status(201).send({ paymentId: r.paymentId, statement: r.statement });
+    } catch (e) { return payFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/statement-payments/:pid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    const pid = String((req.params as Record<string, string>).pid ?? '');
+    if (!/^\d{1,18}$/.test(pid)) return reply.status(404).send({ error: 'No such payment.' });
+    try {
+      const reason = ((req.body ?? {}) as Record<string, unknown>).reason;
+      const r = await pay.voidPayment(pid, req.principal.orgId, platform(req), reason, req.principal.userId ?? null);
+      await auditPay(req, 'finance.statement_payment_voided', 'commission_statement', r.statementId, { payment: pid, reason: String(reason ?? '').slice(0, 300) });
+      return { ok: true, statement: (await pay.payments(r.statementId, req.principal.orgId, platform(req))).statement };
+    } catch (e) { return payFailed(reply, e); }
+  });
+
+  app.get('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const a = await pay.bankAccount(req.principal.orgId, uuidParam(req, 'oid', 'site owner'));
+    return a ? { account: a } : reply.status(404).send({ error: 'No bank details saved for this owner.' });
+  });
+
+  app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const oid = uuidParam(req, 'oid', 'site owner');
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const a = await pay.saveBankAccount(req.principal.orgId, oid, b, req.principal.userId ?? null);
+      await auditPay(req, 'finance.owner_bank_account_saved', 'site_owner', oid, { bank: a.bankName, holder: a.holderName, account: a.accountMasked, numberChanged: Boolean(b.accountNumber) });
+      return { account: a };
+    } catch (e) { return payFailed(reply, e); }
   });
 }

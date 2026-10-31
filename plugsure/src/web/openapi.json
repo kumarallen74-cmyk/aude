@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.13.0",
+    "version": "1.14.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -28162,7 +28162,7 @@
         ],
         "summary": "Payables",
         "operationId": "payables",
-        "description": "Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took (listed as due; recording their payment comes later).\n\n**Permissions checked:** `payment:read`.",
+        "description": "Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "id",
@@ -28276,6 +28276,9 @@
                           "amount": {
                             "type": "number"
                           },
+                          "paid": {
+                            "type": "number"
+                          },
                           "currency": {
                             "type": "string"
                           },
@@ -28286,7 +28289,9 @@
                           "status": {
                             "type": "string",
                             "enum": [
-                              "due"
+                              "due",
+                              "partial",
+                              "paid"
                             ]
                           }
                         }
@@ -28904,6 +28909,615 @@
         },
         "x-permissions": [
           "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/owner-shares": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Site owners' shares and their payouts",
+        "operationId": "siteOwnersSharesAndTheirPayouts",
+        "description": "The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). PlugSure moves no money: the operator's bank does, and the transfer is recorded here.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "due",
+                "partial",
+                "paid"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "shares"
+                  ],
+                  "properties": {
+                    "shares": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OwnerShare"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/owner-shares/transfer-list.csv": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Transfer list for the bank",
+        "operationId": "transferListForBank",
+        "description": "What is still owed to site owners, one line per statement, with each owner's bank, code, holder and FULL account number, for the bank's bulk transfer. payment:write; audited as finance.transfer_list_exported.\n\n**Permissions checked:** `payment:write`.",
+        "responses": {
+          "200": {
+            "description": "CSV (attachment)",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/operator-statements": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Operators' statements to PlugSure",
+        "operationId": "operatorsStatementsToPlugSure",
+        "description": "Platform administrators: every operator's finalised statement to PlugSure (total due), what the operator paid (recorded), outstanding and status.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "due",
+                "partial",
+                "paid"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Statements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statements"
+                  ],
+                  "properties": {
+                    "statements": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OperatorStatementDue"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/finance/statements/{sid}/payments": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Payments recorded against a statement",
+        "operationId": "paymentsRecordedAgainstStatement",
+        "description": "An owner statement of the caller's organisation, or (platform administrators) an operator's statement to PlugSure: what is due and paid, and every payment recorded, voided ones included.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "description": "The statement id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The statement and its payments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statement",
+                    "payments"
+                  ],
+                  "properties": {
+                    "statement": {
+                      "$ref": "#/components/schemas/StatementDue"
+                    },
+                    "payments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/StatementPayment"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a payout or statement payment",
+        "operationId": "recordPayoutOrStatementPayment",
+        "description": "Records a transfer the operator's bank made: to a site owner against an owner statement (finance.owner_payout_recorded), or from the operator to PlugSure against its statement (platform administrators; finance.platform_fee_recorded). amount is in the statement currency's minor units (rupiah: whole rupiah); more than is outstanding is refused; the statement must be finalised.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "description": "The statement id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "amount",
+                  "paidOn",
+                  "reference"
+                ],
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "paidOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              },
+              "example": {
+                "amount": 1250000,
+                "paidOn": "2026-11-05",
+                "reference": "BCA 20261105-7781",
+                "note": "October share"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "paymentId",
+                    "statement"
+                  ],
+                  "properties": {
+                    "paymentId": {
+                      "type": "string"
+                    },
+                    "statement": {
+                      "$ref": "#/components/schemas/StatementDue"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/statement-payments/{pid}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a recorded payment",
+        "operationId": "voidRecordedPayment",
+        "description": "A payment recorded by mistake is voided (never deleted), with a reason; the statement is due again by its amount. Audited as finance.statement_payment_voided.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "description": "The payment id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "reason": "Recorded against the wrong month"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Voided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "statement"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "statement": {
+                      "$ref": "#/components/schemas/StatementDue"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/owners/{oid}/bank-account": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A site owner's bank details",
+        "operationId": "siteOwnerBankDetails",
+        "description": "Where the owner is paid: bank, code, account holder; the account number masked (it is stored sealed). 404 when none are saved.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "oid",
+            "in": "path",
+            "required": true,
+            "description": "The site owner id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bank details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "account"
+                  ],
+                  "properties": {
+                    "account": {
+                      "$ref": "#/components/schemas/OwnerBankAccount"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set a site owner's bank details",
+        "operationId": "setSiteOwnerBankDetails",
+        "description": "bankName and holderName are required; accountNumber (5–20 digits) is required the first time and kept when omitted later. payment:write; audited as finance.owner_bank_account_saved (masked).\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "oid",
+            "in": "path",
+            "required": true,
+            "description": "The site owner id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "bankName",
+                  "holderName"
+                ],
+                "properties": {
+                  "bankName": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "bankCode": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9]{2,12}$"
+                  },
+                  "holderName": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "accountNumber": {
+                    "type": "string",
+                    "pattern": "^[0-9 .-]{5,24}$"
+                  }
+                }
+              },
+              "example": {
+                "bankName": "BCA",
+                "bankCode": "014",
+                "holderName": "PT Hotel Nusantara",
+                "accountNumber": "1234567890"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "account"
+                  ],
+                  "properties": {
+                    "account": {
+                      "$ref": "#/components/schemas/OwnerBankAccount"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
         ]
       }
     }
@@ -47432,6 +48046,324 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "OwnerShare": {
+        "type": "object",
+        "required": [
+          "statementId",
+          "number",
+          "period",
+          "ownerId",
+          "owner",
+          "currency",
+          "due",
+          "paid",
+          "outstanding",
+          "status"
+        ],
+        "properties": {
+          "statementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string",
+            "description": "YYYY-MM."
+          },
+          "ownerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "due": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paid": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outstanding": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "due",
+              "partial",
+              "paid"
+            ]
+          },
+          "finalisedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastPaidOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "bank": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "bankName": {
+                "type": "string"
+              },
+              "holderName": {
+                "type": "string"
+              },
+              "accountMasked": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "OperatorStatementDue": {
+        "type": "object",
+        "required": [
+          "statementId",
+          "number",
+          "period",
+          "orgId",
+          "operator",
+          "currency",
+          "due",
+          "paid",
+          "outstanding",
+          "status"
+        ],
+        "properties": {
+          "statementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "due": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paid": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outstanding": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "due",
+              "partial",
+              "paid"
+            ]
+          },
+          "finalisedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastPaidOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        }
+      },
+      "StatementDue": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "kind",
+          "currency",
+          "due",
+          "paid",
+          "outstanding",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "owner_payout",
+              "platform_fee"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "due": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paid": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outstanding": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "due",
+              "partial",
+              "paid"
+            ]
+          }
+        }
+      },
+      "StatementPayment": {
+        "type": "object",
+        "required": [
+          "id",
+          "amount",
+          "currency",
+          "paidOn",
+          "reference",
+          "voided"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "paidOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recordedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recordedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "voided": {
+            "type": "boolean"
+          },
+          "voidedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "voidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "voidReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OwnerBankAccount": {
+        "type": "object",
+        "required": [
+          "ownerId",
+          "bankName",
+          "holderName",
+          "accountMasked"
+        ],
+        "properties": {
+          "ownerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "holderName": {
+            "type": "string"
+          },
+          "accountMasked": {
+            "type": "string",
+            "description": "••••7890"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

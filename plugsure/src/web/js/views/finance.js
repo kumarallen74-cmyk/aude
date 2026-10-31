@@ -1,5 +1,5 @@
 import { $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, toast, download, modal, zonedYmd, zonedDayStartIso } from '../core.js';
-import { formatMoney, LEGACY_CURRENCY } from '../money.js';
+import { formatMoney, LEGACY_CURRENCY, CURRENCIES } from '../money.js';
 
 /**
  * Finance — the payment gateway's side of the money (v1.12.0), per gateway account: Xendit, and (v1.13.0) the
@@ -101,6 +101,157 @@ function txColumns() {
   ];
 }
 
+// ─────────────────────────────────────────── (v1.14.0) payouts and statement payments, recorded
+
+const PAY_TAG = { due: ['t-warn', 'due'], partial: ['t-info', 'part-paid'], paid: ['t-ok', 'paid'] };
+const payTag = (s) => tag(...(PAY_TAG[s] ?? ['t-mute', s]));
+/** Minor units ↔ the amount a person types (rupiah: the same; ringgit / dollars: two decimals). */
+const toMajor = (minor, cur) => Number(minor) / 10 ** (CURRENCIES[cur]?.exponent ?? 0);
+const toMinor = (major, cur) => Math.round(Number(major) * 10 ** (CURRENCIES[cur]?.exponent ?? 0));
+
+/**
+ * Record a transfer against a statement (an owner's share, or an operator's statement to PlugSure), with the payments
+ * already recorded and a way to void a mistaken one. PlugSure moves no money: this records what the bank did.
+ */
+async function paymentDialog(row, { title, canWrite, onDone }) {
+  let detail;
+  try { detail = await api(`/v1/finance/statements/${encodeURIComponent(row.statementId)}/payments`); } catch (e) { toast(e.message, 'crit'); return; }
+  const st = detail.statement;
+  const exp = CURRENCIES[st.currency]?.exponent ?? 0;
+  const history = detail.payments.length
+    ? `<div class="section"><div class="lbl small" style="font-weight:600">Recorded</div><ul style="margin:6px 0 0;padding-left:18px;display:grid;gap:6px">${detail.payments.map((p) => `<li${p.voided ? ' style="opacity:.6"' : ''}>${p.voided ? '<s>' : ''}<b>${esc(fmt.money(p.amount, p.currency))}</b> on ${esc(fmt.date(`${p.paidOn}T12:00:00Z`))} · <span class="mono">${esc(p.reference)}</span>${p.voided ? '</s>' : ''}
+        ${p.note ? `<div class="cell-sub">${esc(p.note)}</div>` : ''}<div class="cell-sub">${esc(p.recordedBy ?? '')}${p.voided ? ` · voided: ${esc(p.voidReason ?? '')}` : ''}</div>
+        ${canWrite && !p.voided ? `<button class="btn sm" type="button" data-void="${esc(p.id)}">Void…</button>` : ''}</li>`).join('')}</ul></div>` : '';
+  modal({
+    title,
+    subtitle: `${st.number} · due ${fmt.money(st.due, st.currency)} · paid ${fmt.money(st.paid, st.currency)} · outstanding ${fmt.money(st.outstanding, st.currency)}`,
+    body: `${callout('info', 'Record a transfer your bank has made. PlugSure does not move the money.')}
+      ${canWrite && st.outstanding > 0 ? `<div class="form" style="margin-top:12px">
+        ${field(`Amount (${st.currency})`, `<input name="amount" type="number" min="0" step="${exp ? (1 / 10 ** exp).toFixed(exp) : '1'}" value="${esc(String(toMajor(st.outstanding, st.currency)))}">`)}
+        ${field('Paid on', `<input name="paidOn" type="date" value="${esc(zonedYmd(new Date()))}">`)}
+        ${field('Bank reference', '<input name="reference" maxlength="120" autocomplete="off" placeholder="e.g. BCA 20261105-7781">', { full: true })}
+        ${field('Note', '<input name="note" maxlength="500" autocomplete="off">', { full: true, opt: true })}
+      </div>` : st.outstanding <= 0 ? callout('ok', 'Paid in full.') : ''}
+      ${history}`,
+    actions: canWrite && st.outstanding > 0 ? [
+      { label: 'Cancel' },
+      {
+        label: 'Record payment', kind: 'primary',
+        onClick: async (ctx) => {
+          const v = (n) => $(`[name="${n}"]`, ctx.el).value.trim();
+          try {
+            await api(`/v1/finance/statements/${encodeURIComponent(row.statementId)}/payments`, { method: 'POST', body: { amount: toMinor(v('amount'), st.currency), paidOn: v('paidOn'), reference: v('reference'), note: v('note') || undefined } });
+          } catch (e) { toast(e.message, 'crit'); return false; }
+          toast('Payment recorded.');
+          await onDone();
+          return true;
+        },
+      },
+    ] : [{ label: 'Close' }],
+    onMount: (ctx) => {
+      $$('[data-void]', ctx.el).forEach((b) => b.addEventListener('click', async () => {
+        const reason = window.prompt('Why is this payment voided? (e.g. recorded against the wrong month)');
+        if (!reason || !reason.trim()) return;
+        try { await api(`/v1/finance/statement-payments/${encodeURIComponent(b.dataset.void)}/void`, { method: 'POST', body: { reason: reason.trim() } }); } catch (e) { toast(e.message, 'crit'); return; }
+        toast('Voided.');
+        ctx.close();
+        await onDone();
+      }));
+    },
+  });
+}
+
+/** An owner's bank details: shown masked, set or changed (the account number is kept sealed on the server). */
+async function bankDialog(row, { canWrite, onDone }) {
+  let cur = null;
+  try { cur = (await api(`/v1/finance/owners/${encodeURIComponent(row.ownerId)}/bank-account`)).account; } catch (e) { if (e.status !== 404) { toast(e.message, 'crit'); return; } }
+  modal({
+    title: `Bank details · ${row.owner}`,
+    subtitle: cur ? `${cur.bankName} · ${cur.accountMasked} · ${cur.holderName}` : 'Not set yet',
+    body: canWrite ? `<div class="form">
+        ${field('Bank', `<input name="bankName" maxlength="80" placeholder="BCA, Mandiri, BRI…" value="${esc(cur?.bankName ?? '')}">`)}
+        ${field('Bank code', `<input name="bankCode" maxlength="12" placeholder="014" value="${esc(cur?.bankCode ?? '')}">`, { opt: true })}
+        ${field('Account holder', `<input name="holderName" maxlength="120" value="${esc(cur?.holderName ?? '')}">`, { full: true, help: 'As the bank has it.' })}
+        ${field('Account number', `<input name="accountNumber" inputmode="numeric" autocomplete="off" placeholder="${esc(cur ? `${cur.accountMasked} — leave empty to keep` : '')}">`, { full: true })}
+      </div>` : (cur ? '' : callout('info', 'No bank details saved.')),
+    actions: canWrite ? [
+      { label: 'Cancel' },
+      {
+        label: 'Save', kind: 'primary',
+        onClick: async (ctx) => {
+          const v = (n) => $(`[name="${n}"]`, ctx.el).value.trim();
+          try {
+            await api(`/v1/finance/owners/${encodeURIComponent(row.ownerId)}/bank-account`, { method: 'PUT', body: { bankName: v('bankName'), bankCode: v('bankCode') || undefined, holderName: v('holderName'), ...(v('accountNumber') ? { accountNumber: v('accountNumber') } : {}) } });
+          } catch (e) { toast(e.message, 'crit'); return false; }
+          toast('Bank details saved.');
+          await onDone();
+          return true;
+        },
+      },
+    ] : [{ label: 'Close' }],
+  });
+}
+
+/** Site owners' shares: due, part-paid, paid; record a payout; bank details; the transfer list for the bank. */
+async function ownerSharesSection(el, canWrite) {
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let r;
+  try { r = await api('/v1/finance/owner-shares'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return null; }
+  const open = r.shares.filter((x) => x.status !== 'paid');
+  const total = (rows) => {
+    const by = {};
+    for (const x of rows) by[x.currency] = (by[x.currency] ?? 0) + x.outstanding;
+    return Object.entries(by).map(([c, v]) => fmt.money(v, c)).join(' + ') || fmt.money(0, LEGACY_CURRENCY);
+  };
+  el.innerHTML = `<div class="card"><header><h3>Site owners' shares</h3>
+      <span class="cell-sub">${esc(open.length ? `${total(open)} outstanding on ${open.length} statement${open.length === 1 ? '' : 's'}` : 'nothing outstanding')}</span>
+      ${canWrite && open.length ? `<button class="btn sm right" type="button" data-transfers>${icon('download')} Transfer list (CSV)</button>` : ''}</header><div data-list></div></div>
+    <p class="cell-sub">Pay owners from your bank, then record each transfer here. The transfer list has what is outstanding with each owner's bank details, for your bank's bulk transfer.</p>`;
+  const reload = () => ownerSharesSection(el, canWrite);
+  table($('[data-list]', el), {
+    columns: [
+      { label: 'Period', render: (x) => `${esc(x.period)}<div class="cell-sub mono">${esc(x.number)}</div>` },
+      { label: 'Owner', render: (x) => `${esc(x.owner)}<div class="cell-sub">${x.bank ? esc(`${x.bank.bankName} · ${x.bank.accountMasked}`) : '<span style="color:var(--warn)">no bank details</span>'}</div>` },
+      { label: 'Share', num: true, render: (x) => `<b>${esc(fmt.money(x.due, x.currency))}</b>` },
+      { label: 'Paid', num: true, render: (x) => `${esc(fmt.money(x.paid, x.currency))}${x.lastPaidOn ? `<div class="cell-sub">${esc(fmt.date(`${x.lastPaidOn}T12:00:00Z`))}</div>` : ''}` },
+      { label: 'Status', render: (x) => payTag(x.status) },
+      { label: '', render: (x) => `<div class="row nowrap" style="gap:6px"><button class="btn sm${canWrite && x.status !== 'paid' ? ' primary' : ''}" type="button" data-pay="${esc(x.statementId)}">${canWrite && x.status !== 'paid' ? 'Record payment' : 'Payments'}</button><button class="btn sm" type="button" data-bank="${esc(x.statementId)}">Bank</button></div>` },
+    ],
+    rows: r.shares, empty: 'No owners\' shares on finalised statements yet (Billing → finalise an owner\'s statement).',
+  });
+  const byId = (id) => r.shares.find((x) => x.statementId === id);
+  $$('[data-pay]', el).forEach((b) => b.addEventListener('click', () => { const x = byId(b.dataset.pay); paymentDialog(x, { title: `Payout to ${x.owner}`, canWrite, onDone: reload }); }));
+  $$('[data-bank]', el).forEach((b) => b.addEventListener('click', () => bankDialog(byId(b.dataset.bank), { canWrite, onDone: reload })));
+  $('[data-transfers]', el)?.addEventListener('click', async () => {
+    try { const res = await api('/v1/finance/owner-shares/transfer-list.csv', { raw: true }); download('plugsure-owner-transfers.csv', await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+  });
+  return { text: total(open), count: open.length };
+}
+
+/** Platform administrators: operators' statements to PlugSure and what each paid. */
+async function operatorStatementsSection(el, canWrite) {
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let r;
+  try { r = await api('/v1/finance/operator-statements'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => operatorStatementsSection(el, canWrite);
+  el.innerHTML = `<div class="card"><header><h3>Operators' statements to PlugSure</h3><span class="cell-sub">${esc(`${r.statements.filter((x) => x.status !== 'paid').length} not fully paid`)}</span></header><div data-list></div></div>`;
+  table($('[data-list]', el), {
+    columns: [
+      { label: 'Period', render: (x) => `${esc(x.period)}<div class="cell-sub mono">${esc(x.number)}</div>` },
+      { label: 'Operator', render: (x) => esc(x.operator) },
+      { label: 'Due', num: true, render: (x) => `<b>${esc(fmt.money(x.due, x.currency))}</b>` },
+      { label: 'Paid', num: true, render: (x) => `${esc(fmt.money(x.paid, x.currency))}${x.lastPaidOn ? `<div class="cell-sub">${esc(fmt.date(`${x.lastPaidOn}T12:00:00Z`))}</div>` : ''}` },
+      { label: 'Status', render: (x) => payTag(x.status) },
+      { label: '', render: (x) => `<button class="btn sm${canWrite && x.status !== 'paid' ? ' primary' : ''}" type="button" data-pay="${esc(x.statementId)}">${canWrite && x.status !== 'paid' ? 'Record payment' : 'Payments'}</button>` },
+    ],
+    rows: r.statements, empty: 'No finalised operator statements yet.',
+  });
+  $$('[data-pay]', el).forEach((b) => b.addEventListener('click', () => {
+    const x = r.statements.find((s) => s.statementId === b.dataset.pay);
+    paymentDialog(x, { title: `Payment from ${x.operator}`, canWrite, onDone: reload });
+  }));
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -124,7 +275,10 @@ registerView('finance', {
     if (!accounts.length) {
       bodyAll.innerHTML = `<div class="card pad"><div class="empty-state" style="padding:20px 10px"><h3>No payments account to show</h3>
         <p>Finance reads the ledger of a Xendit (or Duitku fallback) payments account: ${state.can('platform:admin') ? 'connect PlugSure\'s under <b>Integrations → Payments</b>.' : 'connect your own under <b>Integrations → Payments → Your account</b>. Payments taken through PlugSure\'s account are in PlugSure\'s finance.'}</p></div>
-        <div class="row" style="justify-content:center"><a class="btn primary" href="#/integrations">${icon('link')} Open Integrations</a></div></div>`;
+        <div class="row" style="justify-content:center"><a class="btn primary" href="#/integrations">${icon('link')} Open Integrations</a></div></div>
+        <div class="section" data-owner-shares></div>`;
+      // Owners are paid whatever acquirer took the money: the payouts are here without a gateway account too.
+      await ownerSharesSection($('[data-owner-shares]', bodyAll), canWrite);
       return;
     }
     const pre = presets();
@@ -235,7 +389,8 @@ registerView('finance', {
           <div class="card"><header><h3>By expected settlement day</h3></header><div data-days></div></div>
           <div class="card"><header><h3>Fleet invoices due</h3></header><div data-fleet></div></div>
         </div>
-        <div class="card section"><header><h3>Payments waiting to settle</h3></header><div data-rows></div></div>`;
+        <div class="card section"><header><h3>Payments waiting to settle</h3></header><div data-rows></div></div>
+        ${state.can('platform:admin') && !accounts.find((a) => a.id === acct)?.orgId ? '<div class="section" data-op-statements></div>' : ''}`;
       table($('[data-days]', body), {
         columns: [
           { label: 'Expected', render: (d) => `${esc(d.day ? fmt.date(`${d.day}T12:00:00Z`) : 'not given')}${d.overdue ? ` ${tag('t-crit', 'overdue')}` : ''}` },
@@ -252,6 +407,8 @@ registerView('finance', {
         ], rows: r.fleetInvoices, empty: 'No fleet invoices outstanding for this account.',
       });
       table($('[data-rows]', body), { columns: txColumns(), rows: r.rows, empty: 'Nothing waiting to settle.' });
+      const ops = $('[data-op-statements]', body);
+      if (ops) await operatorStatementsSection(ops, canWrite);
     };
 
     const drawPayables = async () => {
@@ -259,10 +416,9 @@ registerView('finance', {
       const r = await api(`${base()}/payables`);
       body.innerHTML = `
         <div class="grid k4">${kpi('Refunds due', esc(rp(r.refunds.reduce((a, x) => a + x.amount, 0))), esc(`${r.refunds.length} payments`), r.refunds.length ? 'warn' : '')}
-          ${kpi('Owners\' shares', esc(rp(r.ownerShares.reduce((a, x) => a + x.amount, 0))), 'finalised statements, last 120 days')}</div>
+          <div data-kpi-owners>${kpi('Owners\' shares outstanding', '…', 'site owners\' statements')}</div></div>
         <div class="card section"><header><h3>Refunds due</h3><a class="btn sm right" href="#/refunds">Open Refunds</a></header><div data-refunds></div></div>
-        <div class="card section"><header><h3>Site owners' shares</h3></header><div data-owners></div></div>
-        <p class="cell-sub">Owners' shares are listed from finalised statements; recording when each was paid by bank transfer comes in a later release.</p>`;
+        <div class="section" data-owner-shares></div>`;
       table($('[data-refunds]', body), {
         columns: [
           { label: 'Paid', render: (x) => `${esc(fmt.time(x.paidAt))}<div class="cell-sub">${esc(x.channel ?? '')} · <span class="mono">${esc(x.reference ?? '')}</span></div>` },
@@ -272,15 +428,8 @@ registerView('finance', {
           { label: 'Reason', render: (x) => `<span class="cell-sub wrap">${esc(x.reason ?? '')}</span>${x.operator ? `<div class="cell-sub">${esc(x.operator)}</div>` : ''}` },
         ], rows: r.refunds, empty: 'No refunds due.',
       });
-      table($('[data-owners]', body), {
-        columns: [
-          { label: 'Period', render: (x) => esc(String(x.period).slice(0, 7)) },
-          { label: 'Owner', render: (x) => `${esc(x.owner)}<div class="cell-sub">${esc(x.operator)}</div>` },
-          { label: 'Share', num: true, render: (x) => `<b>${esc(fmt.money(x.amount, x.currency))}</b>` },
-          { label: 'Finalised', render: (x) => esc(fmt.date(x.finalisedAt)) },
-          { label: 'Status', render: () => tag('t-warn', 'due') },
-        ], rows: r.ownerShares, empty: 'No owners\' shares on finalised statements.',
-      });
+      const owed = await ownerSharesSection($('[data-owner-shares]', body), canWrite);
+      if (owed) $('[data-kpi-owners]', body).innerHTML = kpi('Owners\' shares outstanding', esc(owed.text), esc(`${owed.count} statement${owed.count === 1 ? '' : 's'} not fully paid`), owed.count ? 'warn' : '');
     };
 
     const drawFees = async () => {

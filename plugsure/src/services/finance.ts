@@ -656,8 +656,8 @@ export async function receivables(integrationId: string, orgId: string | null) {
 
 /**
  * Money owed out of this account: refunds due (outstanding, failed, processing) on payments it took, and the site
- * owners' shares on finalised statements of the operators whose payments it took (whether they are paid is recorded
- * in a later release; until then the shares are listed as due).
+ * owners' shares on finalised statements of the operators whose payments it took, with what was paid against each
+ * (recorded from v1.14.0, services/payouts.ts).
  */
 export async function payables(integrationId: string) {
   return outsideRequestScope(async () => {
@@ -667,7 +667,8 @@ export async function payables(integrationId: string) {
            FROM payment_intent p LEFT JOIN organisation o ON o.id = p.org_id
           WHERE p.integration_id = $1 AND p.refund_state IN ('due', 'processing', 'failed') ORDER BY p.paid_at NULLS LAST LIMIT 500`, [integrationId]),
       many<any>(
-        `SELECT s.id, s.period, s.owner_share_minor, s.finalised_at, s.currency, COALESCE(w.legal_name, w.name) AS owner, o.name AS org_name
+        `SELECT s.id, s.period, s.owner_share_minor, s.finalised_at, s.currency, COALESCE(w.legal_name, w.name) AS owner, o.name AS org_name,
+                COALESCE((SELECT sum(amount_minor) FROM statement_payment p WHERE p.statement_id = s.id AND p.voided_at IS NULL), 0)::bigint AS paid
            FROM commission_statement s JOIN site_owner w ON w.id = s.owner_id JOIN organisation o ON o.id = s.org_id
           WHERE s.finalised_at IS NOT NULL AND s.owner_share_minor > 0 AND s.finalised_at > now() - interval '120 days'
             AND s.org_id IN (SELECT DISTINCT org_id FROM payment_intent WHERE integration_id = $1 AND created_at > now() - interval '120 days')
@@ -685,7 +686,11 @@ export async function payables(integrationId: string) {
           refundWindowDays: window, daysLeft: window != null && age != null ? window - age : null,
         };
       }),
-      ownerShares: owners.map((s: any) => ({ statementId: s.id, period: s.period, owner: s.owner, operator: s.org_name, amount: num(s.owner_share_minor), currency: s.currency, finalisedAt: iso(s.finalised_at), status: 'due' })),
+      // (v1.14.0) Paid as recorded against the statement (services/payouts.ts).
+      ownerShares: owners.map((s: any) => {
+        const due = num(s.owner_share_minor), paid = num(s.paid);
+        return { statementId: s.id, period: s.period, owner: s.owner, operator: s.org_name, amount: due, paid, currency: s.currency, finalisedAt: iso(s.finalised_at), status: paid <= 0 ? 'due' : paid >= due ? 'paid' : 'partial' };
+      }),
     };
   });
 }

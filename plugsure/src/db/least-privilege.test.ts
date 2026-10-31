@@ -26,7 +26,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
        FROM information_schema.role_table_grants
       WHERE grantee = 'plugsure_app' AND table_name = ANY($1::text[]) GROUP BY 1 ORDER BY 1`,
     [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event', 'whatsapp_event', 'whatsapp_message',
-      'whatsapp_conversation', 'whatsapp_chat_message', 'gateway_transaction', 'gateway_balance_snapshot', 'gateway_sync_state', 'reconciliation_exception']]);
+      'whatsapp_conversation', 'whatsapp_chat_message', 'gateway_transaction', 'gateway_balance_snapshot', 'gateway_sync_state', 'reconciliation_exception',
+      'owner_bank_account', 'statement_payment']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -47,5 +48,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     gateway_sync_state: 'INSERT,SELECT,UPDATE',
     gateway_transaction: 'INSERT,SELECT,UPDATE',
     reconciliation_exception: 'INSERT,SELECT,UPDATE',
+    // (v1.14.0, 082) a recorded payment is voided, never deleted; an owner's bank details are replaced.
+    owner_bank_account: 'DELETE,INSERT,SELECT,UPDATE',
+    statement_payment: 'INSERT,SELECT,UPDATE',
   });
 });

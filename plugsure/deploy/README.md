@@ -477,6 +477,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   6. (v1.13.0) Optionally connect **Payments — fallback** (Duitku): used for a
      driver's charging payment when Xendit does not answer
      ([DUITKU.md](DUITKU.md)).
+  7. (v1.14.0) In **Commercial → Finance → Payables**, enter the site owners'
+     bank details and record each payout your bank makes
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The
