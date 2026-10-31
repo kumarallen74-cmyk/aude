@@ -9,6 +9,7 @@ import { metaSignatureOk, WHATSAPP_DEFAULTS } from './notify-transports.js';
 import { applyAlertDeliveryStatus, metaStatusErrorText, sameSecret } from './alert-routing.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { opsAlertOrgs } from './worker-health.js';
+import { inbound } from './whatsapp-support.js';
 
 /**
  * WhatsApp Business (Meta Cloud API) — PlugSure's own WhatsApp Business Account (v1.10.0).
@@ -26,13 +27,15 @@ import { opsAlertOrgs } from './worker-health.js';
  *                   statuses (ledger, and operator alerts sent from the same Meta app), template and number
  *                   quality and account events (whatsapp_event; a platform alert when something stops sending)
  *   dashboard data  stats(), messages(), events(), requiredTemplates()
+ *   (v1.11.0)       customers' messages go to the support inbox and its AI assistant (whatsapp-support.ts);
+ *                   sendText() sends a free-form reply inside Meta's 24-hour customer service window
  *
  * Every Graph call goes through providerFetch (SSRF guard, no redirects, a deadline) with the bearer token, and
  * Meta's error objects become readable messages (WhatsAppError); nothing raw reaches a route or the console.
  * Neither the full phone number nor a sign-in code is ever stored.
  */
 
-export type Purpose = 'otp' | 'alert' | 'test' | 'other';
+export type Purpose = 'otp' | 'alert' | 'test' | 'other' | 'support';
 export type Status = 'accepted' | 'sent' | 'delivered' | 'read' | 'failed';
 export const NOT_CONFIGURED = 'WhatsApp is not configured: choose "WhatsApp (Meta Cloud API)" under Govern → Integrations → Driver sign-in codes.';
 export const NO_WABA = 'Add the WhatsApp Business Account ID to the sign-in codes integration (Govern → Integrations → Driver sign-in codes) to see templates and account status.';
@@ -264,6 +267,40 @@ export async function sendTemplate(i: {
   }
 }
 
+/**
+ * (v1.11.0) One free-form text message: a support reply. Meta accepts it only within 24 hours of the customer's last
+ * message (error 131047 otherwise); the caller checks the window first. Recorded in the ledger as purpose 'support'.
+ */
+export async function sendText(i: { to: string; body: string; conn?: Connection | null }): Promise<SendOutcome> {
+  let conn: Connection | null;
+  try { conn = i.conn ?? (await connection()); } catch (e) { return { ok: false, error: `WhatsApp: ${(e as Error).message}` }; }
+  if (!conn) return { ok: false, error: NOT_CONFIGURED, notConfigured: true };
+  const to = i.to.replace(/[^\d]/g, '');
+  const ledger = { purpose: 'support' as const, template: null, language: null, to };
+  try {
+    const b = await graph(conn, `/${encodeURIComponent(conn.phoneNumberId)}/messages`, {
+      method: 'POST',
+      body: { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: true, body: i.body.slice(0, 4096) } },
+    });
+    const wamid = b?.messages?.[0]?.id;
+    if (!wamid) throw new WhatsAppError('WhatsApp: the Cloud API accepted the request but returned no message id.');
+    await recordMessage({ ...ledger, wamid: String(wamid), status: 'accepted' });
+    return { ok: true, wamid: String(wamid) };
+  } catch (e) {
+    const err = e instanceof WhatsAppError ? e : new WhatsAppError(`WhatsApp: ${(e as Error).message}`);
+    await recordMessage({ ...ledger, wamid: null, status: 'failed', errorCode: err.code, errorText: err.message.replace(/^WhatsApp: /, '') });
+    return { ok: false, error: err.message, code: err.code };
+  }
+}
+
+/** (v1.11.0) The customer's message shows two blue ticks: the support inbox has it. Best effort. */
+export async function markRead(wamid: string, conn?: Connection | null): Promise<void> {
+  const c = conn ?? (await connection().catch(() => null));
+  if (!c) return;
+  await graph(c, `/${encodeURIComponent(c.phoneNumberId)}/messages`, { method: 'POST', body: { messaging_product: 'whatsapp', status: 'read', message_id: wamid } })
+    .catch((e) => logger.debug({ err: (e as Error).message }, 'WhatsApp read receipt not sent'));
+}
+
 // ─────────────────────────────────────────── webhook
 
 const KEY_RE = /^[A-Za-z0-9_-]{20,64}$/;
@@ -290,19 +327,22 @@ export async function webhook(key: string, rawBody: string, signature: string | 
   if (!metaSignatureOk(rawBody, signature, r.secrets.appSecret)) return { status: 401, body: { error: 'invalid signature' } };
   let j: any;
   try { j = JSON.parse(rawBody); } catch { return { status: 400, body: { error: 'not JSON' } }; }
-  let statuses = 0, events = 0;
+  let statuses = 0, events = 0, inbounds = 0;
   for (const e of Array.isArray(j?.entry) ? j.entry : []) for (const c of Array.isArray(e?.changes) ? e.changes : []) {
     const field = str(c?.field, 80);
     const value = c?.value && typeof c.value === 'object' ? c.value : {};
     for (const s of Array.isArray(value.statuses) ? value.statuses : []) {
       try { if (await applyStatus(s, true)) statuses++; } catch (err) { logger.warn({ err: (err as Error).message }, 'WhatsApp status not applied'); }
     }
-    // Incoming customer messages ("messages" without statuses) are not stored: PlugSure does not take replies here.
+    // (v1.11.0) Customers' messages: the support inbox, and its AI assistant when one is configured.
+    if (field === 'messages' && Array.isArray(value.messages) && value.messages.length) {
+      try { inbounds += await inbound(value, r); } catch (err) { logger.warn({ err: (err as Error).message }, 'WhatsApp message not taken into the support inbox'); }
+    }
     if (field && field !== 'messages') {
       try { await recordEvent(field, value); events++; } catch (err) { logger.warn({ err: (err as Error).message, field }, 'WhatsApp event not recorded'); }
     }
   }
-  return { status: 200, body: { ok: true, statuses, events } };
+  return { status: 200, body: { ok: true, statuses, events, messages: inbounds } };
 }
 
 /** Order of the statuses: a late "delivered" never replaces "read", and a message that arrived is not "failed". */
@@ -392,12 +432,12 @@ async function recordEvent(field: string, v: Record<string, any>): Promise<void>
   }
 }
 
-async function raise(kind: string, severity: 'warning' | 'critical', targetType: string, targetId: string, message: string) {
+export async function raise(kind: string, severity: 'warning' | 'critical', targetType: string, targetId: string, message: string) {
   const orgs = await outsideRequestScope(() => opsAlertOrgs());
   if (!orgs.length) { logger.error({ kind, targetId, message }, 'WhatsApp problem and no organisation to alert (set OPS_ALERT_ORG_ID or create a platform administrator)'); return; }
   for (const orgId of orgs) await outsideRequestScope(() => persistAlert({ orgId, kind, severity, message, targetType, targetId }));
 }
-async function settle(kind: string, targetType: string, targetId: string) {
+export async function settle(kind: string, targetType: string, targetId: string) {
   for (const orgId of await outsideRequestScope(() => opsAlertOrgs())) await outsideRequestScope(() => resolveAlertsFor(orgId, kind, targetType, targetId));
 }
 
@@ -470,7 +510,7 @@ export async function stats(days: number, phoneNumberId: string | null, tz = con
       [phoneNumberId ?? '', tz, days]),
   ]));
   const byStatus: Record<Status, number> = { accepted: 0, sent: 0, delivered: 0, read: 0, failed: 0 };
-  const byPurpose: Record<Purpose, number> = { otp: 0, alert: 0, test: 0, other: 0 };
+  const byPurpose: Record<Purpose, number> = { otp: 0, alert: 0, test: 0, other: 0, support: 0 };
   const daily = dayRows.map((d) => ({ day: d.day, sent: 0, delivered: 0, read: 0, failed: 0 }));
   for (const r of rows) {
     byStatus[r.status] = (byStatus[r.status] ?? 0) + r.n;

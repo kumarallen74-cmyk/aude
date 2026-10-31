@@ -1,3 +1,4 @@
+import { configOf, testConnection as testSupport } from '../services/whatsapp-support.js';
 import { moneyText, LEGACY_CURRENCY, type CurrencyCode } from '../domain/money.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { limitParam } from './paging.js';
@@ -307,6 +308,9 @@ async function runTest(r: store.Resolved, b: any): Promise<{ ok: boolean; messag
       const type = String(res.headers['content-type'] ?? '').slice(0, 100);
       return res.status >= 200 && res.status < 300 && type.startsWith('image/') ? { ok: true, message: `The tile server returned a ${type} tile.` } : { ok: false, message: `The tile server answered HTTP ${res.status} (${type || 'no content type'}).` };
     }
+    case 'ai_support':
+      // (v1.11.0) A one-word request to Claude with the saved key and model.
+      return testSupport(configOf(r));
   }
 }
 

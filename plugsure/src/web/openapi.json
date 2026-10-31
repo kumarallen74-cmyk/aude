@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.10.0",
+    "version": "1.11.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -20585,7 +20585,7 @@
             "name": "kind",
             "in": "path",
             "required": true,
-            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles.",
+            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude).",
             "schema": {
               "type": "string"
             }
@@ -20742,7 +20742,7 @@
             "name": "kind",
             "in": "path",
             "required": true,
-            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles.",
+            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude).",
             "schema": {
               "type": "string"
             }
@@ -20825,7 +20825,7 @@
             "name": "kind",
             "in": "path",
             "required": true,
-            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles.",
+            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude).",
             "schema": {
               "type": "string"
             }
@@ -20920,7 +20920,7 @@
             "name": "kind",
             "in": "path",
             "required": true,
-            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles.",
+            "description": "Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude).",
             "schema": {
               "type": "string"
             }
@@ -26525,6 +26525,10 @@
                             "other": {
                               "type": "integer",
                               "minimum": 0
+                            },
+                            "support": {
+                              "type": "integer",
+                              "minimum": 0
                             }
                           }
                         },
@@ -26581,6 +26585,58 @@
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/WhatsAppMessage"
+                      }
+                    },
+                    "support": {
+                      "type": "object",
+                      "description": "(v1.11.0) The support inbox over the same days.",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean",
+                          "description": "The WhatsApp AI support integration has an API key."
+                        },
+                        "mode": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "auto",
+                            "draft",
+                            "off",
+                            null
+                          ]
+                        },
+                        "model": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "conversations": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "waitingForStaff": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "aiReplies": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "staffReplies": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "handoffs": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "aiTokens": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
                       }
                     }
                   }
@@ -26693,7 +26749,8 @@
                 "otp",
                 "alert",
                 "test",
-                "other"
+                "other",
+                "support"
               ]
             }
           },
@@ -26985,6 +27042,453 @@
           },
           "500": {
             "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/conversations": {
+      "get": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "WhatsApp support inbox",
+        "operationId": "whatsappSupportInbox",
+        "description": "Customers who wrote to the platform's WhatsApp number, newest first, with the last message. Filter by `handler`; page with `before` = the `nextBefore` of the previous page. `assistant` says whether the AI support integration is set up and its mode. Messages are kept 90 days.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "handler",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ai",
+                "human",
+                "closed"
+              ],
+              "description": "Who answers: the AI assistant, staff, or nobody (closed; a new customer message reopens it with the assistant)."
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Only conversations last active before this time.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "conversations",
+                    "nextBefore",
+                    "assistant"
+                  ],
+                  "properties": {
+                    "conversations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppConversation"
+                      }
+                    },
+                    "nextBefore": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "assistant": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "mode": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "auto",
+                            "draft",
+                            "off",
+                            null
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/conversations/{id}": {
+      "get": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "One WhatsApp support conversation",
+        "operationId": "oneWhatsAppSupportConversation",
+        "description": "The conversation and its last 200 messages, oldest first, with each reply's delivery status. Opening it marks it read.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "conversation",
+                    "messages"
+                  ],
+                  "properties": {
+                    "conversation": {
+                      "$ref": "#/components/schemas/WhatsAppConversation"
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WhatsAppChatMessage"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/conversations/{id}/reply": {
+      "post": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "Reply to a WhatsApp customer",
+        "operationId": "replyToWhatsAppCustomer",
+        "description": "Sends a free-form text from the platform's number. Allowed within 24 hours of the customer's last message only (409 otherwise: WhatsApp then takes approved templates only). Staff take the conversation over (handler human; the assistant stops), except in draft mode when the assistant has it: sending its drafts keeps it drafting. 502 with Meta's reason when the send fails. Audited as whatsapp.support_reply.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                }
+              },
+              "example": {
+                "text": "Halo, kami sudah memproses refund Anda."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/conversations/{id}/handler": {
+      "post": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "Hand a WhatsApp conversation over",
+        "operationId": "handWhatsAppConversationOver",
+        "description": "`ai`: back to the assistant (it answers a customer message still unanswered); `human`: staff take over; `closed`: nothing pending. Audited as whatsapp.support_handler.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "handler"
+                ],
+                "properties": {
+                  "handler": {
+                    "type": "string",
+                    "enum": [
+                      "ai",
+                      "human",
+                      "closed"
+                    ],
+                    "description": "Who answers: the AI assistant, staff, or nobody (closed; a new customer message reopens it with the assistant)."
+                  }
+                }
+              },
+              "example": {
+                "handler": "human"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "conversation"
+                  ],
+                  "properties": {
+                    "conversation": {
+                      "$ref": "#/components/schemas/WhatsAppConversation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "platform:admin"
+        ]
+      }
+    },
+    "/v1/whatsapp/conversations/{id}/suggest": {
+      "post": {
+        "tags": [
+          "WhatsApp"
+        ],
+        "summary": "Suggest a WhatsApp reply",
+        "operationId": "suggestWhatsAppReply",
+        "description": "Asks the assistant (Claude) for a reply to the conversation as it stands, whoever handles it, and keeps it as the draft; nothing is sent. `handoff` is set when the assistant would rather a person answered. 409 when the AI support integration is not set up; 502 when the Anthropic API fails. At most 10 a minute per administrator.\n\n**Permissions checked:** `platform:admin`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "draft",
+                    "handoff"
+                  ],
+                  "properties": {
+                    "draft": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "handoff": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
           }
         },
         "x-permissions": [
@@ -44136,7 +44640,8 @@
               "otp",
               "otp_fallback",
               "pnc_pki",
-              "map_tiles"
+              "map_tiles",
+              "ai_support"
             ]
           },
           "label": {
@@ -45191,7 +45696,8 @@
               "otp",
               "alert",
               "test",
-              "other"
+              "other",
+              "support"
             ]
           },
           "to": {
@@ -45267,6 +45773,169 @@
               "boolean",
               "null"
             ]
+          }
+        }
+      },
+      "WhatsAppConversation": {
+        "type": "object",
+        "description": "A customer writing to the platform's WhatsApp number (one conversation per number). The number is masked.",
+        "required": [
+          "id",
+          "phone",
+          "handler",
+          "lastMessageAt",
+          "windowOpen",
+          "unread"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phone": {
+            "type": "string",
+            "description": "Masked, e.g. +6281****890."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The WhatsApp profile name the customer chose."
+          },
+          "hasAccount": {
+            "type": "boolean",
+            "description": "A PlugSure driver account is registered on the number (the assistant can look up its sessions)."
+          },
+          "handler": {
+            "type": "string",
+            "enum": [
+              "ai",
+              "human",
+              "closed"
+            ],
+            "description": "Who answers: the AI assistant, staff, or nobody (closed; a new customer message reopens it with the assistant)."
+          },
+          "handoffReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it went to staff."
+          },
+          "draft": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The assistant's suggested reply (mode draft, or a suggestion asked for)."
+          },
+          "lastMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastAuthor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "customer, ai or staff."
+          },
+          "lastMessageAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastInboundAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "windowOpen": {
+            "type": "boolean",
+            "description": "Within 24 hours of the customer's last message: free-form replies are allowed (Meta's customer service window)."
+          },
+          "unread": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "WhatsAppChatMessage": {
+        "type": "object",
+        "required": [
+          "id",
+          "direction",
+          "author",
+          "body",
+          "at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "author": {
+            "type": "string",
+            "enum": [
+              "customer",
+              "ai",
+              "staff",
+              "system"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Text; media is named (\"[image: caption]\"), not kept. system: a note (handover, an assistant failure)."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A reply's delivery status: accepted, sent, delivered, read or failed."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Claude model that wrote an AI reply."
+          },
+          "tokens": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         }
       },

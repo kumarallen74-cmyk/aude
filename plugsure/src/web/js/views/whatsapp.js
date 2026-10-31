@@ -9,6 +9,7 @@ import { $, $$, esc, api, registerView, pageHead, table, tag, icon, fmt, field, 
  *   Templates  every template on the WABA, the required ones marked
  *   Messages   the ledger, masked numbers, filters
  *   Setup      the webhook URL and verify token for the Meta app, the fields to subscribe, a test send
+ *   Inbox      (v1.11.0) customers' messages: the AI assistant's (Claude) replies and drafts, staff replies, handover
  *
  * Every value from the API is escaped (esc) before it reaches markup.
  */
@@ -16,7 +17,10 @@ import { $, $$, esc, api, registerView, pageHead, table, tag, icon, fmt, field, 
 const QUALITY_TAG = { GREEN: 't-ok', YELLOW: 't-warn', RED: 't-crit' };
 const STATUS_TAG = { read: 't-ok', delivered: 't-ok', sent: 't-info', accepted: 't-info', failed: 't-crit' };
 const TEMPLATE_TAG = { APPROVED: 't-ok', PENDING: 't-info', IN_APPEAL: 't-info', PAUSED: 't-warn', REJECTED: 't-crit', DISABLED: 't-crit', MISSING: 't-crit' };
-const PURPOSE_LABEL = { otp: 'Sign-in code', alert: 'Operator alert', test: 'Test', other: 'Other' };
+const PURPOSE_LABEL = { otp: 'Sign-in code', alert: 'Operator alert', test: 'Test', support: 'Support reply', other: 'Other' };
+const HANDLER_TAG = { ai: ['t-info', 'AI'], human: ['t-warn', 'staff'], closed: ['t-mute', 'closed'] };
+const MODE_LABEL = { auto: 'replies automatically', draft: 'drafts replies for staff', off: 'is off' };
+const handlerTag = (h) => tag(...(HANDLER_TAG[h] ?? ['t-mute', h]));
 /** Chart series bottom to top: the furthest a message got. Status tokens, so dark mode has its own steps. */
 const SERIES = [
   ['read', 'Read', 'var(--accent)'],
@@ -83,6 +87,29 @@ const notConfigured = () => `<div class="card pad">
 
 const toIntegrations = `<a class="btn sm" href="#/integrations">${icon('gear')} Edit in Integrations</a>`;
 
+/** (v1.11.0) The support inbox in four numbers, on the overview. */
+function supportKpis(sp) {
+  if (!sp) return '';
+  if (!sp.configured && !sp.conversations) {
+    return `<div class="section">${callout('info', `Customers who write to this number land in the <b>Inbox</b>. To have Claude answer them, set up <b>WhatsApp AI support</b> in Integrations. <a class="btn sm" href="#/integrations">${icon('gear')} Set up</a>`)}</div>`;
+  }
+  return `<div class="grid k4 section">
+      ${kpi('Support conversations', esc(fmt.num(sp.conversations)), sp.configured ? esc(`AI ${MODE_LABEL[sp.mode] ?? ''}`) : 'no AI assistant')}
+      ${kpi('Waiting for staff', esc(fmt.num(sp.waitingForStaff)), 'answer in the Inbox', sp.waitingForStaff ? 'warn' : '')}
+      ${kpi('AI replies', esc(fmt.num(sp.aiReplies)), esc(`${fmt.num(sp.aiTokens)} tokens`))}
+      ${kpi('Handed to staff', esc(fmt.num(sp.handoffs)), esc(`${fmt.num(sp.staffReplies)} staff replies`))}
+    </div>`;
+}
+
+/** One message of the thread. Outgoing on the right; the assistant's in blue; notes centred. */
+function bubble(m) {
+  if (m.author === 'system') return `<div class="wa-note">${esc(m.body)} · ${esc(fmt.time(m.at))}</div>`;
+  const who = m.author === 'customer' ? '' : m.author === 'ai' ? `AI${m.model ? ` · ${m.model}` : ''}` : 'Staff';
+  const status = m.direction === 'out' ? (m.error ? `not sent: ${m.error}` : m.status ?? '') : '';
+  const meta = [who, fmt.time(m.at), status].filter(Boolean).join(' · ');
+  return `<div class="wa-bubble ${m.direction === 'out' ? 'out' : ''} ${m.author === 'ai' ? 'ai' : ''}">${esc(m.body)}<span class="meta"${m.error ? ' style="color:var(--crit)"' : ''}>${esc(meta)}</span></div>`;
+}
+
 function messageColumns() {
   return [
     { label: 'When', render: (m) => `<span class="nowrap">${esc(fmt.time(m.at))}</span>` },
@@ -105,6 +132,7 @@ registerView('whatsapp', {
   async render(root, [initial]) {
     const tabs = [
       { id: 'overview', label: 'Overview' },
+      { id: 'inbox', label: 'Inbox' },
       { id: 'templates', label: 'Templates' },
       { id: 'messages', label: 'Messages' },
       { id: 'setup', label: 'Setup' },
@@ -150,6 +178,7 @@ registerView('whatsapp', {
           ${kpi('Read', esc(pct(s.readRate)), 'of those delivered')}
           ${kpi('Failed', esc(fmt.num(s.byStatus.failed)), s.total ? esc(pct(s.byStatus.failed / s.total)) : '', s.byStatus.failed ? 'crit' : '')}
         </div>
+        ${supportKpis(o.support)}
         <div class="card section"><header><h3>Messages per day</h3><span class="cell-sub right">by the furthest status reached · days in the platform time zone</span></header><div class="body">${s.total ? chart(s.daily, body.clientWidth - 34) : '<div class="empty-state">Nothing sent in this period.</div>'}</div></div>
         <div class="grid two section">
           <div class="card"><header><h3>Templates PlugSure sends</h3></header><div data-required></div></div>
@@ -286,7 +315,126 @@ registerView('whatsapp', {
       });
     };
 
+    // (v1.11.0) The support inbox: refreshed every 10 s while it is open.
+    let poll = null;
+    let openId = null;
+    let handlerFilter = '';
+    let assistantMode = null;
+    const stopPoll = () => { if (poll) { clearInterval(poll); poll = null; } };
+
+    const drawInbox = async () => {
+      body.innerHTML = `<div data-assistant></div>
+        <div class="row section" style="margin-top:0;justify-content:space-between">
+          <div class="seg" role="group" aria-label="Show" data-handler>${[['', 'All'], ['human', 'Staff'], ['ai', 'AI'], ['closed', 'Closed']].map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${String(v === handlerFilter)}">${esc(l)}</button>`).join('')}</div>
+          <span class="cell-sub">Customers who write to the WhatsApp number. Messages are kept 90 days.</span>
+        </div>
+        <div class="wa-inbox"><div class="card wa-list" data-convs></div><div class="card" data-thread><div class="empty-state">Choose a conversation.</div></div></div>`;
+
+      const drawList = async () => {
+        let r;
+        try { r = await api(`/v1/whatsapp/conversations?limit=100${handlerFilter ? `&handler=${handlerFilter}` : ''}`); } catch (e) { $('[data-convs]', body).innerHTML = callout('crit', esc(e.message)); return; }
+        const a = r.assistant;
+        assistantMode = a.configured ? a.mode : null;
+        $('[data-assistant]', body).innerHTML = a.configured
+          ? (a.mode === 'off' ? callout('info', `The AI assistant is off: staff answer every message. ${toIntegrations}`) : '')
+          : callout('info', `No AI assistant: staff answer every message here. To have Claude answer (or draft answers), set up <b>WhatsApp AI support</b>. ${toIntegrations}`);
+        const list = $('[data-convs]', body);
+        if (!r.conversations.length) { list.innerHTML = '<div class="empty-state">No conversations yet.</div>'; return; }
+        list.innerHTML = r.conversations.map((c) => `<button type="button" class="wa-conv" data-conv="${esc(c.id)}" aria-current="${String(c.id === openId)}">
+            <span class="top"><span class="who">${esc(c.name ?? c.phone)}</span>${c.unread ? `<span class="wa-unread" aria-label="${esc(`${c.unread} unread`)}">${esc(String(c.unread))}</span>` : ''}${handlerTag(c.handler)}</span>
+            <span class="snip">${esc(c.lastAuthor && c.lastAuthor !== 'customer' ? `${c.lastAuthor === 'ai' ? 'AI' : 'Staff'}: ` : '')}${esc(c.lastMessage ?? '')}</span>
+            <span class="cell-sub">${esc(c.name ? `${c.phone} · ` : '')}${esc(fmt.ago(c.lastMessageAt))}${c.draft ? ' · draft ready' : ''}</span>
+          </button>`).join('');
+      };
+
+      const drawThread = async (id, keepCompose = false) => {
+        const box = $('[data-thread]', body);
+        let r;
+        try { r = await api(`/v1/whatsapp/conversations/${encodeURIComponent(id)}`); } catch (e) { box.innerHTML = callout('crit', esc(e.message)); return; }
+        const c = r.conversation;
+        const typed = keepCompose ? $('[data-text]', box)?.value : null;
+        box.innerHTML = `<div class="wa-thread">
+            <header><h3 style="margin:0">${esc(c.name ?? c.phone)}</h3>
+              <span class="cell-sub">${esc(c.phone)}${c.hasAccount ? ' · PlugSure account' : ''}</span>${handlerTag(c.handler)}
+              <span class="actions">
+                ${c.handler !== 'human' ? `<button class="btn sm" type="button" data-set="human">${icon('users')} Take over</button>` : ''}
+                ${c.handler !== 'ai' ? `<button class="btn sm" type="button" data-set="ai">Hand to AI</button>` : ''}
+                ${c.handler !== 'closed' ? `<button class="btn sm" type="button" data-set="closed">Close</button>` : ''}
+              </span></header>
+            ${c.handoffReason && c.handler === 'human' ? callout('warn', `<b>Handed to staff:</b> ${esc(c.handoffReason)}`) : ''}
+            <div class="wa-msgs" data-msgs>${r.messages.map(bubble).join('') || '<div class="wa-note">No messages.</div>'}</div>
+            <form class="wa-compose" data-compose>
+              ${c.windowOpen ? '' : callout('info', 'More than 24 hours since the customer last wrote: WhatsApp only allows approved templates now. They can write again to reopen the chat.')}
+              ${c.draft ? '<div class="cell-sub">The assistant\'s draft is below: edit it if needed, then send.</div>' : ''}
+              <label class="sr-only" for="wa-reply">Reply</label>
+              <textarea id="wa-reply" data-text maxlength="4096" placeholder="Write a reply…" ${c.windowOpen ? '' : 'disabled'}></textarea>
+              <div class="row" style="gap:8px;justify-content:flex-end">
+                <button class="btn" type="button" data-suggest ${c.windowOpen ? '' : 'disabled'}>Suggest reply</button>
+                <button class="btn primary" type="submit" ${c.windowOpen ? '' : 'disabled'}>Send</button>
+              </div>
+              ${c.handler === 'human' ? '' : `<div class="cell-sub">${c.handler === 'ai' && assistantMode === 'draft' ? 'The assistant keeps drafting the next replies.' : 'Sending takes the conversation over from the assistant.'}</div>`}
+            </form></div>`;
+        // Set as a value, never as markup.
+        $('[data-text]', box).value = typed ?? c.draft ?? '';
+        const msgs = $('[data-msgs]', box);
+        msgs.scrollTop = msgs.scrollHeight;
+        $$('[data-set]', box).forEach((b) => b.addEventListener('click', async () => {
+          try { await api(`/v1/whatsapp/conversations/${encodeURIComponent(id)}/handler`, { method: 'POST', body: { handler: b.dataset.set } }); } catch (e) { toast(e.message, 'crit'); return; }
+          toast(b.dataset.set === 'ai' ? 'The assistant answers this conversation again.' : b.dataset.set === 'human' ? 'You have taken over: the assistant stays quiet.' : 'Closed.');
+          await Promise.all([drawThread(id), drawList()]);
+        }));
+        $('[data-suggest]', box).addEventListener('click', async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          try {
+            const s2 = await api(`/v1/whatsapp/conversations/${encodeURIComponent(id)}/suggest`, { method: 'POST' });
+            if (s2.draft) $('[data-text]', box).value = s2.draft;
+            if (s2.handoff) toast(`The assistant suggests a person answers: ${s2.handoff}`, 'warn');
+            else if (!s2.draft) toast('The assistant had no suggestion.', 'warn');
+          } catch (err) { toast(err.message, 'crit'); }
+          finally { btn.disabled = false; }
+        });
+        $('[data-compose]', box).addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const text = $('[data-text]', box).value.trim();
+          if (!text) return;
+          const btn = $('button[type="submit"]', box);
+          btn.disabled = true;
+          try {
+            await api(`/v1/whatsapp/conversations/${encodeURIComponent(id)}/reply`, { method: 'POST', body: { text } });
+            $('[data-text]', box).value = '';
+            await Promise.all([drawThread(id), drawList()]);
+          } catch (err) { toast(err.message, 'crit'); btn.disabled = false; }
+        });
+      };
+
+      $('[data-handler]', body).addEventListener('click', async (e) => {
+        const b = e.target.closest('button[data-v]');
+        if (!b) return;
+        handlerFilter = b.dataset.v;
+        $$('[data-handler] button', body).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        await drawList();
+      });
+      $('[data-convs]', body).addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-conv]');
+        if (!b) return;
+        openId = b.dataset.conv;
+        $$('[data-conv]', body).forEach((x) => x.setAttribute('aria-current', String(x === b)));
+        await drawThread(openId);
+        await drawList();
+      });
+      await drawList();
+      if (openId) await drawThread(openId);
+      poll = setInterval(async () => {
+        if (!root.isConnected || current !== 'inbox') { stopPoll(); return; }
+        // Not while staff are typing a reply: the thread is redrawn with what they typed.
+        await drawList();
+        if (openId) await drawThread(openId, true);
+      }, 10_000);
+    };
+
     const show = async (id) => {
+      stopPoll();
       current = id;
       $$('[data-tab]', root).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
       history.replaceState(null, '', `#/whatsapp/${id}`);
@@ -295,6 +443,7 @@ registerView('whatsapp', {
         try { await load(); } catch (e) { body.innerHTML = callout('crit', esc(e.status === 403 ? 'Only platform administrators can see the WhatsApp Business dashboard.' : e.message)); return; }
       }
       if (id === 'overview') drawOverview();
+      else if (id === 'inbox') await drawInbox();
       else if (id === 'templates') await drawTemplates();
       else if (id === 'messages') await drawMessages();
       else drawSetup();

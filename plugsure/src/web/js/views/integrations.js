@@ -50,7 +50,7 @@ registerView('integrations', {
   order: 2,
   perm: 'org:read',
   async render(root) {
-    root.innerHTML = pageHead('Integrations', 'Connect the services PlugSure depends on: the acquirer that takes drivers\' payments (QRIS, e-wallets, cards), the WhatsApp / SMS provider that sends sign-in codes, the Plug & Charge PKI and the map tiles. Settings made here override environment variables; secrets are stored encrypted and never shown again.', '')
+    root.innerHTML = pageHead('Integrations', 'Connect the services PlugSure depends on: the acquirer that takes drivers\' payments (QRIS, e-wallets, cards), the WhatsApp / SMS provider that sends sign-in codes, the Plug & Charge PKI, the map tiles and the AI assistant that answers customers on WhatsApp. Settings made here override environment variables; secrets are stored encrypted and never shown again.', '')
       + '<div data-body></div>';
     await draw($('[data-body]', root));
   },
@@ -132,7 +132,7 @@ function card(k) {
       <div class="row" style="align-items:flex-start;gap:6px 10px"><div style="flex:1 1 200px"><h3 style="margin:0">${esc(k.label)}</h3></div><div class="chips">${statusOf(k)}</div></div>
       <p class="cell-sub" style="margin:6px 0 0">${esc(k.description)}</p>
       <div style="margin-top:10px"><span class="lbl small">In force:</span> <b>${eff ? esc(providerLabel(k, eff.provider)) : '—'}</b></div>
-      ${ownBlock}${platformBlock}${isWhatsApp(k.kind, k.platform?.provider) ? whatsappBlock(k) : ''}
+      ${ownBlock}${platformBlock}${isWhatsApp(k.kind, k.platform?.provider) ? whatsappBlock(k) : ''}${k.kind === 'ai_support' && k.platform ? `<div style="margin-top:10px"><a class="btn sm" href="#/whatsapp/inbox">${icon('chart')} Open the WhatsApp inbox</a></div>` : ''}
       <div style="margin-top:10px"><button class="btn sm ghost" data-act="activity" data-kind="${key}">${icon('list')} Activity</button></div>
     </div>`;
 }

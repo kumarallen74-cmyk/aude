@@ -4,7 +4,7 @@
  * it. Fields of type 'secret' are sealed at rest and never returned.
  */
 
-export type Kind = 'payments' | 'otp' | 'otp_fallback' | 'pnc_pki' | 'map_tiles';
+export type Kind = 'payments' | 'otp' | 'otp_fallback' | 'pnc_pki' | 'map_tiles' | 'ai_support';
 
 export interface Field {
   key: string;
@@ -266,6 +266,57 @@ export const CATALOGUE: KindDef[] = [
         id: 'osm', label: 'OpenStreetMap (light use only)',
         description: 'tile.openstreetmap.org — fine for testing and very small fleets; its usage policy forbids heavy use.',
         fields: [],
+      },
+    ],
+  },
+  {
+    // (v1.11.0) Customers' WhatsApp messages to PlugSure's number, answered by Claude (src/services/whatsapp-support.ts).
+    kind: 'ai_support',
+    label: 'WhatsApp AI support',
+    description: 'Answers drivers who write to PlugSure\'s WhatsApp number (the sign-in codes number), with Claude: charging help, station availability, the driver\'s own recent sessions, payments and refunds as your knowledge text describes them. It hands the conversation to your staff when it cannot help or the customer asks for a person. Conversations are in Operate → WhatsApp → Inbox.',
+    scope: 'platform',
+    providers: [
+      {
+        id: 'anthropic', label: 'Claude (Anthropic API)', docs: 'https://platform.claude.com/docs/en/api/overview',
+        description: 'An API key from platform.claude.com (Settings → API keys), on PlugSure\'s own Anthropic account. Messages from customers are sent to Anthropic to write the replies.',
+        fields: [
+          { key: 'apiKey', label: 'Anthropic API key', type: 'secret', required: true, placeholder: 'sk-ant-api…' },
+          {
+            key: 'mode', label: 'Replies', type: 'select', default: 'draft', required: true,
+            options: [
+              { value: 'auto', label: 'Automatic: Claude replies to customers itself' },
+              { value: 'draft', label: 'Drafts: Claude suggests, your staff send' },
+              { value: 'off', label: 'Off: staff answer in the inbox, no AI' },
+            ],
+            help: 'Start with drafts, read what Claude writes for a few days, then switch to automatic.',
+          },
+          {
+            key: 'model', label: 'Model', type: 'select', default: 'claude-opus-5-5', required: true,
+            options: [
+              { value: 'claude-opus-5-5', label: 'Claude Opus 5.5 — the most capable ($4 / $20 per million tokens)' },
+              { value: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — fast and capable ($2 / $10)' },
+              { value: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 — the fastest and cheapest ($0.10 / $0.50)' },
+            ],
+          },
+          {
+            key: 'effort', label: 'Effort', type: 'select', default: 'medium', advanced: true,
+            options: [{ value: 'low', label: 'Low: quickest replies' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High: most careful' }],
+            help: 'How much Claude thinks before it answers. Higher is slower and costs more tokens.',
+          },
+          {
+            key: 'knowledge', label: 'What Claude should know', type: 'textarea', required: true,
+            placeholder: 'Opening hours of support, how to pay, refund policy, what to do when a charger will not start, your website and app links…',
+            help: 'Plain text, up to 20,000 characters: your policies, prices that are not on the chargers, links (plugsure.com/pricing, /refunds), and how your support works. Claude answers from this and from PlugSure\'s live data, and says when it does not know.',
+          },
+          { key: 'assistantName', label: 'Assistant\'s name', type: 'text', default: 'PlugSure Assistant', advanced: true },
+          {
+            key: 'handoffText', label: 'Message when a person takes over', type: 'text', advanced: true,
+            default: 'Terima kasih, tim PlugSure akan membalas di sini secepatnya. / Thank you, the PlugSure team will reply here as soon as possible.',
+          },
+          { key: 'maxRepliesPerHour', label: 'AI replies per customer per hour (at most)', type: 'number', default: 15, advanced: true, help: 'Past this, the conversation goes to your staff.' },
+          { key: 'maxRepliesPerDay', label: 'AI replies per day, all customers (at most)', type: 'number', default: 1000, advanced: true, help: 'A ceiling on the Anthropic bill, over the last 24 hours. Past it, new messages wait for your staff.' },
+          { ...baseUrl, help: 'Default https://api.anthropic.com' },
+        ],
       },
     ],
   },

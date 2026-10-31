@@ -441,6 +441,30 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
 .wa-chart .wa-axis { fill: var(--muted); font: 500 11px var(--sans); }
 .wa-chart .wa-hit { fill: transparent; }
 .wa-chart .wa-col:hover .wa-hit { fill: var(--bg-2, var(--line)); }
+/* (v1.11.0) WhatsApp support inbox: the conversation list beside the thread; stacked on a phone. */
+.wa-inbox { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 14px; align-items: start; }
+.wa-list { max-height: 640px; overflow: auto; }
+.wa-conv { display: grid; gap: 2px; width: 100%; text-align: left; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
+.wa-conv:hover { background: var(--bg-2); }
+.wa-conv[aria-current="true"] { background: var(--accent-soft); }
+.wa-conv .top { display: flex; gap: 8px; align-items: baseline; }
+.wa-conv .who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.wa-conv .snip { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-unread { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
+.wa-thread { display: flex; flex-direction: column; min-height: 520px; }
+.wa-thread > .wa-msgs { flex: 1; }
+.wa-thread > header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.wa-thread > header .actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.wa-thread > .callout { margin: 10px 14px 0; }
+.wa-msgs { display: flex; flex-direction: column; gap: 8px; padding: 14px; overflow: auto; max-height: 520px; background: var(--bg); }
+.wa-bubble { max-width: min(78%, 560px); padding: 8px 11px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.wa-bubble.out { align-self: flex-end; background: var(--accent-soft); border-color: transparent; }
+.wa-bubble.ai { background: var(--info-soft); border-color: transparent; }
+.wa-bubble .meta { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); white-space: normal; }
+.wa-note { align-self: center; font-size: 12px; color: var(--muted); text-align: center; max-width: 90%; }
+.wa-compose { display: grid; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+.wa-compose textarea { width: 100%; min-height: 72px; resize: vertical; }
+@media (max-width: 860px) { .wa-inbox { grid-template-columns: 1fr; } .wa-list { max-height: 280px; } .wa-bubble { max-width: 92%; } }
 
 /* ------------------------------------------------------------------ map picker */
 .map { position: relative; height: 280px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: #dfe7ee; cursor: crosshair; touch-action: none; user-select: none; }

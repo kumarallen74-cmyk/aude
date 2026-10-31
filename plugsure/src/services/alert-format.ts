@@ -37,6 +37,7 @@ export const ALERT_KINDS: Record<string, string> = {
   'platform.whatsapp_template': 'WhatsApp template paused or rejected',
   'platform.whatsapp_quality': 'WhatsApp number quality low',
   'platform.whatsapp_account': 'WhatsApp Business account restricted',
+  'platform.whatsapp_support': 'WhatsApp customer waiting for staff',
 };
 
 export const titleOf = (kind: string) =>

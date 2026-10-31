@@ -7,6 +7,10 @@ health is on **Operate → WhatsApp**: the number's quality rating and messaging
 limit, the templates PlugSure needs, and how many codes and alerts were
 delivered, read or failed.
 
+From v1.11.0, customers who write to that number land in a **support inbox**
+(Operate → WhatsApp → Inbox), where an **AI assistant (Claude)** can answer
+them or draft answers for staff: section 3.
+
 This page is the setup, step by step: first at Meta, then in the PlugSure
 console.
 
@@ -119,6 +123,83 @@ applied to the alert log there, and a failed alert still falls back to SMS.
 The channel's own `/hooks/whatsapp/<key>` URL is only needed for an alert
 channel on a different Meta app.
 
+## 3. Customer support with Claude (v1.11.0)
+
+Customers who write to the WhatsApp number (a driver replying to a sign-in
+code, or anyone who has it from plugsure.com) arrive in **Operate → WhatsApp →
+Inbox**, one conversation per number. Without anything more, staff answer them
+there and an operator alert (*WhatsApp customer waiting for staff*) tells
+whoever is on call. The webhook needs the **`messages`** field subscribed
+(section 2, step 3).
+
+To have **Claude** answer them:
+
+1. **Anthropic account.** At platform.claude.com, under PT. Railsure
+   Solutions Indonesia's organisation: *Settings → Billing* (a payment method
+   or credits), then *Settings → API keys → Create key*. Copy the key
+   (`sk-ant-api…`); it is shown once. A spend limit on the workspace caps the
+   bill (*Settings → Limits*).
+2. **Govern → Integrations → WhatsApp AI support** → *Connect*, provider
+   *Claude (Anthropic API)*:
+   - **Anthropic API key**: the key from step 1. Sealed like every secret.
+   - **Replies**: start with **Drafts** (Claude writes, staff check and send),
+     then **Automatic** once the drafts are right. **Off** keeps the inbox
+     without AI.
+   - **Model**: *Claude Opus 5.5* (default, the most capable), *Sonnet 5.5*
+     (faster, half the price) or *Haiku 5.5* (fastest, cheapest).
+   - **What Claude should know**: your support hours, how payment and refunds
+     work, prices that are not on the chargers, links (plugsure.com/pricing,
+     /refunds, /terms), what to do when a charger does not start. Claude answers
+     from this and from PlugSure's live data, and says when it does not know.
+   - Advanced: the assistant's name, the handover message, and the reply
+     limits (per customer per hour, default 15; all customers per 24 hours,
+     default 1,000).
+   - **Test** sends one tiny request with the key and model.
+3. Watch the **Inbox** for a few days in draft mode, improve the knowledge
+   text, then switch to automatic.
+
+**What Claude does.** It replies in the customer's language (Bahasa Indonesia
+by default), briefly, in WhatsApp style. It looks things up with four read-only
+tools:
+
+| Tool | What it returns |
+|---|---|
+| `find_stations` | Public stations by name, street or area, or nearest to a location the customer shares: address, free chargers now, fastest charger, price per kWh. |
+| `charger_status` | One charger's live status, by the code printed on it or the SPKLU id. |
+| `my_recent_sessions` | The last five sessions and payments of the PlugSure account registered on **the number writing**, and nobody else's. |
+| `hand_off_to_staff` | Passes the conversation to staff, with a one-line reason. |
+
+It **cannot change anything**: no refunds, no starting or stopping a charge, no
+account changes. It hands those to staff, as it does when the customer asks for
+a person, when it cannot help, or when the reply limits are reached. The
+customer then gets the handover message, the conversation shows **staff** in
+the inbox, and an operator alert is raised. A staff reply resolves the alert.
+
+**The inbox.** Filter by who answers (staff, AI, closed). Open a conversation
+to see the messages with the delivery status of each reply, and:
+
+- **Send** a reply. Staff take the conversation over and the assistant stops,
+  except in draft mode, where sending its draft keeps it drafting.
+- **Suggest reply** asks Claude for a draft, whoever has the conversation.
+- **Hand to AI**, **Take over**, **Close**. A new message reopens a closed
+  conversation with the assistant.
+
+WhatsApp allows free-form replies only **within 24 hours** of the customer's
+last message. After that the reply box is disabled until the customer writes
+again.
+
+**Cost.** Each AI reply is one to three requests to the Anthropic API: the
+instructions and knowledge (cached after the first request), the last 24 hours
+of the conversation, and the tool results. Token counts are on each AI reply in
+the inbox and in total on the overview. Opus 5.5 costs US$4 per million input
+tokens and US$20 per million output tokens; Sonnet 5.5 $2 / $10; Haiku 5.5
+$0.10 / $0.50. Meta does not charge for replies within the 24-hour window.
+
+**Refusals.** On Opus and Sonnet, if Anthropic's safety systems decline a
+request, the request is re-run on Anthropic's recommended fallback model
+(`fallbacks: "default"`). If that also declines, the conversation goes to
+staff.
+
 ## Privacy
 
 - **Masked numbers only.** The message ledger (`whatsapp_message`) stores the
@@ -127,11 +208,17 @@ channel on a different Meta app.
 - **Retention.** Messages are kept **180 days**. Account events (template
   status, quality, account updates) are kept 90 days, at most the last 500.
   The hourly retention worker deletes older rows.
-- **No replies stored.** Incoming customer messages that reach the webhook are
-  ignored. PlugSure does not take replies on this number.
-- **Platform administrators only.** The dashboard and its API
+- **Support conversations (v1.11.0).** Customers' messages and the replies are
+  stored as text (media is noted, not kept), **90 days**. The customer's number
+  is stored sealed (`SECRETS_KEY`), because a reply needs it, and shown masked.
+  With WhatsApp AI support on, the conversation's last 24 hours go to Anthropic
+  to write each reply. Under its commercial terms, Anthropic does not train its
+  models on API data by default. Mention it in the
+  privacy policy (plugsure.com/privacy.html).
+- **Platform administrators only.** The dashboard, the inbox and their API
   (`/v1/whatsapp/*`) need `platform:admin`. Test sends are audited
-  (`whatsapp.test_sent`, number masked).
+  (`whatsapp.test_sent`, number masked), and so are staff replies and handovers
+  (`whatsapp.support_reply`, `whatsapp.support_handler`).
 
 ## Troubleshooting
 
@@ -152,6 +239,11 @@ channel on a different Meta app.
 | Code 131026 / failed "message undeliverable" | The number has no WhatsApp or an outdated app. The SMS fallback (if configured) sends the code instead. |
 | Code 131030 | The number is Meta's test number, which only sends to up to 5 allowed recipients. Register the real number. |
 | Code 131042 | Billing problem: add or fix the payment method on the WhatsApp account. |
+| Inbox empty although customers write | The `messages` webhook field is not subscribed, or the webhook is answered 403 (no app secret). |
+| Claude does not answer | *WhatsApp AI support* not connected, its *Replies* set to *Off* or *Drafts* (look for the draft in the conversation), or the conversation is with staff (*Hand to AI*). A note in the conversation gives an API error. |
+| Note: "the Anthropic API key is invalid" | The key was revoked or mistyped. Create a new one and save it. |
+| Note: "Anthropic's rate limit" | The organisation's rate limit at Anthropic. The next message is tried again. Raise the limit (platform.claude.com → Limits) or lower the reply limits. |
+| A conversation went to staff: "more than N AI replies…" | The per-customer hourly limit was reached (an endless chat, or a loop with another bot). Answer it, or *Hand to AI*. |
 
 Platform alerts go to the platform operator's organisations, the same way as
 background-worker alerts: `OPS_ALERT_ORG_ID`, or else the organisations of the

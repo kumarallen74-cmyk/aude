@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.10.0 (31 October 2026), the current release:** the WhatsApp dashboard (Operate → WhatsApp) and delivery tracking for WhatsApp sign-in codes. Notes: [`RELEASE-NOTES-v1.10.0.md`](RELEASE-NOTES-v1.10.0.md); setup: [`deploy/WHATSAPP.md`](deploy/WHATSAPP.md).
+**v1.11.0 (31 October 2026), the current release:** WhatsApp customer support: an inbox for customers who write to the WhatsApp number, answered by an AI assistant (Claude) or by staff. Notes: [`RELEASE-NOTES-v1.11.0.md`](RELEASE-NOTES-v1.11.0.md); setup: [`deploy/WHATSAPP.md`](deploy/WHATSAPP.md) §3.
+
+**v1.10.0 (31 October 2026):** the WhatsApp dashboard (Operate → WhatsApp) and delivery tracking for WhatsApp sign-in codes. Notes: [`RELEASE-NOTES-v1.10.0.md`](RELEASE-NOTES-v1.10.0.md); setup: [`deploy/WHATSAPP.md`](deploy/WHATSAPP.md).
 
 **v1.9.2 (26 October 2026):** v1.9.1 with the PlugSure app on its live host `app.plugsure.co.id` (API and links; website and policies on plugsure.com). Notes: [`RELEASE-NOTES-v1.9.2.md`](RELEASE-NOTES-v1.9.2.md).
 

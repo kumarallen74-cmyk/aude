@@ -15,6 +15,8 @@ import { logger } from '../logger.js';
  *                       that long is full; dropping it changes nothing)
  *   whatsapp_message    (v1.10.0) the WhatsApp ledger (masked numbers, statuses):
  *                       180 days; whatsapp_event: 90 days, at most the last 500
+ *   whatsapp_chat_message (v1.11.0) support conversations' messages: 90 days; a
+ *                       conversation with no message left goes with them
  *
  * Both logs grew without bound — a few hundred chargers write tens of millions
  * of frames a year — until the disk filled or backups became unrestorable in
@@ -34,6 +36,7 @@ export const BATCH_ROWS = 10_000;
 const WA_MESSAGE_DAYS = 180;
 const WA_EVENT_DAYS = 90;
 const WA_EVENT_KEEP = 500;
+const WA_CHAT_DAYS = 90;
 const PAUSE_MS = 200;
 const MAX_PASS_MS = 50_000;
 
@@ -48,6 +51,7 @@ export interface RetentionResult {
   /** (v1.10.0) WhatsApp ledger rows and account events removed. */
   whatsappMessages: number;
   whatsappEvents: number;
+  whatsappChat: number;
   /** True when the pass stopped on its time budget with old rows still left. */
   incomplete: boolean;
 }
@@ -112,7 +116,7 @@ export async function runRetention(opts: {
   const pause = opts.pauseMs ?? PAUSE_MS;
   const now = opts.now ?? Date.now();
   const deadline = Date.now() + (opts.maxPassMs ?? MAX_PASS_MS);
-  const out: RetentionResult = { ocppFrames: 0, connectionAttempts: 0, rateBuckets: 0, oidcTransactions: 0, whatsappMessages: 0, whatsappEvents: 0, incomplete: false };
+  const out: RetentionResult = { ocppFrames: 0, connectionAttempts: 0, rateBuckets: 0, oidcTransactions: 0, whatsappMessages: 0, whatsappEvents: 0, whatsappChat: 0, incomplete: false };
 
   // 0 (or a negative / non-numeric value) keeps that table forever.
   if (frameDays > 0) {
@@ -138,6 +142,11 @@ export async function runRetention(opts: {
     `DELETE FROM whatsapp_event WHERE created_at < now() - make_interval(days => $1)
         OR id <= (SELECT id FROM whatsapp_event ORDER BY id DESC OFFSET $2 LIMIT 1)`, [WA_EVENT_DAYS, WA_EVENT_KEEP]).catch(() => null);
   out.whatsappEvents = we?.rowCount ?? 0;
+  const wc = await query(`DELETE FROM whatsapp_chat_message WHERE created_at < now() - make_interval(days => $1)`, [WA_CHAT_DAYS]).catch(() => null);
+  out.whatsappChat = wc?.rowCount ?? 0;
+  await query(
+    `DELETE FROM whatsapp_conversation c WHERE c.last_message_at < now() - make_interval(days => $1)
+        AND NOT EXISTS (SELECT 1 FROM whatsapp_chat_message m WHERE m.conversation_id = c.id)`, [WA_CHAT_DAYS]).catch(() => null);
 
   if (out.ocppFrames || out.connectionAttempts || out.incomplete) {
     logger.info({ ...out, frameDays, attemptDays }, out.incomplete ? 'retention pass stopped on its time budget; the next pass continues' : 'retention pass');

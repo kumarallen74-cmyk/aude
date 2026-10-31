@@ -405,3 +405,289 @@ dbDescribe('/v1/whatsapp', () => {
     void many;
   });
 });
+
+// ─────────────────────────────────────────── (v1.11.0) the support inbox and its AI assistant
+
+/**
+ * Customers' messages through the same webhook, answered by Claude against a fake Anthropic API (scripted answers,
+ * requests recorded): replies in auto mode, drafts in draft mode, tool calls (stations, the customer's own sessions),
+ * the handover (tool, refusal, reply cap) with its platform alert, API failures as notes, staff replies inside
+ * Meta's 24-hour window only, the handler switches, the connection test, retention.
+ */
+const support = await import('./whatsapp-support.js');
+const CUSTOMER = `62813${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
+const claudeSeen: Array<{ path: string; headers: http.IncomingHttpHeaders; body: any }> = [];
+let claudeScript: Array<{ status?: number; body: any }> = [];
+const claudeMsg = (content: unknown[], stop = 'end_turn'): { status?: number; body: any } => ({
+  body: { id: `msg_${TAG}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 120, output_tokens: 30 } },
+});
+const claude = http.createServer((req, res) => {
+  let raw = '';
+  req.on('data', (c) => { raw += c; });
+  req.on('end', () => {
+    let body: any = null;
+    try { body = JSON.parse(raw); } catch { /* not JSON */ }
+    claudeSeen.push({ path: req.url ?? '', headers: req.headers, body });
+    const a = claudeScript.shift() ?? claudeMsg([{ type: 'text', text: 'Fallback answer.' }]);
+    res.writeHead(a.status ?? 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(a.body));
+  });
+});
+let claudeBase = '';
+let wamidSeq = 0;
+const customerSays = (text: string, extra: Record<string, unknown> = {}) => hook({
+  object: 'whatsapp_business_account',
+  entry: [{ id: WABA, changes: [{ field: 'messages', value: {
+    messaging_product: 'whatsapp', metadata: { phone_number_id: PNID },
+    contacts: [{ wa_id: CUSTOMER, profile: { name: `Budi ${TAG}` } }],
+    messages: [{ from: CUSTOMER, id: `wamid.in.${TAG}.${++wamidSeq}`, timestamp: ts(new Date()), type: 'text', text: { body: text }, ...extra }],
+  } }] }],
+});
+const saveSupport = (settings: Record<string, unknown> = {}, secrets: Record<string, string> = { apiKey: `sk-ant-api03-${TAG}abcdefghij` }) => store.save('ai_support', null, {
+  provider: 'anthropic',
+  settings: { mode: 'auto', model: 'claude-opus-5-5', effort: 'low', knowledge: `Refunds within 3 working days. Code ${TAG}.`, maxRepliesPerHour: 15, maxRepliesPerDay: 1000, baseUrl: claudeBase, ...settings },
+  secrets,
+}, null);
+const theConv = () => one<any>(`SELECT * FROM whatsapp_conversation WHERE phone_hash = $1`, [support.phoneHash(CUSTOMER)]);
+const sentTexts = () => seen.filter((r) => r.path === `/v20.0/${PNID}/messages` && r.body.includes('"type":"text"')).map((r) => JSON.parse(r.body));
+
+dbDescribe('WhatsApp support: the inbox and the AI assistant', () => {
+  let preexistingSupport = false;
+  before(async () => {
+    preexistingSupport = Boolean(await one(`SELECT 1 FROM integration WHERE kind = 'ai_support' AND archived_at IS NULL`));
+    await new Promise<void>((r) => claude.listen(0, '127.0.0.1', () => r()));
+    claudeBase = `http://127.0.0.1:${(claude.address() as any).port}`;
+    support.setSettleMs(0);
+    // The test above removed the app secret: the webhook needs it back.
+    await save({}, { accessToken: 'EAAG-test', appSecret: APP_SECRET });
+    store.invalidate();
+  });
+  after(async () => {
+    await support.idle();
+    claude.close();
+    await query(`DELETE FROM whatsapp_conversation WHERE phone_hash = $1`, [support.phoneHash(CUSTOMER)]);
+    if (!preexistingSupport) await query(`DELETE FROM integration WHERE kind = 'ai_support' AND org_id IS NULL`);
+  });
+
+  test('preconditions: no AI support configured by someone else', () => assert.equal(preexistingSupport, false));
+
+  test('the integration: key format, bounds; the connection test asks Claude once', async () => {
+    await assert.rejects(saveSupport({}, { apiKey: 'not-a-key' }), /sk-ant-/);
+    await assert.rejects(saveSupport({ knowledge: 'x'.repeat(20_001) }), /20,000/);
+    await assert.rejects(saveSupport({ maxRepliesPerHour: 0 }), /whole number/);
+    const saved = (await saveSupport())!;
+    assert.ok((saved.secretHints as any).apiKey, 'the key is a sealed secret, shown as a hint');
+    claudeScript = [claudeMsg([{ type: 'text', text: 'OK' }])];
+    const t = (await app.inject({ method: 'POST', url: '/v1/integrations/ai_support/test', payload: {} })).json();
+    assert.equal(t.ok, true, t.message);
+    assert.match(t.message, /Claude answered/);
+    const req = claudeSeen.pop()!;
+    // The saved key, and only it (SDK 1.x sends it as a bearer token; never the server's environment credentials).
+    const key = `sk-ant-api03-${TAG}abcdefghij`;
+    assert.ok(req.headers['x-api-key'] === key || req.headers.authorization === `Bearer ${key}`, JSON.stringify(req.headers));
+  });
+
+  test('a customer message: stored (number sealed, masked), answered by Claude, the reply sent and tracked', async () => {
+    claudeSeen.length = 0;
+    claudeScript = [claudeMsg([{ type: 'text', text: `Halo Budi! Refund diproses dalam 3 hari kerja.` }])];
+    const before = sentTexts().length;
+    const r = await customerSays('Halo, kapan refund saya?');
+    assert.equal(r.statusCode, 200);
+    assert.equal(r.json().messages, 1);
+    await support.idle();
+    const c = await theConv();
+    assert.equal(c.phone_masked.includes(CUSTOMER.slice(4, 9)), false, 'masked');
+    assert.equal(c.phone_sealed.includes(CUSTOMER), false, 'sealed');
+    assert.equal(c.profile_name, `Budi ${TAG}`);
+    assert.equal(c.handler, 'ai');
+    // Claude got the instructions, the knowledge (cached), the tools, the conversation, and the fallback opt-in.
+    const req = claudeSeen[0]!;
+    assert.match(req.path, /^\/v1\/messages/);
+    assert.equal(req.body.model, 'claude-opus-5-5');
+    assert.equal(req.body.output_config.effort, 'low');
+    assert.equal(req.body.fallbacks, 'default');
+    assert.match(String(req.headers['anthropic-beta']), /server-side-fallback-2026-07-01/);
+    assert.match(req.body.system[0].text, new RegExp(`Code ${TAG}`));
+    assert.deepEqual(req.body.system[0].cache_control, { type: 'ephemeral' });
+    assert.deepEqual(req.body.tools.map((t: any) => t.name), ['find_stations', 'charger_status', 'my_recent_sessions', 'hand_off_to_staff']);
+    assert.deepEqual(req.body.messages, [{ role: 'user', content: 'Halo, kapan refund saya?' }]);
+    assert.equal(req.body.thinking, undefined, 'thinking is left to the model (always on for Opus 5.5)');
+    // Sent as free-form text to the customer; in the conversation with Meta's id and in the ledger as support.
+    const sent = sentTexts().slice(before);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, CUSTOMER);
+    assert.match(sent[0].text.body, /Refund diproses/);
+    const out = await one<any>(`SELECT * FROM whatsapp_chat_message WHERE conversation_id = $1 AND author = 'ai' ORDER BY id DESC LIMIT 1`, [c.id]);
+    assert.ok(out.wamid);
+    assert.equal(out.model, 'claude-opus-5-5');
+    assert.equal(out.input_tokens, 120);
+    assert.equal((await ledger(out.wamid)).purpose, 'support');
+    // The read receipt for the customer's message.
+    assert.ok(seen.some((x) => x.body.includes('"status":"read"')));
+    // Meta's retry of the same message is not taken twice, nor answered again.
+    const dup = await hook({ object: 'whatsapp_business_account', entry: [{ id: WABA, changes: [{ field: 'messages', value: { contacts: [], messages: [{ from: CUSTOMER, id: `wamid.in.${TAG}.${wamidSeq}`, timestamp: ts(new Date()), type: 'text', text: { body: 'Halo, kapan refund saya?' } }] } }] }] });
+    assert.equal(dup.json().messages, 0);
+  });
+
+  test('tools: the assistant looks up stations and the customer\'s own sessions, then answers', async () => {
+    claudeSeen.length = 0;
+    claudeScript = [
+      claudeMsg([{ type: 'tool_use', id: 'tu_1', name: 'find_stations', input: { query: `nowhere-${TAG}`, near_latitude: null, near_longitude: null, only_available: true } },
+        { type: 'tool_use', id: 'tu_2', name: 'my_recent_sessions', input: {} }], 'tool_use'),
+      claudeMsg([{ type: 'text', text: 'Tidak ada stasiun dengan nama itu.' }]),
+    ];
+    await customerSays(`Ada SPKLU di nowhere-${TAG}?`);
+    await support.idle();
+    assert.equal(claudeSeen.length, 2);
+    const second = claudeSeen[1]!.body.messages;
+    const results = second[second.length - 1].content;
+    assert.deepEqual(results.map((x: any) => x.tool_use_id), ['tu_1', 'tu_2'], 'both results in one user message');
+    assert.deepEqual(JSON.parse(results[0].content).stations, []);
+    assert.equal(JSON.parse(results[1].content).account, false, 'no PlugSure account on this number');
+    // The assistant's turn with its tool calls is replayed as it came back.
+    assert.equal(second[second.length - 2].role, 'assistant');
+    assert.equal(second[second.length - 2].content[0].type, 'tool_use');
+    assert.match(sentTexts().pop()!.text.body, /Tidak ada stasiun/);
+  });
+
+  test('handover by the tool: staff\'s conversation, the handover message, a platform alert; the assistant then stays quiet', async () => {
+    claudeScript = [claudeMsg([{ type: 'text', text: 'Saya teruskan ke tim kami.' }, { type: 'tool_use', id: 'tu_3', name: 'hand_off_to_staff', input: { reason: 'wants a refund for a failed session' } }], 'tool_use')];
+    await customerSays('Saya mau refund sekarang!');
+    await support.idle();
+    const c = await theConv();
+    assert.equal(c.handler, 'human');
+    assert.equal(c.handoff_reason, 'wants a refund for a failed session');
+    assert.match(sentTexts().pop()!.text.body, /Saya teruskan ke tim kami\.\n\nTerima kasih, tim PlugSure/);
+    const alert = await one<any>(`SELECT * FROM alert WHERE org_id = $1 AND kind = 'platform.whatsapp_support' AND target_id = $2 AND resolved_at IS NULL`, [org, c.id]);
+    assert.ok(alert);
+    assert.match(alert.message, /waiting for staff/);
+    const calls = claudeSeen.length;
+    await customerSays('Halo?');
+    await support.idle();
+    assert.equal(claudeSeen.length, calls, 'a conversation with staff is not answered by the assistant');
+  });
+
+  test('the inbox: list, open, staff reply (takes over, resolves the alert), 24-hour window, handler switches; platform:admin only', async () => {
+    const list = (await app.inject({ method: 'GET', url: '/v1/whatsapp/conversations?handler=human' })).json();
+    const mine = list.conversations.find((x: any) => x.name === `Budi ${TAG}`);
+    assert.ok(mine);
+    assert.equal(mine.phone.includes(CUSTOMER.slice(4, 9)), false);
+    assert.equal(mine.windowOpen, true);
+    assert.ok(mine.unread >= 1);
+    const one1 = (await app.inject({ method: 'GET', url: `/v1/whatsapp/conversations/${mine.id}` })).json();
+    assert.ok(one1.messages.some((m: any) => m.author === 'system' && /Handed to staff/.test(m.body)));
+    assert.ok(one1.messages.some((m: any) => m.author === 'ai' && m.status === 'accepted'));
+    assert.equal((await theConv()).unread, 0, 'opening it marks it read');
+    const r = await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${mine.id}/reply`, payload: { text: 'Refund Anda sudah kami proses.' } });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.match(sentTexts().pop()!.text.body, /sudah kami proses/);
+    assert.equal(await one(`SELECT 1 FROM alert WHERE org_id = $1 AND kind = 'platform.whatsapp_support' AND target_id = $2 AND resolved_at IS NULL`, [org, mine.id]), null, 'answered: the alert is resolved');
+    assert.equal((await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${mine.id}/reply`, payload: { text: '  ' } })).statusCode, 422);
+    assert.equal((await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${randomUUID()}/reply`, payload: { text: 'x' } })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'GET', url: '/v1/whatsapp/conversations/not-a-uuid' })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${mine.id}/handler`, payload: { handler: 'robot' } })).statusCode, 400);
+    // Outside the window: refused, as Meta would.
+    await query(`UPDATE whatsapp_conversation SET last_inbound_at = now() - interval '25 hours' WHERE id = $1`, [mine.id]);
+    const late = await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${mine.id}/reply`, payload: { text: 'Halo' } });
+    assert.equal(late.statusCode, 409);
+    assert.match(late.json().error, /24 hours/);
+    await query(`UPDATE whatsapp_conversation SET last_inbound_at = now() WHERE id = $1`, [mine.id]);
+    // Closed, then the customer writes: back with the assistant.
+    const closed = (await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${mine.id}/handler`, payload: { handler: 'closed' } })).json();
+    assert.equal(closed.conversation.handler, 'closed');
+    claudeScript = [claudeMsg([{ type: 'text', text: 'Sama-sama!' }])];
+    await customerSays('Terima kasih');
+    await support.idle();
+    assert.equal((await theConv()).handler, 'ai');
+    assert.match(sentTexts().pop()!.text.body, /Sama-sama/);
+    const audit = await one(`SELECT 1 FROM audit_log WHERE org_id = $1 AND action = 'whatsapp.support_reply'`, [org]);
+    assert.ok(audit);
+    role = 'none';
+    try {
+      for (const [method, url] of [['GET', '/v1/whatsapp/conversations'], ['GET', `/v1/whatsapp/conversations/${mine.id}`], ['POST', `/v1/whatsapp/conversations/${mine.id}/reply`], ['POST', `/v1/whatsapp/conversations/${mine.id}/handler`], ['POST', `/v1/whatsapp/conversations/${mine.id}/suggest`]] as const) {
+        assert.equal((await app.inject({ method, url, ...(method === 'POST' ? { payload: { text: 'x', handler: 'ai' } } : {}) })).statusCode, 403, `${method} ${url}`);
+      }
+    } finally { role = 'admin'; }
+  });
+
+  test('draft mode: Claude\'s reply waits for staff; suggest asks for one on demand', async () => {
+    await saveSupport({ mode: 'draft' });
+    store.invalidate();
+    claudeScript = [claudeMsg([{ type: 'text', text: `Draf jawaban ${TAG}` }])];
+    const sent = sentTexts().length;
+    await customerSays('Bagaimana cara bayar?');
+    await support.idle();
+    assert.equal(sentTexts().length, sent, 'nothing sent in draft mode');
+    const c = await theConv();
+    assert.equal(c.draft, `Draf jawaban ${TAG}`);
+    claudeScript = [claudeMsg([{ type: 'text', text: 'Saran kedua' }])];
+    const s = (await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${c.id}/suggest` })).json();
+    assert.deepEqual(s, { draft: 'Saran kedua', handoff: null });
+    assert.equal(sentTexts().length, sent);
+    // A draft is waiting: staff are told.
+    assert.ok(await one(`SELECT 1 FROM alert WHERE org_id = $1 AND kind = 'platform.whatsapp_support' AND target_id = $2 AND resolved_at IS NULL AND message LIKE '%drafted%'`, [org, c.id]));
+    // Staff send the draft: the assistant keeps the conversation (it drafts the next one too).
+    assert.equal((await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${c.id}/reply`, payload: { text: 'Saran kedua' } })).statusCode, 200);
+    assert.equal((await theConv()).handler, 'ai');
+    assert.equal((await theConv()).draft, null);
+    // Nothing to answer after a reply: no request with a final assistant turn.
+    const calls = claudeSeen.length;
+    assert.equal((await app.inject({ method: 'POST', url: `/v1/whatsapp/conversations/${c.id}/suggest` })).statusCode, 409);
+    assert.equal(claudeSeen.length, calls);
+  });
+
+  test('a refusal, a reply cap and an API failure: handed to staff, or a note, never a broken reply', async () => {
+    await saveSupport({ mode: 'auto', maxRepliesPerHour: 100 });
+    store.invalidate();
+    let c = await theConv();
+    await query(`UPDATE whatsapp_conversation SET handler = 'ai' WHERE id = $1`, [c.id]);
+    claudeScript = [claudeMsg([], 'refusal')];
+    await customerSays('…');
+    await support.idle();
+    c = await theConv();
+    assert.equal(c.handler, 'human');
+    assert.match(c.handoff_reason, /declined/);
+    // A cap of 1 an hour, already reached: no request at all.
+    await saveSupport({ mode: 'auto', maxRepliesPerHour: 1 });
+    store.invalidate();
+    await query(`UPDATE whatsapp_conversation SET handler = 'ai' WHERE id = $1`, [c.id]);
+    const calls = claudeSeen.length;
+    await customerSays('Halo lagi');
+    await support.idle();
+    assert.equal(claudeSeen.length, calls);
+    assert.match((await theConv()).handoff_reason, /more than 1 AI replies/);
+    // A bad key: a note in the conversation, nothing sent, the conversation stays with the assistant.
+    await saveSupport({ mode: 'auto', maxRepliesPerHour: 100 });
+    store.invalidate();
+    await query(`UPDATE whatsapp_conversation SET handler = 'ai' WHERE id = $1`, [c.id]);
+    claudeScript = [{ status: 401, body: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } } }];
+    const sent = sentTexts().length;
+    await customerSays('Tes');
+    await support.idle();
+    assert.equal(sentTexts().length, sent);
+    const note = await one<any>(`SELECT body FROM whatsapp_chat_message WHERE conversation_id = $1 AND author = 'system' ORDER BY id DESC LIMIT 1`, [c.id]);
+    assert.match(note.body, /API key is invalid/);
+    assert.equal((await theConv()).handler, 'ai');
+  });
+
+  test('message bodies: text, location, media named with its caption, reactions skipped', () => {
+    assert.equal(support.bodyOf({ type: 'text', text: { body: 'hi' } }), 'hi');
+    assert.equal(support.bodyOf({ type: 'location', location: { latitude: -6.2, longitude: 106.8166667, name: 'GBK' } }), '[location -6.20000, 106.81667 — GBK]');
+    assert.equal(support.bodyOf({ type: 'image', image: { caption: 'error on screen' } }), '[image: error on screen]');
+    assert.equal(support.bodyOf({ type: 'audio', audio: { voice: true } }), '[voice message]');
+    assert.equal(support.bodyOf({ type: 'reaction', reaction: { emoji: '👍' } }), '');
+  });
+
+  test('overview counts the inbox; retention keeps messages 90 days', async () => {
+    const o = (await app.inject({ method: 'GET', url: '/v1/whatsapp/overview' })).json();
+    assert.equal(o.support.configured, true);
+    assert.ok(o.support.aiReplies >= 3);
+    assert.ok(o.support.handoffs >= 1);
+    const c = await theConv();
+    await query(`INSERT INTO whatsapp_chat_message (conversation_id, direction, author, body, created_at) VALUES ($1, 'in', 'customer', $2, now() - interval '91 days')`, [c.id, `old ${TAG}`]);
+    const { runRetention } = await import('./retention.js');
+    const out = await runRetention({ ocppFrameDays: 0, connectionAttemptDays: 0 });
+    assert.ok(out.whatsappChat >= 1);
+    assert.equal(await one(`SELECT 1 FROM whatsapp_chat_message WHERE body = $1`, [`old ${TAG}`]), null);
+  });
+});

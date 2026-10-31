@@ -532,7 +532,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   status webhook URL (`https://<OCPP host>/hooks/whatsapp-cloud/<key>`) and the
   verify token it shows into the Meta app. Delivery, templates and number
   quality appear on **Operate → WhatsApp**. Step by step:
-  [WHATSAPP.md](WHATSAPP.md).
+  [WHATSAPP.md](WHATSAPP.md). Customers who write to the number appear in its
+  **Inbox**; to have Claude answer them, connect **WhatsApp AI support** with an
+  Anthropic API key (v1.11.0, [WHATSAPP.md](WHATSAPP.md) §3).
 - **Plug & Charge PKI** and **map tiles**: see those sections. The `PNC_*` and
   `MAP_TILE_*` variables keep working when nothing is set in the console.
 

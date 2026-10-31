@@ -72,6 +72,8 @@ function fromEnv(kind: Kind): Resolved | null {
       if (mode === 'http') return { ...base, provider: 'http', settings: { url: config.pnc.pkiUrl, signer: config.pnc.signer, vaultMount: config.pnc.vaultMount, vaultRole: config.pnc.vaultRole }, secrets: { token: config.pnc.pkiToken }, source };
       return { ...base, provider: mode === 'mock' ? 'mock' : 'none', settings: { signer: config.pnc.signer, vaultMount: config.pnc.vaultMount, vaultRole: config.pnc.vaultRole }, secrets: {}, source };
     }
+    case 'ai_support':
+      return null;
     case 'map_tiles':
       return process.env.MAP_TILE_URL
         ? { ...base, provider: 'custom', settings: { tileUrl: config.driverApp.mapTileUrl, attribution: config.driverApp.mapAttribution, maxZoom: 19 }, secrets: {}, source: 'environment' }
@@ -260,6 +262,17 @@ export async function save(kind: Kind, orgId: string | null, input: SaveInput, u
     if (v !== undefined) settings[f.key] = v;
   }
   if (kind === 'map_tiles' && p.id === 'custom' && !/\{z\}/.test(String(settings.tileUrl)) ) throw new IntegrationError(422, 'The tile URL must contain {z}, {x} and {y}.');
+  if (kind === 'ai_support') {
+    // (v1.11.0) The knowledge text goes into every request's system prompt: bounded, like the reply caps.
+    if (String(settings.knowledge ?? '').length > 20_000) throw new IntegrationError(422, 'What Claude should know: at most 20,000 characters.');
+    if (String(settings.assistantName ?? '').length > 60) throw new IntegrationError(422, 'The assistant\'s name: at most 60 characters.');
+    if (String(settings.handoffText ?? '').length > 500) throw new IntegrationError(422, 'The handover message: at most 500 characters.');
+    for (const [k, label, max] of [['maxRepliesPerHour', 'AI replies per customer per hour', 100], ['maxRepliesPerDay', 'AI replies per day', 100_000]] as const) {
+      const n = Number(settings[k]);
+      if (!Number.isInteger(n) || n < 1 || n > max) throw new IntegrationError(422, `${label}: a whole number from 1 to ${max}.`);
+    }
+    if (secrets.apiKey && !/^sk-ant-[A-Za-z0-9_-]{10,}$/.test(secrets.apiKey)) throw new IntegrationError(422, 'The Anthropic API key starts with sk-ant- (platform.claude.com → Settings → API keys).');
+  }
   if (isWhatsAppCloud(kind, p.id)) {
     // (v1.10.0) Meta's ids are long decimal numbers; a pasted phone number or a name is the usual mistake. Optional:
     // a configuration saved before keeps working without it (the dashboard then shows no templates).
