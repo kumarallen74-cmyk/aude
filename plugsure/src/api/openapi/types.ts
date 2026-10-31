@@ -74,6 +74,7 @@ export const TAGS = [
   'Integrations',
   'WhatsApp',
   'Payments and refunds',
+  'Finance',
   'RFID and tokens',
   'Firmware and diagnostics',
   'Compliance',

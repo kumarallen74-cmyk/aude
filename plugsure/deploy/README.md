@@ -469,6 +469,11 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      add GoPay, ShopeePay and cards with Midtrans, or OVO, DANA, ShopeePay,
      LinkAja and cards with Xendit. Enable only methods that are activated on
      your acquirer account.
+  5. (v1.12.0) With Xendit, give the secret key the **Balance** and
+     **Transactions** read permissions (Xendit dashboard → Settings → API keys).
+     **Commercial → Finance** then shows what Xendit collected, charged in
+     fees and settled to the bank, and reconciles it with PlugSure's payments
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

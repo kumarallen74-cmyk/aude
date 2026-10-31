@@ -25,7 +25,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     `SELECT table_name AS t, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
        FROM information_schema.role_table_grants
       WHERE grantee = 'plugsure_app' AND table_name = ANY($1::text[]) GROUP BY 1 ORDER BY 1`,
-    [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event', 'whatsapp_event', 'whatsapp_message']]);
+    [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event', 'whatsapp_event', 'whatsapp_message',
+      'whatsapp_conversation', 'whatsapp_chat_message', 'gateway_transaction', 'gateway_balance_snapshot', 'gateway_sync_state', 'reconciliation_exception']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -38,5 +39,13 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     // (v1.10.0, 078) the WhatsApp ledger is updated by the webhook; an account event is recorded once.
     whatsapp_event: 'DELETE,INSERT,SELECT',
     whatsapp_message: 'DELETE,INSERT,SELECT,UPDATE',
+    // (v1.11.0, 079) a support message is written once; its conversation changes.
+    whatsapp_chat_message: 'DELETE,INSERT,SELECT',
+    whatsapp_conversation: 'DELETE,INSERT,SELECT,UPDATE',
+    // (v1.12.0, 080) the finance ledger is a financial record: synced and updated, never deleted by the app.
+    gateway_balance_snapshot: 'DELETE,INSERT,SELECT',
+    gateway_sync_state: 'INSERT,SELECT,UPDATE',
+    gateway_transaction: 'INSERT,SELECT,UPDATE',
+    reconciliation_exception: 'INSERT,SELECT,UPDATE',
   });
 });

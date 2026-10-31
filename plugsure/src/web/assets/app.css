@@ -441,6 +441,8 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
 .wa-chart .wa-axis { fill: var(--muted); font: 500 11px var(--sans); }
 .wa-chart .wa-hit { fill: transparent; }
 .wa-chart .wa-col:hover .wa-hit { fill: var(--bg-2, var(--line)); }
+/* (v1.12.0) Finance: notices above the figures. */
+.fin-notes:not(:empty) { display: grid; gap: 10px; margin-bottom: 14px; }
 /* (v1.11.0) WhatsApp support inbox: the conversation list beside the thread; stacked on a phone. */
 .wa-inbox { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 14px; align-items: start; }
 .wa-list { max-height: 640px; overflow: auto; }

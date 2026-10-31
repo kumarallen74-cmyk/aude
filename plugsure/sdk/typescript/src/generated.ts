@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.11.0";
+export const API_VERSION = "1.12.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -1433,6 +1433,19 @@ export interface EvseTopology {
   evses: EvseSpec[];
 }
 
+export interface FinanceAccount {
+  id: string;
+  /** Null: the platform's own account (it takes the payments of every operator without one). */
+  orgId?: string | null;
+  orgName?: string | null;
+  provider: "xendit";
+  environment?: string | null;
+  /** Replaced by another account; kept while its money settles. */
+  archived?: boolean;
+  testMode?: boolean;
+  label: string;
+}
+
 export interface FirmwareImage {
   id: string;
   name: string;
@@ -1959,6 +1972,42 @@ export interface Frame {
   unique_id?: string | null;
   /** The OCPP message payload as received or sent. */
   payload: unknown;
+}
+
+/** One transaction in the gateway's ledger, as synced, matched to PlugSure's payment when it is one. */
+export interface GatewayTransaction {
+  id: string;
+  /** Xendit's transaction id (txn_…). */
+  gatewayId: string;
+  kind: "payment" | "refund" | "payout" | "transfer" | "fee" | "other";
+  /** The gateway's own type word. */
+  type?: string | null;
+  status: "success" | "pending" | "failed" | "voided" | "reversed";
+  cashflow?: "in" | "out";
+  channel?: string | null;
+  channelCategory?: string | null;
+  /** The reference PlugSure gave the gateway (ps-…). */
+  reference?: string | null;
+  productId?: string | null;
+  currency?: string;
+  amount: number;
+  fee?: number;
+  vat?: number;
+  withholdingTax?: number;
+  net?: number | null;
+  settlement?: "pending" | "settled" | "early_settled" | null;
+  expectedSettlementAt?: string | null;
+  /** When the sync first saw it settled. */
+  settledSeenAt?: string | null;
+  at: string;
+  updatedAt?: string;
+  /** How it matched PlugSure: a payment, a membership pass charge, a refund; null: not matched. */
+  matched?: "intent" | "pass" | "refund" | null;
+  paymentId?: string | null;
+  paymentState?: string | null;
+  sessionId?: string | null;
+  operator?: string | null;
+  passChargeId?: string | null;
 }
 
 export interface IntegrationField {
@@ -2573,6 +2622,25 @@ export interface QuirkProfile {
   updated_at: string;
   /** Charge points currently resolved to this profile. */
   charge_points: number;
+}
+
+export interface ReconciliationException {
+  id: string;
+  kind: "missing_in_plugsure" | "missing_at_gateway" | "amount_mismatch" | "pending_too_long" | "settlement_overdue" | "refund_mismatch";
+  text: string;
+  state: "open" | "resolved";
+  amount?: number | null;
+  reference?: string | null;
+  channel?: string | null;
+  gatewayId?: string | null;
+  paymentId?: string | null;
+  detail?: Record<string, unknown>;
+  /** A gateway payment matching a PlugSure payment that never became paid: POST …/apply applies it. */
+  canApply?: boolean;
+  resolution?: string | null;
+  resolvedAt?: string | null;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
 }
 
 export interface RefundOutcome {
@@ -4725,6 +4793,11 @@ export type ApplyLoadPlanNowResponse = {
   applied: PowerAllocation[];
 };
 
+export type ApplyPaymentPlugSureMissedResponse = {
+  ok: boolean;
+  outcome: string;
+};
+
 export type ArchiveFirmwareImageResponse = {
   ok: true;
 };
@@ -5274,6 +5347,91 @@ export type EscalateRejectedDisputeToPlatformEMSPSideResponse = {
 export type FetchPkiRootCertificatesResponse = {
   anchors: PncTrustAnchor[];
   received: number;
+};
+
+export type FinanceOverviewResponse = {
+  account: FinanceAccount;
+  period?: {
+    from?: string;
+    to?: string;
+    timeZone?: string;
+  };
+  currency?: string;
+  collected: number;
+  payments?: number;
+  fees?: number;
+  vat?: number;
+  withholdingTax?: number;
+  feeRate?: number | null;
+  refunds?: number;
+  refundCount?: number;
+  payouts?: number;
+  settled?: number;
+  net: number;
+  receivable: {
+    amount?: number;
+    count?: number;
+    overdue?: number;
+    byDay?: {
+      day?: string;
+      amount?: number;
+      count?: number;
+    }[];
+  };
+  balance?: {
+    amount?: number;
+    at?: string;
+  } | null;
+  payable?: {
+    refundsDue?: number;
+    refundsDueCount?: number;
+  };
+  byChannel?: {
+    channel?: string;
+    count?: number;
+    amount?: number;
+    fees?: number;
+  }[];
+  daily?: {
+    day?: string;
+    collected?: number;
+    fees?: number;
+    refunds?: number;
+  }[];
+  exceptionsOpen?: number;
+  sync?: {
+    lastRunAt?: string | null;
+    ok?: boolean | null;
+    error?: string | null;
+    rows?: number | null;
+    complete?: boolean;
+    lastReconciledAt?: string | null;
+  } | null;
+};
+
+export type GatewayFeesResponse = {
+  rows: {
+    month?: string;
+    channel?: string;
+    count?: number;
+    amount?: number;
+    fee?: number;
+    vat?: number;
+    withholdingTax?: number;
+    total?: number;
+    rate?: number | null;
+  }[];
+  qris: {
+    payments?: number;
+    actual?: number;
+    estimated?: number;
+    difference?: number;
+  };
+};
+
+export type GatewayTransactionsResponse = {
+  transactions: GatewayTransaction[];
+  nextBefore: string | null;
 };
 
 export type GetAlertRoutingSettingsResponse = {
@@ -5954,6 +6112,37 @@ export type OneWhatsAppSupportConversationResponse = {
   messages: WhatsAppChatMessage[];
 };
 
+export type PayablesResponse = {
+  refunds: {
+    paymentId?: string;
+    state?: string;
+    amount?: number;
+    currency?: string;
+    reason?: string | null;
+    requestedAt?: string | null;
+    channel?: string | null;
+    paidAt?: string | null;
+    reference?: string | null;
+    operator?: string | null;
+    refundWindowDays?: number | null;
+    daysLeft?: number | null;
+  }[];
+  ownerShares: {
+    statementId?: string;
+    period?: string;
+    owner?: string;
+    operator?: string;
+    amount?: number;
+    currency?: string;
+    finalisedAt?: string;
+    status?: "due";
+  }[];
+};
+
+export type PaymentsAccountsWithFinanceDataResponse = {
+  accounts: FinanceAccount[];
+};
+
 export type PaymentsOnMyPositionsResponse = {
   payments: {
     id?: string;
@@ -6032,11 +6221,37 @@ export type ReadVariablesNowGetVariablesResponse = {
   results?: Record<string, unknown>[];
 };
 
+export type ReceivablesResponse = {
+  byDay: {
+    day?: string | null;
+    net?: number;
+    gross?: number;
+    count?: number;
+    overdue?: boolean;
+  }[];
+  total: number;
+  rows: GatewayTransaction[];
+  fleetInvoices: {
+    id?: string;
+    number?: string;
+    period?: string;
+    total?: number;
+    currency?: string;
+    dueDate?: string;
+    account?: string | null;
+    overdue?: boolean;
+  }[];
+};
+
 export type ReconcileStuckSessionsResponse = {
   /** Sessions closed for review. */
   stuck: number;
   /** Unrated sessions retried. */
   rerated: number;
+};
+
+export type ReconciliationExceptionsResponse = {
+  exceptions: ReconciliationException[];
 };
 
 export type RecordCreditNoteAsRefundedBody = {
@@ -6290,6 +6505,14 @@ export type ResetUserTwoStepVerificationResponse = {
 
 export type ResolveAlertResponse = {
   ok: true;
+};
+
+export type ResolveReconciliationExceptionBody = {
+  note: string;
+};
+
+export type ResolveReconciliationExceptionResponse = {
+  ok: boolean;
 };
 
 export type ResumeSuspendedChargePointResponse = {
@@ -6738,6 +6961,21 @@ export type SwitchSignedMeterReadingsOnOrOffResponse = {
   }[];
 };
 
+export type SyncAndReconcileNowResponse = {
+  sync?: {
+    ok?: boolean;
+    rows?: number;
+    complete?: boolean;
+    error?: string;
+  };
+  balance?: number | null;
+  reconciliation?: {
+    open?: number;
+    found?: number;
+    cleared?: number;
+  };
+};
+
 export type TestIntegrationBody = {
   scope?: "org" | "platform";
   /** Sign-in codes: send a real test code to this number. */
@@ -7155,6 +7393,22 @@ export class Operations {
     siteId: string;
   }, options?: RequestOptions): Promise<ApplyLoadPlanNowResponse> {
     return this.transport.request<ApplyLoadPlanNowResponse>({ method: "POST", path: "/v1/sites/{siteId}/power/apply", pathParams: { siteId: params.siteId }, accept: "json" }, options);
+  }
+
+  /**
+   * Apply a payment PlugSure missed
+   *
+   * For a missing_in_plugsure exception whose gateway payment matches a PlugSure payment that never became paid: the payment is applied exactly as its lost notification would have been (state, amount and currency checks; a refund when it came too late), and the exception resolved with the outcome. Audited as finance.exception_applied.
+   *
+   * `POST /v1/finance/accounts/{id}/exceptions/{eid}/apply` · needs `payment:write`
+   */
+  applyPaymentPlugSureMissed(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    /** The exception id. */
+    eid: string;
+  }, options?: RequestOptions): Promise<ApplyPaymentPlugSureMissedResponse> {
+    return this.transport.request<ApplyPaymentPlugSureMissedResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/exceptions/{eid}/apply", pathParams: { id: params.id, eid: params.eid }, accept: "json" }, options);
   }
 
   /**
@@ -8263,6 +8517,27 @@ export class Operations {
   }
 
   /**
+   * Export the period (CSV, Excel, PDF)
+   *
+   * The period for the accountant: csv — every transaction; xlsx — Summary, By channel, Fees and Transactions sheets; pdf — the summary, by channel, fees by month, then the transactions. Audited as finance.exported.
+   *
+   * `GET /v1/finance/accounts/{id}/export` · needs `payment:read`
+   */
+  exportPeriodCsvExcelPdf(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+      format?: "csv" | "xlsx" | "pdf";
+    };
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/accounts/{id}/export", pathParams: { id: params.id }, query: params.query, accept: "binary" }, options);
+  }
+
+  /**
    * Export sessions as CSV
    *
    * Downloads up to 50,000 matching sessions as UTF-8 CSV with a byte-order mark (for Excel), including the tax breakdown. Cells that start with a formula character are prefixed to prevent formula injection; site-scoped users get masked cards. Each export is audited as session.exported. Columns: an organisation whose sites are all in Indonesia gets the v1.5 columns unchanged (legacy names `energy_subtotal_idr` … `gross_total_idr`, rupiah); an organisation with a site outside Indonesia gets `energy_subtotal_minor` … `gross_total_minor` in minor units of the row's currency, with a `currency` column last.
@@ -8316,6 +8591,74 @@ export class Operations {
     body: BillingFinaliseInput;
   }, options?: RequestOptions): Promise<BillingFinalised> {
     return this.transport.request<BillingFinalised>({ method: "POST", path: "/v1/billing/owners/{id}/finalise", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Finance overview
+   *
+   * Over the period: collected, payments, fees, VAT on fees, withholding tax, refunds, payouts, settled, net (collected − fees − VAT − refunds), by channel and by day. Now: receivable (collected, not yet settled, by expected day; overdue), the last balance at the gateway, refunds due, open reconciliation exceptions, and the sync state.
+   *
+   * `GET /v1/finance/accounts/{id}/overview` · needs `payment:read`
+   */
+  financeOverview(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<FinanceOverviewResponse> {
+    return this.transport.request<FinanceOverviewResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/overview", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Gateway fees
+   *
+   * Fees, VAT and withholding tax on payments by month and channel with the effective rate; and the QRIS fees Xendit charged against PlugSure's estimate (the one on owner statements).
+   *
+   * `GET /v1/finance/accounts/{id}/fees` · needs `payment:read`
+   */
+  gatewayFees(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<GatewayFeesResponse> {
+    return this.transport.request<GatewayFeesResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/fees", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Gateway transactions
+   *
+   * The synced ledger, newest first. Filters: kind, status, settlement (pending, settled, early_settled, none), channel, matched (true / false), q (part of a reference or id). Page with before = nextBefore.
+   *
+   * `GET /v1/finance/accounts/{id}/transactions` · needs `payment:read`
+   */
+  gatewayTransactions(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+      kind?: "payment" | "refund" | "payout" | "transfer" | "fee" | "other";
+      status?: "success" | "pending" | "failed" | "voided" | "reversed";
+      settlement?: "pending" | "settled" | "early_settled" | "none";
+      channel?: string;
+      matched?: boolean;
+      q?: string;
+      before?: string;
+      limit?: number;
+    };
+  }, options?: RequestOptions): Promise<GatewayTransactionsResponse> {
+    return this.transport.request<GatewayTransactionsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/transactions", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -9883,6 +10226,31 @@ export class Operations {
   }
 
   /**
+   * Payables
+   *
+   * Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took (listed as due; recording their payment comes later).
+   *
+   * `GET /v1/finance/accounts/{id}/payables` · needs `payment:read`
+   */
+  payables(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+  }, options?: RequestOptions): Promise<PayablesResponse> {
+    return this.transport.request<PayablesResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/payables", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Payments accounts with finance data
+   *
+   * The gateway accounts the caller may see: its organisation's own Xendit account(s), and for platform administrators the platform's.
+   *
+   * `GET /v1/finance/accounts` · needs `payment:read`
+   */
+  paymentsAccountsWithFinanceData(options?: RequestOptions): Promise<PaymentsAccountsWithFinanceDataResponse> {
+    return this.transport.request<PaymentsAccountsWithFinanceDataResponse>({ method: "GET", path: "/v1/finance/accounts", accept: "json" }, options);
+  }
+
+  /**
    * Payments on my positions
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -10115,6 +10483,20 @@ export class Operations {
   }
 
   /**
+   * Receivables
+   *
+   * Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator's own account, its fleet invoices issued and not paid.
+   *
+   * `GET /v1/finance/accounts/{id}/receivables` · needs `payment:read`
+   */
+  receivables(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+  }, options?: RequestOptions): Promise<ReceivablesResponse> {
+    return this.transport.request<ReceivablesResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/receivables", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Reconcile stuck sessions
    *
    * Closes the organisation’s sessions still active past the maximum session length (flagged STUCK_SESSION for review) and rates ended sessions that never produced a CDR.
@@ -10123,6 +10505,24 @@ export class Operations {
    */
   reconcileStuckSessions(options?: RequestOptions): Promise<ReconcileStuckSessionsResponse> {
     return this.transport.request<ReconcileStuckSessionsResponse>({ method: "POST", path: "/v1/sessions/reconcile", accept: "json" }, options);
+  }
+
+  /**
+   * Reconciliation exceptions
+   *
+   * Differences between the gateway's ledger and PlugSure over the last 35 days, open first. Found by the reconciliation every 6 hours (and on POST …/sync); one that is no longer found closes itself.
+   *
+   * `GET /v1/finance/accounts/{id}/exceptions` · needs `payment:read`
+   */
+  reconciliationExceptions(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      state?: "open" | "resolved";
+      limit?: number;
+    };
+  }, options?: RequestOptions): Promise<ReconciliationExceptionsResponse> {
+    return this.transport.request<ReconciliationExceptionsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/exceptions", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -10647,6 +11047,23 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<ResolveAlertResponse> {
     return this.transport.request<ResolveAlertResponse>({ method: "POST", path: "/v1/alerts/{id}/resolve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Resolve a reconciliation exception
+   *
+   * Closes an open exception with a note saying what was done. Audited as finance.exception_resolved.
+   *
+   * `POST /v1/finance/accounts/{id}/exceptions/{eid}/resolve` · needs `payment:write`
+   */
+  resolveReconciliationException(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    /** The exception id. */
+    eid: string;
+    body: ResolveReconciliationExceptionBody;
+  }, options?: RequestOptions): Promise<ResolveReconciliationExceptionResponse> {
+    return this.transport.request<ResolveReconciliationExceptionResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/exceptions/{eid}/resolve", pathParams: { id: params.id, eid: params.eid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11295,6 +11712,20 @@ export class Operations {
     body?: SwitchSignedMeterReadingsOnOrOffBody;
   }, options?: RequestOptions): Promise<SwitchSignedMeterReadingsOnOrOffResponse> {
     return this.transport.request<SwitchSignedMeterReadingsOnOrOffResponse>({ method: "POST", path: "/v1/charge-points/{identity}/signed-metering", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Sync and reconcile now
+   *
+   * Syncs the account's transactions changed since the last run, reads the balance and reconciles (the workers do this every 15 minutes, hourly and every 6 hours). At most 4 a minute. Audited as finance.synced.
+   *
+   * `POST /v1/finance/accounts/{id}/sync` · needs `payment:write`
+   */
+  syncAndReconcileNow(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+  }, options?: RequestOptions): Promise<SyncAndReconcileNowResponse> {
+    return this.transport.request<SyncAndReconcileNowResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/sync", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
