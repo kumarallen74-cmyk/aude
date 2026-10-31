@@ -948,8 +948,8 @@ export const ops: Op[] = [
   },
   {
     method: 'GET', path: '/v1/finance/site-pnl', tag: T, summary: 'Site P&L for a month',
-    description: '(v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to.',
-    query: [{ name: 'month', required: true, schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }],
+    description: '(v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to. month: YYYY-MM, default last month.',
+    query: [{ name: 'month', schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }],
     responses: { 200: { description: 'P&L', schema: { type: 'object', properties: { month: { type: 'string' }, sites: arrayOf({ type: 'object' }), totals: { type: 'object' }, unallocated: arrayOf({ type: 'object' }) } } } },
     errors: [422],
   },

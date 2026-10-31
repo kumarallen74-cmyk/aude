@@ -211,6 +211,8 @@ dbDescribe('Shared costs and the site P&L', () => {
     const c2 = (await call('POST', '/v1/finance/shared-costs', { category: 'connectivity', description: 'SIM cards', amount: 100_001, basis: 'equal', siteIds: [siteA, siteB], monthFrom: M, monthTo: M })).json();
     const c3 = (await call('POST', '/v1/finance/shared-costs', { category: 'rent', description: 'Car park B only', amount: 50_000, basis: 'sessions', siteIds: [siteB], monthFrom: M })).json();
     const p = (await call('GET', `/v1/finance/site-pnl?month=${M}`)).json();
+    assert.equal((await call('GET', '/v1/finance/site-pnl')).json().month, M, 'last month by default');
+    assert.equal((await call('GET', '/v1/finance/site-pnl?month=2026-13')).statusCode, 422);
     const A_ = p.sites.find((s: any) => s.siteId === siteA), B_ = p.sites.find((s: any) => s.siteId === siteB);
     assert.deepEqual([A_.shared.maintenance, B_.shared.maintenance], [300_000, 100_000], '300 kWh against 100');
     assert.deepEqual([A_.shared.connectivity + B_.shared.connectivity, B_.shared.rent, A_.shared.rent], [100_001, 50_000, 0]);

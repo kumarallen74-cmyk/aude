@@ -134,9 +134,10 @@ export async function voidCost(orgId: string, id: string, reasonRaw: unknown, us
   return { ok: true };
 }
 
-/** A month's P&L per site: revenue, energy cost, shared costs (by category), depreciation, contribution. */
+/** A month's P&L per site (default last month): revenue, energy cost, shared costs (by category), depreciation, contribution. */
 export async function pnl(orgId: string, monthRaw: unknown) {
-  const m = String(monthRaw ?? '');
+  // Last month when none is given (as Margin and Budgets).
+  const m = monthRaw == null || monthRaw === '' ? addMonths(thisMonth(), -1) : String(monthRaw);
   if (!MONTH_RE.test(m)) throw new SharedCostError(422, 'month is YYYY-MM.');
   const [e, sites, costs, invs] = await Promise.all([
     energyMonth(orgId, m),

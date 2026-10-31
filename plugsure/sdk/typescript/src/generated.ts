@@ -14112,16 +14112,16 @@ export class Operations {
   /**
    * Site P&L for a month
    *
-   * (v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to.
+   * (v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to. month: YYYY-MM, default last month.
    *
    * `GET /v1/finance/site-pnl` · needs `payment:read`
    */
-  sitePLForMonth(params: {
-    query: {
-      month: string;
+  sitePLForMonth(params?: {
+    query?: {
+      month?: string;
     };
   }, options?: RequestOptions): Promise<SitePLForMonthResponse> {
-    return this.transport.request<SitePLForMonthResponse>({ method: "GET", path: "/v1/finance/site-pnl", query: params.query, accept: "json" }, options);
+    return this.transport.request<SitePLForMonthResponse>({ method: "GET", path: "/v1/finance/site-pnl", query: params?.query, accept: "json" }, options);
   }
 
   /**

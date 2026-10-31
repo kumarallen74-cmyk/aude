@@ -38373,12 +38373,12 @@
         ],
         "summary": "Site P&L for a month",
         "operationId": "sitePLForMonth",
-        "description": "(v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to.\n\n**Permissions checked:** `payment:read`.",
+        "description": "(v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to. month: YYYY-MM, default last month.\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "month",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
               "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
