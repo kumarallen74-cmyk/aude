@@ -28,6 +28,7 @@ import type { RefundStatusArgs } from './registry.js';
  *               Xendit's QRIS refund window; the 'qr.refund' callback settles it. Cards by bank transfer from the
  *               Refunds page. Confirm the QRIS refund fields and callback in Xendit's sandbox before live traffic.
  *   test        GET  {base}/balance
+ *   reports     (v1.16.0) POST {base}/reports, GET {base}/reports/{id}: Xendit's own reports, from Finance
  *
  *   card holds  Payments API v3: a hosted Payment Session (mode PAYMENT_LINK, CARDS, capture_method
  *   and       MANUAL) → 'payment.authorization' (AUTHORIZED); POST {base}/v3/payment_requests/{id}/captures
@@ -549,6 +550,28 @@ export class XenditProvider implements PaymentProvider {
     const b = Number(r.body?.balance);
     if (r.status !== 200 || !Number.isFinite(b)) throw new Error(`Xendit balance: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? r.text.slice(0, 160)}`.trim());
     return b;
+  }
+
+  /**
+   * (v1.16.0) Ask Xendit to generate one of its reports (Report API): POST {base}/reports
+   * { type: TRANSACTIONS | BALANCE_HISTORY | UPCOMING_TRANSACTIONS, filter: { from, to }, format: 'CSV', currency }
+   * → { id, status: PENDING }. The key needs the Report permission. Confirm the fields in Xendit's sandbox.
+   */
+  async createReport(a: { type: 'TRANSACTIONS' | 'BALANCE_HISTORY' | 'UPCOMING_TRANSACTIONS'; from: Date; to: Date }): Promise<{ id: string; status: string; url: string | null }> {
+    const r = await providerFetch(`${this.base()}/reports`, {
+      method: 'POST', headers: this.headers(), timeoutMs: 20_000,
+      body: JSON.stringify({ type: a.type, filter: { from: a.from.toISOString(), to: a.to.toISOString() }, format: 'CSV', currency: 'IDR' }),
+    });
+    const j = r.body ?? {};
+    if (r.status >= 300 || !j.id) throw new Error(`Xendit report: ${r.status} ${j.error_code ?? ''} ${j.message ?? r.text.slice(0, 160)}`.trim());
+    return { id: String(j.id), status: String(j.status ?? 'PENDING').toUpperCase(), url: j.url ? String(j.url) : null };
+  }
+
+  /** (v1.16.0) Where a report stands: GET {base}/reports/{id} → status PENDING / COMPLETED / FAILED, and its download url. */
+  async getReport(id: string): Promise<{ status: string; url: string | null }> {
+    const r = await providerFetch(`${this.base()}/reports/${encodeURIComponent(id)}`, { headers: this.headers(), timeoutMs: 15_000 });
+    if (r.status >= 300) throw new Error(`Xendit report: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? r.text.slice(0, 160)}`.trim());
+    return { status: String(r.body?.status ?? 'PENDING').toUpperCase(), url: r.body?.url ? String(r.body.url) : null };
   }
 
   async testConnection() {

@@ -104,6 +104,8 @@ export async function sweepUnusedPayments(): Promise<number> {
   if (n) logger.info({ n }, 'unused prepaid payments marked for refund');
   // (v1.15.0) Refunds sent through Duitku Disbursement whose result is not known yet (services/refund-transfers.ts).
   const transfers = await (await import('./refund-transfers.js')).sweepTransfers().catch((e) => { logger.warn({ err: (e as Error).message }, 'refund transfer sweep failed'); return 0; });
+  // (v1.16.0) Owner payouts sent the same way (services/payout-transfers.ts).
+  await (await import('./payout-transfers.js')).sweepPayouts().catch((e) => { logger.warn({ err: (e as Error).message }, 'payout transfer sweep failed'); return 0; });
   return n + transfers + (await sweepProcessingRefunds());
 }
 

@@ -614,6 +614,156 @@ export async function transactions(integrationId: string, p: Period, f: TxFilter
   return rows.map(txView);
 }
 
+/**
+ * (v1.16.0) One ledger row's whole trail: the gateway transaction (with its raw record), the other ledger rows of the same
+ * PlugSure payment (the payment and its refunds), the payment itself with its state history, the charging session (site,
+ * charger, energy) and its charge record, refund transfers, the membership pass it paid, and reconciliation exceptions.
+ * The driver's phone is masked. 404 when the row is not this account's.
+ */
+export async function trail(integrationId: string, txId: string) {
+  if (!/^\d{1,18}$/.test(txId)) throw new FinanceError(404, 'No such transaction.');
+  return outsideRequestScope(async () => {
+    const g = await one<any>(
+      `SELECT g.*, p.state AS intent_state, p.session_id, o.name AS org_name FROM gateway_transaction g
+         LEFT JOIN payment_intent p ON p.id = g.payment_intent_id LEFT JOIN organisation o ON o.id = p.org_id
+        WHERE g.id = $1 AND g.integration_id = $2`, [txId, integrationId]);
+    if (!g) throw new FinanceError(404, 'No such transaction.');
+    const pid = g.payment_intent_id as string | null;
+    const [related, pi, exceptions, pass] = await Promise.all([
+      pid ? many<any>(`SELECT g.*, NULL::text AS intent_state, NULL::uuid AS session_id, NULL::text AS org_name FROM gateway_transaction g
+                        WHERE g.payment_intent_id = $1 AND g.id <> $2 ORDER BY g.gateway_created_at`, [pid, txId]) : Promise.resolve([]),
+      pid ? one<any>(`SELECT pi.*, o.name AS org_name FROM payment_intent pi LEFT JOIN organisation o ON o.id = pi.org_id WHERE pi.id = $1`, [pid]) : Promise.resolve(null),
+      many<any>(`SELECT id, kind, state, resolution, first_seen_at, resolved_at FROM reconciliation_exception
+                  WHERE integration_id = $1 AND (gateway_transaction_id = $2 OR ($3::uuid IS NOT NULL AND payment_intent_id = $3::uuid)) ORDER BY first_seen_at`, [integrationId, txId, pid]),
+      g.subscription_charge_id ? one<any>(`SELECT id, state, total_minor AS amount_minor, currency, created_at FROM subscription_charge WHERE id = $1`, [g.subscription_charge_id]) : Promise.resolve(null),
+    ]);
+    const sess = pi ? await one<any>(
+      `SELECT cs.id, cs.state, cs.started_at, cs.ended_at, cs.energy_wh, s.name AS site, cp.ocpp_identity AS charger, e.evse_id AS connector,
+              d.id AS cdr_id, d.total_minor AS cdr_total, d.currency AS cdr_currency, d.issued_at AS cdr_issued_at, ad.phone
+         FROM charging_session cs LEFT JOIN site s ON s.id = cs.site_id LEFT JOIN charge_point cp ON cp.id = cs.charge_point_id
+         LEFT JOIN connector c ON c.id = cs.connector_uuid LEFT JOIN evse e ON e.id = c.evse_uuid
+         LEFT JOIN cdr d ON d.session_id = cs.id
+         LEFT JOIN driver_charge dc ON dc.payment_intent_id = $1 LEFT JOIN app_driver ad ON ad.id = dc.app_driver_id
+        WHERE cs.id = $2 OR cs.payment_intent_id = $1 LIMIT 1`, [pi.id, pi.session_id]) : null;
+    const transfers = pi ? await many<any>(`SELECT id, state, amount_minor, bank_code, account_last4, checked_name, requested_at, approved_at, response_code, error
+                                               FROM refund_transfer WHERE payment_intent_id = $1 ORDER BY requested_at`, [pi.id]) : [];
+    const mask = (ph: string | null | undefined) => (ph ? `${ph.slice(0, 6)}••••${ph.slice(-3)}` : null);
+    // The gateway's raw record, without anything that identifies the payer beyond what the ledger shows.
+    const raw = JSON.parse(JSON.stringify(g.raw ?? {}), (k, v) => (/phone|mobile|email|account_number|customer/i.test(k) && typeof v === 'string' ? '••••' : v));
+    return {
+      transaction: { ...txView(g), raw },
+      related: related.map(txView),
+      payment: pi ? {
+        id: pi.id, operator: pi.org_name, provider: pi.provider, method: pi.method, channel: pi.channel, mode: pi.mode, state: pi.state, currency: pi.currency,
+        authorised: pi.amount_authorised_minor != null ? Number(pi.amount_authorised_minor) : null, captured: pi.amount_captured_minor != null ? Number(pi.amount_captured_minor) : null,
+        providerRef: pi.provider_ref, providerPaymentId: pi.provider_payment_id, createdAt: iso(pi.created_at), paidAt: iso(pi.paid_at ?? pi.captured_at),
+        refund: pi.refund_state ? { state: pi.refund_state, due: pi.refund_due_minor != null ? Number(pi.refund_due_minor) : null, refunded: pi.refunded_minor != null ? Number(pi.refunded_minor) : null,
+          method: pi.refund_method, reference: pi.refund_ref, reason: pi.refund_reason, requestedAt: iso(pi.refund_requested_at), refundedAt: iso(pi.refunded_at), error: pi.refund_error } : null,
+        events: (Array.isArray(pi.raw_events) ? pi.raw_events : []).slice(-50).map((e: any) => ({ at: e?.at ?? null, status: e?.status ?? null, paymentId: e?.paymentId ?? null })),
+      } : null,
+      session: sess ? {
+        id: sess.id, state: sess.state, startedAt: iso(sess.started_at), endedAt: iso(sess.ended_at), energyKwh: sess.energy_wh != null ? Math.round(Number(sess.energy_wh) / 100) / 10 : null,
+        site: sess.site, charger: sess.charger, connector: sess.connector, driver: mask(sess.phone),
+        chargeRecord: sess.cdr_id ? { id: sess.cdr_id, total: Number(sess.cdr_total), currency: sess.cdr_currency, issuedAt: iso(sess.cdr_issued_at) } : null,
+      } : null,
+      transfers: transfers.map((t: any) => ({ id: String(t.id), state: t.state, amount: Number(t.amount_minor), account: `${t.bank_code} ••••${t.account_last4}`, bankName: t.checked_name,
+        requestedAt: iso(t.requested_at), approvedAt: iso(t.approved_at), responseCode: t.response_code, error: t.error })),
+      pass: pass ? { id: pass.id, state: pass.state, amount: Number(pass.amount_minor), createdAt: iso(pass.created_at) } : null,
+      exceptions: exceptions.map((x: any) => ({ id: String(x.id), kind: x.kind, state: x.state, resolution: x.resolution, firstSeenAt: iso(x.first_seen_at), resolvedAt: iso(x.resolved_at) })),
+    };
+  });
+}
+
+/**
+ * (v1.16.0) What each payment method actually costs, per gateway account the caller may see, over the period: payments,
+ * amount, fees and VAT on fees, the average fee, the effective rate and the cost per 100,000 rupiah collected. For a
+ * Duitku account, also what Duitku quotes today for 100,000 rupiah by method (getpaymentmethod), for methods not used yet.
+ */
+export async function methodCosts(accounts: Account[], p: Period) {
+  const ids = accounts.map((a) => a.id);
+  const rows = ids.length ? await outsideRequestScope(() => many<any>(
+    `SELECT integration_id, upper(COALESCE(channel_code, channel_category, 'OTHER')) AS channel, count(*)::int AS n, sum(amount) AS amount, sum(fee + vat) AS fees
+       FROM gateway_transaction WHERE integration_id = ANY($1::uuid[]) AND kind = 'payment' AND status = 'success' AND cashflow = 'in'
+        AND gateway_created_at >= $2 AND gateway_created_at < $3
+      GROUP BY 1, 2 ORDER BY 1, 4 DESC`, [ids, p.from, p.to])) : [];
+  const quoted = new Map<string, Array<{ channel: string; fee: number }>>();
+  await Promise.all(accounts.filter((a) => a.provider === 'duitku' && !a.archived).map(async (a) => {
+    const r = await byId(a.id).catch(() => null);
+    const prov = r ? (() => { try { return providerFor(r); } catch { return null; } })() : null;
+    const q = prov instanceof DuitkuProvider ? await prov.quotedFees(100_000) : null;
+    if (q) quoted.set(a.id, q);
+  }));
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    per: 100_000,
+    accounts: accounts.map((a) => ({
+      id: a.id, label: a.label, provider: a.provider, fallback: a.fallback,
+      methods: rows.filter((x) => x.integration_id === a.id).map((x) => {
+        const amount = num(x.amount), fees = num(x.fees);
+        return { channel: x.channel, payments: x.n, amount, fees, averageFee: x.n ? r2(fees / x.n) : null, rate: amount ? fees / amount : null, per100k: amount ? r2((fees / amount) * 100_000) : null };
+      }),
+      quoted: quoted.get(a.id) ?? null,
+    })),
+  };
+}
+
+// ─────────────────────────────────────────── (v1.16.0) Xendit's own reports, requested from Finance
+
+export const REPORT_TYPES = ['TRANSACTIONS', 'BALANCE_HISTORY', 'UPCOMING_TRANSACTIONS'] as const;
+export type ReportType = typeof REPORT_TYPES[number];
+const reportView = (r: any) => ({
+  id: String(r.id), type: r.type, from: iso(r.period_from), to: iso(r.period_to), status: r.status, ready: r.status === 'COMPLETED' && Boolean(r.url),
+  error: r.error, requestedAt: iso(r.requested_at), updatedAt: iso(r.updated_at), requestedBy: r.requested_by_name ?? null,
+});
+
+/** Reports requested for this Xendit account, newest first. */
+export async function reports(a: Account) {
+  const rows = await outsideRequestScope(() => many<any>(
+    `SELECT r.*, u.name AS requested_by_name FROM gateway_report r LEFT JOIN app_user u ON u.id = r.requested_by
+      WHERE r.integration_id = $1 ORDER BY r.requested_at DESC LIMIT 50`, [a.id]));
+  return rows.map(reportView);
+}
+
+/** Ask Xendit to generate a report for the period (upcoming settlements: from now on, the period is ignored). */
+export async function requestReport(a: Account, type: string, p: Period, userId: string | null) {
+  if (!REPORT_TYPES.includes(type as ReportType)) throw new FinanceError(422, `type is one of ${REPORT_TYPES.join(', ')}`);
+  const x = await xenditOf(a.id);
+  if (!x) throw new FinanceError(409, 'Reports are generated by Xendit: this is not a Xendit account.');
+  const from = type === 'UPCOMING_TRANSACTIONS' ? new Date() : p.from;
+  const to = type === 'UPCOMING_TRANSACTIONS' ? new Date(Date.now() + 30 * 86_400_000) : p.to;
+  let res: { id: string; status: string; url: string | null };
+  try { res = await x.x.createReport({ type: type as ReportType, from, to }); } catch (e) { throw new FinanceError(502, `${(e as Error).message}. The secret key needs Xendit's Report permission.`); }
+  const r = await outsideRequestScope(() => one<any>(
+    `INSERT INTO gateway_report (integration_id, org_id, type, period_from, period_to, external_id, status, url, requested_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [a.id, a.orgId, type, from, to, res.id, ['COMPLETED', 'FAILED'].includes(res.status) ? res.status : 'PENDING', res.url, userId]));
+  return reportView(r);
+}
+
+/**
+ * A report's state, asked of Xendit while it is pending (or when its link is wanted again: Xendit's links expire).
+ * `link`: also return the download link of a completed report.
+ */
+export async function reportStatus(a: Account, id: string, link = false) {
+  if (!/^\d{1,18}$/.test(id)) throw new FinanceError(404, 'No such report.');
+  let r = await outsideRequestScope(() => one<any>(`SELECT * FROM gateway_report WHERE id = $1 AND integration_id = $2`, [id, a.id]));
+  if (!r) throw new FinanceError(404, 'No such report.');
+  if ((r.status === 'PENDING' || (link && r.status === 'COMPLETED')) && r.external_id) {
+    const x = await xenditOf(a.id);
+    if (x) {
+      try {
+        const g = await x.x.getReport(r.external_id);
+        const status = ['COMPLETED', 'FAILED'].includes(g.status) ? g.status : 'PENDING';
+        r = await outsideRequestScope(() => one<any>(`UPDATE gateway_report SET status = $2, url = COALESCE($3, url), error = $4, updated_at = now() WHERE id = $1 RETURNING *`,
+          [id, status, g.url, status === 'FAILED' ? 'Xendit could not generate the report.' : null]));
+      } catch (e) {
+        logger.warn({ id, err: (e as Error).message }, 'finance: Xendit report status failed');
+      }
+    }
+  }
+  return { ...reportView(r), url: link && r.status === 'COMPLETED' ? r.url : undefined };
+}
+
 function txView(g: any) {
   return {
     id: String(g.id), gatewayId: g.external_id, kind: g.kind, type: g.gateway_type, status: g.status, cashflow: g.cashflow,

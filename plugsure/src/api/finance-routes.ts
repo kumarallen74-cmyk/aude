@@ -7,6 +7,7 @@ import * as fin from '../services/finance.js';
 import { render, type ExportFormat } from '../services/finance-export.js';
 import * as pay from '../services/payouts.js';
 import * as xfer from '../services/refund-transfers.js';
+import * as pxfer from '../services/payout-transfers.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -17,6 +18,17 @@ import * as xfer from '../services/refund-transfers.js';
  *   GET  /v1/finance/accounts/:id/receivables               collected, not yet settled; fleet invoices due
  *   GET  /v1/finance/accounts/:id/payables                  refunds due, owners' shares on finalised statements
  *   GET  /v1/finance/accounts/:id/breakdown                 (v1.15.0) the period by operator and by site
+ *   GET  /v1/finance/accounts/:id/transactions/:tid/trail   (v1.16.0) one ledger row's whole trail
+ *   GET  /v1/finance/method-costs                           (v1.16.0) what each method costs, per gateway account
+ *   GET  /v1/finance/accounts/:id/reports                   (v1.16.0) Xendit reports requested for the account
+ *   POST /v1/finance/accounts/:id/reports                   ask Xendit to generate one (?from&to; body { type })
+ *   GET  /v1/finance/accounts/:id/reports/:rid              its state (asked of Xendit while pending); ?link=true: the download link
+ *   (v1.16.0) owner payouts sent through Duitku Disbursement (two people)
+ *   GET  /v1/finance/payout-transfers                       payouts (?open=true: not settled)
+ *   POST /v1/finance/statements/:sid/payout                 request one: the owner's saved account, checked by name
+ *   POST /v1/finance/payout-transfers/:tid/approve          a second person approves: sent once; paid → statement payment
+ *   POST /v1/finance/payout-transfers/:tid/reject           before it is sent, with a reason
+ *   POST /v1/finance/payout-transfers/:tid/resolve          a result Duitku never confirmed, settled by a person
  *   GET  /v1/finance/accounts/:id/fees                      fees by month and channel; QRIS actual vs estimated
  *   GET  /v1/finance/accounts/:id/exceptions                reconciliation differences
  *   POST /v1/finance/accounts/:id/exceptions/:eid/apply     apply a payment the gateway has and PlugSure missed
@@ -74,6 +86,11 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     return { accounts: await fin.accountsFor(req.principal.orgId, platform(req)) };
   });
 
+  app.get('/v1/finance/method-costs', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await fin.methodCosts(await fin.accountsFor(req.principal.orgId, platform(req)), period(req)); } catch (e) { return failed(reply, e); }
+  });
+
   app.get('/v1/finance/accounts/:id/overview', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     try { const a = await account(req); return { account: a, ...(await fin.overview(a.id, period(req))) }; } catch (e) { return failed(reply, e); }
@@ -101,6 +118,38 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.get('/v1/finance/accounts/:id/receivables', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     try { const a = await account(req); return await fin.receivables(a.id, a.orgId); } catch (e) { return failed(reply, e); }
+  });
+
+  app.get('/v1/finance/accounts/:id/transactions/:tid/trail', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { const a = await account(req); return await fin.trail(a.id, String((req.params as Record<string, string>).tid ?? '')); } catch (e) { return failed(reply, e); }
+  });
+
+  app.get('/v1/finance/accounts/:id/reports', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { reports: await fin.reports(await account(req)) }; } catch (e) { return failed(reply, e); }
+  });
+
+  app.post('/v1/finance/accounts/:id/reports', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const a = await account(req);
+      const type = String(((req.body ?? {}) as Record<string, unknown>).type ?? '');
+      const r = await fin.requestReport(a, type, period(req), /^[0-9a-f-]{36}$/i.test(String(req.principal.userId ?? '')) ? req.principal.userId! : null);
+      await audit(req, 'finance.report_requested', a.id, { type, report: r.id, from: r.from, to: r.to });
+      return reply.status(201).send({ report: r });
+    } catch (e) { return failed(reply, e); }
+  });
+
+  app.get('/v1/finance/accounts/:id/reports/:rid', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const a = await account(req);
+      const link = String(((req.query ?? {}) as Record<string, string>).link ?? '') === 'true';
+      const r = await fin.reportStatus(a, String((req.params as Record<string, string>).rid ?? ''), link);
+      if (link && r.url) await audit(req, 'finance.report_downloaded', a.id, { report: r.id, type: r.type });
+      return { report: r };
+    } catch (e) { return failed(reply, e); }
   });
 
   app.get('/v1/finance/accounts/:id/breakdown', async (req, reply) => {
@@ -209,7 +258,7 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/v1/finance/owner-shares', async (req) => {
     assertCan(req.principal, { permission: 'payment:read' });
-    return { shares: await pay.ownerShares(req.principal.orgId, { status: statusParam(req) }) };
+    return { shares: await pay.ownerShares(req.principal.orgId, { status: statusParam(req) }), payoutsAvailable: await pxfer.payoutsAvailable(req.principal.orgId, platform(req)) };
   });
 
   app.get('/v1/finance/owner-shares/transfer-list.csv', async (req, reply) => {
@@ -321,6 +370,54 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       const b = (req.body ?? {}) as Record<string, unknown>;
       const t = await xfer.resolveTransfer(req.principal.orgId, tidParam(req), b.outcome, b.note, userUuid(req));
       await auditX(req, 'refund.transfer_resolved', t, { outcome: b.outcome, note: String(b.note ?? '').slice(0, 300) });
+      return { transfer: t };
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.16.0) owner payouts sent through Duitku Disbursement
+
+  const auditP = (req: FastifyRequest, action: string, t: pxfer.PayoutTransferView, extra: Record<string, unknown> = {}) =>
+    auditPay(req, action, 'commission_statement', t.statementId, { payout: t.id, amount: t.amount, currency: t.currency, bank: t.bankCode, account: t.accountMasked, state: t.state, ...extra });
+
+  app.get('/v1/finance/payout-transfers', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const open = String(((req.query ?? {}) as Record<string, string>).open ?? '') === 'true';
+    return { transfers: await pxfer.listPayoutTransfers(req.principal.orgId, { open }) };
+  });
+
+  app.post('/v1/finance/statements/:sid/payout', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const t = await pxfer.requestPayout(req.principal.orgId, platform(req), uuidParam(req, 'sid', 'statement'), (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditP(req, 'finance.owner_payout_requested', t, { holder: t.holderName, bankName: t.checkedName, namesMatch: t.namesMatch });
+      return reply.status(201).send({ transfer: t });
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/payout-transfers/:tid/approve', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const t = await pxfer.approvePayout(req.principal.orgId, tidParam(req), userUuid(req));
+      await auditP(req, 'finance.owner_payout_approved', t, { responseCode: t.responseCode, error: t.error, statementPayment: t.statementPaymentId });
+      return { transfer: t };
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/payout-transfers/:tid/reject', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const t = await pxfer.rejectPayout(req.principal.orgId, tidParam(req), ((req.body ?? {}) as Record<string, unknown>).reason, userUuid(req));
+      await auditP(req, 'finance.owner_payout_rejected', t, { reason: t.reason });
+      return { transfer: t };
+    } catch (e) { return xferFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/payout-transfers/:tid/resolve', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const t = await pxfer.resolvePayout(req.principal.orgId, tidParam(req), b.outcome, b.note, userUuid(req));
+      await auditP(req, 'finance.owner_payout_resolved', t, { outcome: b.outcome, note: String(b.note ?? '').slice(0, 300), statementPayment: t.statementPaymentId });
       return { transfer: t };
     } catch (e) { return xferFailed(reply, e); }
   });

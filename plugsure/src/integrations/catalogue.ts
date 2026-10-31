@@ -182,6 +182,8 @@ export const CATALOGUE: KindDef[] = [
           { key: 'disbursementSecretKey', label: 'Disbursement secret key', type: 'secret', advanced: true },
           { key: 'disbursementMaxPerTransfer', label: 'Largest refund transfer (rupiah)', type: 'number', default: 5000000, advanced: true, help: 'A refund above this is paid by bank transfer instead.' },
           { key: 'disbursementMaxPerDay', label: 'Refund transfers per day, in all (rupiah)', type: 'number', default: 25000000, advanced: true, help: 'Approvals past this wait for the next day (platform time zone).' },
+          { key: 'disbursementMaxPayout', label: 'Largest owner payout (rupiah)', type: 'number', default: 50000000, advanced: true, help: 'Owners\' shares sent from Finance → Payables (two people). Above this, pay by bank transfer and record it.' },
+          { key: 'disbursementMaxPayoutPerDay', label: 'Owner payouts per day, in all (rupiah)', type: 'number', default: 100000000, advanced: true },
           { ...baseUrl, help: 'Default https://sandbox.duitku.com (sandbox) or https://passport.duitku.com (production).' },
         ],
       },

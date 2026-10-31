@@ -483,6 +483,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   8. (v1.15.0) With Duitku's Disbursement credentials saved, refunds of Duitku
      payments can be sent from the Refunds page (two people) and owners' bank
      accounts checked by name ([DUITKU.md](DUITKU.md)).
+  9. (v1.16.0) Owners' shares can be sent through the operator's own Duitku
+     Disbursement (two people), and Xendit's own reports requested from Finance
+     (the secret key needs the Report permission) ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The
