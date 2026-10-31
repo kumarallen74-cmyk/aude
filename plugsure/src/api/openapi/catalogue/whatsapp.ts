@@ -3,11 +3,13 @@ import { type Op, type Schema, ref, arrayOf, nullable } from '../types.js';
 /**
  * Operate → WhatsApp (v1.10.0): src/api/whatsapp-routes.ts. The platform's WhatsApp Business Account — the one the
  * sign-in codes integration (WhatsApp Cloud API) sends from — so every route needs platform:admin. The public Meta webhook (/hooks/whatsapp-cloud/<key>) is not a /v1 route.
+ * (v1.11.0) The support inbox: customers' messages to that number, answered by the AI assistant (Claude) or by staff.
  */
 
 const T = 'WhatsApp' as const;
 const DT = { type: 'string', format: 'date-time' };
-const PURPOSE = { type: 'string', enum: ['otp', 'alert', 'test', 'other'] };
+const PURPOSE = { type: 'string', enum: ['otp', 'alert', 'test', 'other', 'support'] };
+const HANDLER = { type: 'string', enum: ['ai', 'human', 'closed'], description: 'Who answers: the AI assistant, staff, or nobody (closed; a new customer message reopens it with the assistant).' };
 const STATUS = { type: 'string', enum: ['accepted', 'sent', 'delivered', 'read', 'failed'] };
 const count: Schema = { type: 'integer', minimum: 0 };
 
@@ -24,6 +26,32 @@ export const schemas: Record<string, Schema> = {
       sentAt: nullable('string', { format: 'date-time' }), deliveredAt: nullable('string', { format: 'date-time' }), readAt: nullable('string', { format: 'date-time' }),
       pricingCategory: nullable('string', { description: 'From Meta\'s status: authentication, utility, marketing, service…' }),
       billable: { type: ['boolean', 'null'] },
+    },
+  },
+  WhatsAppConversation: {
+    type: 'object',
+    description: 'A customer writing to the platform\'s WhatsApp number (one conversation per number). The number is masked.',
+    required: ['id', 'phone', 'handler', 'lastMessageAt', 'windowOpen', 'unread'],
+    properties: {
+      id: { type: 'string', format: 'uuid' }, phone: { type: 'string', description: 'Masked, e.g. +6281****890.' },
+      name: nullable('string', { description: 'The WhatsApp profile name the customer chose.' }),
+      hasAccount: { type: 'boolean', description: 'A PlugSure driver account is registered on the number (the assistant can look up its sessions).' },
+      handler: HANDLER, handoffReason: nullable('string', { description: 'Why it went to staff.' }),
+      draft: nullable('string', { description: 'The assistant\'s suggested reply (mode draft, or a suggestion asked for).' }),
+      lastMessage: nullable('string'), lastAuthor: nullable('string', { description: 'customer, ai or staff.' }), lastMessageAt: DT,
+      lastInboundAt: nullable('string', { format: 'date-time' }),
+      windowOpen: { type: 'boolean', description: 'Within 24 hours of the customer\'s last message: free-form replies are allowed (Meta\'s customer service window).' },
+      unread: count,
+    },
+  },
+  WhatsAppChatMessage: {
+    type: 'object', required: ['id', 'direction', 'author', 'body', 'at'],
+    properties: {
+      id: { type: 'string' }, direction: { type: 'string', enum: ['in', 'out'] }, author: { type: 'string', enum: ['customer', 'ai', 'staff', 'system'] },
+      body: { type: 'string', description: 'Text; media is named ("[image: caption]"), not kept. system: a note (handover, an assistant failure).' },
+      at: DT, status: nullable('string', { description: 'A reply\'s delivery status: accepted, sent, delivered, read or failed.' }), error: nullable('string'),
+      model: nullable('string', { description: 'The Claude model that wrote an AI reply.' }),
+      tokens: { type: ['object', 'null'], properties: { input: count, output: count } },
     },
   },
   WhatsAppTemplate: {
@@ -73,10 +101,14 @@ export const ops: Op[] = [
       stats: { type: 'object', required: ['days', 'total', 'byStatus', 'byPurpose', 'daily'], properties: {
         days: { type: 'integer' }, total: count,
         byStatus: { type: 'object', properties: { accepted: count, sent: count, delivered: count, read: count, failed: count } },
-        byPurpose: { type: 'object', properties: { otp: count, alert: count, test: count, other: count } },
+        byPurpose: { type: 'object', properties: { otp: count, alert: count, test: count, other: count, support: count } },
         deliveryRate: { type: ['number', 'null'] }, readRate: { type: ['number', 'null'] }, daily,
       } },
       recentFailures: arrayOf(ref('WhatsAppMessage')),
+      support: { type: 'object', description: '(v1.11.0) The support inbox over the same days.', properties: {
+        configured: { type: 'boolean', description: 'The WhatsApp AI support integration has an API key.' }, mode: nullable('string', { enum: ['auto', 'draft', 'off', null] }), model: nullable('string'),
+        conversations: count, waitingForStaff: count, aiReplies: count, staffReplies: count, handoffs: count, aiTokens: count,
+      } },
     } } } },
     errors: [400],
   },
@@ -115,5 +147,48 @@ export const ops: Op[] = [
     } }, example: { phone: '081234567890', template: 'plugsure_alert', language: 'id', params: ['Test', 'PlugSure test message'] } },
     responses: { 200: { description: 'Sent, or Meta\'s reason it was not', schema: { type: 'object', required: ['ok', 'to'], properties: { ok: { type: 'boolean' }, messageId: { type: 'string' }, error: { type: 'string' }, to: { type: 'string' } } } } },
     errors: [409, 422],
+  },
+  {
+    method: 'GET', path: '/v1/whatsapp/conversations', tag: T, summary: 'WhatsApp support inbox',
+    description: 'Customers who wrote to the platform\'s WhatsApp number, newest first, with the last message. Filter by `handler`; page with `before` = the `nextBefore` of the previous page. `assistant` says whether the AI support integration is set up and its mode. Messages are kept 90 days.',
+    query: [
+      { name: 'handler', schema: HANDLER }, { name: 'before', schema: DT, description: 'Only conversations last active before this time.' },
+      { name: 'limit', schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
+    ],
+    responses: { 200: { description: 'Conversations', schema: { type: 'object', required: ['conversations', 'nextBefore', 'assistant'], properties: {
+      conversations: arrayOf(ref('WhatsAppConversation')), nextBefore: nullable('string', { format: 'date-time' }),
+      assistant: { type: 'object', properties: { configured: { type: 'boolean' }, mode: nullable('string', { enum: ['auto', 'draft', 'off', null] }) } },
+    } } } },
+    errors: [400],
+  },
+  {
+    method: 'GET', path: '/v1/whatsapp/conversations/:id', tag: T, summary: 'One WhatsApp support conversation',
+    description: 'The conversation and its last 200 messages, oldest first, with each reply\'s delivery status. Opening it marks it read.',
+    pathParams: { id: 'The conversation id.' },
+    responses: { 200: { description: 'The conversation', schema: { type: 'object', required: ['conversation', 'messages'], properties: { conversation: ref('WhatsAppConversation'), messages: arrayOf(ref('WhatsAppChatMessage')) } } } },
+    errors: [404],
+  },
+  {
+    method: 'POST', path: '/v1/whatsapp/conversations/:id/reply', tag: T, summary: 'Reply to a WhatsApp customer',
+    description: 'Sends a free-form text from the platform\'s number. Allowed within 24 hours of the customer\'s last message only (409 otherwise: WhatsApp then takes approved templates only). Staff take the conversation over (handler human; the assistant stops), except in draft mode when the assistant has it: sending its drafts keeps it drafting. 502 with Meta\'s reason when the send fails. Audited as whatsapp.support_reply.',
+    pathParams: { id: 'The conversation id.' },
+    body: { required: true, schema: { type: 'object', required: ['text'], properties: { text: { type: 'string', minLength: 1, maxLength: 4096 } } }, example: { text: 'Halo, kami sudah memproses refund Anda.' } },
+    responses: { 200: { description: 'Sent', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } } },
+    errors: [404, 409, 422, 502],
+  },
+  {
+    method: 'POST', path: '/v1/whatsapp/conversations/:id/handler', tag: T, summary: 'Hand a WhatsApp conversation over',
+    description: '`ai`: back to the assistant (it answers a customer message still unanswered); `human`: staff take over; `closed`: nothing pending. Audited as whatsapp.support_handler.',
+    pathParams: { id: 'The conversation id.' },
+    body: { required: true, schema: { type: 'object', required: ['handler'], properties: { handler: HANDLER } }, example: { handler: 'human' } },
+    responses: { 200: { description: 'The conversation', schema: { type: 'object', required: ['conversation'], properties: { conversation: ref('WhatsAppConversation') } } } },
+    errors: [400, 404],
+  },
+  {
+    method: 'POST', path: '/v1/whatsapp/conversations/:id/suggest', tag: T, summary: 'Suggest a WhatsApp reply',
+    description: 'Asks the assistant (Claude) for a reply to the conversation as it stands, whoever handles it, and keeps it as the draft; nothing is sent. `handoff` is set when the assistant would rather a person answered. 409 when the AI support integration is not set up; 502 when the Anthropic API fails. At most 10 a minute per administrator.',
+    pathParams: { id: 'The conversation id.' },
+    responses: { 200: { description: 'The suggestion', schema: { type: 'object', required: ['draft', 'handoff'], properties: { draft: nullable('string'), handoff: nullable('string') } } } },
+    errors: [404, 409, 502],
   },
 ];

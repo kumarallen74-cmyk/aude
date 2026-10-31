@@ -8,6 +8,7 @@ import { normalisePhone } from '../driver/identity.js';
 import { TokenBuckets } from '../services/ratelimit.js';
 import { webhookPathFor } from '../integrations/store.js';
 import * as wa from '../services/whatsapp-cloud.js';
+import * as support from '../services/whatsapp-support.js';
 
 /**
  * Operate → WhatsApp (v1.10.0): the dashboard of PlugSure's WhatsApp Business Account.
@@ -17,6 +18,12 @@ import * as wa from '../services/whatsapp-cloud.js';
  *   GET  /v1/whatsapp/messages    the message ledger and the WhatsApp alerts from the same number (masked)
  *   GET  /v1/whatsapp/events      template, quality and account events from the webhook
  *   POST /v1/whatsapp/test        send one template message
+ *   (v1.11.0) the support inbox — customers' messages, answered by the AI assistant (Claude) or by staff:
+ *   GET  /v1/whatsapp/conversations                 newest first, by handler (ai / human / closed)
+ *   GET  /v1/whatsapp/conversations/:id             one conversation and its messages
+ *   POST /v1/whatsapp/conversations/:id/reply       staff reply (within Meta's 24-hour window); staff take over
+ *   POST /v1/whatsapp/conversations/:id/handler     hand to the assistant, take over, or close
+ *   POST /v1/whatsapp/conversations/:id/suggest     a suggested reply from the assistant
  *
  * The connection is the platform's sign-in codes integration on the WhatsApp Cloud API (whatsapp-cloud.ts).
  * platform:admin only: the WABA is the platform's asset, and the ledger spans every tenant's drivers. Queries run
@@ -24,11 +31,16 @@ import * as wa from '../services/whatsapp-cloud.js';
  * answer (connection.error), never a 500: the dashboard is where an operator goes when WhatsApp is broken.
  */
 
-const PURPOSES = ['otp', 'alert', 'test', 'other'] as const;
+const PURPOSES = ['otp', 'alert', 'test', 'other', 'support'] as const;
+const HANDLERS = ['ai', 'human', 'closed'] as const;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATUSES = ['accepted', 'sent', 'delivered', 'read', 'failed'] as const;
 /** Test sends: a handful a minute per administrator is plenty, and keeps a stuck button from spamming a phone. */
 const testBuckets = new TokenBuckets();
 const TEST_PER_MIN = 5;
+/** Suggested replies cost an Anthropic request each. */
+const suggestBuckets = new TokenBuckets();
+const SUGGEST_PER_MIN = 10;
 
 export async function registerWhatsAppRoutes(app: FastifyInstance): Promise<void> {
   const publicBase = (req: FastifyRequest) => config.console.publicBaseUrl || `${req.protocol}://${req.headers.host ?? 'localhost'}`;
@@ -40,11 +52,13 @@ export async function registerWhatsAppRoutes(app: FastifyInstance): Promise<void
     if (q.days !== undefined && q.days !== '7' && q.days !== '30') throw bad('days must be 7 or 30');
     const days = q.days === '30' ? 30 : 7;
     const conn = await wa.connection();
-    const [stats, activity, required, failures] = await Promise.all([
+    const [stats, activity, required, failures, supportStats, supportCfg] = await Promise.all([
       wa.stats(days, conn?.phoneNumberId ?? null),
       wa.webhookActivity(),
       wa.requiredTemplates(conn),
       wa.messages({ phoneNumberId: conn?.phoneNumberId ?? null, status: 'failed', limit: 10 }),
+      support.supportStats(days),
+      support.supportConfig(),
     ]);
     let connection: Record<string, unknown> | null = null;
     let requiredTemplates: Array<wa.RequiredTemplate & { status: string | null; category: string | null }> = required.map((t) => ({ ...t, status: null, category: null }));
@@ -78,6 +92,7 @@ export async function registerWhatsAppRoutes(app: FastifyInstance): Promise<void
       requiredTemplates,
       stats,
       recentFailures: failures,
+      support: { ...supportStats, configured: Boolean(supportCfg?.apiKey), mode: supportCfg?.mode ?? null, model: supportCfg?.model ?? null },
     };
   });
 
@@ -144,5 +159,70 @@ export async function registerWhatsAppRoutes(app: FastifyInstance): Promise<void
       after: { to: maskPhone(phone), template, language, ok: r.ok, ...(r.ok ? { messageId: r.wamid } : { error: r.error.slice(0, 200) }) },
     });
     return r.ok ? { ok: true, messageId: r.wamid, to: maskPhone(phone) } : { ok: false, error: r.error, to: maskPhone(phone) };
+  });
+
+  // ─────────────────────────────────────────── (v1.11.0) the support inbox
+
+  const conversationId = (req: FastifyRequest) => {
+    const id = String((req.params as Record<string, string>).id ?? '');
+    if (!UUID_RE.test(id)) throw Object.assign(new Error('No such conversation.'), { statusCode: 404 });
+    return id;
+  };
+  const failed = (reply: any, e: unknown) => {
+    if (e instanceof support.SupportError) return reply.status(e.statusCode).send({ error: e.message });
+    throw e;
+  };
+
+  app.get('/v1/whatsapp/conversations', async (req) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    const handler = q.handler ? String(q.handler) : null;
+    if (handler && !(HANDLERS as readonly string[]).includes(handler)) throw bad(`handler must be one of ${HANDLERS.join(', ')}`);
+    let before: Date | null = null;
+    if (q.before) { before = new Date(String(q.before)); if (Number.isNaN(before.getTime())) throw bad('before must be a date-time'); }
+    const limit = limitParam(q.limit, 50, 200);
+    const rows = await support.conversations({ handler: handler as support.Handler | null, before, limit });
+    const cfg = await support.supportConfig();
+    return { conversations: rows, nextBefore: rows.length === limit ? rows[rows.length - 1]!.lastMessageAt : null, assistant: { configured: Boolean(cfg?.apiKey), mode: cfg?.mode ?? null } };
+  });
+
+  app.get('/v1/whatsapp/conversations/:id', async (req, reply) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    const r = await support.conversation(conversationId(req));
+    return r ?? reply.status(404).send({ error: 'No such conversation.' });
+  });
+
+  app.post('/v1/whatsapp/conversations/:id/reply', async (req, reply) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    const id = conversationId(req);
+    const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? '');
+    try {
+      const r = await support.sendStaffReply(id, text, req.principal.userId ?? null);
+      await writeAudit({
+        orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action: 'whatsapp.support_reply', targetType: 'whatsapp_conversation', targetId: id, ip: req.ip,
+        after: { ok: r.ok, length: text.trim().length, ...(r.ok ? {} : { error: r.error?.slice(0, 200) }) },
+      });
+      return r.ok ? r : reply.status(502).send({ error: r.error });
+    } catch (e) { return failed(reply, e); }
+  });
+
+  app.post('/v1/whatsapp/conversations/:id/handler', async (req, reply) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    const id = conversationId(req);
+    const handler = String(((req.body ?? {}) as Record<string, unknown>).handler ?? '');
+    if (!(HANDLERS as readonly string[]).includes(handler)) throw bad(`handler must be one of ${HANDLERS.join(', ')}`);
+    try {
+      const c = await support.setHandler(id, handler as support.Handler);
+      await writeAudit({ orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action: 'whatsapp.support_handler', targetType: 'whatsapp_conversation', targetId: id, ip: req.ip, after: { handler } });
+      return { conversation: c };
+    } catch (e) { return failed(reply, e); }
+  });
+
+  app.post('/v1/whatsapp/conversations/:id/suggest', async (req, reply) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    const id = conversationId(req);
+    const d = suggestBuckets.take(req.principal.userId ?? req.ip, SUGGEST_PER_MIN);
+    if (!d.allowed) return reply.status(429).header('Retry-After', d.retryAfterS).send({ error: `At most ${SUGGEST_PER_MIN} suggestions a minute.` });
+    try { return await support.suggest(id); } catch (e) { return failed(reply, e); }
   });
 }

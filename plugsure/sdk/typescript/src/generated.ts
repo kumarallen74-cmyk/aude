@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.10.0";
+export const API_VERSION = "1.11.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -1990,7 +1990,7 @@ export interface IntegrationInput {
 }
 
 export interface IntegrationKind {
-  kind: "payments" | "otp" | "otp_fallback" | "pnc_pki" | "map_tiles";
+  kind: "payments" | "otp" | "otp_fallback" | "pnc_pki" | "map_tiles" | "ai_support";
   label: string;
   description?: string;
   /** org: each operator may connect its own account (falls back to the platform's); platform: one for the deployment. */
@@ -4341,12 +4341,55 @@ export interface WebhookSendResult {
   ms: number;
 }
 
+export interface WhatsAppChatMessage {
+  id: string;
+  direction: "in" | "out";
+  author: "customer" | "ai" | "staff" | "system";
+  /** Text; media is named ("[image: caption]"), not kept. system: a note (handover, an assistant failure). */
+  body: string;
+  at: string;
+  /** A reply's delivery status: accepted, sent, delivered, read or failed. */
+  status?: string | null;
+  error?: string | null;
+  /** The Claude model that wrote an AI reply. */
+  model?: string | null;
+  tokens?: {
+    input?: number;
+    output?: number;
+  } | null;
+}
+
+/** A customer writing to the platform's WhatsApp number (one conversation per number). The number is masked. */
+export interface WhatsAppConversation {
+  id: string;
+  /** Masked, e.g. +6281****890. */
+  phone: string;
+  /** The WhatsApp profile name the customer chose. */
+  name?: string | null;
+  /** A PlugSure driver account is registered on the number (the assistant can look up its sessions). */
+  hasAccount?: boolean;
+  /** Who answers: the AI assistant, staff, or nobody (closed; a new customer message reopens it with the assistant). */
+  handler: "ai" | "human" | "closed";
+  /** Why it went to staff. */
+  handoffReason?: string | null;
+  /** The assistant's suggested reply (mode draft, or a suggestion asked for). */
+  draft?: string | null;
+  lastMessage?: string | null;
+  /** customer, ai or staff. */
+  lastAuthor?: string | null;
+  lastMessageAt: string;
+  lastInboundAt?: string | null;
+  /** Within 24 hours of the customer's last message: free-form replies are allowed (Meta's customer service window). */
+  windowOpen: boolean;
+  unread: number;
+}
+
 /** One message sent from the platform's number: a sign-in code or a test send, or an operator alert from an alert channel on the same number. The number is masked; codes are never stored. */
 export interface WhatsAppMessage {
   /** `m<n>` for the ledger, `a<n>` for an alert notification. */
   id: string;
   at: string;
-  purpose: "otp" | "alert" | "test" | "other";
+  purpose: "otp" | "alert" | "test" | "other" | "support";
   /** Masked, e.g. +6281****890. */
   to: string;
   template?: string | null;
@@ -5340,6 +5383,15 @@ export type GetStoredDeviceModelOcpp201Response = {
   reports?: Record<string, unknown>[];
 };
 
+export type HandWhatsAppConversationOverBody = {
+  /** Who answers: the AI assistant, staff, or nobody (closed; a new customer message reopens it with the assistant). */
+  handler: "ai" | "human" | "closed";
+};
+
+export type HandWhatsAppConversationOverResponse = {
+  conversation: WhatsAppConversation;
+};
+
 export type ImportPartnerNetworkResponse = {
   locations: number;
   tariffs: number;
@@ -5897,6 +5949,11 @@ export type OneOfMyHubStatementsResponse = {
   };
 };
 
+export type OneWhatsAppSupportConversationResponse = {
+  conversation: WhatsAppConversation;
+  messages: WhatsAppChatMessage[];
+};
+
 export type PaymentsOnMyPositionsResponse = {
   payments: {
     id?: string;
@@ -6202,6 +6259,14 @@ export type ReplayFailedWebhookDeliveriesBody = {
 
 export type ReplayFailedWebhookDeliveriesResponse = {
   requeued: number;
+};
+
+export type ReplyToWhatsAppCustomerBody = {
+  text: string;
+};
+
+export type ReplyToWhatsAppCustomerResponse = {
+  ok: boolean;
 };
 
 export type ReSendEverythingToPartnerResponse = {
@@ -6634,6 +6699,11 @@ export type StopSessionRemotelyBody = {
   transactionId: number | string;
 };
 
+export type SuggestWhatsAppReplyResponse = {
+  draft: string | null;
+  handoff: string | null;
+};
+
 export type SuspendChargePointBody = {
   reason?: string;
 };
@@ -6839,6 +6909,7 @@ export type WhatsappBusinessDashboardResponse = {
       alert?: number;
       test?: number;
       other?: number;
+      support?: number;
     };
     deliveryRate?: number | null;
     readRate?: number | null;
@@ -6851,6 +6922,19 @@ export type WhatsappBusinessDashboardResponse = {
     }[];
   };
   recentFailures: WhatsAppMessage[];
+  /** (v1.11.0) The support inbox over the same days. */
+  support?: {
+    /** The WhatsApp AI support integration has an API key. */
+    configured?: boolean;
+    mode?: "auto" | "draft" | "off" | null;
+    model?: string | null;
+    conversations?: number;
+    waitingForStaff?: number;
+    aiReplies?: number;
+    staffReplies?: number;
+    handoffs?: number;
+    aiTokens?: number;
+  };
 };
 
 export type WhatsappMessagesResponse = {
@@ -6862,6 +6946,15 @@ export type WhatsappMessageTemplatesResponse = {
   templates: WhatsAppTemplate[];
   required: WhatsAppRequiredTemplate[];
   managerUrl: string;
+};
+
+export type WhatsappSupportInboxResponse = {
+  conversations: WhatsAppConversation[];
+  nextBefore: string | null;
+  assistant: {
+    configured?: boolean;
+    mode?: "auto" | "draft" | "off" | null;
+  };
 };
 
 export type WithdrawMyDisputeEMSPSideBody = {
@@ -7505,7 +7598,7 @@ export class Operations {
    * `PUT /v1/integrations/{kind}`
    */
   connectOrChangeIntegration(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles. */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     body: IntegrationInput;
   }, options?: RequestOptions): Promise<ConnectOrChangeIntegrationResponse> {
@@ -8707,6 +8800,21 @@ export class Operations {
   }
 
   /**
+   * Hand a WhatsApp conversation over
+   *
+   * `ai`: back to the assistant (it answers a customer message still unanswered); `human`: staff take over; `closed`: nothing pending. Audited as whatsapp.support_handler.
+   *
+   * `POST /v1/whatsapp/conversations/{id}/handler` · needs `platform:admin`
+   */
+  handWhatsAppConversationOver(params: {
+    /** The conversation id. */
+    id: string;
+    body: HandWhatsAppConversationOverBody;
+  }, options?: RequestOptions): Promise<HandWhatsAppConversationOverResponse> {
+    return this.transport.request<HandWhatsAppConversationOverResponse>({ method: "POST", path: "/v1/whatsapp/conversations/{id}/handler", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Import a partner’s network
    *
    * Pulls a connected CPO partner’s locations and tariffs now (409 when it is not connected).
@@ -8743,7 +8851,7 @@ export class Operations {
    * `GET /v1/integrations/{kind}/events` · needs `org:read`
    */
   integrationActivity(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles. */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     query?: {
       limit?: number;
@@ -9739,6 +9847,20 @@ export class Operations {
   }
 
   /**
+   * One WhatsApp support conversation
+   *
+   * The conversation and its last 200 messages, oldest first, with each reply's delivery status. Opening it marks it read.
+   *
+   * `GET /v1/whatsapp/conversations/{id}` · needs `platform:admin`
+   */
+  oneWhatsAppSupportConversation(params: {
+    /** The conversation id. */
+    id: string;
+  }, options?: RequestOptions): Promise<OneWhatsAppSupportConversationResponse> {
+    return this.transport.request<OneWhatsAppSupportConversationResponse>({ method: "GET", path: "/v1/whatsapp/conversations/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * The operator’s console brand
    *
    * The name, tagline, colours, logo and web address the operator’s console uses instead of PlugSure’s, and the colours as the console applies them in both themes.
@@ -10230,7 +10352,7 @@ export class Operations {
    * `DELETE /v1/integrations/{kind}`
    */
   removeIntegrationConsoleSettings(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles. */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     query?: {
       scope?: "org" | "platform";
@@ -10413,6 +10535,21 @@ export class Operations {
     body: ReplayFailedWebhookDeliveriesBody;
   }, options?: RequestOptions): Promise<ReplayFailedWebhookDeliveriesResponse> {
     return this.transport.request<ReplayFailedWebhookDeliveriesResponse>({ method: "POST", path: "/v1/webhooks/{id}/replay", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Reply to a WhatsApp customer
+   *
+   * Sends a free-form text from the platform's number. Allowed within 24 hours of the customer's last message only (409 otherwise: WhatsApp then takes approved templates only). Staff take the conversation over (handler human; the assistant stops), except in draft mode when the assistant has it: sending its drafts keeps it drafting. 502 with Meta's reason when the send fails. Audited as whatsapp.support_reply.
+   *
+   * `POST /v1/whatsapp/conversations/{id}/reply` · needs `platform:admin`
+   */
+  replyToWhatsAppCustomer(params: {
+    /** The conversation id. */
+    id: string;
+    body: ReplyToWhatsAppCustomerBody;
+  }, options?: RequestOptions): Promise<ReplyToWhatsAppCustomerResponse> {
+    return this.transport.request<ReplyToWhatsAppCustomerResponse>({ method: "POST", path: "/v1/whatsapp/conversations/{id}/reply", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11086,6 +11223,20 @@ export class Operations {
   }
 
   /**
+   * Suggest a WhatsApp reply
+   *
+   * Asks the assistant (Claude) for a reply to the conversation as it stands, whoever handles it, and keeps it as the draft; nothing is sent. `handoff` is set when the assistant would rather a person answered. 409 when the AI support integration is not set up; 502 when the Anthropic API fails. At most 10 a minute per administrator.
+   *
+   * `POST /v1/whatsapp/conversations/{id}/suggest` · needs `platform:admin`
+   */
+  suggestWhatsAppReply(params: {
+    /** The conversation id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SuggestWhatsAppReplyResponse> {
+    return this.transport.request<SuggestWhatsAppReplyResponse>({ method: "POST", path: "/v1/whatsapp/conversations/{id}/suggest", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Summarise connection attempts
    *
    * Counts of accepted, pending-adoption and refused attempts, and distinct identities, by the organisation’s charge points over a recent window.
@@ -11154,7 +11305,7 @@ export class Operations {
    * `POST /v1/integrations/{kind}/test`
    */
   testIntegration(params: {
-    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI) or map_tiles. */
+    /** Integration: payments (the acquirer: QRIS, e-wallets, cards), otp (driver sign-in codes), otp_fallback, pnc_pki (Plug & Charge PKI), map_tiles or ai_support (WhatsApp AI support, Claude). */
     kind: string;
     body: TestIntegrationBody;
   }, options?: RequestOptions): Promise<TestIntegrationResponse> {
@@ -11544,7 +11695,7 @@ export class Operations {
    */
   whatsappMessages(params?: {
     query?: {
-      purpose?: "otp" | "alert" | "test" | "other";
+      purpose?: "otp" | "alert" | "test" | "other" | "support";
       status?: "accepted" | "sent" | "delivered" | "read" | "failed";
       /** Only messages before this time. */
       before?: string;
@@ -11563,6 +11714,24 @@ export class Operations {
    */
   whatsappMessageTemplates(options?: RequestOptions): Promise<WhatsappMessageTemplatesResponse> {
     return this.transport.request<WhatsappMessageTemplatesResponse>({ method: "GET", path: "/v1/whatsapp/templates", accept: "json" }, options);
+  }
+
+  /**
+   * WhatsApp support inbox
+   *
+   * Customers who wrote to the platform's WhatsApp number, newest first, with the last message. Filter by `handler`; page with `before` = the `nextBefore` of the previous page. `assistant` says whether the AI support integration is set up and its mode. Messages are kept 90 days.
+   *
+   * `GET /v1/whatsapp/conversations` · needs `platform:admin`
+   */
+  whatsappSupportInbox(params?: {
+    query?: {
+      handler?: "ai" | "human" | "closed";
+      /** Only conversations last active before this time. */
+      before?: string;
+      limit?: number;
+    };
+  }, options?: RequestOptions): Promise<WhatsappSupportInboxResponse> {
+    return this.transport.request<WhatsappSupportInboxResponse>({ method: "GET", path: "/v1/whatsapp/conversations", query: params?.query, accept: "json" }, options);
   }
 
   /**
