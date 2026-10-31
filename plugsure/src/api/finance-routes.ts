@@ -26,6 +26,10 @@ import * as finSummary from '../services/finance-summary.js';
 import * as periods from '../services/finance-periods.js';
 import * as invest from '../services/site-investments.js';
 import * as anomalies from '../services/revenue-anomalies.js';
+import * as taxCal from '../services/tax-calendar.js';
+import * as disputes from '../services/owner-disputes.js';
+import * as sharedCosts from '../services/shared-costs.js';
+import * as settle from '../services/settlement-tracking.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -981,6 +985,103 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.post('/v1/finance/revenue-alerts/check', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:write' });
     try { return await anomalies.detect(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).day); } catch (e) { return p11Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.23.0) tax calendar, owner queries, shared costs, settlements
+
+  const p12Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof taxCal.TaxCalendarError || e instanceof disputes.DisputeError || e instanceof sharedCosts.SharedCostError || e instanceof settle.SettlementError) return reply.status(e.statusCode).send({ error: e.message });
+    return p11Failed(reply, e);
+  };
+
+  app.get('/v1/finance/tax/calendar', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await taxCal.calendar(req.principal.orgId); } catch (e) { return p12Failed(reply, e); }
+  });
+  app.put('/v1/finance/tax/calendar/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await taxCal.saveSettings(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.tax_calendar_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p12Failed(reply, e); }
+  });
+  app.post('/v1/finance/tax/filings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await taxCal.markFiled(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.tax_filed', 'tax_filing', r.id, r);
+      return reply.status(201).send(r);
+    } catch (e) { return p12Failed(reply, e); }
+  });
+  app.post('/v1/finance/tax/filings/:fid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await taxCal.voidFiling(req.principal.orgId, prm(req, 'fid'), b.reason, userUuid(req));
+      await auditPay(req, 'finance.tax_filing_voided', 'tax_filing', prm(req, 'fid'), { reason: String(b.reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p12Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/owner-queries', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await disputes.list(req.principal.orgId); } catch (e) { return p12Failed(reply, e); }
+  });
+  app.post('/v1/finance/owner-queries/:qid/answer', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await disputes.answer(req.principal.orgId, prm(req, 'qid'), (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, `finance.owner_query_${r.state}`, 'owner_statement_dispute', r.id, { amount: r.amount, currency: r.currency });
+      return r;
+    } catch (e) { return p12Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/shared-costs', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await sharedCosts.list(req.principal.orgId); } catch (e) { return p12Failed(reply, e); }
+  });
+  app.post('/v1/finance/shared-costs', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await sharedCosts.record(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.shared_cost_recorded', 'finance_shared_cost', r.id, { category: r.category, amount: r.amount, currency: r.currency, basis: r.basis, monthFrom: r.monthFrom, monthTo: r.monthTo, sites: r.siteIds });
+      return reply.status(201).send(r);
+    } catch (e) { return p12Failed(reply, e); }
+  });
+  app.post('/v1/finance/shared-costs/:cid/end', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await sharedCosts.end(req.principal.orgId, prm(req, 'cid'), ((req.body ?? {}) as Record<string, unknown>).monthTo);
+      await auditPay(req, 'finance.shared_cost_ended', 'finance_shared_cost', r.id, { monthTo: r.monthTo });
+      return r;
+    } catch (e) { return p12Failed(reply, e); }
+  });
+  app.post('/v1/finance/shared-costs/:cid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await sharedCosts.voidCost(req.principal.orgId, prm(req, 'cid'), b.reason, userUuid(req));
+      await auditPay(req, 'finance.shared_cost_voided', 'finance_shared_cost', prm(req, 'cid'), { reason: String(b.reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p12Failed(reply, e); }
+  });
+  app.get('/v1/finance/site-pnl', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await sharedCosts.pnl(req.principal.orgId, ((req.query ?? {}) as Record<string, string>).month); } catch (e) { return p12Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/accounts/:id/settlements', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await settle.overview(await account(req), req.principal.orgId); } catch (e) { return failed(reply, e); }
+  });
+  app.put('/v1/finance/settlement-tracking/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await settle.saveSettings(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.settlement_tracking_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p12Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

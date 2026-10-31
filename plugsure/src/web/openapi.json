@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.22.0",
+    "version": "1.23.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -37487,6 +37487,1080 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/tax/calendar": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Tax filing calendar",
+        "operationId": "taxFilingCalendar",
+        "description": "(v1.23.0) The obligations (PPh 23 payment and SPT Masa Unifikasi, PPN payment and SPT Masa PPN, e-Faktur upload) of the last 6 periods and the current one: the due date (a day of the following month, a weekend moved to Monday), the status (filed, overdue, due_soon, upcoming), what PlugSure knows of the amount, and the filing.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "Calendar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "today": {
+                      "type": "string"
+                    },
+                    "settings": {
+                      "type": "object"
+                    },
+                    "labels": {
+                      "type": "object"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "obligation": {
+                            "type": "string"
+                          },
+                          "period": {
+                            "type": "string"
+                          },
+                          "dueDate": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "filed",
+                              "overdue",
+                              "due_soon",
+                              "upcoming"
+                            ]
+                          },
+                          "amount": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "filing": {
+                            "type": [
+                              "object",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/tax/calendar/settings": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set the tax filing calendar",
+        "operationId": "setTaxFilingCalendar",
+        "description": "(v1.23.0) Per obligation: enabled and the due day of the following month (31 = its last day); reminderDays (0–30); reminders (finance.tax_due alerts). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "obligations": {
+                    "type": "object"
+                  },
+                  "reminderDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "reminders": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "example": {
+                "obligations": {
+                  "pph23_pay": {
+                    "day": 15
+                  },
+                  "ppn_report": {
+                    "day": 31
+                  }
+                },
+                "reminderDays": 5,
+                "reminders": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/tax/filings": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Mark a tax obligation filed",
+        "operationId": "markTaxObligationFiled",
+        "description": "(v1.23.0) The obligation and period, the date filed or paid, the reference (NTPN, BPE, receipt) and optionally the amount. 409 when already marked (void it first). Audited as finance.tax_filed.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "obligation",
+                  "period",
+                  "filedOn",
+                  "reference"
+                ],
+                "properties": {
+                  "obligation": {
+                    "type": "string",
+                    "enum": [
+                      "pph23_pay",
+                      "pph23_report",
+                      "ppn_pay",
+                      "ppn_report",
+                      "efaktur"
+                    ]
+                  },
+                  "period": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                  },
+                  "filedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              },
+              "example": {
+                "obligation": "pph23_pay",
+                "period": "2026-09",
+                "filedOn": "2026-10-14",
+                "reference": "NTPN 0A1B2C3D4E5F6G7H",
+                "amount": 1250000
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Marked filed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/tax/filings/{fid}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a tax filing mark",
+        "operationId": "voidTaxFilingMark",
+        "description": "(v1.23.0) With a reason. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "fid",
+            "in": "path",
+            "required": true,
+            "description": "The filing id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Voided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/owner-queries": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Site owners' queries on their statements",
+        "operationId": "siteOwnersQueriesOnTheirStatements",
+        "description": "(v1.23.0) Open queries first, then the last answered; the adjustments agreed and not yet on a statement, per owner and currency.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "Queries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "disputes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "open": {
+                      "type": "integer"
+                    },
+                    "pendingAdjustments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/owner-queries/{qid}/answer": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Answer a site owner's query",
+        "operationId": "answerSiteOwnerQuery",
+        "description": "(v1.23.0) decision reject (the statement stands), resolve (explained) or adjust (amount, negative when the owner owes it back: added to the owner's share on its next statement finalised in that currency); the answer the owner sees. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "qid",
+            "in": "path",
+            "required": true,
+            "description": "The query id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "decision",
+                  "answer"
+                ],
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "reject",
+                      "resolve",
+                      "adjust"
+                    ]
+                  },
+                  "answer": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "example": {
+                "decision": "adjust",
+                "answer": "Two sessions on 12 September were missed; added to your October statement.",
+                "amount": 185000
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "currency": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/shared-costs": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Shared costs",
+        "operationId": "sharedCosts",
+        "description": "(v1.23.0) Costs shared by sites (rent, maintenance, connectivity, insurance, staff, other), per month from monthFrom to monthTo (or ongoing), and how each is allocated (kWh, sessions, revenue, equal).\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "Costs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "costs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "categories": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "bases": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a shared cost",
+        "operationId": "recordSharedCost",
+        "description": "(v1.23.0) The amount per month, in the minor unit of the sites' currency; siteIds (optional: all the currency's sites). 409 when monthFrom is locked. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "category",
+                  "description",
+                  "amount",
+                  "monthFrom"
+                ],
+                "properties": {
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "rent",
+                      "maintenance",
+                      "connectivity",
+                      "insurance",
+                      "staff",
+                      "other"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": [
+                      "kwh",
+                      "sessions",
+                      "revenue",
+                      "equal"
+                    ]
+                  },
+                  "siteIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "monthFrom": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                  },
+                  "monthTo": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                  }
+                }
+              },
+              "example": {
+                "category": "maintenance",
+                "description": "Annual service contract, all DC chargers",
+                "amount": 15000000,
+                "basis": "kwh",
+                "monthFrom": "2026-10"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/shared-costs/{cid}/end": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "End a shared cost",
+        "operationId": "endSharedCost",
+        "description": "(v1.23.0) The last month it counts in; the months it leaves must not be locked. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "description": "The cost id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "monthTo"
+                ],
+                "properties": {
+                  "monthTo": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "monthTo": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/shared-costs/{cid}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a shared cost",
+        "operationId": "voidSharedCost",
+        "description": "(v1.23.0) With a reason; 409 when it counts in a locked month (end it instead). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "description": "The cost id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Voided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/site-pnl": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Site P&L for a month",
+        "operationId": "sitePLForMonth",
+        "description": "(v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "P&L",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string"
+                    },
+                    "sites": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "totals": {
+                      "type": "object"
+                    },
+                    "unallocated": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/settlements": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Settlements and withdrawals of a payments account",
+        "operationId": "settlementsAndWithdrawalsOfPaymentsAccount",
+        "description": "(v1.23.0) Settlements per expected day (45 days back, 14 ahead): expected net, settled, pending, state (settled, due, upcoming, late after the grace days). Withdrawals to the bank (45 days) against the bank statement lines matched to them: in_bank, short, missing, awaiting_statement.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settlements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "today": {
+                      "type": "string"
+                    },
+                    "settings": {
+                      "type": "object"
+                    },
+                    "bankStatementsTo": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "settlements": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "withdrawals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "summary": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/settlement-tracking/settings": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set settlement tracking",
+        "operationId": "setSettlementTracking",
+        "description": "(v1.23.0) graceDays (0–14, default 2): a settlement is late after them; withdrawalDays (1–14, default 3): a withdrawal is missing when bank statements cover that many days after it. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "graceDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 14
+                  },
+                  "withdrawalDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 14
+                  }
+                }
+              },
+              "example": {
+                "graceDays": 2,
+                "withdrawalDays": 3
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
                 }
               }
             }

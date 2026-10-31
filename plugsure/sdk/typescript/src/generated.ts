@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.22.0";
+export const API_VERSION = "1.23.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5061,6 +5061,19 @@ export type AnswerDisputeCpoSideAcceptOrRejectResponse = {
   };
 };
 
+export type AnswerSiteOwnerQueryBody = {
+  decision: "reject" | "resolve" | "adjust";
+  answer: string;
+  amount?: number;
+};
+
+export type AnswerSiteOwnerQueryResponse = {
+  id?: string;
+  state?: string;
+  amount?: number | null;
+  currency?: string;
+};
+
 export type ApplyLoadPlanNowResponse = {
   applied: PowerAllocation[];
 };
@@ -5754,6 +5767,15 @@ export type EMailStatementOfAccountResponse = {
   reference?: string | null;
 };
 
+export type EndSharedCostBody = {
+  monthTo: string;
+};
+
+export type EndSharedCostResponse = {
+  id?: string;
+  monthTo?: string;
+};
+
 export type EnergyCostAndMarginByMonthResponse = {
   months?: {
     month?: string;
@@ -6406,6 +6428,15 @@ export type LockMonthResponse = {
   id?: string;
   month?: string;
   locked?: boolean;
+};
+
+export type MarkTaxObligationFiledBody = {
+  obligation: "pph23_pay" | "pph23_report" | "ppn_pay" | "ppn_report" | "efaktur";
+  period: string;
+  filedOn: string;
+  reference: string;
+  amount?: number;
+  note?: string;
 };
 
 export type MatchIgnoreOrUnmatchBankLineBody = {
@@ -7097,6 +7128,17 @@ export type RecordRefundPaidByBankTransferResponse = {
   refundRef: string;
 };
 
+export type RecordSharedCostBody = {
+  category: "rent" | "maintenance" | "connectivity" | "insurance" | "staff" | "other";
+  description: string;
+  amount: number;
+  currency?: string;
+  basis?: "kwh" | "sessions" | "revenue" | "equal";
+  siteIds?: string[];
+  monthFrom: string;
+  monthTo?: string;
+};
+
 export type RecordSiteElectricityBillBody = {
   month: string;
   amount: number;
@@ -7739,6 +7781,11 @@ export type SetSecurityProfileResponse = {
   profile: 0 | 1 | 2 | 3;
 };
 
+export type SetSettlementTrackingBody = {
+  graceDays?: number;
+  withdrawalDays?: number;
+};
+
 export type SetSiteElectricityCostPerKWhBody = {
   ratePerKwh: number;
 };
@@ -7786,6 +7833,21 @@ export type SetSitePowerBudgetBody = {
   applyNow?: boolean;
 };
 
+export type SetTaxFilingCalendarBody = {
+  obligations?: Record<string, unknown>;
+  reminderDays?: number;
+  reminders?: boolean;
+};
+
+export type SettlementsAndWithdrawalsOfPaymentsAccountResponse = {
+  today?: string;
+  settings?: Record<string, unknown>;
+  bankStatementsTo?: string | null;
+  settlements?: Record<string, unknown>[];
+  withdrawals?: Record<string, unknown>[];
+  summary?: Record<string, unknown>;
+};
+
 export type SettleOwnerPayoutDuitkuNeverConfirmedBody = {
   outcome: "succeeded" | "failed";
   note: string;
@@ -7821,6 +7883,12 @@ export type SetVariableSetVariablesResponse = {
   rebootRequired?: boolean;
   reason?: string;
   label?: string;
+};
+
+export type SharedCostsResponse = {
+  costs?: Record<string, unknown>[];
+  categories?: string[];
+  bases?: string[];
 };
 
 export type ShareOrUnshareCardsBody = {
@@ -7944,10 +8012,23 @@ export type SiteOwnersBankDetailChangeRequestsResponse = {
   }[];
 };
 
+export type SiteOwnersQueriesOnTheirStatementsResponse = {
+  disputes?: Record<string, unknown>[];
+  open?: number;
+  pendingAdjustments?: Record<string, unknown>[];
+};
+
 export type SiteOwnersSharesAndTheirPayoutsResponse = {
   shares: OwnerShare[];
   payoutsAvailable?: boolean;
   payoutRails?: ("duitku" | "xendit")[];
+};
+
+export type SitePLForMonthResponse = {
+  month?: string;
+  sites?: Record<string, unknown>[];
+  totals?: Record<string, unknown>;
+  unallocated?: Record<string, unknown>[];
 };
 
 export type StartSessionRemotelyBody = {
@@ -8024,6 +8105,20 @@ export type SyncAndReconcileNowResponse = {
     found?: number;
     cleared?: number;
   };
+};
+
+export type TaxFilingCalendarResponse = {
+  today?: string;
+  settings?: Record<string, unknown>;
+  labels?: Record<string, unknown>;
+  items?: {
+    obligation?: string;
+    period?: string;
+    dueDate?: string;
+    status?: "filed" | "overdue" | "due_soon" | "upcoming";
+    amount?: number | null;
+    filing?: Record<string, unknown> | null;
+  }[];
 };
 
 export type TestIntegrationBody = {
@@ -8197,11 +8292,27 @@ export type VoidRecordedPaymentResponse = {
   statement: StatementDue;
 };
 
+export type VoidSharedCostBody = {
+  reason: string;
+};
+
+export type VoidSharedCostResponse = {
+  ok?: boolean;
+};
+
 export type VoidSiteInvestmentBody = {
   reason: string;
 };
 
 export type VoidSiteInvestmentResponse = {
+  ok?: boolean;
+};
+
+export type VoidTaxFilingMarkBody = {
+  reason: string;
+};
+
+export type VoidTaxFilingMarkResponse = {
   ok?: boolean;
 };
 
@@ -8617,6 +8728,21 @@ export class Operations {
     body: AnswerDisputeCpoSideAcceptOrRejectBody;
   }, options?: RequestOptions): Promise<AnswerDisputeCpoSideAcceptOrRejectResponse> {
     return this.transport.request<AnswerDisputeCpoSideAcceptOrRejectResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/respond", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Answer a site owner's query
+   *
+   * (v1.23.0) decision reject (the statement stands), resolve (explained) or adjust (amount, negative when the owner owes it back: added to the owner's share on its next statement finalised in that currency); the answer the owner sees. Audited.
+   *
+   * `POST /v1/finance/owner-queries/{qid}/answer` · needs `payment:write`
+   */
+  answerSiteOwnerQuery(params: {
+    /** The query id. */
+    qid: string;
+    body: AnswerSiteOwnerQueryBody;
+  }, options?: RequestOptions): Promise<AnswerSiteOwnerQueryResponse> {
+    return this.transport.request<AnswerSiteOwnerQueryResponse>({ method: "POST", path: "/v1/finance/owner-queries/{qid}/answer", pathParams: { qid: params.qid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9959,6 +10085,21 @@ export class Operations {
     body: EMailStatementOfAccountBody;
   }, options?: RequestOptions): Promise<EMailStatementOfAccountResponse> {
     return this.transport.request<EMailStatementOfAccountResponse>({ method: "POST", path: "/v1/fleet-accounts/{id}/account-statement/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * End a shared cost
+   *
+   * (v1.23.0) The last month it counts in; the months it leaves must not be locked. Audited.
+   *
+   * `POST /v1/finance/shared-costs/{cid}/end` · needs `payment:write`
+   */
+  endSharedCost(params: {
+    /** The cost id. */
+    cid: string;
+    body: EndSharedCostBody;
+  }, options?: RequestOptions): Promise<EndSharedCostResponse> {
+    return this.transport.request<EndSharedCostResponse>({ method: "POST", path: "/v1/finance/shared-costs/{cid}/end", pathParams: { cid: params.cid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11652,6 +11793,19 @@ export class Operations {
   }
 
   /**
+   * Mark a tax obligation filed
+   *
+   * (v1.23.0) The obligation and period, the date filed or paid, the reference (NTPN, BPE, receipt) and optionally the amount. 409 when already marked (void it first). Audited as finance.tax_filed.
+   *
+   * `POST /v1/finance/tax/filings` · needs `payment:write`
+   */
+  markTaxObligationFiled(params: {
+    body: MarkTaxObligationFiledBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/tax/filings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Match, ignore or unmatch a bank line
    *
    * (v1.18.0) kind: a candidate's kind with its ref; ignored with a note (bank fee, another business); none to undo. A record matches one line only (409). payment:write; audited as finance.bank_line_matched.
@@ -12472,6 +12626,19 @@ export class Operations {
     body: RecordRefundPaidByBankTransferBody;
   }, options?: RequestOptions): Promise<RecordRefundPaidByBankTransferResponse> {
     return this.transport.request<RecordRefundPaidByBankTransferResponse>({ method: "POST", path: "/v1/refunds/{id}/mark-refunded", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a shared cost
+   *
+   * (v1.23.0) The amount per month, in the minor unit of the sites' currency; siteIds (optional: all the currency's sites). 409 when monthFrom is locked. Audited.
+   *
+   * `POST /v1/finance/shared-costs` · needs `payment:write`
+   */
+  recordSharedCost(params: {
+    body: RecordSharedCostBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/shared-costs", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13625,6 +13792,19 @@ export class Operations {
   }
 
   /**
+   * Set settlement tracking
+   *
+   * (v1.23.0) graceDays (0–14, default 2): a settlement is late after them; withdrawalDays (1–14, default 3): a withdrawal is missing when bank statements cover that many days after it. Audited.
+   *
+   * `PUT /v1/finance/settlement-tracking/settings` · needs `payment:write`
+   */
+  setSettlementTracking(params: {
+    body: SetSettlementTrackingBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/settlement-tracking/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set a site's electricity cost per kWh
    *
    * (v1.20.0) What the site pays per kWh, taxes included (its PLN tariff): the energy cost of months without a recorded bill. Audited as finance.energy_rate_saved.
@@ -13700,6 +13880,33 @@ export class Operations {
   }
 
   /**
+   * Set the tax filing calendar
+   *
+   * (v1.23.0) Per obligation: enabled and the due day of the following month (31 = its last day); reminderDays (0–30); reminders (finance.tax_due alerts). Audited.
+   *
+   * `PUT /v1/finance/tax/calendar/settings` · needs `payment:write`
+   */
+  setTaxFilingCalendar(params: {
+    body: SetTaxFilingCalendarBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/tax/calendar/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Settlements and withdrawals of a payments account
+   *
+   * (v1.23.0) Settlements per expected day (45 days back, 14 ahead): expected net, settled, pending, state (settled, due, upcoming, late after the grace days). Withdrawals to the bank (45 days) against the bank statement lines matched to them: in_bank, short, missing, awaiting_statement.
+   *
+   * `GET /v1/finance/accounts/{id}/settlements` · needs `payment:read`
+   */
+  settlementsAndWithdrawalsOfPaymentsAccount(params: {
+    /** The payments account (integration) id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SettlementsAndWithdrawalsOfPaymentsAccountResponse> {
+    return this.transport.request<SettlementsAndWithdrawalsOfPaymentsAccountResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/settlements", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Settle an owner payout Duitku never confirmed
    *
    * (v1.16.0) After checking Duitku's dashboard: succeeded records the statement payment; failed records nothing. Audited as finance.owner_payout_resolved.
@@ -13742,6 +13949,17 @@ export class Operations {
     body: SetVariableSetVariablesBody;
   }, options?: RequestOptions): Promise<SetVariableSetVariablesResponse> {
     return this.transport.request<SetVariableSetVariablesResponse>({ method: "PUT", path: "/v1/charge-points/{identity}/device-model/variable", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Shared costs
+   *
+   * (v1.23.0) Costs shared by sites (rent, maintenance, connectivity, insurance, staff, other), per month from monthFrom to monthTo (or ongoing), and how each is allocated (kWh, sessions, revenue, equal).
+   *
+   * `GET /v1/finance/shared-costs` · needs `payment:read`
+   */
+  sharedCosts(options?: RequestOptions): Promise<SharedCostsResponse> {
+    return this.transport.request<SharedCostsResponse>({ method: "GET", path: "/v1/finance/shared-costs", accept: "json" }, options);
   }
 
   /**
@@ -13866,6 +14084,17 @@ export class Operations {
   }
 
   /**
+   * Site owners' queries on their statements
+   *
+   * (v1.23.0) Open queries first, then the last answered; the adjustments agreed and not yet on a statement, per owner and currency.
+   *
+   * `GET /v1/finance/owner-queries` · needs `payment:read`
+   */
+  siteOwnersQueriesOnTheirStatements(options?: RequestOptions): Promise<SiteOwnersQueriesOnTheirStatementsResponse> {
+    return this.transport.request<SiteOwnersQueriesOnTheirStatementsResponse>({ method: "GET", path: "/v1/finance/owner-queries", accept: "json" }, options);
+  }
+
+  /**
    * Site owners' shares and their payouts
    *
    * The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). The operator's bank makes the transfers and they are recorded here; (v1.16.0) or, with Disbursement on the operator's own Duitku account (payoutsAvailable), they can be sent with POST /v1/finance/statements/{sid}/payout.
@@ -13878,6 +14107,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<SiteOwnersSharesAndTheirPayoutsResponse> {
     return this.transport.request<SiteOwnersSharesAndTheirPayoutsResponse>({ method: "GET", path: "/v1/finance/owner-shares", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Site P&L for a month
+   *
+   * (v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to.
+   *
+   * `GET /v1/finance/site-pnl` · needs `payment:read`
+   */
+  sitePLForMonth(params: {
+    query: {
+      month: string;
+    };
+  }, options?: RequestOptions): Promise<SitePLForMonthResponse> {
+    return this.transport.request<SitePLForMonthResponse>({ method: "GET", path: "/v1/finance/site-pnl", query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -14053,6 +14297,17 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<SyncAndReconcileNowResponse> {
     return this.transport.request<SyncAndReconcileNowResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/sync", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Tax filing calendar
+   *
+   * (v1.23.0) The obligations (PPh 23 payment and SPT Masa Unifikasi, PPN payment and SPT Masa PPN, e-Faktur upload) of the last 6 periods and the current one: the due date (a day of the following month, a weekend moved to Monday), the status (filed, overdue, due_soon, upcoming), what PlugSure knows of the amount, and the filing.
+   *
+   * `GET /v1/finance/tax/calendar` · needs `payment:read`
+   */
+  taxFilingCalendar(options?: RequestOptions): Promise<TaxFilingCalendarResponse> {
+    return this.transport.request<TaxFilingCalendarResponse>({ method: "GET", path: "/v1/finance/tax/calendar", accept: "json" }, options);
   }
 
   /**
@@ -14491,6 +14746,21 @@ export class Operations {
   }
 
   /**
+   * Void a shared cost
+   *
+   * (v1.23.0) With a reason; 409 when it counts in a locked month (end it instead). Audited.
+   *
+   * `POST /v1/finance/shared-costs/{cid}/void` · needs `payment:write`
+   */
+  voidSharedCost(params: {
+    /** The cost id. */
+    cid: string;
+    body: VoidSharedCostBody;
+  }, options?: RequestOptions): Promise<VoidSharedCostResponse> {
+    return this.transport.request<VoidSharedCostResponse>({ method: "POST", path: "/v1/finance/shared-costs/{cid}/void", pathParams: { cid: params.cid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void a site investment
    *
    * (v1.22.0) With a reason. 409 when its month is locked. Audited as finance.investment_voided.
@@ -14503,6 +14773,21 @@ export class Operations {
     body: VoidSiteInvestmentBody;
   }, options?: RequestOptions): Promise<VoidSiteInvestmentResponse> {
     return this.transport.request<VoidSiteInvestmentResponse>({ method: "POST", path: "/v1/finance/investments/{iid}/void", pathParams: { iid: params.iid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a tax filing mark
+   *
+   * (v1.23.0) With a reason. Audited.
+   *
+   * `POST /v1/finance/tax/filings/{fid}/void` · needs `payment:write`
+   */
+  voidTaxFilingMark(params: {
+    /** The filing id. */
+    fid: string;
+    body: VoidTaxFilingMarkBody;
+  }, options?: RequestOptions): Promise<VoidTaxFilingMarkResponse> {
+    return this.transport.request<VoidTaxFilingMarkResponse>({ method: "POST", path: "/v1/finance/tax/filings/{fid}/void", pathParams: { fid: params.fid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

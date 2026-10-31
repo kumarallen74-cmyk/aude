@@ -33,6 +33,11 @@ const { registerFinanceRoutes } = await import('../api/finance-routes.js');
 const budgets = await import('./budgets.js');
 const collections = await import('./collections.js');
 
+/** A day relative to today in the billing zone (YYYY-MM-DD). */
+const localDays = (n: number) => {
+  const t = new Intl.DateTimeFormat('en-CA', { timeZone: config.billing.timeZone }).format(new Date());
+  return new Date(Date.parse(`${t}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+};
 const TAG = randomBytes(3).toString('hex');
 const A = randomUUID(), B = randomUUID();
 let org = '', site = '', site2 = '', cpA = '', cpB = '', fleet = '', inv = '', xenditId = '';
@@ -110,7 +115,8 @@ if (DB_OK) {
     await s(c, site2, 50_000, 125_000, '2026-09-12T03:00:00Z');
     // A fleet invoice due 40 days ago, Rp 1 000 000, Rp 100 000 credited.
     fleet = (await one<{ id: string }>(`INSERT INTO fleet_account (org_id, name, billing_email, phone) VALUES ($1, $2, 'ap@fleet.test', '628123456789') RETURNING id`, [org, `Fleet ${TAG}`]))!.id;
-    const due = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
+    // Dates in the billing zone (the server counts days past due there), not UTC's.
+    const due = localDays(-40);
     inv = (await one<{ id: string }>(
       `INSERT INTO fleet_invoice (org_id, fleet_account_id, period, number, status, due_date, sessions, energy_wh, subtotal_minor, local_tax_minor, taxable_minor, tax_base_minor, tax_minor,
                                   own_total_minor, roaming_total_minor, total_minor, credited_minor, data, currency)
@@ -231,7 +237,7 @@ dbDescribe('Collections and dunning', () => {
     const h = (await call('GET', `/v1/finance/collections/fleet_invoice/${inv}`)).json();
     assert.deepEqual(h.reminders.map((x: any) => [x.step, x.manual]), [[30, false], [40, true]]);
 
-    const future = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+    const future = localDays(5);
     assert.equal((await call('POST', `/v1/finance/collections/fleet_invoice/${inv}/notes`, { note: 'Will pay Friday', promiseDate: future })).statusCode, 201);
     await query(`UPDATE finance_org_settings SET dunning_steps = '{30,35}' WHERE org_id = $1`, [org]);
     assert.equal(await collections.sweepDunning(), 0, 'a promise to pay pauses the reminders');
@@ -258,7 +264,7 @@ dbDescribe('Collections and dunning', () => {
 
 dbDescribe('The audit pack', () => {
   test('a ZIP: the CSVs, a manifest whose SHA-256s match, the audit chain checked', async () => {
-    const r = await call('GET', `/v1/finance/accounts/${xenditId}/audit-pack?from=2026-09-01&to=2026-10-31`);
+    const r = await call('GET', `/v1/finance/accounts/${xenditId}/audit-pack?from=2026-09-01&to=${localDays(0)}`);
     assert.equal(r.statusCode, 200, r.body.slice(0, 300));
     assert.match(r.headers['content-type'] as string, /zip/);
     const files = unzip(r.rawPayload);
