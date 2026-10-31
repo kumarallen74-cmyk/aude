@@ -1,4 +1,4 @@
-import { $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, toast, download, modal, zonedYmd, zonedDayStartIso } from '../core.js';
+import { $, $$, esc, api, state, registerView, pageHead, table, tag, icon, fmt, field, callout, kpi, toast, download, modal, drawer, zonedYmd, zonedDayStartIso } from '../core.js';
 import { formatMoney, LEGACY_CURRENCY, CURRENCIES } from '../money.js';
 
 /**
@@ -99,6 +99,68 @@ function txColumns() {
     { label: 'Status', render: (t) => `${tag(STATUS_TAG[t.status] ?? 't-mute', t.status)}` },
     { label: 'Settlement', render: (t) => `${settleTag(t.settlement)}${t.settlement === 'pending' && t.expectedSettlementAt ? `<div class="cell-sub">${new Date(t.expectedSettlementAt) < new Date() ? '<span style="color:var(--crit)">overdue</span> · ' : ''}${esc(fmt.date(t.expectedSettlementAt))}</div>` : ''}` },
   ];
+}
+
+/**
+ * (v1.16.0) One ledger row's whole trail, in a drawer: the gateway transaction (and its raw record), the other ledger rows
+ * of the same payment, PlugSure's payment and its state history, the session and its charge record, refunds and
+ * transfers, the pass it paid, and reconciliation exceptions.
+ */
+function openTrail(base, t) {
+  const dl = (rows) => `<dl class="kv">${rows.filter(([, v]) => v != null && v !== '').map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
+  const sect = (title, html) => `<div class="card section"><header><h3>${esc(title)}</h3></header><div class="body">${html}</div></div>`;
+  drawer({
+    title: `${KIND_LABEL[t.kind] ?? t.kind} · ${rp(t.amount)}`,
+    subtitle: `<span class="mono">${esc(t.gatewayId)}</span> · ${esc(fmt.time(t.at))}`,
+    tabs: [
+      {
+        id: 'trail', label: 'Trail',
+        async render(body) {
+          const r = await api(`${base}/transactions/${encodeURIComponent(t.id)}/trail`);
+          const x = r.transaction, p = r.payment, s = r.session;
+          let html = sect('At the gateway', dl([
+            ['Status', `${tag(STATUS_TAG[x.status] ?? 't-mute', x.status)} ${settleTag(x.settlement)}`],
+            ['Channel', esc(x.channel ?? '—')], ['Reference', `<span class="mono">${esc(x.reference ?? '—')}</span>`],
+            ['Amount', esc(rp(x.amount))], ['Fee', esc(rp(x.fee))], ['VAT on fee', esc(rp(x.vat))], ['Withholding tax', x.withholdingTax ? esc(rp(x.withholdingTax)) : null],
+            ['Net', x.net == null ? '—' : `<b>${esc(rp(x.net))}</b>`],
+            ['Expected settlement', x.expectedSettlementAt ? esc(fmt.time(x.expectedSettlementAt)) : null], ['Seen settled', x.settledSeenAt ? esc(fmt.time(x.settledSeenAt)) : null],
+          ]));
+          if (r.related.length) {
+            html += sect('Same payment at the gateway', r.related.map((g) => `<div class="row" style="justify-content:space-between;gap:8px;padding:4px 0">
+              <span>${esc(KIND_LABEL[g.kind] ?? g.kind)} · ${tag(STATUS_TAG[g.status] ?? 't-mute', g.status)}<div class="cell-sub mono">${esc(g.gatewayId)} · ${esc(fmt.time(g.at))}</div></span>
+              <span class="num">${esc(rp(g.amount))}${g.fee || g.vat ? `<div class="cell-sub">fee ${esc(rp(g.fee + g.vat))}</div>` : ''}</span></div>`).join(''));
+          }
+          if (p) {
+            html += sect('PlugSure payment', dl([
+              ['State', tag(p.state === 'captured' ? 't-ok' : p.state === 'voided' || p.state === 'failed' ? 't-crit' : 't-info', p.state)],
+              ['Operator', esc(p.operator ?? '—')], ['Method', esc(`${p.method ?? ''}${p.channel ? ` · ${p.channel}` : ''}${p.mode ? ` · ${p.mode}` : ''}`)],
+              ['Captured', p.captured != null ? esc(fmt.money(p.captured, p.currency)) : null], ['Authorised', p.authorised != null && p.authorised !== p.captured ? esc(fmt.money(p.authorised, p.currency)) : null],
+              ['Provider', `${esc(p.provider)} · <span class="mono">${esc(p.providerRef ?? '')}</span>`], ['Paid', p.paidAt ? esc(fmt.time(p.paidAt)) : null],
+              ['Refund', p.refund ? `${tag(p.refund.state === 'refunded' ? 't-ok' : p.refund.state === 'failed' ? 't-crit' : 't-warn', p.refund.state)} ${esc(fmt.money(p.refund.refunded ?? p.refund.due, p.currency))}${p.refund.method ? `<div class="cell-sub">${esc(p.refund.method === 'manual' ? 'bank transfer' : p.refund.method === 'disbursement' ? 'Duitku Disbursement' : 'provider')} · <span class="mono">${esc(p.refund.reference ?? '')}</span></div>` : ''}${p.refund.reason ? `<div class="cell-sub">${esc(p.refund.reason)}</div>` : ''}` : null],
+            ]) + (p.events.length ? `<div class="cell-sub" style="margin-top:8px">State history</div>${p.events.map((e) => `<div class="cell-sub">${esc(e.at ? fmt.time(e.at) : '—')} · ${esc(e.status ?? '')}</div>`).join('')}` : ''));
+          }
+          if (s) {
+            html += sect('Charging session', dl([
+              ['Where', `${esc(s.site ?? '—')}<div class="cell-sub mono">${esc(s.charger ?? '')}${s.connector ? ` #${esc(String(s.connector))}` : ''}</div>`],
+              ['When', `${esc(fmt.time(s.startedAt))}${s.endedAt ? ` – ${esc(fmt.time(s.endedAt))}` : ''}`], ['Energy', s.energyKwh != null ? esc(`${fmt.num(s.energyKwh, 1)} kWh`) : null],
+              ['Driver', esc(s.driver ?? 'guest')],
+              ['Charge record', s.chargeRecord ? `${esc(fmt.money(s.chargeRecord.total, s.chargeRecord.currency))} · <a href="/v1/sessions/${esc(s.id)}/receipt" target="_blank" rel="noopener">receipt</a>` : null],
+            ]) + `<a class="btn sm" href="#/sessions/${esc(s.id)}">Open the session</a>`);
+          }
+          if (r.transfers.length) {
+            html += sect('Refund transfers (Duitku Disbursement)', r.transfers.map((x2) => `<div style="padding:4px 0">${esc(fmt.money(x2.amount, p?.currency ?? LEGACY_CURRENCY))} · <span class="mono">${esc(x2.account)}</span> · ${esc(x2.state)}<div class="cell-sub">${esc(x2.bankName ?? '')} · requested ${esc(fmt.time(x2.requestedAt))}${x2.error ? ` · ${esc(x2.error)}` : ''}</div></div>`).join(''));
+          }
+          if (r.pass) html += sect('Membership pass', dl([['Charge', `<span class="mono">${esc(r.pass.id)}</span>`], ['State', esc(r.pass.state)], ['Amount', esc(rp(r.pass.amount))]]));
+          if (r.exceptions.length) {
+            html += sect('Reconciliation', r.exceptions.map((e) => `<div style="padding:4px 0">${tag(e.state === 'open' ? 't-warn' : 't-ok', e.state)} ${esc(e.kind.replace(/_/g, ' '))}<div class="cell-sub">${esc(fmt.time(e.firstSeenAt))}${e.resolution ? ` · ${esc(e.resolution)}` : ''}</div></div>`).join(''));
+          }
+          if (!p && !r.pass) html += callout('info', 'This transaction is not matched to a PlugSure payment or pass.');
+          html += `<details class="section"><summary class="cell-sub">The gateway's record</summary><pre class="mono small" style="white-space:pre-wrap;word-break:break-all">${esc(JSON.stringify(x.raw, null, 2))}</pre></details>`;
+          body.innerHTML = html;
+        },
+      },
+    ],
+  });
 }
 
 // ─────────────────────────────────────────── (v1.14.0) payouts and statement payments, recorded
@@ -234,7 +296,8 @@ async function ownerSharesSection(el, canWrite) {
   el.innerHTML = `<div class="card"><header><h3>Site owners' shares</h3>
       <span class="cell-sub">${esc(open.length ? `${total(open)} outstanding on ${open.length} statement${open.length === 1 ? '' : 's'}` : 'nothing outstanding')}</span>
       ${canWrite && open.length ? `<button class="btn sm right" type="button" data-transfers>${icon('download')} Transfer list (CSV)</button>` : ''}</header><div data-list></div></div>
-    <p class="cell-sub">Pay owners from your bank, then record each transfer here. The transfer list has what is outstanding with each owner's bank details, for your bank's bulk transfer.</p>`;
+    <p class="cell-sub">Pay owners from your bank, then record each transfer here. The transfer list has what is outstanding with each owner's bank details, for your bank's bulk transfer.${r.payoutsAvailable ? ' Or send a payout through Duitku Disbursement: a second person approves it, and it is recorded here once Duitku confirms it.' : ''}</p>
+    <div class="section" data-payouts></div>`;
   const reload = () => ownerSharesSection(el, canWrite);
   table($('[data-list]', el), {
     columns: [
@@ -243,7 +306,7 @@ async function ownerSharesSection(el, canWrite) {
       { label: 'Share', num: true, render: (x) => `<b>${esc(fmt.money(x.due, x.currency))}</b>` },
       { label: 'Paid', num: true, render: (x) => `${esc(fmt.money(x.paid, x.currency))}${x.lastPaidOn ? `<div class="cell-sub">${esc(fmt.date(`${x.lastPaidOn}T12:00:00Z`))}</div>` : ''}` },
       { label: 'Status', render: (x) => payTag(x.status) },
-      { label: '', render: (x) => `<div class="row nowrap" style="gap:6px"><button class="btn sm${canWrite && x.status !== 'paid' ? ' primary' : ''}" type="button" data-pay="${esc(x.statementId)}">${canWrite && x.status !== 'paid' ? 'Record payment' : 'Payments'}</button><button class="btn sm" type="button" data-bank="${esc(x.statementId)}">Bank</button></div>` },
+      { label: '', render: (x) => `<div class="row nowrap" style="gap:6px">${canWrite && r.payoutsAvailable && x.status !== 'paid' && x.bank ? `<button class="btn sm primary" type="button" data-send="${esc(x.statementId)}">Send via Disbursement</button>` : ''}<button class="btn sm${canWrite && x.status !== 'paid' && !r.payoutsAvailable ? ' primary' : ''}" type="button" data-pay="${esc(x.statementId)}">${canWrite && x.status !== 'paid' ? 'Record payment' : 'Payments'}</button><button class="btn sm" type="button" data-bank="${esc(x.statementId)}">Bank</button></div>` },
     ],
     rows: r.shares, empty: 'No owners\' shares on finalised statements yet (Billing → finalise an owner\'s statement).',
   });
@@ -253,7 +316,108 @@ async function ownerSharesSection(el, canWrite) {
   $('[data-transfers]', el)?.addEventListener('click', async () => {
     try { const res = await api('/v1/finance/owner-shares/transfer-list.csv', { raw: true }); download('plugsure-owner-transfers.csv', await res.blob()); } catch (e) { toast(e.message, 'crit'); }
   });
+  // (v1.16.0) Send a payout through Duitku Disbursement: requested here, approved by a second person.
+  $$('[data-send]', el).forEach((b) => b.addEventListener('click', () => {
+    const x = byId(b.dataset.send);
+    const ex = CURRENCIES[x.currency]?.exponent ?? 0;
+    modal({
+      title: `Send ${x.owner}'s share through Duitku Disbursement`,
+      subtitle: `${x.number} · ${fmt.money(x.outstanding, x.currency)} outstanding · to ${x.bank.bankName} ${x.bank.accountMasked}`,
+      body: `${callout('info', 'Duitku checks the owner\'s saved account and returns the name the bank has. A second person then approves the payout; it is recorded against the statement once Duitku confirms it.')}
+        <div class="form" style="margin-top:12px">${field(`Amount (${esc(x.currency)})`, `<input name="amount" inputmode="decimal" value="${esc(String(toMajor(x.outstanding, x.currency)))}">`)}${field('Note', '<input name="note" maxlength="300" placeholder="e.g. October share">', { opt: true })}</div>`,
+      actions: [
+        { label: 'Cancel' },
+        {
+          label: 'Check and request', kind: 'primary',
+          async onClick(ctx) {
+            const amount = Math.round(Number($('[name="amount"]', ctx.body).value.replace(/[^\d.]/g, '')) * 10 ** ex);
+            try {
+              const t = (await api(`/v1/finance/statements/${encodeURIComponent(x.statementId)}/payout`, { method: 'POST', body: { amount, note: $('[name="note"]', ctx.body).value.trim() || undefined } })).transfer;
+              toast(t.namesMatch ? `The bank names it ${t.checkedName}. Awaiting approval.` : `The bank names it ${t.checkedName ?? '—'}, not ${t.holderName}. Awaiting approval.`, t.namesMatch ? 'ok' : 'warn');
+              reload();
+            } catch (e) { toast(e.message, 'crit'); return false; }
+          },
+        },
+      ],
+    });
+  }));
+  await payoutsSection($('[data-payouts]', el), canWrite, reload);
   return { text: total(open), count: open.length };
+}
+
+/** (v1.16.0) Owner payouts through Duitku Disbursement: approve (a second person), reject, or settle by hand. */
+async function payoutsSection(el, canWrite, reload) {
+  let list = [];
+  try { list = (await api('/v1/finance/payout-transfers')).transfers ?? []; } catch { el.innerHTML = ''; return; }
+  if (!list.length) { el.innerHTML = ''; return; }
+  const me = state.me?.user?.id;
+  const TAGS = { awaiting_approval: ['t-warn', 'awaiting approval'], sending: ['t-info', 'sending'], sent: ['t-info', 'sent, not confirmed'], succeeded: ['t-ok', 'paid'], failed: ['t-crit', 'failed'], rejected: ['t-mute', 'rejected'] };
+  const waiting = list.filter((t) => t.state === 'awaiting_approval').length;
+  el.innerHTML = `<div class="card"><header><h3>Payouts (Duitku Disbursement)</h3></header>${waiting ? `<div class="body">${callout('warn', `${fmt.num(waiting)} payout${waiting === 1 ? '' : 's'} awaiting approval by someone other than the requester.`)}</div>` : ''}<div data-pl></div></div>`;
+  table($('[data-pl]', el), {
+    columns: [
+      { label: 'Requested', render: (t) => `${esc(fmt.time(t.requestedAt))}<div class="cell-sub">${esc(t.requestedByName ?? '—')}</div>` },
+      { label: 'Statement', render: (t) => `${esc(t.owner ?? '')}<div class="cell-sub mono">${esc(t.number ?? '')}</div>` },
+      { label: 'Amount', num: true, render: (t) => `<b>${esc(fmt.money(t.amount, t.currency))}</b>` },
+      { label: 'Account', render: (t) => `<span class="mono">${esc(t.bankCode)} ${esc(t.accountMasked)}</span><div class="cell-sub">bank: ${esc(t.checkedName ?? '—')} ${t.checkedName ? (t.namesMatch ? tag('t-ok', 'names match') : tag('t-warn', 'names differ')) : ''}</div>` },
+      { label: 'Status', render: (t) => `${tag(...(TAGS[t.state] ?? ['t-mute', t.state]))}${t.approvedByName ? `<div class="cell-sub">approved by ${esc(t.approvedByName)}</div>` : ''}${t.reason ? `<div class="cell-sub">${esc(t.reason)}</div>` : ''}${t.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(t.error)}</div>` : ''}` },
+      {
+        label: '',
+        render: (t) => {
+          if (!canWrite) return '';
+          if (t.state === 'awaiting_approval') {
+            const mine = t.requestedBy && t.requestedBy === me;
+            return `<div class="row nowrap" style="gap:6px">${mine ? '<span class="cell-sub">needs another person</span>' : `<button class="btn sm primary" type="button" data-papprove="${esc(t.id)}">Approve and send</button>`}<button class="btn sm" type="button" data-preject="${esc(t.id)}">${mine ? 'Withdraw' : 'Reject'}</button></div>`;
+          }
+          return t.state === 'sent' ? `<button class="btn sm" type="button" data-psettle="${esc(t.id)}">Settle by hand</button>` : '';
+        },
+      },
+    ],
+    rows: list, empty: '',
+  });
+  el.addEventListener('click', async (ev) => {
+    const ap = ev.target.closest('[data-papprove]'), rj = ev.target.closest('[data-preject]'), st = ev.target.closest('[data-psettle]');
+    const btn = ap ?? rj ?? st;
+    if (!btn) return;
+    const t = list.find((x) => x.id === (btn.dataset.papprove ?? btn.dataset.preject ?? btn.dataset.psettle));
+    if (ap) {
+      modal({
+        title: 'Approve and send the payout',
+        body: `<p>Send <b>${esc(fmt.money(t.amount, t.currency))}</b> to ${esc(t.checkedName ?? t.holderName)} (${esc(t.bankCode)} ${esc(t.accountMasked)}) through Duitku Disbursement?</p>${t.namesMatch ? '' : callout('warn', `The bank names the account ${esc(t.checkedName ?? '—')}, not ${esc(t.holderName)}. Approve only if you are sure it is the owner's.`)}`,
+        actions: [{ label: 'Cancel' }, {
+          label: 'Approve and send', kind: 'primary',
+          async onClick() {
+            try {
+              const r = (await api(`/v1/finance/payout-transfers/${t.id}/approve`, { method: 'POST' })).transfer;
+              toast(r.state === 'succeeded' ? 'Paid and recorded against the statement' : r.state === 'sent' ? 'Sent; its result is checked automatically' : `Not paid: ${r.error ?? r.state}`, r.state === 'failed' ? 'crit' : 'ok');
+              reload();
+            } catch (e) { toast(e.message, 'crit'); return false; }
+          },
+        }],
+      });
+      return;
+    }
+    const settle = Boolean(st);
+    modal({
+      title: settle ? 'Settle a payout by hand' : 'Reject the payout',
+      subtitle: `${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName}`,
+      body: settle
+        ? `${callout('warn', 'Duitku has not confirmed this payout. Check it in Duitku\'s dashboard first.')}<div class="form one" style="margin-top:12px">${field('Outcome', '<select name="outcome"><option value="succeeded">Paid (Duitku shows success)</option><option value="failed">Not paid (Duitku shows it failed)</option></select>')}${field('What the dashboard shows', '<input name="note" maxlength="300">')}</div>`
+        : `<div class="form one">${field('Reason', '<input name="note" maxlength="300">')}</div>`,
+      actions: [{ label: 'Cancel' }, {
+        label: settle ? 'Settle' : 'Reject', kind: settle ? 'primary' : 'danger',
+        async onClick(ctx) {
+          const note = $('[name="note"]', ctx.body).value.trim();
+          if (!note) { $('[name="note"]', ctx.body).classList.add('invalid'); return false; }
+          try {
+            await api(`/v1/finance/payout-transfers/${t.id}/${settle ? 'resolve' : 'reject'}`, { method: 'POST', body: settle ? { outcome: $('[name="outcome"]', ctx.body).value, note } : { reason: note } });
+            toast(settle ? 'Settled' : 'Rejected', 'ok');
+            reload();
+          } catch (e) { toast(e.message, 'crit'); return false; }
+        },
+      }],
+    });
+  });
 }
 
 /** Platform administrators: operators' statements to PlugSure and what each paid. */
@@ -324,6 +488,7 @@ registerView('finance', {
           <button class="btn" type="button" data-export="xlsx">${icon('download')} Excel</button>
           <button class="btn" type="button" data-export="csv">CSV</button>
           <button class="btn" type="button" data-export="pdf">PDF</button>
+          <button class="btn" type="button" data-reports>Xendit reports</button>
         </div>
       </div>
       <div class="tabs" role="tablist">${tabs.map((t) => `<button role="tab" type="button" aria-selected="false" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}</div>
@@ -402,7 +567,7 @@ registerView('finance', {
           ${field('Search', '<input data-f="q" placeholder="Reference or id" autocomplete="off">')}
         </div>
         <div class="card" data-list></div><div class="row" style="justify-content:center;margin-top:10px" data-more></div>
-        <p class="cell-sub">${isDuitku() ? 'Built from PlugSure\'s Duitku payments with the amount and fee Duitku reports for each; the settlement date is estimated from Duitku\'s schedule (QRIS and e-wallets 2 working days, cards 4).' : 'From Xendit\'s ledger: amounts, fees and VAT as Xendit charged them.'} Net = amount − fee − VAT (money in).</p>`;
+        <p class="cell-sub">Click a row for its whole trail. ${isDuitku() ? 'Built from PlugSure\'s Duitku payments with the amount and fee Duitku reports for each; the settlement date is estimated from Duitku\'s schedule (QRIS and e-wallets 2 working days, cards 4).' : 'From Xendit\'s ledger: amounts, fees and VAT as Xendit charged them.'} Net = amount − fee − VAT (money in).</p>`;
       let rows = [];
       const draw = async (more = false) => {
         const q = new URLSearchParams({ from, to, limit: '200' });
@@ -411,7 +576,7 @@ registerView('finance', {
         let r;
         try { r = await api(`${base()}/transactions?${q}`); } catch (e) { toast(e.message, 'crit'); return; }
         rows = more ? rows.concat(r.transactions) : r.transactions;
-        table($('[data-list]', body), { columns: txColumns(), rows, empty: 'No transactions match.' });
+        table($('[data-list]', body), { columns: txColumns(), rows, empty: 'No transactions match.', onRow: (t) => openTrail(base(), t) });
         $('[data-more]', body).innerHTML = r.nextBefore ? '<button class="btn sm" type="button" data-load-more>Load older</button>' : '';
         $('[data-load-more]', body)?.addEventListener('click', () => draw(true));
       };
@@ -449,7 +614,7 @@ registerView('finance', {
           { label: 'Total', num: true, render: (f) => esc(fmt.money(f.total, f.currency)) },
         ], rows: r.fleetInvoices, empty: 'No fleet invoices outstanding for this account.',
       });
-      table($('[data-rows]', body), { columns: txColumns(), rows: r.rows, empty: 'Nothing waiting to settle.' });
+      table($('[data-rows]', body), { columns: txColumns(), rows: r.rows, empty: 'Nothing waiting to settle.', onRow: (t) => openTrail(base(), t) });
       // (v1.15.0) PlugSure Hub: its fee invoices not paid (platform), or settlement positions owed to this operator.
       const hub = $('[data-hub-recv]', body);
       if (hub && r.hubFeeInvoices?.length) {
@@ -512,6 +677,32 @@ registerView('finance', {
           { label: 'Rate', num: true, render: (x) => esc(pct(x.rate)) },
         ], rows: r.rows, empty: 'No payments in this period.',
       });
+      // (v1.16.0) What each method costs, across the gateway accounts you can see: to choose which methods to offer.
+      body.insertAdjacentHTML('beforeend', `<div class="card section"><header><h3>What each method costs</h3></header><div data-costs><div class="empty-state"><span class="spinner"></span></div></div></div>
+        <p class="cell-sub">Over the period, from each gateway's ledger: the fee and VAT per payment, and per ${esc(rp(100000))} collected. <i>Quoted</i>: what Duitku's project lists today for ${esc(rp(100000))}, including methods not used yet.</p>`);
+      try {
+        const c = await api(`/v1/finance/method-costs?${per()}`);
+        const rows = [];
+        for (const a of c.accounts) {
+          const used = new Set(a.methods.map((m) => m.channel));
+          for (const m of a.methods) rows.push({ ...m, account: a.label, quotedFee: a.quoted?.find((q) => q.channel === m.channel)?.fee ?? null });
+          for (const q of a.quoted ?? []) if (!used.has(q.channel)) rows.push({ channel: q.channel, account: a.label, payments: 0, averageFee: null, rate: null, per100k: null, quotedFee: q.fee });
+        }
+        rows.sort((x, y) => String(x.channel).localeCompare(String(y.channel)) || (x.per100k ?? x.quotedFee ?? 1e12) - (y.per100k ?? y.quotedFee ?? 1e12));
+        const cheapest = new Map();
+        for (const x of rows) { const v = x.per100k ?? x.quotedFee; if (v != null && (!cheapest.has(x.channel) || v < cheapest.get(x.channel))) cheapest.set(x.channel, v); }
+        table($('[data-costs]', body), {
+          columns: [
+            { label: 'Method', render: (x) => `<b>${esc(x.channel)}</b>` },
+            { label: 'Account', render: (x) => esc(x.account) },
+            { label: 'Payments', num: true, render: (x) => (x.payments ? esc(fmt.num(x.payments)) : '<span class="cell-sub">not used</span>') },
+            { label: 'Average fee', num: true, render: (x) => (x.averageFee == null ? '—' : esc(rp(x.averageFee))) },
+            { label: 'Rate', num: true, render: (x) => esc(pct(x.rate)) },
+            { label: `Per ${rp(100000)}`, num: true, render: (x) => (x.per100k == null ? '—' : `<b>${esc(rp(x.per100k))}</b>${x.per100k === cheapest.get(x.channel) && rows.filter((y) => y.channel === x.channel).length > 1 ? ` ${tag('t-ok', 'lowest')}` : ''}`) },
+            { label: 'Quoted', num: true, render: (x) => (x.quotedFee == null ? '—' : `${esc(rp(x.quotedFee))}${x.per100k == null && x.quotedFee === cheapest.get(x.channel) && rows.filter((y) => y.channel === x.channel).length > 1 ? ` ${tag('t-ok', 'lowest')}` : ''}`) },
+          ], rows, empty: 'No payments in this period.',
+        });
+      } catch (e) { $('[data-costs]', body).innerHTML = callout('crit', esc(e.message)); }
     };
 
     const drawReconciliation = async () => {
@@ -599,6 +790,58 @@ registerView('finance', {
         await show(current);
       } catch (err) { toast(err.message, 'crit'); }
       finally { b.disabled = false; }
+    });
+    // (v1.16.0) Xendit's own reports, generated on request; the button only for a Xendit account.
+    const reportsBtn = $('[data-reports]', bodyAll);
+    const showReportsBtn = () => { reportsBtn.hidden = isDuitku(); };
+    showReportsBtn();
+    $('[data-acct]', bodyAll).addEventListener('change', () => setTimeout(showReportsBtn));
+    const RTYPE = { TRANSACTIONS: 'Transactions', BALANCE_HISTORY: 'Balance history', UPCOMING_TRANSACTIONS: 'Upcoming settlements' };
+    reportsBtn.addEventListener('click', () => {
+      let timer = null;
+      const m = modal({
+        title: 'Xendit reports', subtitle: 'Generated by Xendit as CSV; ready in a few minutes',
+        size: 'lg',
+        body: `<div class="filters" style="margin-top:0">${field('Report', `<select name="rtype">${Object.entries(RTYPE).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('')}</select>`)}
+            <div class="row" style="align-self:flex-end"><button class="btn primary" type="button" data-rq>Request for ${esc(from)} – ${esc(to)}</button></div></div>
+          <p class="cell-sub">Upcoming settlements cover the next 30 days whatever the period. The secret key needs Xendit's Report permission.</p>
+          <div data-rlist></div>`,
+        actions: [{ label: 'Close' }],
+        onClose: () => clearTimeout(timer),
+      });
+      const box = () => $('[data-rlist]', m.el);
+      const draw = async () => {
+        let r;
+        try { r = await api(`${base()}/reports`); } catch (e) { box().innerHTML = callout('crit', esc(e.message)); return; }
+        // Pending ones: ask Xendit again (one call each), then redraw while any stays pending.
+        const pending = r.reports.filter((x) => x.status === 'PENDING');
+        if (pending.length) r.reports = await Promise.all(r.reports.map((x) => (x.status === 'PENDING' ? api(`${base()}/reports/${x.id}`).then((y) => y.report).catch(() => x) : x)));
+        table(box(), {
+          columns: [
+            { label: 'Report', render: (x) => `${esc(RTYPE[x.type] ?? x.type)}<div class="cell-sub">${esc(fmt.date(x.from))} – ${esc(fmt.date(x.to))}</div>` },
+            { label: 'Requested', render: (x) => `${esc(fmt.time(x.requestedAt))}<div class="cell-sub">${esc(x.requestedBy ?? '')}</div>` },
+            { label: 'Status', render: (x) => (x.status === 'COMPLETED' ? tag('t-ok', 'ready') : x.status === 'FAILED' ? tag('t-crit', 'failed') : tag('t-info', 'generating')) },
+            { label: '', render: (x) => (x.status === 'COMPLETED' ? `<button class="btn sm" type="button" data-rdl="${esc(x.id)}">${icon('download')} Download</button>` : '') },
+          ],
+          rows: r.reports, empty: 'No reports requested yet.',
+        });
+        if (r.reports.some((x) => x.status === 'PENDING') && document.body.contains(m.el)) timer = setTimeout(draw, 15_000);
+      };
+      $('[data-rq]', m.el).addEventListener('click', async (e) => {
+        e.currentTarget.disabled = true;
+        try { await api(`${base()}/reports?${per()}`, { method: 'POST', body: { type: $('[name="rtype"]', m.el).value } }); toast('Requested from Xendit.', 'ok'); } catch (err) { toast(err.message, 'crit'); }
+        e.currentTarget.disabled = false;
+        clearTimeout(timer); draw();
+      });
+      box().addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-rdl]');
+        if (!b) return;
+        try {
+          const r = await api(`${base()}/reports/${b.dataset.rdl}?link=true`);
+          if (r.report.url) window.open(r.report.url, '_blank', 'noopener'); else toast('Xendit has no link for it now. Request it again.', 'warn');
+        } catch (err) { toast(err.message, 'crit'); }
+      });
+      draw();
     });
     $$('[data-export]', bodyAll).forEach((b) => b.addEventListener('click', async () => {
       const f = b.dataset.export;

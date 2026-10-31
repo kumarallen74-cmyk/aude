@@ -27,7 +27,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       WHERE grantee = 'plugsure_app' AND table_name = ANY($1::text[]) GROUP BY 1 ORDER BY 1`,
     [['app_driver_deletion', 'audit_head', 'driver_idempotency', 'audit_log', 'country', 'currency_unit', 'oidc_login_tx', 'payment_webhook_event', 'whatsapp_event', 'whatsapp_message',
       'whatsapp_conversation', 'whatsapp_chat_message', 'gateway_transaction', 'gateway_balance_snapshot', 'gateway_sync_state', 'reconciliation_exception',
-      'owner_bank_account', 'statement_payment', 'refund_transfer']]);
+      'owner_bank_account', 'statement_payment', 'refund_transfer', 'payout_transfer', 'gateway_report']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -52,5 +52,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     owner_bank_account: 'DELETE,INSERT,SELECT,UPDATE',
     statement_payment: 'INSERT,SELECT,UPDATE',
     refund_transfer: 'INSERT,SELECT,UPDATE',
+    payout_transfer: 'INSERT,SELECT,UPDATE',
+    gateway_report: 'INSERT,SELECT,UPDATE',
   });
 });

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.15.0",
+    "version": "1.16.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -29191,7 +29191,7 @@
         ],
         "summary": "Site owners' shares and their payouts",
         "operationId": "siteOwnersSharesAndTheirPayouts",
-        "description": "The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). PlugSure moves no money: the operator's bank does, and the transfer is recorded here.\n\n**Permissions checked:** `payment:read`.",
+        "description": "The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). The operator's bank makes the transfers and they are recorded here; (v1.16.0) or, with Disbursement on the operator's own Duitku account (payoutsAvailable), they can be sent with POST /v1/finance/statements/{sid}/payout.\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "status",
@@ -29223,6 +29223,9 @@
                       "items": {
                         "$ref": "#/components/schemas/OwnerShare"
                       }
+                    },
+                    "payoutsAvailable": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -30275,6 +30278,947 @@
                   "properties": {
                     "transfer": {
                       "$ref": "#/components/schemas/RefundTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/transactions/{tid}/trail": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A ledger row's whole trail",
+        "operationId": "ledgerRowWholeTrail",
+        "description": "(v1.16.0) The gateway transaction with its raw record (payer details masked), the other ledger rows of the same payment, PlugSure's payment with its state history and refund, the charging session (site, charger, energy, driver masked) and its charge record, Disbursement refund transfers, the membership pass it paid, and reconciliation exceptions.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The ledger row id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A ledger row's whole trail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transaction",
+                    "related",
+                    "transfers",
+                    "exceptions"
+                  ],
+                  "properties": {
+                    "transaction": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/GatewayTransaction"
+                        }
+                      ],
+                      "properties": {
+                        "raw": {
+                          "type": "object"
+                        }
+                      }
+                    },
+                    "related": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GatewayTransaction"
+                      }
+                    },
+                    "payment": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "session": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "pass": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "exceptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/reports": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Xendit reports",
+        "operationId": "xenditReports",
+        "description": "(v1.16.0) Reports requested from Xendit for this account (newest 50).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Xendit reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "reports"
+                  ],
+                  "properties": {
+                    "reports": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GatewayReport"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Ask Xendit to generate a report",
+        "operationId": "askXenditToGenerateReport",
+        "description": "(v1.16.0) Xendit's Report API for the period (from, to): TRANSACTIONS, BALANCE_HISTORY or UPCOMING_TRANSACTIONS (the next 30 days whatever the period), as CSV. 409 for a Duitku account; 502 when Xendit refuses (the key needs the Report permission). Audited as finance.report_requested.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (platform time zone). Default: the first of the current month.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive. Default: today. At most 400 days.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "TRANSACTIONS",
+                      "BALANCE_HISTORY",
+                      "UPCOMING_TRANSACTIONS"
+                    ]
+                  }
+                }
+              },
+              "example": {
+                "type": "TRANSACTIONS"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "report"
+                  ],
+                  "properties": {
+                    "report": {
+                      "$ref": "#/components/schemas/GatewayReport"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/accounts/{id}/reports/{rid}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A Xendit report",
+        "operationId": "xenditReport",
+        "description": "(v1.16.0) Its state, asked of Xendit while pending. link=true on a completed one: Xendit's download link (asked again, as links expire); audited as finance.report_downloaded.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payments account (integration) id, from GET /v1/finance/accounts.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "description": "The report id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "link",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Xendit report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "report"
+                  ],
+                  "properties": {
+                    "report": {
+                      "$ref": "#/components/schemas/GatewayReport"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/method-costs": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "What each payment method costs",
+        "operationId": "whatEachPaymentMethodCosts",
+        "description": "(v1.16.0) Per gateway account the caller may see, over the period: per method the payments, amount, fees and VAT on fees, the average fee, the effective rate and the cost per 100,000 rupiah collected; for a Duitku account also what Duitku quotes today for 100,000 rupiah by method (getpaymentmethod; null when it does not answer).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (platform time zone). Default: the first of the current month.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive. Default: today. At most 400 days.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Costs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "per",
+                    "accounts"
+                  ],
+                  "properties": {
+                    "per": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "provider": {
+                            "type": "string"
+                          },
+                          "fallback": {
+                            "type": "boolean"
+                          },
+                          "methods": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "channel": {
+                                  "type": "string"
+                                },
+                                "payments": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "amount": {
+                                  "type": "number"
+                                },
+                                "fees": {
+                                  "type": "number"
+                                },
+                                "averageFee": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "rate": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "per100k": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "quoted": {
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "channel": {
+                                  "type": "string"
+                                },
+                                "fee": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/payout-transfers": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Owner payouts through Duitku Disbursement",
+        "operationId": "ownerPayoutsThroughDuitkuDisbursement",
+        "description": "(v1.16.0) The organisation's owner payouts, newest first (at most 300); open=true: only those not settled.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "open",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payouts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfers"
+                  ],
+                  "properties": {
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PayoutTransfer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/statements/{sid}/payout": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Request an owner payout through Duitku Disbursement",
+        "operationId": "requestOwnerPayoutThroughDuitkuDisbursement",
+        "description": "(v1.16.0) For an owner statement due or part-paid, to the owner's saved bank account (it needs the bank code): Duitku's inquiry returns the holder's name, and the payout waits for a SECOND person's approval. amount (minor units) defaults to what is outstanding; never more. Paid only from the operator's OWN Duitku account. payment:write; audited as finance.owner_payout_requested.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "description": "The owner statement id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "amount": 1250000,
+                "note": "October share"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Requested, awaiting approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/PayoutTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/payout-transfers/{tid}/approve": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Approve and send an owner payout",
+        "operationId": "approveAndSendOwnerPayout",
+        "description": "(v1.16.0) By a second person (never the requester: 403). Within the payout limits, with what is outstanding checked again and a fresh inquiry, the transfer is sent once; when Duitku confirms it the statement payment is recorded. Audited as finance.owner_payout_approved.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The payout id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The payout after sending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/PayoutTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/payout-transfers/{tid}/reject": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Reject an owner payout before it is sent",
+        "operationId": "rejectOwnerPayoutBeforeItIsSent",
+        "description": "(v1.16.0) Awaiting approval only, with a reason. Audited as finance.owner_payout_rejected.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The payout id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "reason": "Wrong month"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/PayoutTransfer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/payout-transfers/{tid}/resolve": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Settle an owner payout Duitku never confirmed",
+        "operationId": "settleOwnerPayoutDuitkuNeverConfirmed",
+        "description": "(v1.16.0) After checking Duitku's dashboard: succeeded records the statement payment; failed records nothing. Audited as finance.owner_payout_resolved.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The payout id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome",
+                  "note"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "succeeded",
+                      "failed"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                }
+              },
+              "example": {
+                "outcome": "succeeded",
+                "note": "Dashboard: success"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transfer"
+                  ],
+                  "properties": {
+                    "transfer": {
+                      "$ref": "#/components/schemas/PayoutTransfer"
                     }
                   }
                 }
@@ -49266,6 +50210,211 @@
                 "format": "date-time"
               }
             }
+          }
+        }
+      },
+      "PayoutTransfer": {
+        "type": "object",
+        "required": [
+          "id",
+          "statementId",
+          "state",
+          "amount",
+          "currency",
+          "bankCode",
+          "accountMasked",
+          "holderName",
+          "namesMatch",
+          "requestedAt"
+        ],
+        "description": "(v1.16.0) An owner's share paid through Duitku Disbursement from the operator's own account, approved by a second person.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "statementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_approval",
+              "sending",
+              "sent",
+              "succeeded",
+              "failed",
+              "rejected"
+            ]
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "accountMasked": {
+            "type": "string"
+          },
+          "holderName": {
+            "type": "string"
+          },
+          "checkedName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namesMatch": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approvedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approvedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "responseCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statementPaymentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The statement payment recorded once Duitku confirmed it."
+          }
+        }
+      },
+      "GatewayReport": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "status",
+          "ready"
+        ],
+        "description": "(v1.16.0) A report Xendit generates on request (Report API), as CSV.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "TRANSACTIONS",
+              "BALANCE_HISTORY",
+              "UPCOMING_TRANSACTIONS"
+            ]
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "COMPLETED",
+              "FAILED"
+            ]
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requestedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "With ?link=true on a completed report: Xendit's download link (short-lived)."
           }
         }
       },

@@ -100,6 +100,12 @@ Every step is in the audit log (`refund.transfer_requested`, `_approved`,
 the bank*): the same inquiry, with nothing transferred. It needs the bank code.
 The check is cleared when the account number, bank code or holder changes.
 
+**Owners' shares** (v1.16.0, Finance → Payables → *Send via Disbursement*): the
+same two-person flow from the operator's own Duitku account, with its own
+limits (largest payout, default 50,000,000 rupiah; payouts per day, default
+100,000,000). A confirmed payout is recorded against the statement. See
+[FINANCE.md](FINANCE.md).
+
 **To confirm with Duitku before live transfers:** the Disbursement paths
 (`/webapi/api/disbursement/inquiry`, `/transfer`, and `inquirysandbox` /
 `transfersandbox` in the sandbox; `/inquirystatus`), the signatures

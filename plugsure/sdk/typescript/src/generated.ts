@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.15.0";
+export const API_VERSION = "1.16.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -1976,6 +1976,22 @@ export interface Frame {
   payload: unknown;
 }
 
+/** (v1.16.0) A report Xendit generates on request (Report API), as CSV. */
+export interface GatewayReport {
+  id: string;
+  type: "TRANSACTIONS" | "BALANCE_HISTORY" | "UPCOMING_TRANSACTIONS";
+  from?: string;
+  to?: string;
+  status: "PENDING" | "COMPLETED" | "FAILED";
+  ready: boolean;
+  error?: string | null;
+  requestedAt?: string;
+  updatedAt?: string;
+  requestedBy?: string | null;
+  /** With ?link=true on a completed report: Xendit's download link (short-lived). */
+  url?: string;
+}
+
 /** One transaction in the gateway's ledger, as synced, matched to PlugSure's payment when it is one. */
 export interface GatewayTransaction {
   id: string;
@@ -2412,6 +2428,34 @@ export interface OwnerShare {
     holderName?: string;
     accountMasked?: string;
   } | null;
+}
+
+/** (v1.16.0) An owner's share paid through Duitku Disbursement from the operator's own account, approved by a second person. */
+export interface PayoutTransfer {
+  id: string;
+  statementId: string;
+  number?: string | null;
+  owner?: string | null;
+  state: "awaiting_approval" | "sending" | "sent" | "succeeded" | "failed" | "rejected";
+  amount: number;
+  currency: string;
+  bankCode: string;
+  accountMasked: string;
+  holderName: string;
+  checkedName?: string | null;
+  namesMatch: boolean;
+  note?: string | null;
+  requestedBy?: string | null;
+  requestedByName?: string | null;
+  requestedAt: string;
+  approvedBy?: string | null;
+  approvedByName?: string | null;
+  approvedAt?: string | null;
+  reason?: string | null;
+  responseCode?: string | null;
+  error?: string | null;
+  /** The statement payment recorded once Duitku confirmed it. */
+  statementPaymentId?: string | null;
 }
 
 export interface PendingCharger {
@@ -4935,6 +4979,10 @@ export type ApplyPaymentPlugSureMissedResponse = {
   outcome: string;
 };
 
+export type ApproveAndSendOwnerPayoutResponse = {
+  transfer: PayoutTransfer;
+};
+
 export type ApproveAndSendRefundTransferResponse = {
   transfer: RefundTransfer;
 };
@@ -4974,6 +5022,14 @@ export type AskStationForItsVariableMonitorsGetMonitoringReportResponse = {
   requestId?: number;
   status?: string;
   state?: string;
+};
+
+export type AskXenditToGenerateReportBody = {
+  type: "TRANSACTIONS" | "BALANCE_HISTORY" | "UPCOMING_TRANSACTIONS";
+};
+
+export type AskXenditToGenerateReportResponse = {
+  report: GatewayReport;
 };
 
 export type AssignTariffBody = {
@@ -5845,6 +5901,16 @@ export type IssueTestContractCertificateResponse = {
   }[];
 };
 
+export type LedgerRowWholeTrailResponse = {
+  transaction: GatewayTransaction;
+  related: GatewayTransaction[];
+  payment?: Record<string, unknown> | null;
+  session?: Record<string, unknown> | null;
+  transfers: Record<string, unknown>[];
+  pass?: Record<string, unknown> | null;
+  exceptions: Record<string, unknown>[];
+};
+
 export type ListAlertNotificationsResponse = {
   rows: AlertRoutingNotification[];
 };
@@ -6266,6 +6332,10 @@ export type OperatorsStatementsToPlugSureResponse = {
   statements: OperatorStatementDue[];
 };
 
+export type OwnerPayoutsThroughDuitkuDisbursementResponse = {
+  transfers: PayoutTransfer[];
+};
+
 export type PayablesResponse = {
   refunds: {
     paymentId?: string;
@@ -6628,6 +6698,14 @@ export type RejectHeldPartnerChargeRecordResponse = {
   status: "rejected";
 };
 
+export type RejectOwnerPayoutBeforeItIsSentBody = {
+  reason: string;
+};
+
+export type RejectOwnerPayoutBeforeItIsSentResponse = {
+  transfer: PayoutTransfer;
+};
+
 export type RejectRefundTransferBeforeItIsSentBody = {
   reason: string;
 };
@@ -6721,6 +6799,15 @@ export type ReplyToWhatsAppCustomerBody = {
 
 export type ReplyToWhatsAppCustomerResponse = {
   ok: boolean;
+};
+
+export type RequestOwnerPayoutThroughDuitkuDisbursementBody = {
+  amount?: number;
+  note?: string;
+};
+
+export type RequestOwnerPayoutThroughDuitkuDisbursementResponse = {
+  transfer: PayoutTransfer;
 };
 
 export type RequestRefundTransferThroughDuitkuDisbursementBody = {
@@ -7061,6 +7148,15 @@ export type SetSitePowerBudgetBody = {
   applyNow?: boolean;
 };
 
+export type SettleOwnerPayoutDuitkuNeverConfirmedBody = {
+  outcome: "succeeded" | "failed";
+  note: string;
+};
+
+export type SettleOwnerPayoutDuitkuNeverConfirmedResponse = {
+  transfer: PayoutTransfer;
+};
+
 export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody = {
   outcome: "succeeded" | "failed";
   note: string;
@@ -7184,6 +7280,7 @@ export type SiteOwnerBankDetailsResponse = {
 
 export type SiteOwnersSharesAndTheirPayoutsResponse = {
   shares: OwnerShare[];
+  payoutsAvailable?: boolean;
 };
 
 export type StartSessionRemotelyBody = {
@@ -7380,6 +7477,29 @@ export type VoidRecordedPaymentResponse = {
   statement: StatementDue;
 };
 
+export type WhatEachPaymentMethodCostsResponse = {
+  per: number;
+  accounts: {
+    id?: string;
+    label?: string;
+    provider?: string;
+    fallback?: boolean;
+    methods?: {
+      channel?: string;
+      payments?: number;
+      amount?: number;
+      fees?: number;
+      averageFee?: number | null;
+      rate?: number | null;
+      per100k?: number | null;
+    }[];
+    quoted?: {
+      channel?: string;
+      fee?: number;
+    }[] | null;
+  }[];
+};
+
 export type WhatsappAccountEventsResponse = {
   events: {
     id: string;
@@ -7505,6 +7625,14 @@ export type WithdrawMyDisputeEMSPSideResponse = {
     /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
     claimed_idr?: number | null;
   };
+};
+
+export type XenditReportResponse = {
+  report: GatewayReport;
+};
+
+export type XenditReportsResponse = {
+  reports: GatewayReport[];
 };
 
 /** Every operation of the API, one method each. `PlugSure` (index.ts) adds the transport. */
@@ -7699,6 +7827,20 @@ export class Operations {
   }
 
   /**
+   * Approve and send an owner payout
+   *
+   * (v1.16.0) By a second person (never the requester: 403). Within the payout limits, with what is outstanding checked again and a fresh inquiry, the transfer is sent once; when Duitku confirms it the statement payment is recorded. Audited as finance.owner_payout_approved.
+   *
+   * `POST /v1/finance/payout-transfers/{tid}/approve` · needs `payment:write`
+   */
+  approveAndSendOwnerPayout(params: {
+    /** The payout id. */
+    tid: string;
+  }, options?: RequestOptions): Promise<ApproveAndSendOwnerPayoutResponse> {
+    return this.transport.request<ApproveAndSendOwnerPayoutResponse>({ method: "POST", path: "/v1/finance/payout-transfers/{tid}/approve", pathParams: { tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
    * Approve and send a refund transfer
    *
    * (v1.15.0) By a second person with payment:write (never the requester: 403). Within the limits (one transfer; all approved that day), a fresh inquiry is made (the bank's name must not have changed) and the transfer sent, once. succeeded: the refund is recorded refunded (method disbursement); failed: due again; sent: not confirmed yet, checked automatically. Audited as refund.transfer_approved.
@@ -7824,6 +7966,27 @@ export class Operations {
     identity: string;
   }, options?: RequestOptions): Promise<AskStationForItsVariableMonitorsGetMonitoringReportResponse> {
     return this.transport.request<AskStationForItsVariableMonitorsGetMonitoringReportResponse>({ method: "POST", path: "/v1/charge-points/{identity}/device-model/monitoring-report", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
+   * Ask Xendit to generate a report
+   *
+   * (v1.16.0) Xendit's Report API for the period (from, to): TRANSACTIONS, BALANCE_HISTORY or UPCOMING_TRANSACTIONS (the next 30 days whatever the period), as CSV. 409 for a Duitku account; 502 when Xendit refuses (the key needs the Report permission). Audited as finance.report_requested.
+   *
+   * `POST /v1/finance/accounts/{id}/reports` · needs `payment:read`
+   */
+  askXenditToGenerateReport(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+    };
+    body: AskXenditToGenerateReportBody;
+  }, options?: RequestOptions): Promise<AskXenditToGenerateReportResponse> {
+    return this.transport.request<AskXenditToGenerateReportResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/reports", pathParams: { id: params.id }, query: params.query, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9651,6 +9814,22 @@ export class Operations {
   }
 
   /**
+   * A ledger row's whole trail
+   *
+   * (v1.16.0) The gateway transaction with its raw record (payer details masked), the other ledger rows of the same payment, PlugSure's payment with its state history and refund, the charging session (site, charger, energy, driver masked) and its charge record, Disbursement refund transfers, the membership pass it paid, and reconciliation exceptions.
+   *
+   * `GET /v1/finance/accounts/{id}/transactions/{tid}/trail` · needs `payment:read`
+   */
+  ledgerRowWholeTrail(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    /** The ledger row id. */
+    tid: string;
+  }, options?: RequestOptions): Promise<LedgerRowWholeTrailResponse> {
+    return this.transport.request<LedgerRowWholeTrailResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/transactions/{tid}/trail", pathParams: { id: params.id, tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
    * List alert notifications
    *
    * The notification outbox and delivery log, newest first, at most 300 rows, with the alert, contact and rule each message came from.
@@ -10556,6 +10735,21 @@ export class Operations {
   }
 
   /**
+   * Owner payouts through Duitku Disbursement
+   *
+   * (v1.16.0) The organisation's owner payouts, newest first (at most 300); open=true: only those not settled.
+   *
+   * `GET /v1/finance/payout-transfers` · needs `payment:read`
+   */
+  ownerPayoutsThroughDuitkuDisbursement(params?: {
+    query?: {
+      open?: "true";
+    };
+  }, options?: RequestOptions): Promise<OwnerPayoutsThroughDuitkuDisbursementResponse> {
+    return this.transport.request<OwnerPayoutsThroughDuitkuDisbursementResponse>({ method: "GET", path: "/v1/finance/payout-transfers", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Payables
    *
    * Refunds due on payments this account took (with the gateway's refund window and days left), (v1.15.0) for an operator's own account the PlugSure Hub settlement positions it owes, and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).
@@ -11075,6 +11269,21 @@ export class Operations {
   }
 
   /**
+   * Reject an owner payout before it is sent
+   *
+   * (v1.16.0) Awaiting approval only, with a reason. Audited as finance.owner_payout_rejected.
+   *
+   * `POST /v1/finance/payout-transfers/{tid}/reject` · needs `payment:write`
+   */
+  rejectOwnerPayoutBeforeItIsSent(params: {
+    /** The payout id. */
+    tid: string;
+    body: RejectOwnerPayoutBeforeItIsSentBody;
+  }, options?: RequestOptions): Promise<RejectOwnerPayoutBeforeItIsSentResponse> {
+    return this.transport.request<RejectOwnerPayoutBeforeItIsSentResponse>({ method: "POST", path: "/v1/finance/payout-transfers/{tid}/reject", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Reject a refund transfer before it is sent
    *
    * (v1.15.0) Awaiting approval only, with a reason (the requester withdrawing it, or another person refusing it). The refund is due again. Audited as refund.transfer_rejected.
@@ -11375,6 +11584,21 @@ export class Operations {
     body?: DiagnosticsRequestBody;
   }, options?: RequestOptions): Promise<DiagnosticsRequested> {
     return this.transport.request<DiagnosticsRequested>({ method: "POST", path: "/v1/charge-points/{identity}/diagnostics", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Request an owner payout through Duitku Disbursement
+   *
+   * (v1.16.0) For an owner statement due or part-paid, to the owner's saved bank account (it needs the bank code): Duitku's inquiry returns the holder's name, and the payout waits for a SECOND person's approval. amount (minor units) defaults to what is outstanding; never more. Paid only from the operator's OWN Duitku account. payment:write; audited as finance.owner_payout_requested.
+   *
+   * `POST /v1/finance/statements/{sid}/payout` · needs `payment:write`
+   */
+  requestOwnerPayoutThroughDuitkuDisbursement(params: {
+    /** The owner statement id. */
+    sid: string;
+    body?: RequestOwnerPayoutThroughDuitkuDisbursementBody;
+  }, options?: RequestOptions): Promise<RequestOwnerPayoutThroughDuitkuDisbursementResponse> {
+    return this.transport.request<RequestOwnerPayoutThroughDuitkuDisbursementResponse>({ method: "POST", path: "/v1/finance/statements/{sid}/payout", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11913,6 +12137,21 @@ export class Operations {
   }
 
   /**
+   * Settle an owner payout Duitku never confirmed
+   *
+   * (v1.16.0) After checking Duitku's dashboard: succeeded records the statement payment; failed records nothing. Audited as finance.owner_payout_resolved.
+   *
+   * `POST /v1/finance/payout-transfers/{tid}/resolve` · needs `payment:write`
+   */
+  settleOwnerPayoutDuitkuNeverConfirmed(params: {
+    /** The payout id. */
+    tid: string;
+    body: SettleOwnerPayoutDuitkuNeverConfirmedBody;
+  }, options?: RequestOptions): Promise<SettleOwnerPayoutDuitkuNeverConfirmedResponse> {
+    return this.transport.request<SettleOwnerPayoutDuitkuNeverConfirmedResponse>({ method: "POST", path: "/v1/finance/payout-transfers/{tid}/resolve", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Settle a refund transfer whose result Duitku never confirmed
    *
    * (v1.15.0) For a transfer sent (or stuck sending) without a confirmed result, after checking Duitku's dashboard: succeeded records the refund refunded; failed makes it due again. Audited as refund.transfer_resolved.
@@ -12040,7 +12279,7 @@ export class Operations {
   /**
    * Site owners' shares and their payouts
    *
-   * The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). PlugSure moves no money: the operator's bank does, and the transfer is recorded here.
+   * The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). The operator's bank makes the transfers and they are recorded here; (v1.16.0) or, with Disbursement on the operator's own Duitku account (payoutsAvailable), they can be sent with POST /v1/finance/statements/{sid}/payout.
    *
    * `GET /v1/finance/owner-shares` · needs `payment:read`
    */
@@ -12598,6 +12837,24 @@ export class Operations {
   }
 
   /**
+   * What each payment method costs
+   *
+   * (v1.16.0) Per gateway account the caller may see, over the period: per method the payments, amount, fees and VAT on fees, the average fee, the effective rate and the cost per 100,000 rupiah collected; for a Duitku account also what Duitku quotes today for 100,000 rupiah by method (getpaymentmethod; null when it does not answer).
+   *
+   * `GET /v1/finance/method-costs` · needs `payment:read`
+   */
+  whatEachPaymentMethodCosts(params?: {
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<WhatEachPaymentMethodCostsResponse> {
+    return this.transport.request<WhatEachPaymentMethodCostsResponse>({ method: "GET", path: "/v1/finance/method-costs", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * WhatsApp account events
    *
    * From the webhook: template status and quality changes, number quality, account updates (payloads trimmed). The last 500, at most 90 days.
@@ -12687,5 +12944,38 @@ export class Operations {
     body: WithdrawMyDisputeEMSPSideBody;
   }, options?: RequestOptions): Promise<WithdrawMyDisputeEMSPSideResponse> {
     return this.transport.request<WithdrawMyDisputeEMSPSideResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/withdraw", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A Xendit report
+   *
+   * (v1.16.0) Its state, asked of Xendit while pending. link=true on a completed one: Xendit's download link (asked again, as links expire); audited as finance.report_downloaded.
+   *
+   * `GET /v1/finance/accounts/{id}/reports/{rid}` · needs `payment:read`
+   */
+  xenditReport(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    /** The report id. */
+    rid: string;
+    query?: {
+      link?: "true";
+    };
+  }, options?: RequestOptions): Promise<XenditReportResponse> {
+    return this.transport.request<XenditReportResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/reports/{rid}", pathParams: { id: params.id, rid: params.rid }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Xendit reports
+   *
+   * (v1.16.0) Reports requested from Xendit for this account (newest 50).
+   *
+   * `GET /v1/finance/accounts/{id}/reports` · needs `payment:read`
+   */
+  xenditReports(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+  }, options?: RequestOptions): Promise<XenditReportsResponse> {
+    return this.transport.request<XenditReportsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/reports", pathParams: { id: params.id }, accept: "json" }, options);
   }
 }

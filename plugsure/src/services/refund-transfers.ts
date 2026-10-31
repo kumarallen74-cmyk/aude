@@ -48,7 +48,7 @@ export function namesMatch(entered: string | null | undefined, bank: string | nu
   return inB || inA;
 }
 
-async function duitkuFor(integrationId: string | null): Promise<{ p: DuitkuProvider; id: string } | null> {
+export async function duitkuFor(integrationId: string | null): Promise<{ p: DuitkuProvider; id: string } | null> {
   if (!integrationId) return null;
   const r = await byId(integrationId);
   if (!r || r.provider !== 'duitku') return null;

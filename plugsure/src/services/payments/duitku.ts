@@ -49,6 +49,9 @@ export interface DuitkuConfig {
   /** (v1.15.0) Limits on refunds sent through Disbursement, in rupiah: one transfer, and all transfers approved in a day. */
   disbursementMaxPerTransfer?: string | number;
   disbursementMaxPerDay?: string | number;
+  /** (v1.16.0) Limits on owner payouts sent through Disbursement: one payout, and all payouts approved in a day. */
+  disbursementMaxPayout?: string | number;
+  disbursementMaxPayoutPerDay?: string | number;
 }
 
 /** Duitku's Disbursement answer to an inquiry: the holder's name the bank has, and the id the transfer must quote. */
@@ -190,6 +193,11 @@ export class DuitkuProvider implements PaymentProvider {
     const n = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v)) : d);
     return { perTransfer: n(this.cfg.disbursementMaxPerTransfer, 5_000_000), perDay: n(this.cfg.disbursementMaxPerDay, 25_000_000) };
   }
+  /** (v1.16.0) Owner payouts: larger than refunds, with their own daily total. */
+  payoutLimits(): { perTransfer: number; perDay: number } {
+    const n = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v)) : d);
+    return { perTransfer: n(this.cfg.disbursementMaxPayout, 50_000_000), perDay: n(this.cfg.disbursementMaxPayoutPerDay, 100_000_000) };
+  }
   /** Sandbox and production paths differ (inquirysandbox / transfersandbox). */
   private disbPath(op: 'inquiry' | 'transfer') {
     return `${this.base()}/webapi/api/disbursement/${op}${this.cfg.environment === 'production' ? '' : 'sandbox'}`;
@@ -270,6 +278,28 @@ export class DuitkuProvider implements PaymentProvider {
     });
     const code = String(r.body?.responseCode ?? '');
     return code === '00' ? { outcome: 'succeeded', responseCode: code, error: null } : { outcome: 'unknown', responseCode: code, error: String(r.body?.responseDesc ?? `HTTP ${r.status}`) };
+  }
+
+  /**
+   * (v1.16.0) What Duitku quotes for each method on the project, for an amount (getpaymentmethod's totalFee), by
+   * PlugSure channel. For Finance's method cost comparison; null when Duitku does not answer.
+   */
+  async quotedFees(amount = 100_000): Promise<Array<{ channel: string; fee: number }> | null> {
+    const datetime = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const r = await providerFetch(`${this.base()}/webapi/api/merchant/paymentmethod/getpaymentmethod`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ merchantcode: this.cfg.merchantCode, amount, datetime, signature: sha256(`${this.cfg.merchantCode}${amount}${datetime}${this.cfg.apiKey}`) }),
+      timeoutMs: 8_000,
+    }).catch(() => null);
+    const list = Array.isArray(r?.body?.paymentFee) ? r!.body.paymentFee : null;
+    if (!list) return null;
+    const byCode = new Map<string, string>(Object.entries(DUITKU_METHOD).map(([ch, code]) => [code as string, ch]));
+    byCode.set(this.cfg.qrisMethod || 'SP', 'QRIS');
+    return list.flatMap((m: any) => {
+      const ch = byCode.get(String(m.paymentMethod));
+      const fee = Number(m.totalFee);
+      return ch && Number.isFinite(fee) ? [{ channel: ch, fee }] : [];
+    });
   }
 
   async testConnection() {

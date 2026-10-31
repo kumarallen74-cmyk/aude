@@ -132,6 +132,40 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   account, PlugSure Hub fee invoices unpaid; on an operator's, Hub settlement
   positions owed to it. **Payables** show the Hub positions an operator owes.
 
+## Trail, method costs, owner payouts and Xendit reports (v1.16.0)
+
+- **Trail.** In **Payments** (and Receivables), click a row: a drawer shows the
+  gateway transaction and its raw record (the payer's details masked), the other
+  rows of the same payment (its refunds), PlugSure's payment with its state
+  history and refund, the charging session (site, charger, energy, the driver's
+  number masked) with its receipt, Disbursement refund transfers, the membership
+  pass it paid, and reconciliation differences.
+- **What each method costs** (Fees tab). Per gateway account you can see, over
+  the period: payments, the average fee and VAT per payment, the effective rate
+  and the cost per 100,000 rupiah collected; the lowest per method is marked.
+  For a Duitku account, also what Duitku quotes today for 100,000 rupiah, for
+  methods not used yet.
+- **Owner payouts through Duitku Disbursement** (Payables). With Disbursement
+  on the operator's **own** Duitku account, **Send via Disbursement** on an
+  owner's share (due or part-paid):
+  1. the amount (up to what is outstanding) goes to the owner's saved bank
+     account, which needs the bank code; Duitku returns the holder's name;
+  2. a **second person** approves it (never the requester), within the payout
+     limits (largest payout, default 50,000,000 rupiah; all payouts approved in
+     a day, default 100,000,000), with what is outstanding checked again;
+  3. when Duitku confirms it, the payout is **recorded against the statement**
+     (reference *Duitku Disbursement <id>*), so the share is part-paid or paid.
+     Not confirmed: asked again by the worker; after a day the operator is
+     alerted and it can be settled by hand.
+
+  The platform's Duitku account never pays an operator's owners. Recording a
+  payout your bank made (v1.14.0) works as before.
+- **Xendit reports** (the *Xendit reports* button, Xendit accounts): ask Xendit
+  to generate its own report for the period, as CSV: transactions, balance
+  history, or upcoming settlements (the next 30 days). It is ready in a few
+  minutes; **Download** asks Xendit for a fresh link. The secret key needs
+  Xendit's **Report** permission. Requests and downloads are audited.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

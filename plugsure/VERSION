@@ -1,11 +1,18 @@
 PlugSure CSMS
-Version:   1.15.0
-Package:   plugsure-v1.15.0
-Prepared:  2026-10-31  (v1.14.0 + phase 4 of the finance review — see RELEASE-NOTES-v1.15.0.md)
+Version:   1.16.0
+Package:   plugsure-v1.16.0
+Prepared:  2026-10-31  (v1.15.0 + phase 5 of the finance review — see RELEASE-NOTES-v1.16.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (359 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (369 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.15.0 = v1.14.0 + phase 4 of the finance review: refund windows per channel (closing first) and Xendit QRIS
+Status:    v1.16.0 = v1.15.0 + phase 5 of the finance review: a payment's whole trail from Finance's ledger (gateway
+           record, PlugSure payment, session and receipt, refunds, transfers, exceptions), what each payment method
+           costs per gateway (with Duitku's quoted fees), owners' shares paid through Duitku Disbursement from the
+           operator's own account with two people (recorded against the statement once confirmed), and Xendit's own
+           reports requested and downloaded from Finance. Migration 084 (additive).
+
+v1.15.0 (2026-10-31):
+           v1.15.0 = v1.14.0 + phase 4 of the finance review: refund windows per channel (closing first) and Xendit QRIS
            refunds through the gateway (partial where the issuer allows), the gateway's refund status and fees on refunds;
            Duitku refunds sent through Disbursement with two people (the account checked by name, limits per transfer
            and per day, results confirmed by Duitku); owners' bank accounts checked by name; owner statements with the

@@ -222,8 +222,12 @@ try {
   // Blocked card cannot start; active card with a 1 kWh preset can.
   const startBlocked = await ops.post(`/v1/charge-points/${ID}/remote-start`, { connectorId: 1, idTag: 'ID-RFID-BLOCKED' });
   check('cockpit: remote start is sent (charger decides on blocked card)', startBlocked.status === 200, startBlocked.data);
-  await sleep(3000);
-  const start = await ops.post(`/v1/charge-points/${ID}/remote-start`, { connectorId: 1, idTag: 'ID-RFID-0001', limitType: 'energy', limitValue: '1' });
+  // The charger refuses a start while the blocked card's attempt is still being authorised (slow under CI load): ask
+  // again until it accepts, rather than after a fixed pause.
+  await sleep(1000);
+  const start = await until(
+    () => ops.post(`/v1/charge-points/${ID}/remote-start`, { connectorId: 1, idTag: 'ID-RFID-0001', limitType: 'energy', limitValue: '1' }),
+    (r) => r.status === 200 && r.data?.status === 'Accepted', 20_000, 1000);
   check('cockpit: remote start with 1 kWh preset accepted', start.status === 200 && start.data.status === 'Accepted' && start.data.limit?.energyLimitWh === 1000, start.data);
   const running = await until(() => ops.get('/v1/charge-points'), (r) => !!r.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId), 30_000, 1000);
   const conn1 = running.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId);
