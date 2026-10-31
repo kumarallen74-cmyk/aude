@@ -79,7 +79,11 @@ export function providerFor(r: Resolved): PaymentProvider {
   let p: PaymentProvider;
   switch (r.provider) {
     case 'midtrans': p = new MidtransProvider({ environment: s.environment === 'production' ? 'production' : 'sandbox', serverKey: k.serverKey ?? '', acquirer: s.acquirer, baseUrl: s.baseUrl, savedCard3ds: s.savedCard3ds !== false }); break;
-    case 'xendit': p = new XenditProvider({ secretKey: k.secretKey ?? '', callbackToken: k.callbackToken ?? '', forUserId: s.forUserId, baseUrl: s.baseUrl }); break;
+    case 'xendit': p = new XenditProvider({
+      secretKey: k.secretKey ?? '', callbackToken: k.callbackToken ?? '', forUserId: s.forUserId, baseUrl: s.baseUrl,
+      payoutsEnabled: s.payoutsEnabled === true, disbursementMaxPerTransfer: s.disbursementMaxPerTransfer, disbursementMaxPerDay: s.disbursementMaxPerDay,
+      disbursementMaxPayout: s.disbursementMaxPayout, disbursementMaxPayoutPerDay: s.disbursementMaxPayoutPerDay,
+    }); break;
     case 'stripe': {
       // One Stripe account per country (MY or SG); its currency follows (docs/MULTI-COUNTRY-DESIGN.md §D6).
       const country = r.countryCode === 'MY' || r.countryCode === 'SG' ? r.countryCode : null;

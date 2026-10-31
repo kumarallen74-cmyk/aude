@@ -166,6 +166,45 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   minutes; **Download** asks Xendit for a fresh link. The secret key needs
   Xendit's **Report** permission. Requests and downloads are audited.
 
+## Accounting journal, monthly close e-mail and Xendit payouts (v1.17.0)
+
+- **Journal** (the *Journal* button; Excel by default, also CSV). The period as
+  double-entry entries, one per day and kind, every entry balanced:
+
+  | Kind | Debit | Credit |
+  |---|---|---|
+  | Collections | Gateway balance (1130) | Charging revenue (4100) |
+  | Gateway fees | Gateway fees (6110), VAT input on fees (1410) | Gateway balance |
+  | Withholding tax, as the gateway reports it | Gateway balance | Withholding tax payable (2140) |
+  | Refunds through the gateway | Refunds to drivers (4190) | Gateway balance |
+  | Withdrawals to the bank | Bank (1110) | Gateway balance |
+  | Owner payouts recorded | Owners' shares payable (2120) | Bank |
+
+  The codes in brackets are PlugSure's defaults: set your chart of accounts in
+  **Finance → Settings**. The *By account* sheet nets to zero. Check the
+  treatment of withholding tax and of revenue (gross of taxes) with your
+  accountant.
+- **Monthly close e-mail** (Finance → Settings). On the 1st of each month
+  (platform time zone), the previous month's finance export (Excel and PDF)
+  and the journal go to up to 10 recipients, through your e-mail channel
+  (Govern → Alert routing → Channels). Each month is sent once; a failure is
+  shown in Settings and retried hourly. **Send last month now** sends it at
+  once.
+- **Xendit payouts.** On the Xendit integration (Payments → advanced), *Send
+  refunds and owner payouts through Xendit Payouts* (the secret key needs the
+  **Money-out write** permission) with its limits. Then:
+  - refunds of Xendit payments, for example a card or a QRIS payment past its
+    refund window, can be sent to the driver's bank account from the Refunds
+    page;
+  - owners' shares can be sent from Payables (Xendit first when both Xendit and
+    Duitku are set up; choose in the dialog).
+
+  The same two-person approval and limits apply. Xendit does not check the
+  account holder's name (the approver sees the name entered). Bank codes
+  (014 BCA, 008 Mandiri, 002 BRI, 009 BNI, …) map to Xendit's channels, or
+  enter Xendit's own (ID_BCA). Xendit's *SUCCEEDED* records the refund or
+  payout; *FAILED*, *CANCELLED* or *REVERSED* makes it due again.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

@@ -486,6 +486,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   9. (v1.16.0) Owners' shares can be sent through the operator's own Duitku
      Disbursement (two people), and Xendit's own reports requested from Finance
      (the secret key needs the Report permission) ([FINANCE.md](FINANCE.md)).
+  10. (v1.17.0) Optionally set the chart of accounts and the monthly close
+     e-mail (Finance → Settings), and Xendit payouts on the Xendit integration
+     (the key needs Money-out write) ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

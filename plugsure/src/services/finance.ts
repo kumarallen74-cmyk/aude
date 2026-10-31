@@ -698,10 +698,20 @@ export async function methodCosts(accounts: Account[], p: Period) {
     per: 100_000,
     accounts: accounts.map((a) => ({
       id: a.id, label: a.label, provider: a.provider, fallback: a.fallback,
-      methods: rows.filter((x) => x.integration_id === a.id).map((x) => {
-        const amount = num(x.amount), fees = num(x.fees);
-        return { channel: x.channel, payments: x.n, amount, fees, averageFee: x.n ? r2(fees / x.n) : null, rate: amount ? fees / amount : null, per100k: amount ? r2((fees / amount) * 100_000) : null };
-      }),
+      methods: (() => {
+        // One name per method across gateways (Xendit says ID_DANA and CARDS; Duitku, DANA and CARD).
+        const norm = (c: string) => { const u = c.replace(/^ID_/, ''); return ['CARDS', 'CREDIT_CARD', 'CARD'].includes(u) ? 'CARD' : u; };
+        const by = new Map<string, { n: number; amount: number; fees: number }>();
+        for (const x of rows.filter((y) => y.integration_id === a.id)) {
+          const k = norm(String(x.channel));
+          const t = by.get(k) ?? { n: 0, amount: 0, fees: 0 };
+          t.n += x.n; t.amount += num(x.amount); t.fees += num(x.fees);
+          by.set(k, t);
+        }
+        return [...by.entries()].sort((p1, p2) => p2[1].amount - p1[1].amount).map(([channel, t]) => ({
+          channel, payments: t.n, amount: t.amount, fees: r2(t.fees), averageFee: t.n ? r2(t.fees / t.n) : null, rate: t.amount ? t.fees / t.amount : null, per100k: t.amount ? r2((t.fees / t.amount) * 100_000) : null,
+        }));
+      })(),
       quoted: quoted.get(a.id) ?? null,
     })),
   };

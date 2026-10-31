@@ -182,6 +182,8 @@ export function startWorkers(): () => void {
   const financeSync = once('finance-sync', () => syncAll());
   const financeBalance = once('finance-balance', () => snapshotAll());
   const financeReconcile = once('finance-reconcile', () => reconcileAll());
+  // (v1.17.0) The monthly close e-mail: the previous month, once, on the first pass of a new month.
+  const financeCloseMail = once('finance-close-mail', async () => { await (await import('./finance-close-mail.js')).closeMailAll(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -283,6 +285,7 @@ export function startWorkers(): () => void {
     every(financeSync, 15 * 60_000, 'finance-sync'),
     every(financeBalance, 60 * 60_000, 'finance-balance'),
     every(financeReconcile, 6 * 60 * 60_000, 'finance-reconcile'),
+    every(financeCloseMail, 60 * 60_000, 'finance-close-mail'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

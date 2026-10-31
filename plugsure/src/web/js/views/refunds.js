@@ -79,9 +79,10 @@ registerView('refunds', {
               // (v1.15.0) Duitku has no refund API: a transfer through Disbursement (two people), or a bank transfer.
               if (r.refund_state === 'processing' && r.refund_method === 'disbursement') return '<span class="cell-sub">see Transfers below</span>';
               const open = r.refund_state !== 'processing';
-              const primary = r.provider === 'duitku'
-                ? (open && r.disbursement_available ? `<button class="btn sm primary" type="button" data-disb="${esc(r.id)}">Send via Disbursement</button>` : '')
-                : (open ? `<button class="btn sm primary" type="button" data-pay="${esc(r.id)}">Refund via provider</button>` : '');
+              // (v1.17.0) Xendit payments too: Xendit Payouts sends to a bank account when the payer's method cannot be refunded.
+              const send = open && r.disbursement_available ? `<button class="btn sm${r.provider === 'duitku' ? ' primary' : ''}" type="button" data-disb="${esc(r.id)}">Send to bank account</button>` : '';
+              const primary = r.provider === 'duitku' ? send
+                : `${open ? `<button class="btn sm primary" type="button" data-pay="${esc(r.id)}">Refund via provider</button>` : ''}${send}`;
               return `<div class="row nowrap" style="gap:6px">${primary}<button class="btn sm" type="button" data-manual="${esc(r.id)}">Record bank transfer</button></div>`;
             },
           },
@@ -125,14 +126,14 @@ registerView('refunds', {
       if (!transfers.length) { box.innerHTML = ''; return; }
       const me = state.me?.user?.id;
       const waiting = transfers.filter((t) => t.state === 'awaiting_approval').length;
-      box.innerHTML = `<div class="section-head"><h2>Transfers (Duitku Disbursement)</h2><div class="muted">Refunds of Duitku payments paid to the driver's bank account. The bank's name for the account is checked first; a second person approves each transfer.</div></div>
+      box.innerHTML = `<div class="section-head"><h2>Transfers to bank accounts</h2><div class="muted">Refunds paid to the driver's bank account through Duitku Disbursement or Xendit Payouts. Duitku checks the bank's name for the account first; a second person approves each transfer.</div></div>
         ${waiting ? callout('warn', `${fmt.num(waiting)} transfer${waiting === 1 ? '' : 's'} awaiting approval by someone other than the requester.`) : ''}
         <div class="card" data-xferlist></div>`;
       table($('[data-xferlist]', box), {
         columns: [
           { label: 'Requested', render: (t) => `${esc(fmt.time(t.requestedAt))}<div class="cell-sub">${esc(t.requestedByName ?? '—')}</div>` },
           { label: 'Amount', num: true, render: (t) => `<b>${esc(fmt.money(t.amount, t.currency))}</b>` },
-          { label: 'Account', render: (t) => `<span class="mono">${esc(t.bankCode)} ${esc(t.accountMasked)}</span><div class="cell-sub">entered: ${esc(t.holderName)}</div><div class="cell-sub">bank: ${esc(t.checkedName ?? '—')} ${t.checkedName ? (t.namesMatch ? tag('t-ok', 'names match') : tag('t-warn', 'names differ')) : ''}</div>` },
+          { label: 'Account', render: (t) => `<span class="mono">${esc(t.bankCode)} ${esc(t.accountMasked)}</span><div class="cell-sub">entered: ${esc(t.holderName)}</div>${t.rail === 'xendit' ? '<div class="cell-sub">Xendit Payouts · name not checked</div>' : `<div class="cell-sub">bank: ${esc(t.checkedName ?? '—')} ${t.checkedName ? (t.namesMatch ? tag('t-ok', 'names match') : tag('t-warn', 'names differ')) : ''}</div>`}` },
           { label: 'Status', render: (t) => `${tag(...(XFER_TAG[t.state] ?? ['t-mute', t.state]))}${t.approvedByName ? `<div class="cell-sub">approved by ${esc(t.approvedByName)}</div>` : ''}${t.reason ? `<div class="cell-sub">${esc(t.reason)}</div>` : ''}${t.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(t.error)}</div>` : ''}` },
           {
             label: '',
@@ -158,7 +159,7 @@ registerView('refunds', {
       if (ap) {
         const ok = await confirmDialog({
           title: 'Approve and send the transfer',
-          message: `Send ${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName} (${t.bankCode} ${t.accountMasked}) through Duitku Disbursement?${t.namesMatch ? '' : ` The bank names the account ${t.checkedName ?? '—'}, not ${t.holderName}: approve only if you are sure it is the driver's.`}`,
+          message: `Send ${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName} (${t.bankCode} ${t.accountMasked}) through ${t.rail === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}?${t.rail === 'xendit' ? ' Xendit does not check the name: approve only if the account is the driver\'s.' : t.namesMatch ? '' : ` The bank names the account ${t.checkedName ?? '—'}, not ${t.holderName}: approve only if you are sure it is the driver's.`}`,
           confirmLabel: 'Approve and send',
         });
         if (!ok) return;
@@ -174,8 +175,8 @@ registerView('refunds', {
         title: settle ? 'Settle a transfer by hand' : 'Reject the transfer',
         subtitle: `${fmt.money(t.amount, t.currency)} to ${t.checkedName ?? t.holderName}`,
         body: settle
-          ? `${callout('warn', 'Duitku has not confirmed this transfer. Check it in Duitku\'s dashboard first: marking a paid transfer as not paid lets the refund be paid twice.')}
-             <div class="form one" style="margin-top:12px">${field('Outcome', '<select name="outcome"><option value="succeeded">Paid (Duitku shows success)</option><option value="failed">Not paid (Duitku shows it failed)</option></select>')}${field('What the dashboard shows', '<input name="note" maxlength="300" autocomplete="off">')}</div>`
+          ? `${callout('warn', 'The gateway has not confirmed this transfer. Check it in its dashboard first: marking a paid transfer as not paid lets the refund be paid twice.')}
+             <div class="form one" style="margin-top:12px">${field('Outcome', '<select name="outcome"><option value="succeeded">Paid (the dashboard shows success)</option><option value="failed">Not paid (the dashboard shows it failed)</option></select>')}${field('What the dashboard shows', '<input name="note" maxlength="300" autocomplete="off">')}</div>`
           : `<div class="form one">${field('Reason', '<input name="note" maxlength="300" autocomplete="off" placeholder="e.g. the bank names someone else">')}</div>`,
         actions: [
           { label: 'Cancel' },
@@ -200,9 +201,9 @@ registerView('refunds', {
       if (disb) {
         const r = rows.find((x) => x.id === disb.dataset.disb);
         modal({
-          title: 'Send the refund through Duitku Disbursement',
+          title: `Send the refund to a bank account (${r?.disbursement_rail === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'})`,
           subtitle: `${fmt.money(r?.refund_due_minor, r?.currency)} to ${r?.driver_phone ?? 'the payer'}`,
-          body: `${callout('info', 'Enter the driver\'s bank account. Duitku checks it and returns the name the bank has; a second person then approves the transfer.')}
+          body: `${callout('info', r?.disbursement_rail === 'xendit' ? 'Enter the driver\'s bank account (bank code e.g. 014 for BCA, or Xendit\'s ID_BCA). A second person then approves the transfer.' : 'Enter the driver\'s bank account. Duitku checks it and returns the name the bank has; a second person then approves the transfer.')}
             <div class="form" style="margin-top:12px">${field('Bank code', '<input name="bankCode" maxlength="12" autocomplete="off" placeholder="e.g. 014 (BCA)">')}${field('Account number', '<input name="accountNumber" inputmode="numeric" maxlength="24" autocomplete="off">')}</div>
             <div class="form one">${field('Account holder', '<input name="holderName" maxlength="120" autocomplete="off">')}</div>`,
           actions: [
@@ -215,7 +216,7 @@ registerView('refunds', {
                 if (!body.bankCode || !body.accountNumber || !body.holderName) { for (const k of Object.keys(body)) if (!body[k]) $(`[name="${k}"]`, ctx.body).classList.add('invalid'); return false; }
                 try {
                   const t = (await api(`/v1/refunds/${disb.dataset.disb}/disbursement`, { method: 'POST', body })).transfer;
-                  toast(t.namesMatch ? `The bank names it ${t.checkedName}. Awaiting approval.` : `The bank names it ${t.checkedName ?? '—'}, not ${t.holderName}. Awaiting approval.`, t.namesMatch ? 'ok' : 'warn');
+                  toast(t.rail === 'xendit' ? 'Requested. Awaiting approval by a second person.' : t.namesMatch ? `The bank names it ${t.checkedName}. Awaiting approval.` : `The bank names it ${t.checkedName ?? '—'}, not ${t.holderName}. Awaiting approval.`, t.rail === 'xendit' || t.namesMatch ? 'ok' : 'warn');
                   load(); loadTransfers();
                 } catch (e) { toast(e.message, 'crit'); return false; }
               },

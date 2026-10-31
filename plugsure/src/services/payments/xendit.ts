@@ -29,6 +29,7 @@ import type { RefundStatusArgs } from './registry.js';
  *               Refunds page. Confirm the QRIS refund fields and callback in Xendit's sandbox before live traffic.
  *   test        GET  {base}/balance
  *   reports     (v1.16.0) POST {base}/reports, GET {base}/reports/{id}: Xendit's own reports, from Finance
+ *   payouts     (v1.17.0) POST {base}/v2/payouts, GET {base}/v2/payouts/{id}: refunds and owner payouts to bank accounts
  *
  *   card holds  Payments API v3: a hosted Payment Session (mode PAYMENT_LINK, CARDS, capture_method
  *   and       MANUAL) → 'payment.authorization' (AUTHORIZED); POST {base}/v3/payment_requests/{id}/captures
@@ -98,6 +99,26 @@ export interface XenditConfig {
   callbackToken: string;
   forUserId?: string;
   baseUrl?: string;
+  /** (v1.17.0) Refunds and owner payouts sent through Xendit Payouts, with their limits (rupiah). */
+  payoutsEnabled?: boolean;
+  disbursementMaxPerTransfer?: string | number;
+  disbursementMaxPerDay?: string | number;
+  disbursementMaxPayout?: string | number;
+  disbursementMaxPayoutPerDay?: string | number;
+}
+
+/**
+ * (v1.17.0) Indonesian bank codes (as Duitku and the banks number them) → Xendit's payout channel codes. A code already
+ * in Xendit's form (ID_…) is used as it is.
+ */
+export const XENDIT_BANK_CHANNEL: Record<string, string> = {
+  '002': 'ID_BRI', '008': 'ID_MANDIRI', '009': 'ID_BNI', '011': 'ID_DANAMON', '013': 'ID_PERMATA', '014': 'ID_BCA', '016': 'ID_MAYBANK',
+  '019': 'ID_PANIN', '022': 'ID_CIMB', '028': 'ID_OCBC_NISP', '200': 'ID_BTN', '213': 'ID_BTPN', '451': 'ID_BSI', '426': 'ID_MEGA', '147': 'ID_MUAMALAT',
+};
+export function xenditChannelFor(bankCode: string): string | null {
+  const c = String(bankCode ?? '').trim().toUpperCase();
+  if (/^ID_[A-Z0-9_]{2,30}$/.test(c)) return c;
+  return XENDIT_BANK_CHANNEL[c.padStart(3, '0')] ?? null;
 }
 
 export class XenditProvider implements PaymentProvider {
@@ -572,6 +593,53 @@ export class XenditProvider implements PaymentProvider {
     const r = await providerFetch(`${this.base()}/reports/${encodeURIComponent(id)}`, { headers: this.headers(), timeoutMs: 15_000 });
     if (r.status >= 300) throw new Error(`Xendit report: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? r.text.slice(0, 160)}`.trim());
     return { status: String(r.body?.status ?? 'PENDING').toUpperCase(), url: r.body?.url ? String(r.body.url) : null };
+  }
+
+  /** (v1.17.0) Payouts on: refunds and owner payouts can be sent from PlugSure. */
+  payoutsEnabled(): boolean { return this.cfg.payoutsEnabled === true; }
+  payoutLimits(kind: 'refund' | 'payout'): { perTransfer: number; perDay: number } {
+    const n = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v)) : d);
+    return kind === 'refund'
+      ? { perTransfer: n(this.cfg.disbursementMaxPerTransfer, 5_000_000), perDay: n(this.cfg.disbursementMaxPerDay, 25_000_000) }
+      : { perTransfer: n(this.cfg.disbursementMaxPayout, 50_000_000), perDay: n(this.cfg.disbursementMaxPayoutPerDay, 100_000_000) };
+  }
+
+  /**
+   * (v1.17.0) A payout to a bank account (Payouts API v2): POST {base}/v2/payouts with Idempotency-key
+   * { reference_id, channel_code: 'ID_BCA', channel_properties: { account_holder_name, account_number }, amount, currency, description }
+   * → { id, status: ACCEPTED | REQUESTED | … }. Its result comes later (GET /v2/payouts/{id}; payout.* callbacks).
+   * A repeat with the same idempotency key returns the first payout, never a second. Confirm in Xendit's sandbox.
+   */
+  async createPayout(a: { referenceId: string; channelCode: string; accountNumber: string; holderName: string; amount: number; description: string; idempotencyKey: string }):
+    Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; id: string | null; code: string; error: string | null }> {
+    let r;
+    try {
+      r = await providerFetch(`${this.base()}/v2/payouts`, {
+        method: 'POST', headers: { ...this.headers(), 'Idempotency-key': a.idempotencyKey }, timeoutMs: 30_000,
+        body: JSON.stringify({ reference_id: a.referenceId, channel_code: a.channelCode, channel_properties: { account_holder_name: a.holderName.slice(0, 100), account_number: a.accountNumber },
+          amount: Math.round(a.amount), currency: 'IDR', description: a.description.slice(0, 100) }),
+      });
+    } catch (e) {
+      return { outcome: 'unknown', id: null, code: '', error: `no answer from Xendit (${(e as Error).message})` };
+    }
+    const j = r.body ?? {};
+    if (r.status >= 500) return { outcome: 'unknown', id: j.id ?? null, code: String(r.status), error: j.message ?? `HTTP ${r.status}` };
+    if (r.status >= 300) return { outcome: 'failed', id: null, code: String(j.error_code ?? r.status), error: String(j.message ?? r.text.slice(0, 160)) };
+    return { ...XenditProvider.payoutState(j.status), id: j.id ? String(j.id) : null, code: String(j.status ?? '') };
+  }
+
+  /** (v1.17.0) Where a payout stands: GET {base}/v2/payouts/{id}. SUCCEEDED, or FAILED / CANCELLED / REVERSED (final). */
+  async getPayout(id: string): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; code: string; error: string | null }> {
+    const r = await providerFetch(`${this.base()}/v2/payouts/${encodeURIComponent(id)}`, { headers: this.headers(), timeoutMs: 15_000 });
+    if (r.status >= 300) return { outcome: 'unknown', code: String(r.status), error: r.body?.message ?? `HTTP ${r.status}` };
+    return { ...XenditProvider.payoutState(r.body?.status, r.body?.failure_code), code: String(r.body?.status ?? '') };
+  }
+
+  private static payoutState(st: unknown, failure?: unknown): { outcome: 'succeeded' | 'failed' | 'unknown'; error: string | null } {
+    const s = String(st ?? '').toUpperCase();
+    if (s === 'SUCCEEDED') return { outcome: 'succeeded', error: null };
+    if (['FAILED', 'CANCELLED', 'REVERSED'].includes(s)) return { outcome: 'failed', error: `${s}${failure ? ` ${String(failure)}` : ''}` };
+    return { outcome: 'unknown', error: null };
   }
 
   async testConnection() {
