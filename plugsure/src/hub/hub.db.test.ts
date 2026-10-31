@@ -414,7 +414,14 @@ dbDescribe('the hub surface, in-process', () => {
     await query(`UPDATE hub_party SET status = 'CONNECTED' WHERE id = $1`, [parties['t:CPO']!.id]);
     // The tenant accepts a party behind the hub only once ClientInfo announced it.
     await pushAgreementChange(parties['t:CPO']!.id, parties['xe:EMSP']!.id, true);
-    for (let i = 0; i < 3; i++) await deliverHubDue(100);
+    // pushAgreementChange kicks the outbox itself: that pass may hold the ClientInfo row (deliverHubDue then finds
+    // nothing due and returns at once), so wait until the tenant's ClientInfo is actually delivered.
+    for (let i = 0; i < 50; i++) {
+      await deliverHubDue(100);
+      const left = await one<{ n: number }>(`SELECT count(*)::int AS n FROM hub_outbox WHERE recipient_connection_id = $1 AND kind = 'clientinfo' AND state = 'pending'`, [conns.t!.id]);
+      if (!left?.n) break;
+      await new Promise((res) => setTimeout(res, 100));
+    }
     const r = await call('xe', 'GET', 'sender/locations', { from: XE, to: T });
     assert.equal(r.status, 200);
     assert.equal(r.headers['ocpi-from-party-id'], T.pid);
