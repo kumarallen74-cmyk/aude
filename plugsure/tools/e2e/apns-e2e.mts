@@ -258,7 +258,9 @@ try {
   await notifyDevices([devA], 'cdr.created', `cdr:apns-${RUN}`, { id: { title: 'Struk siap', body: 'Rp 30.000' }, en: { title: 'Receipt ready', body: 'Rp 30.000' }, url: '/app/#history', tag: `r-${RUN}` });
   await until(() => [...hits], (h) => h.length >= 1, 15_000);
   const refused = await until(() => ops('GET', '/v1/driver-app'), (r) => r.data.brand?.apnsCheckOk === false, 10_000);
-  const msg = (await db.query(`SELECT state, last_status, last_error FROM push_message WHERE dedupe_key = $1`, [`cdr:apns-${RUN}`])).rows[0];
+  // The sender marks the brand first, then the message: wait for the message's own result too.
+  const msg = await until(async () => (await db.query(`SELECT state, last_status, last_error FROM push_message WHERE dedupe_key = $1`, [`cdr:apns-${RUN}`])).rows[0],
+    (m) => m?.last_status === 403, 10_000);
   const subA = (await db.query(`SELECT failures FROM push_subscription WHERE device_id = $1`, [devA])).rows[0];
   check('refused key: the console shows Apple refused it while sending; the notification waits for a retry, and the iPhone is not blamed',
     /refused the key while sending/.test(refused.data.brand.apnsCheckDetail) && msg.state === 'pending' && msg.last_status === 403 && /InvalidProviderToken/.test(msg.last_error) && subA.failures === 0,
