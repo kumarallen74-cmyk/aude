@@ -725,6 +725,18 @@ async function currencyMismatch(
   return { outcome: 'currency_mismatch', orgId: intent.org_id, detail: { expected, got: n.currency, ...(kind === 'hold' ? { released: true } : {}) } };
 }
 
+/**
+ * (v1.12.0) A payment the gateway's own ledger reports as paid while PlugSure never received its notification
+ * (finance reconciliation). Applied exactly as that notification would have been — the same state guards, amount and
+ * currency checks, refunds for a payment that arrived too late — and logged as 'reconciled'. The data comes from the
+ * gateway's API with the account's own key, so it is as trustworthy as a verified notification.
+ */
+export async function applyGatewayPayment(r: Resolved, n: Notification): Promise<{ outcome: string; orgId?: string; detail?: Record<string, unknown> }> {
+  const res = await outsideRequestScope(() => applyNotification(r, n));
+  await logEvent(r, res.orgId ?? r.orgId, 'notification', `reconciled:${res.outcome}`, { providerRef: n.providerRef, amountMinor: n.amountMinor, source: 'finance reconciliation' });
+  return res;
+}
+
 async function applyNotification(r: Resolved, n: Notification): Promise<{ outcome: string; orgId?: string; detail?: Record<string, unknown> }> {
   const intent = await one<{ id: string; org_id: string; state: string; mode: string; amount_authorised_minor: number | null; integration_id: string | null; save_card: boolean; currency: string }>(
     `SELECT id, org_id, state, mode, amount_authorised_minor, integration_id, save_card, currency FROM payment_intent WHERE provider = $1 AND provider_ref = $2`,

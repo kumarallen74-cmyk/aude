@@ -68,6 +68,27 @@ const PAYMENT_EVENTS = new Set([
 ]);
 /** The callback events that report a refund. */
 const REFUND_EVENTS = new Set(['refund.succeeded', 'refund.failed', 'ewallet.refund']);
+/** (v1.12.0) A transaction as GET /transactions returns it (the fields PlugSure reads). */
+export interface XenditTransaction {
+  id: string;
+  product_id?: string | null;
+  type?: string;
+  status?: string;
+  channel_category?: string | null;
+  channel_code?: string | null;
+  reference_id?: string | null;
+  account_identifier?: string | null;
+  currency?: string;
+  amount?: number | string;
+  net_amount?: number | string | null;
+  cashflow?: 'MONEY_IN' | 'MONEY_OUT' | string;
+  settlement_status?: string | null;
+  estimated_settlement_time?: string | null;
+  fee?: { xendit_fee?: number | string; value_added_tax?: number | string; xendit_withholding_tax?: number | string; third_party_withholding_tax?: number | string; status?: string } | null;
+  created?: string;
+  updated?: string;
+}
+
 export interface XenditConfig {
   secretKey: string;
   callbackToken: string;
@@ -485,6 +506,32 @@ export class XenditProvider implements PaymentProvider {
     if (!REFUND_EVENTS.has(event)) return null;
     const id = j.data?.id;
     return id ? { refundRef: String(id), status: XenditProvider.refundState(j.data?.status), event } : null;
+  }
+
+  // ─────────────────────────────────────────── (v1.12.0) Finance: the account's own ledger at Xendit
+
+  /**
+   * One page of the account's transactions (GET {base}/transactions): payments, refunds, payouts, each with Xendit's
+   * fee, VAT, net amount and settlement status. Oldest changes first is not offered: pages are newest first, followed
+   * with after_id. `updatedFrom` limits it to transactions changed since then.
+   */
+  async listTransactions(q: { updatedFrom?: Date | null; afterId?: string | null; limit?: number }): Promise<{ data: XenditTransaction[]; hasMore: boolean }> {
+    const p = new URLSearchParams({ limit: String(Math.min(Math.max(q.limit ?? 50, 1), 50)) });
+    if (q.updatedFrom) p.set('updated[gte]', q.updatedFrom.toISOString());
+    if (q.afterId) p.set('after_id', q.afterId);
+    const r = await providerFetch(`${this.base()}/transactions?${p}`, { headers: this.headers(), timeoutMs: 20_000 });
+    if (r.status !== 200 || !Array.isArray(r.body?.data)) {
+      throw new Error(`Xendit transactions: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? r.text.slice(0, 160)}`.trim());
+    }
+    return { data: r.body.data as XenditTransaction[], hasMore: r.body.has_more === true };
+  }
+
+  /** The account's balance (GET {base}/balance): CASH by default, the money that can be withdrawn. */
+  async accountBalance(accountType: 'CASH' | 'HOLDING' = 'CASH'): Promise<number> {
+    const r = await providerFetch(`${this.base()}/balance?account_type=${accountType}`, { headers: this.headers(), timeoutMs: 15_000 });
+    const b = Number(r.body?.balance);
+    if (r.status !== 200 || !Number.isFinite(b)) throw new Error(`Xendit balance: ${r.status} ${r.body?.error_code ?? ''} ${r.body?.message ?? r.text.slice(0, 160)}`.trim());
+    return b;
   }
 
   async testConnection() {

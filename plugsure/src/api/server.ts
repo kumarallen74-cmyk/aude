@@ -81,6 +81,7 @@ import { registerPncRoutes } from './pnc-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
 import { registerWhatsAppRoutes } from './whatsapp-routes.js';
+import { registerFinanceRoutes } from './finance-routes.js';
 import { registerBrandRoutes } from './brand-routes.js';
 import { registerConsoleBrandRoutes } from './console-brand-routes.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
@@ -1968,6 +1969,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerOnboardingRoutes(app);
   await registerIntegrationRoutes(app);
   await registerWhatsAppRoutes(app);
+  await registerFinanceRoutes(app);
   await registerBrandRoutes(app);
   await registerConsoleBrandRoutes(app);
   await registerMicrosoftRoutes(app);

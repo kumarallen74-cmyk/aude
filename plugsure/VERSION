@@ -1,11 +1,19 @@
 PlugSure CSMS
-Version:   1.11.0
-Package:   plugsure-v1.11.0
-Prepared:  2026-10-31  (v1.10.0 + WhatsApp customer support with Claude — see RELEASE-NOTES-v1.11.0.md)
+Version:   1.12.0
+Package:   plugsure-v1.12.0
+Prepared:  2026-10-31  (v1.11.0 + Finance for Xendit — see RELEASE-NOTES-v1.12.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (333 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (344 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.11.0 = v1.10.0 + WhatsApp customer support: customers who write to the WhatsApp number land in an
+Status:    v1.12.0 = v1.11.0 + Finance (Commercial → Finance): the Xendit account's ledger synced every 15 minutes —
+           collected, fees and VAT, refunds, payouts, net, settlement status — with receivables (not yet settled,
+           overdue flagged), payables (refunds due with their refund window, owners' shares), fees against the QRIS
+           estimate, the balance at Xendit, a reconciliation against PlugSure's payments (a missed payment can be
+           applied), and CSV / Excel / PDF exports. For platform administrators and operators with their own Xendit
+           account. Migration 080 (additive).
+
+v1.11.0 (2026-10-31):
+           v1.11.0 = v1.10.0 + WhatsApp customer support: customers who write to the WhatsApp number land in an
            inbox (Operate → WhatsApp → Inbox, platform administrators), and an AI assistant (Claude, Anthropic API;
            Govern → Integrations → WhatsApp AI support) answers them or drafts answers for staff. It looks up
            stations, a charger's status and the writer's own sessions, and hands over to staff (with an operator

@@ -5,6 +5,7 @@ import { bus } from './events.js';
 import { runComplianceSweep, keyRotationSweep } from './compliance.js';
 import { runControlLoop } from './smartcharging.js';
 import { reconcileStuckSessions, recoverUnsettledPayments, settlementRecoveryNotBefore } from './sessions.js';
+import { syncAll, snapshotAll, reconcileAll } from './finance.js';
 import { tick as firmwareTick } from './firmware.js';
 import { registerPrepaidEnforcement } from './payments/prepaid.js';
 import { registerOperatorLimits } from './operator-limits.js';
@@ -177,6 +178,10 @@ export function startWorkers(): () => void {
   const notBefore = settlementRecoveryNotBefore();
   if (notBefore) logger.info({ notBefore: notBefore.toISOString() }, 'settlement recovery ignores CDRs issued before SETTLEMENT_RECOVERY_NOT_BEFORE');
   const settlement = once('settlement-recovery', () => recoverUnsettledPayments());
+  // (v1.12.0) Finance: the gateways' ledgers (Xendit), balances, and the daily reconciliation against PlugSure.
+  const financeSync = once('finance-sync', () => syncAll());
+  const financeBalance = once('finance-balance', () => snapshotAll());
+  const financeReconcile = once('finance-reconcile', () => reconcileAll());
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -275,6 +280,9 @@ export function startWorkers(): () => void {
     every(holds, 60_000, 'card-holds'),
     every(roamingHolds, 60_000, 'roaming-holds'),
     every(settlement, 5 * 60_000, 'settlement-recovery'),
+    every(financeSync, 15 * 60_000, 'finance-sync'),
+    every(financeBalance, 60 * 60_000, 'finance-balance'),
+    every(financeReconcile, 6 * 60 * 60_000, 'finance-reconcile'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

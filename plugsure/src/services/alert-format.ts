@@ -38,6 +38,8 @@ export const ALERT_KINDS: Record<string, string> = {
   'platform.whatsapp_quality': 'WhatsApp number quality low',
   'platform.whatsapp_account': 'WhatsApp Business account restricted',
   'platform.whatsapp_support': 'WhatsApp customer waiting for staff',
+  // (v1.12.0) Finance: the gateway's ledger against PlugSure (services/finance.ts).
+  'finance.reconciliation': 'Payments differ from the gateway',
 };
 
 export const titleOf = (kind: string) =>
