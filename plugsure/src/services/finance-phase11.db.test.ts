@@ -159,6 +159,11 @@ dbDescribe('Month lock', () => {
     assert.equal((await call('PUT', '/v1/finance/fx-rates/reporting-currency', { currency: 'IDR' })).statusCode, 200);
     assert.equal((await call('PUT', '/v1/finance/fx-rates', { month: M, currency: 'MYR', rate: 3500 })).statusCode, 409);
     assert.equal((await call('POST', '/v1/finance/investments', { siteId, category: 'other', description: 'Signage', amount: 100_000, investedOn: `${M}-05` })).statusCode, 409);
+    await call('PUT', '/v1/finance/budgets', { month: ym(-2), currency: 'IDR', revenue: 900_000 });
+    const cp = await call('POST', '/v1/finance/budgets/copy', { from: ym(-2), months: 2 });
+    assert.equal(cp.statusCode, 409, 'a copy into a locked month');
+    assert.match(cp.json().error, /nothing was copied/);
+    assert.equal((await one<{ n: number }>(`SELECT count(*)::int AS n FROM finance_budget WHERE org_id = $1 AND month = $2`, [org, ym(0)]))!.n, 0, 'not even the open month after it');
     // Another month is not affected.
     assert.equal((await call('PUT', '/v1/finance/budgets', { month: ym(0), currency: 'IDR', revenue: 1_000_000 })).statusCode, 200);
 
