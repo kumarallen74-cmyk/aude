@@ -19,6 +19,8 @@ import { formatMoney, LEGACY_CURRENCY, CURRENCIES } from '../money.js';
  *   Collections     (v1.20.0) what customers owe by age, notes and promises, reminders, write-offs (two people)
  *   Margin          (v1.20.0) energy cost (bills or cost per kWh) and gross margin per site and charger
  *   Budgets         (v1.20.0) budgets vs actuals per month, organisation and sites
+ *   Summary         (v1.21.0) key figures per currency (and consolidated): revenue, margin, DSO, cash, rates, trends
+ *   (v1.21.0) Settings: currencies and exchange rates, the approvals matrix, report e-mails
  *   (v1.20.0) Audit pack: the period's records as one ZIP with checksums
  *   (v1.19.0) Fees: the fee audit against the contracted rates; Settings: the rates and the accounting software export;
  *   Payables: owners' bank detail changes to approve
@@ -377,7 +379,9 @@ async function payoutsSection(el, canWrite, reload) {
           if (!canWrite) return '';
           if (t.state === 'awaiting_approval') {
             const mine = t.requestedBy && t.requestedBy === me;
-            return `<div class="row nowrap" style="gap:6px">${mine ? '<span class="cell-sub">needs another person</span>' : `<button class="btn sm primary" type="button" data-papprove="${esc(t.id)}">Approve and send</button>`}<button class="btn sm" type="button" data-preject="${esc(t.id)}">${mine ? 'Withdraw' : 'Reject'}</button></div>`;
+            const first = t.firstApprovedBy && t.firstApprovedBy === me;
+            const wait = mine ? 'needs another person' : first ? 'needs a second approver' : '';
+            return `<div class="row nowrap" style="gap:6px">${t.firstApprovedBy ? tag('t-info', '1 of 2 approved') : ''}${wait ? `<span class="cell-sub">${wait}</span>` : `<button class="btn sm primary" type="button" data-papprove="${esc(t.id)}">${t.firstApprovedBy ? 'Second approval and send' : 'Approve and send'}</button>`}<button class="btn sm" type="button" data-preject="${esc(t.id)}">${mine ? 'Withdraw' : 'Reject'}</button></div>`;
           }
           return t.state === 'sent' ? `<button class="btn sm" type="button" data-psettle="${esc(t.id)}">Settle by hand</button>` : '';
         },
@@ -399,7 +403,7 @@ async function payoutsSection(el, canWrite, reload) {
           async onClick() {
             try {
               const r = (await api(`/v1/finance/payout-transfers/${t.id}/approve`, { method: 'POST' })).transfer;
-              toast(r.state === 'succeeded' ? 'Paid and recorded against the statement' : r.state === 'sent' ? 'Sent; its result is checked automatically' : `Not paid: ${r.error ?? r.state}`, r.state === 'failed' ? 'crit' : 'ok');
+              toast(r.state === 'awaiting_approval' ? 'First approval recorded: a second approver sends it' : r.state === 'succeeded' ? 'Paid and recorded against the statement' : r.state === 'sent' ? 'Sent; its result is checked automatically' : `Not paid: ${r.error ?? r.state}`, r.state === 'failed' ? 'crit' : 'ok');
               reload();
             } catch (e) { toast(e.message, 'crit'); return false; }
           },
@@ -785,7 +789,7 @@ async function bankRequestsSection(el, canWrite) {
         async onClick(ctx) {
           const note = $('[name="note"]', ctx.body).value.trim();
           if (!ap && !note) { $('[name="note"]', ctx.body).classList.add('invalid'); return false; }
-          try { await api(`/v1/finance/owner-bank-requests/${x.id}/${ap ? 'approve' : 'reject'}`, { method: 'POST', body: { note: note || undefined } }); toast(ap ? 'Approved: the account on file is replaced.' : 'Rejected.', 'ok'); bankRequestsSection(el, canWrite); } catch (err) { toast(err.message, 'crit'); return false; }
+          try { const res = await api(`/v1/finance/owner-bank-requests/${x.id}/${ap ? 'approve' : 'reject'}`, { method: 'POST', body: { note: note || undefined } }); toast(res.firstApproval ? 'First approval recorded: a second approver completes it.' : ap ? 'Approved: the account on file is replaced.' : 'Rejected.', 'ok'); bankRequestsSection(el, canWrite); } catch (err) { toast(err.message, 'crit'); return false; }
         },
       }],
     });
@@ -915,7 +919,7 @@ async function collectionsSection(host, canWrite) {
     { label: 'Requested', render: (w) => `${esc(fmt.time(w.requestedAt))}<div class="cell-sub">${esc(w.requestedBy ?? '')}</div>` },
     { label: 'Amount', num: true, render: (w) => `<b>${esc(fmt.money(w.amount, w.currency))}</b>` },
     { label: 'Reason', render: (w) => `<span class="cell-sub wrap">${esc(w.reason)}</span>` },
-    { label: '', render: (w) => (!canWrite ? '' : w.requestedById === me ? '<span class="cell-sub">needs another person</span>' : `<div class="row nowrap" style="gap:6px"><button class="btn sm primary" type="button" data-woa="${esc(w.id)}">Approve</button><button class="btn sm" type="button" data-wor="${esc(w.id)}">Reject</button></div>`) },
+    { label: '', render: (w) => (!canWrite ? '' : w.requestedById === me ? '<span class="cell-sub">needs another person</span>' : w.firstApprovedBy === me ? `${tag('t-info', '1 of 2 approved')} <span class="cell-sub">needs a second approver</span>` : `<div class="row nowrap" style="gap:6px">${w.firstApprovedBy ? tag('t-info', '1 of 2 approved') : ''}<button class="btn sm primary" type="button" data-woa="${esc(w.id)}">Approve</button><button class="btn sm" type="button" data-wor="${esc(w.id)}">Reject</button></div>`) },
   ], rows: r.writeOffsPending, empty: '' });
   table($('[data-cr]', el), { columns: [
     { label: 'Document', render: (x) => `<span class="mono">${esc(x.number)}</span><div class="cell-sub">${esc(x.counterparty)}</div>` },
@@ -950,7 +954,7 @@ async function collectionsSection(host, canWrite) {
       const id = t.dataset.woa ?? t.dataset.wor, ok = Boolean(t.dataset.woa);
       modal({ title: ok ? 'Approve the write-off' : 'Reject the write-off', body: `<div class="form one">${field(ok ? 'Note' : 'Reason', '<input name="n" maxlength="300">', { opt: ok })}</div>`,
         actions: [{ label: 'Cancel' }, { label: ok ? 'Approve' : 'Reject', kind: ok ? 'primary' : 'danger', async onClick(ctx) {
-          try { await api(`/v1/finance/write-offs/${id}/${ok ? 'approve' : 'reject'}`, { method: 'POST', body: { note: $('[name="n"]', ctx.body).value.trim() || undefined } }); toast(ok ? 'Written off.' : 'Rejected.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+          try { const x = await api(`/v1/finance/write-offs/${id}/${ok ? 'approve' : 'reject'}`, { method: 'POST', body: { note: $('[name="n"]', ctx.body).value.trim() || undefined } }); toast(x.firstApproval ? 'First approval recorded: a second approver completes it.' : ok ? 'Written off.' : 'Rejected.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
         } }] });
       return;
     }
@@ -976,6 +980,115 @@ async function collectionsSection(host, canWrite) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.21.0) summary, currencies, approvals, report e-mails
+
+/** A small trend line (no axes), in the accent colour; a dashed zero line when the series crosses it. */
+function spark(values, w = 140, h = 34) {
+  const v = values.map((x) => Number(x) || 0);
+  if (v.length < 2) return '';
+  const lo = Math.min(0, ...v), hi = Math.max(...v, lo + 1);
+  const x = (i) => (i * (w - 4)) / (v.length - 1) + 2, y = (n) => h - 2 - ((n - lo) * (h - 4)) / (hi - lo);
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${lo < 0 ? `<line x1="0" x2="${w}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--line)" stroke-dasharray="3 3"/>` : ''}<polyline points="${v.map((n, i) => `${x(i).toFixed(1)},${y(n).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>`;
+}
+const deltaTxt = (p, invert = false) => (p == null ? '<span class="cell-sub">—</span>' : `<span style="color:${(invert ? p <= 0 : p >= 0) ? 'var(--ok)' : 'var(--crit)'}">${p >= 0 ? '+' : ''}${esc(String(p))}%</span>`);
+
+async function summarySection(el) {
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let s;
+  try { s = await api('/v1/finance/summary'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const c = s.consolidated;
+  el.innerHTML = `${c ? `<div class="card" style="margin-bottom:16px"><header><h3>Consolidated in ${esc(c.currency)}</h3></header><div class="body"><div class="grid k3">
+      ${kpi('Revenue this month', esc(fmt.money(c.revenueMtd.amount, c.currency)), c.revenueMtd.missing.length ? `no rate for ${esc(c.revenueMtd.missing.join(', '))}` : 'all currencies')}
+      ${kpi('Margin this month', esc(fmt.money(c.marginMtd.amount, c.currency)), c.marginMtd.missing.length ? `no rate for ${esc(c.marginMtd.missing.join(', '))}` : '')}
+      ${kpi('Owed by customers', esc(fmt.money(c.receivables.amount, c.currency)), c.receivables.missing.length ? `no rate for ${esc(c.receivables.missing.join(', '))}` : '')}</div></div></div>` : ''}
+    ${s.perCurrency.map((p) => `<div class="card section"><header><h3>${esc(p.currency)}</h3><span class="cell-sub">${esc(s.month)}-01 to ${esc(s.asOf)}</span></header><div class="body">
+      <div class="grid k4">
+        ${kpi('Revenue this month', esc(fmt.money(p.revenue.mtd, p.currency)), `${deltaTxt(p.revenue.vsLastMonthPct)} vs last month · ${deltaTxt(p.revenue.vsLastYearPct)} vs last year`)}
+        ${kpi('Margin', p.margin ? esc(fmt.money(p.margin.mtd, p.currency)) : '—', p.margin ? `${p.margin.pct == null ? '' : `${esc(String(p.margin.pct))}% of revenue`}${p.margin.unknownSites ? ` · ${p.margin.unknownSites} site(s) without energy cost` : ''}` : '', p.margin && p.margin.mtd < 0 ? 'crit' : '')}
+        ${kpi('Owed by customers', esc(fmt.money(p.receivables, p.currency)), p.dso == null ? 'DSO —' : `DSO ${esc(String(p.dso))} days`, p.dso != null && p.dso > 45 ? 'warn' : '')}
+        ${kpi('Cash', esc(fmt.money(p.cash.gateways + (p.cash.bank ?? 0), p.currency)), `gateways${p.cash.bank != null ? ` + bank (${esc(p.cash.bankAsOf)})` : ''}`)}
+      </div>
+      <div class="row" style="gap:24px;margin-top:14px;flex-wrap:wrap">
+        <div><div class="cell-sub">Revenue, 12 months</div>${spark(p.trend.map((t) => t.revenue))}</div>
+        <div><div class="cell-sub">Margin, 12 months</div>${spark(p.trend.map((t) => t.margin))}</div>
+        <div><div class="cell-sub">Fee rate (30 days)</div><b>${p.feeRatePct == null ? '—' : `${esc(String(p.feeRatePct))}%`}</b></div>
+        <div><div class="cell-sub">Refund rate (30 days)</div><b>${p.refundRatePct == null ? '—' : `${esc(String(p.refundRatePct))}%`}</b></div>
+        <div><div class="cell-sub">Energy this month</div><b>${esc(fmt.num(Math.round(p.kwhMtd)))} kWh</b></div>
+      </div></div></div>`).join('') || callout('info', 'No charging, receivables or payments yet.')}
+    <p class="cell-sub">Revenue is before tax. DSO (days sales outstanding) is what customers owe ÷ the last 90 days' revenue per day. Margin uses energy bills, or estimates from each site's cost per kWh.</p>`;
+}
+
+const KIND_LBL = { refund: 'Refunds', payout: 'Owner payouts', write_off: 'Write-offs', bank_change: 'Owner bank detail changes' };
+
+async function phase10Settings(el, canWrite) {
+  let fxr, ar, rs;
+  try { [fxr, ar, rs] = await Promise.all([api('/v1/finance/fx-rates'), api('/v1/finance/approval-rules'), api('/v1/finance/report-schedules')]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => phase10Settings(el, canWrite);
+  const rc = fxr.reportingCurrency;
+  const cm = new Intl.DateTimeFormat('en-CA').format(new Date()).slice(0, 7);
+  const others = fxr.currencies.filter((c) => c !== rc);
+  el.innerHTML = `
+    <div class="card section"><header><h3>Currencies</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">Your sites use ${esc(fxr.currencies.join(', ') || '—')}. With a reporting currency, Summary, Margin and Budgets also show totals converted at each month's rate.</p>
+      <div class="filters" style="margin-top:0">${field('Reporting currency', `<select data-rcur${canWrite ? '' : ' disabled'}><option value="">— none —</option>${[...new Set([...fxr.currencies, ...Object.keys(CURRENCIES)])].map((c) => `<option${c === rc ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>`)}
+      ${rc && others.length && canWrite ? `<div class="row" style="align-self:flex-end;gap:6px"><button class="btn" type="button" data-fxfetch>Fetch ECB rates for ${esc(cm)}</button><button class="btn" type="button" data-fxadd>Enter a rate</button></div>` : ''}</div>
+      ${rc ? `<div data-fxl></div>` : ''}</div></div>
+    <div class="card section"><header><h3>Approvals</h3>${ar.canApprove ? '' : '<span class="cell-sub">changing these needs a Finance Manager (finance:approve)</span>'}</header><div class="body">
+      <p class="cell-sub" style="margin-top:0">Every transfer, write-off and bank detail change already needs a second person. Above an amount you can require a Finance Manager (finance:approve), or two approvers.</p>
+      <table class="table" data-rules><thead><tr><th>What</th><th>Rule</th><th class="num">Above (minor unit)</th></tr></thead><tbody>
+      ${Object.keys(KIND_LBL).map((k) => { const r = ar.rules[k] ?? {}; const dis = ar.canApprove && canWrite ? '' : ' disabled'; return `<tr data-k="${k}"><td>${KIND_LBL[k]}</td><td><select name="rule"${dis}><option value="">Second person only</option><option value="finance_approver"${r.rule === 'finance_approver' ? ' selected' : ''}>A Finance Manager</option><option value="two_approvers"${r.rule === 'two_approvers' ? ' selected' : ''}>Two approvers</option></select></td><td class="num">${k === 'bank_change' ? '<span class="cell-sub">every change</span>' : `<input name="above" inputmode="numeric" value="${esc(String(r.above ?? ''))}" style="width:130px"${dis}>`}</td></tr>`; }).join('')}
+      </tbody></table>
+      ${ar.canApprove && canWrite ? '<div class="row" style="margin-top:10px"><button class="btn primary" type="button" data-rsave>Save approvals</button></div>' : ''}</div></div>
+    <div class="card section"><header><h3>Report e-mails</h3>${canWrite ? '<button class="btn sm right" type="button" data-rnew>New schedule</button>' : ''}</header><div data-rl></div></div>`;
+  if (rc) table($('[data-fxl]', el), { columns: [
+    { label: 'Month', render: (r) => esc(r.month) }, { label: 'Currency', render: (r) => `1 ${esc(r.currency)}` },
+    { label: `In ${esc(rc)}`, num: true, render: (r) => esc(String(r.rate)) }, { label: 'Source', render: (r) => `${tag(r.source === 'ecb' ? 't-info' : 't-mute', r.source === 'ecb' ? 'ECB' : 'manual')}<div class="cell-sub">${esc(r.by ?? '')}</div>` },
+  ], rows: fxr.rates, empty: others.length ? 'No rates yet: fetch them or enter them.' : `All your sites use ${rc}.` });
+  table($('[data-rl]', el), { columns: [
+    { label: 'Schedule', render: (r) => `${esc(r.name)}<div class="cell-sub">${esc(r.reports.join(', '))}</div>` },
+    { label: 'When', render: (r) => esc(r.frequency === 'weekly' ? `weekly, ${['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][r.weekday]}` : 'monthly, on the 1st') },
+    { label: 'To', render: (r) => `<span class="cell-sub wrap">${esc(r.recipients.join(', '))}</span>` },
+    { label: 'Last', render: (r) => (r.lastError ? `<span style="color:var(--crit)" class="cell-sub">${esc(r.lastError)}</span>` : r.lastSentAt ? `<span class="cell-sub">${esc(fmt.ago(r.lastSentAt))}</span>` : '<span class="cell-sub">not sent yet</span>') },
+    { label: '', render: (r) => (canWrite ? `<div class="row nowrap" style="gap:6px"><button class="btn sm" type="button" data-rsend="${esc(r.id)}">Send now</button><button class="btn sm" type="button" data-rdel="${esc(r.id)}">Remove</button></div>` : '') },
+  ], rows: rs.schedules, empty: 'No report e-mails yet. The monthly close e-mail is set above.' });
+  $('[data-rcur]', el)?.addEventListener('change', async (e) => {
+    try { await api('/v1/finance/fx-rates/reporting-currency', { method: 'PUT', body: { currency: e.target.value || null } }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); }
+  });
+  $('[data-fxfetch]', el)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { const r = await api('/v1/finance/fx-rates/fetch', { method: 'POST', body: { month: cm } }); toast(`Fetched ${r.rates.map((x) => `${x.currency} ${x.rate}`).join(', ')}${r.failed.length ? `; not ${r.failed.map((x) => x.currency).join(', ')}` : ''}.`, r.failed.length ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+  });
+  $('[data-fxadd]', el)?.addEventListener('click', () => modal({ title: 'Enter an exchange rate', subtitle: `Into ${rc}`,
+    body: `<div class="form">${field('Month', `<input name="m" type="month" value="${cm}">`)}${field('Currency', `<select name="c">${others.map((c) => `<option>${esc(c)}</option>`).join('')}</select>`)}${field(`1 unit in ${esc(rc)}`, '<input name="r" inputmode="decimal">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(ctx) {
+      const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+      try { await api('/v1/finance/fx-rates', { method: 'PUT', body: { month: v('m'), currency: v('c'), rate: Number(v('r').replace(',', '.')) } }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+  $('[data-rsave]', el)?.addEventListener('click', async () => {
+    const rules = {};
+    for (const tr of $$('[data-rules] tbody tr', el)) {
+      const rule = $('[name="rule"]', tr).value;
+      if (!rule) continue;
+      rules[tr.dataset.k] = { rule, above: Number(($('[name="above"]', tr)?.value ?? '0').replace(/\D/g, '') || 0) };
+    }
+    try { await api('/v1/finance/approval-rules', { method: 'PUT', body: { rules } }); toast('Approvals saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); }
+  });
+  $('[data-rnew]', el)?.addEventListener('click', () => modal({ title: 'New report e-mail', size: 'lg',
+    body: `<div class="form">${field('Name', '<input name="n" maxlength="80" value="Finance weekly">')}${field('When', '<select name="f"><option value="weekly">Weekly</option><option value="monthly">Monthly (on the 1st, last month)</option></select>')}
+      ${field('Weekday', `<select name="w">${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d, i) => `<option value="${i + 1}">${d}</option>`).join('')}</select>`)}
+      ${field('Recipients', '<input name="to" placeholder="cfo@yourcompany.co.id, accountant@firm.co.id">')}</div>
+      <div class="row" style="gap:14px;flex-wrap:wrap;margin-top:8px">${rs.reports.map((r) => `<label class="check"><input type="checkbox" name="rep" value="${esc(r)}"${r === 'summary' || r === 'collections' ? ' checked' : ''}><span>${esc(r)}</span></label>`).join('')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Create', kind: 'primary', async onClick(ctx) {
+      const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+      try { await api('/v1/finance/report-schedules', { method: 'POST', body: { name: v('n'), frequency: v('f'), weekday: Number(v('w')), recipients: v('to'), reports: $$('[name="rep"]:checked', ctx.body).map((x) => x.value) } }); toast('Created.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+  $('[data-rl]', el).addEventListener('click', async (e) => {
+    const sb = e.target.closest('[data-rsend]'), db = e.target.closest('[data-rdel]');
+    if (sb) { sb.disabled = true; try { const r = await api(`/v1/finance/report-schedules/${sb.dataset.rsend}/send`, { method: 'POST' }); toast(`Sent to ${r.to.join(', ')}.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); sb.disabled = false; } }
+    if (db) { try { await api(`/v1/finance/report-schedules/${db.dataset.rdel}`, { method: 'PUT', body: { archived: true } }); toast('Removed.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } }
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -987,7 +1100,7 @@ registerView('finance', {
   async render(root, [initialTab]) {
     const canWrite = state.can('payment:write');
     const tabs = [
-      { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
+      { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
       { id: 'payables', label: 'Payables' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'settings', label: 'Settings' },
     ];
@@ -1319,8 +1432,10 @@ registerView('finance', {
           ${[...new Set([...RATE_METHODS, ...Object.keys(st.contractRates ?? {})])].map((m) => { const v = st.contractRates?.[m] ?? {}; const inp = (k, w) => `<input name="r_${k}_${esc(m)}" value="${v[k] ?? ''}" inputmode="decimal" style="width:${w}px"${canWrite ? '' : ' disabled'}>`; return `<tr><td class="mono">${esc(m)}</td><td class="num">${inp('pct', 70)}</td><td class="num">${inp('fixed', 90)}</td><td class="num">${inp('min', 90)}</td><td class="num">${inp('freeUpTo', 110)}</td></tr>`; }).join('')}
           </tbody></table></div></div>
         ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}
-        <div class="section" data-acct-sw></div>`;
+        <div class="section" data-acct-sw></div>
+        <div data-p10></div>`;
       accountingSection($('[data-acct-sw]', body), base(), canWrite, st.accountingPackage);
+      phase10Settings($('[data-p10]', body), canWrite);
       $('[data-jdl]', body).addEventListener('click', () => $('[data-journal]', bodyAll).click());
       $('[data-save]', body)?.addEventListener('click', async () => {
         const journalAccounts = Object.fromEntries(Object.keys(r.defaults).map((k) => [k, { code: $(`[name="code_${k}"]`, body).value.trim(), name: $(`[name="name_${k}"]`, body).value.trim() }]));
@@ -1347,6 +1462,7 @@ registerView('finance', {
     const DRAW = { overview: drawOverview, payments: drawPayments, receivables: drawReceivables, payables: drawPayables, fees: drawFees, reconciliation: drawReconciliation, settings: drawSettings,
       bank: () => bankSection(body, canWrite), tax: () => taxSection(body, canWrite),
       forecast: () => { load(); return forecastSection(body, base(), gw()); },
+      summary: () => summarySection(body),
       margin: () => marginSection(body, canWrite), budgets: () => budgetsSection(body, canWrite), collections: () => collectionsSection(body, canWrite) };
     const show = async (id) => {
       current = id;

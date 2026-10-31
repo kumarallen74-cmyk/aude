@@ -1,4 +1,5 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
+import { gate, ApprovalError } from './finance-approvals.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { seal, unseal } from './secrets.js';
@@ -81,12 +82,15 @@ export async function disbursementAvailable(intentIds: string[]): Promise<Map<st
 export interface TransferView {
   id: string; paymentId: string; rail: 'duitku' | 'xendit'; state: string; amount: number; currency: string; bankCode: string; accountMasked: string;
   holderName: string; checkedName: string | null; namesMatch: boolean; requestedBy: string | null; requestedByName: string | null; requestedAt: string;
+  /** (v1.21.0) The first of two approvals, when the approvals matrix asks for two. */
+  firstApprovedBy: string | null;
   approvedBy: string | null; approvedByName: string | null; approvedAt: string | null; reason: string | null; responseCode: string | null; error: string | null;
 }
 const view = (r: any): TransferView => ({
   id: String(r.id), paymentId: r.payment_intent_id, rail: r.rail ?? 'duitku', state: r.state, amount: Number(r.amount_minor), currency: r.currency, bankCode: r.bank_code,
   accountMasked: `••••${r.account_last4}`, holderName: r.holder_name, checkedName: r.checked_name, namesMatch: namesMatch(r.holder_name, r.checked_name),
   requestedBy: r.requested_by, requestedByName: r.requested_by_name ?? null, requestedAt: iso(r.requested_at)!,
+  firstApprovedBy: r.first_approved_by ?? null,
   approvedBy: r.approved_by, approvedByName: r.approved_by_name ?? null, approvedAt: iso(r.approved_at), reason: r.reason, responseCode: r.response_code, error: r.error,
 });
 
@@ -164,10 +168,18 @@ export async function rejectTransfer(orgId: string, id: string, reasonRaw: unkno
 }
 
 /** Step 2: a second person approves; the transfer is sent, once. */
-export async function approveTransfer(orgId: string, id: string, userId: string | null): Promise<TransferView> {
+export async function approveTransfer(orgId: string, id: string, userId: string | null, canApprove = false): Promise<TransferView> {
   const t = await transferRow(orgId, id);
   if (t.state !== 'awaiting_approval') throw new TransferError(409, `The transfer is ${t.state}.`);
-  if (!userId || t.requested_by === userId) throw new TransferError(403, 'A transfer is approved by a second person: not the one who requested it.');
+  // (v1.21.0) The approvals matrix: a Finance Manager above a threshold, or two approvers (the first is recorded here).
+  try {
+    if (await gate('refund', orgId, { id: t.id, amount: Number(t.amount_minor), requested_by: t.requested_by, first_approved_by: t.first_approved_by }, { userId, canApprove }) === 'first') {
+      return view(await one<any>(`SELECT * FROM refund_transfer WHERE id = $1`, [t.id]));
+    }
+  } catch (e) {
+    if (e instanceof ApprovalError) throw new TransferError(e.statusCode, e.message);
+    throw e;
+  }
   const d = await railFor(t.integration_id);
   if (!d) throw new TransferError(409, 'Sending refunds is no longer set up on that account.');
   const lim = d.limits('refund');

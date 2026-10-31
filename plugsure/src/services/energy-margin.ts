@@ -1,5 +1,6 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { config } from '../config.js';
+import { consolidate } from './fx.js';
 
 /**
  * Energy cost and margin (v1.20.0), per site and month:
@@ -90,7 +91,11 @@ export async function month(orgId: string, monthRaw: unknown, siteId?: string) {
     if (s.energyCost == null) { if (s.kwh > 0) t.unknownSites++; } else { t.energyCost += s.energyCost; t.margin += s.revenue - s.energyCost; }
     totals[s.currency] = t;
   }
-  return { month: m, sites: out, totals };
+  // (v1.21.0) In the reporting currency, when one is set.
+  const pick = (k: 'revenue' | 'energyCost' | 'margin') => Object.fromEntries(Object.entries(totals).map(([c, t]) => [c, t[k]]));
+  const [rev, cost, mar] = await Promise.all([consolidate(orgId, m, pick('revenue')), consolidate(orgId, m, pick('energyCost')), consolidate(orgId, m, pick('margin'))]);
+  const consolidated = rev ? { currency: rev.currency, revenue: rev.amount, energyCost: cost!.amount, margin: mar!.amount, missing: [...new Set([...rev.missing, ...cost!.missing])] } : null;
+  return { month: m, sites: out, totals, consolidated };
 }
 
 /** The last n months for the organisation (or one site): revenue, kWh, energy cost, margin per month and currency. */

@@ -23,6 +23,8 @@ export type Permission =
   | 'tariff:read' | 'tariff:write'
   | 'token:read' | 'token:write'
   | 'payment:read' | 'payment:write'
+  /** (v1.21.0) Approve refunds, payouts and write-offs above the organisation's approval thresholds, and set them. */
+  | 'finance:approve'
   | 'invoice:read' | 'invoice:write'
   | 'compliance:read' | 'compliance:write'
   | 'smartcharging:read' | 'smartcharging:write'
@@ -72,7 +74,7 @@ export const SYSTEM_ROLES: Record<string, Permission[]> = {
     'charge_point:read', 'charge_point:write', 'charge_point:command', 'charge_point:config',
     'firmware:read', 'firmware:write',
     'session:read', 'session:write', 'session:export', 'tariff:read', 'tariff:write',
-    'token:read', 'token:write', 'payment:read', 'payment:write',
+    'token:read', 'token:write', 'payment:read', 'payment:write', 'finance:approve',
     'invoice:read', 'invoice:write', 'compliance:read', 'compliance:write',
     'smartcharging:read', 'smartcharging:write', 'audit:read',
     'user:read', 'user:write', 'webhook:read', 'webhook:write', 'alert:read', 'alert:write',
@@ -101,7 +103,7 @@ export const SYSTEM_ROLES: Record<string, Permission[]> = {
     'charge_point:read', 'charge_point:write', 'charge_point:command', 'charge_point:config',
     'firmware:read', 'firmware:write',
     'session:read', 'session:write', 'session:export', 'tariff:read', 'tariff:write',
-    'token:read', 'token:write', 'payment:read', 'payment:write',
+    'token:read', 'token:write', 'payment:read', 'payment:write', 'finance:approve',
     'invoice:read', 'invoice:write', 'compliance:read', 'compliance:write',
     'smartcharging:read', 'smartcharging:write', 'audit:read',
     'user:read', 'user:write', 'webhook:read', 'webhook:write', 'alert:read', 'alert:write',
@@ -143,6 +145,9 @@ export const SYSTEM_ROLES: Record<string, Permission[]> = {
 
   finance: ['site:read', 'session:read', 'payment:read', 'payment:write', 'invoice:read', 'invoice:write', 'tariff:read'],
 
+  /** (v1.21.0) Finance manager: the finance team's lead, who approves above the thresholds of the approvals matrix. */
+  finance_manager: ['site:read', 'session:read', 'session:export', 'payment:read', 'payment:write', 'finance:approve', 'invoice:read', 'invoice:write', 'tariff:read', 'audit:read', 'alert:read'],
+
   compliance: ['site:read', 'charge_point:read', 'compliance:read', 'compliance:write', 'session:read', 'audit:read'],
 
   technician: ['site:read', 'charge_point:read', 'charge_point:write', 'charge_point:command', 'compliance:read'],
@@ -181,6 +186,8 @@ export const CONSOLE_ROLES: Array<{ name: string; label: string; siteScoped: boo
     description: 'Sees only the sites they host: live status, revenue and power. No commands.' },
   { name: 'field_technician', label: 'Field Technician', siteScoped: false,
     description: 'Monitors the fleet, runs diagnostic commands and test sessions, edits charger configuration.' },
+  { name: 'finance_manager', label: 'Finance Manager', siteScoped: false,
+    description: 'Finance: payments, refunds, payouts, statements and invoices; approves above the approval thresholds (finance:approve). No fleet control.' },
   { name: 'financial_auditor', label: 'Financial Auditor', siteScoped: false,
     description: 'Read-only fleet visibility with full session, invoice and audit export.' },
   { name: 'site_owner', label: 'Site Owner (portal)', siteScoped: false, ownerScoped: true,
@@ -251,7 +258,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   'charge_point:read', 'charge_point:write', 'charge_point:command', 'charge_point:config',
   'firmware:read', 'firmware:write',
   'session:read', 'session:write', 'session:export', 'tariff:read', 'tariff:write',
-  'token:read', 'token:write', 'payment:read', 'payment:write',
+  'token:read', 'token:write', 'payment:read', 'payment:write', 'finance:approve',
   'invoice:read', 'invoice:write', 'compliance:read', 'compliance:write',
   'smartcharging:read', 'smartcharging:write', 'audit:read',
   'user:read', 'user:write', 'webhook:read', 'webhook:write', 'alert:read', 'alert:write',

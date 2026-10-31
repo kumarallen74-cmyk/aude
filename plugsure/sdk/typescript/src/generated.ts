@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.20.0";
+export const API_VERSION = "1.21.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5070,6 +5070,14 @@ export type ApplyPaymentPlugSureMissedResponse = {
   outcome: string;
 };
 
+export type ApprovalsMatrixResponse = {
+  rules?: Record<string, {
+    above?: number;
+    rule?: "finance_approver" | "two_approvers";
+  }>;
+  canApprove?: boolean;
+};
+
 export type ApproveAndSendOwnerPayoutResponse = {
   transfer: PayoutTransfer;
 };
@@ -5520,6 +5528,16 @@ export type CreateQrisPrePurchaseBody = {
   amountIdr?: number;
 };
 
+export type CreateReportEMailScheduleBody = {
+  name: string;
+  reports: ("summary" | "margin" | "collections" | "budgets" | "forecast")[];
+  frequency: "weekly" | "monthly";
+  weekday?: number;
+  recipients: string[];
+  accountId?: string;
+  enabled?: boolean;
+};
+
 export type CreateRoamingPartnerBody = {
   name: string;
   /** Any other value is stored as emsp. */
@@ -5788,6 +5806,18 @@ export type ExportClosedMonthToAccountingPackageBody = {
   package?: "jurnal" | "accurate" | "generic";
 };
 
+export type FetchMonthEcbReferenceRatesBody = {
+  month: string;
+};
+
+export type FetchMonthEcbReferenceRatesResponse = {
+  month?: string;
+  reporting?: string;
+  date?: string;
+  rates?: Record<string, unknown>[];
+  failed?: Record<string, unknown>[];
+};
+
 export type FetchPkiRootCertificatesResponse = {
   anchors: PncTrustAnchor[];
   received: number;
@@ -5872,6 +5902,14 @@ export type FinanceSettingsResponse = {
     name?: string;
   }>;
   labels?: Record<string, string>;
+};
+
+export type FinanceSummaryKeyFiguresResponse = {
+  asOf?: string;
+  month?: string;
+  months?: string[];
+  perCurrency?: Record<string, unknown>[];
+  consolidated?: Record<string, unknown> | null;
 };
 
 export type GatewayFeeAuditResponse = {
@@ -7169,6 +7207,24 @@ export type ReplyToWhatsAppCustomerResponse = {
   ok: boolean;
 };
 
+export type ReportEMailSchedulesResponse = {
+  schedules?: Record<string, unknown>[];
+  reports?: string[];
+};
+
+export type ReportingCurrencyAndExchangeRatesResponse = {
+  reportingCurrency?: string | null;
+  currencies?: string[];
+  rates?: {
+    month?: string;
+    currency?: string;
+    rate?: number;
+    source?: "manual" | "ecb";
+    by?: string | null;
+    at?: string;
+  }[];
+};
+
 export type RequestOwnerPayoutThroughDuitkuDisbursementBody = {
   amount?: number;
   note?: string;
@@ -7432,6 +7488,12 @@ export type SendPaymentReminderNowResponse = {
   destination?: string | null;
 };
 
+export type SendReportEMailNowResponse = {
+  ok?: boolean;
+  to?: string[];
+  reference?: string | null;
+};
+
 export type SendTestAlertMessageBody = {
   /** E-mail address, or WhatsApp / mobile number (e.g. +62 812 3456 7890). */
   destination: string;
@@ -7476,6 +7538,15 @@ export type SetAllowedEMailDomainsResponse = {
   tenant: MicrosoftTenant;
 };
 
+export type SetApprovalsMatrixBody = {
+  rules: Record<string, unknown>;
+};
+
+export type SetApprovalsMatrixResponse = {
+  rules?: Record<string, unknown>;
+  canApprove?: boolean;
+};
+
 export type SetBudgetAlertThresholdBody = {
   budgetAlertPct: number;
 };
@@ -7502,6 +7573,12 @@ export type SetMonthBudgetBody = {
   ownerShare?: number;
 };
 
+export type SetMonthExchangeRateBody = {
+  month: string;
+  currency: string;
+  rate: number;
+};
+
 export type SetOcpiPartyOfCountryBody = {
   /** Three letters or digits. Upper-cased. */
   partyId: string;
@@ -7521,6 +7598,14 @@ export type SetReminderScheduleBody = {
     name?: string;
     lang?: string;
   } | null;
+};
+
+export type SetReportingCurrencyBody = {
+  currency?: string | null;
+};
+
+export type SetReportingCurrencyResponse = {
+  reportingCurrency?: string | null;
 };
 
 export type SetRoamingIdentityBody = {
@@ -8433,11 +8518,22 @@ export class Operations {
   }
 
   /**
+   * The approvals matrix
+   *
+   * (v1.21.0) Per kind (refund, payout, write_off, bank_change): above an amount, finance_approver (the approver holds finance:approve) or two_approvers (two different people, neither the requester). canApprove: whether the caller holds finance:approve.
+   *
+   * `GET /v1/finance/approval-rules` · needs `payment:read`
+   */
+  approvalsMatrix(options?: RequestOptions): Promise<ApprovalsMatrixResponse> {
+    return this.transport.request<ApprovalsMatrixResponse>({ method: "GET", path: "/v1/finance/approval-rules", accept: "json" }, options);
+  }
+
+  /**
    * Approve and send an owner payout
    *
    * (v1.16.0) By a second person (never the requester: 403). Within the payout limits, with what is outstanding checked again and a fresh inquiry, the transfer is sent once; when Duitku confirms it the statement payment is recorded. Audited as finance.owner_payout_approved.
    *
-   * `POST /v1/finance/payout-transfers/{tid}/approve` · needs `payment:write`
+   * `POST /v1/finance/payout-transfers/{tid}/approve` · needs `payment:write`, `finance:approve`
    */
   approveAndSendOwnerPayout(params: {
     /** The payout id. */
@@ -8451,7 +8547,7 @@ export class Operations {
    *
    * (v1.15.0) By a second person with payment:write (never the requester: 403). Within the limits (one transfer; all approved that day), a fresh inquiry is made (the bank's name must not have changed) and the transfer sent, once. succeeded: the refund is recorded refunded (method disbursement); failed: due again; sent: not confirmed yet, checked automatically. Audited as refund.transfer_approved.
    *
-   * `POST /v1/refund-transfers/{tid}/approve` · needs `payment:write`
+   * `POST /v1/refund-transfers/{tid}/approve` · needs `payment:write`, `finance:approve`
    */
   approveAndSendRefundTransfer(params: {
     /** The transfer id. */
@@ -8465,7 +8561,7 @@ export class Operations {
    *
    * (v1.19.0) decision: approve (the requested account replaces the one on file) or reject (note required; the owner sees it). Not by the person who asked. Audited as finance.owner_bank_change_approved / _rejected.
    *
-   * `POST /v1/finance/owner-bank-requests/{rid}/{decision}` · needs `payment:write`
+   * `POST /v1/finance/owner-bank-requests/{rid}/{decision}` · needs `payment:write`, `finance:approve`
    */
   approveOrRejectSiteOwnerBankDetailChange(params: {
     /** The request id. */
@@ -8482,7 +8578,7 @@ export class Operations {
    *
    * (v1.20.0) decision: approve or reject (note required); not by the requester. Audited as finance.write_off_approved / _rejected.
    *
-   * `POST /v1/finance/write-offs/{wid}/{decision}` · needs `payment:write`
+   * `POST /v1/finance/write-offs/{wid}/{decision}` · needs `payment:write`, `finance:approve`
    */
   approveOrRejectWriteOff(params: {
     /** The write-off id. */
@@ -8915,6 +9011,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a report e-mail schedule
+   *
+   * (v1.21.0) The same fields; archived: true removes it. Audited.
+   *
+   * `PUT /v1/finance/report-schedules/{rid}` · needs `payment:write`
+   */
+  changeOrArchiveReportEMailSchedule(params: {
+    /** The schedule id. */
+    rid: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/report-schedules/{rid}", pathParams: { rid: params.rid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Chargers and their V2G certificates
    *
    * **Permissions checked:** `charge_point:read`.
@@ -9234,6 +9345,19 @@ export class Operations {
     body: CreateQrisPrePurchaseBody;
   }, options?: RequestOptions): Promise<CheckoutQrisResult> {
     return this.transport.request<CheckoutQrisResult>({ method: "POST", path: "/v1/checkout/qris", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Create a report e-mail schedule
+   *
+   * (v1.21.0) name; reports (summary, margin, collections, budgets, forecast); frequency weekly (weekday 1–7) or monthly (the 1st); 1–10 recipients; accountId for the forecast. Audited.
+   *
+   * `POST /v1/finance/report-schedules` · needs `payment:write`
+   */
+  createReportEMailSchedule(params: {
+    body: CreateReportEMailScheduleBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-schedules", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9834,6 +9958,19 @@ export class Operations {
   }
 
   /**
+   * Fetch a month's ECB reference rates
+   *
+   * (v1.21.0) For each other currency of the organisation's sites, the ECB reference rate on the month's last day (or the latest) into the reporting currency (FX_RATES_URL, default the frankfurter API). 502 when none could be fetched. Audited as finance.fx_rates_fetched.
+   *
+   * `POST /v1/finance/fx-rates/fetch` · needs `payment:write`
+   */
+  fetchMonthEcbReferenceRates(params: {
+    body: FetchMonthEcbReferenceRatesBody;
+  }, options?: RequestOptions): Promise<FetchMonthEcbReferenceRatesResponse> {
+    return this.transport.request<FetchMonthEcbReferenceRatesResponse>({ method: "POST", path: "/v1/finance/fx-rates/fetch", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Fetch the PKI's root certificates
    *
    * **Permissions checked:** `org:write`.
@@ -9891,6 +10028,17 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<FinanceSettingsResponse> {
     return this.transport.request<FinanceSettingsResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/settings", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Finance summary (key figures)
+   *
+   * (v1.21.0) Per currency: revenue month to date (against last month to the same day and the same month last year), kWh, margin, receivables and DSO, cash (gateway balances and the last bank statement), the last 30 days' fee and refund rates, and 12 months of revenue and margin; consolidated revenue, margin and receivables in the reporting currency when set.
+   *
+   * `GET /v1/finance/summary` · needs `payment:read`
+   */
+  financeSummaryKeyFigures(options?: RequestOptions): Promise<FinanceSummaryKeyFiguresResponse> {
+    return this.transport.request<FinanceSummaryKeyFiguresResponse>({ method: "GET", path: "/v1/finance/summary", accept: "json" }, options);
   }
 
   /**
@@ -12488,6 +12636,32 @@ export class Operations {
   }
 
   /**
+   * Report e-mail schedules
+   *
+   * (v1.21.0) The organisation's schedules (reports, weekly or monthly, recipients, the last send or error) and the reports offered.
+   *
+   * `GET /v1/finance/report-schedules` · needs `payment:read`
+   */
+  reportEMailSchedules(options?: RequestOptions): Promise<ReportEMailSchedulesResponse> {
+    return this.transport.request<ReportEMailSchedulesResponse>({ method: "GET", path: "/v1/finance/report-schedules", accept: "json" }, options);
+  }
+
+  /**
+   * Reporting currency and exchange rates
+   *
+   * (v1.21.0) The reporting currency, the currencies of the organisation's sites, and the monthly rates into the reporting currency (manual or ECB). month: one month.
+   *
+   * `GET /v1/finance/fx-rates` · needs `payment:read`
+   */
+  reportingCurrencyAndExchangeRates(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<ReportingCurrencyAndExchangeRatesResponse> {
+    return this.transport.request<ReportingCurrencyAndExchangeRatesResponse>({ method: "GET", path: "/v1/finance/fx-rates", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Request diagnostic logs
    *
    * Sends GetDiagnostics so the charger uploads its logs, either to your location or to a one-time URL on this deployment for the built-in log viewer. Needs charge_point:config or charge_point:command. Returns 409 when the charger is offline, and 422 (with the request id) when the location is invalid or the charger refuses or does not answer.
@@ -12897,6 +13071,20 @@ export class Operations {
   }
 
   /**
+   * Send a report e-mail now
+   *
+   * (v1.21.0) Through the e-mail channel, with the workbook attached. 409 without an e-mail channel; 502 when the server refuses. Audited as finance.report_sent.
+   *
+   * `POST /v1/finance/report-schedules/{rid}/send` · needs `payment:write`
+   */
+  sendReportEMailNow(params: {
+    /** The schedule id. */
+    rid: string;
+  }, options?: RequestOptions): Promise<SendReportEMailNowResponse> {
+    return this.transport.request<SendReportEMailNowResponse>({ method: "POST", path: "/v1/finance/report-schedules/{rid}/send", pathParams: { rid: params.rid }, accept: "json" }, options);
+  }
+
+  /**
    * Send a test alert message
    *
    * Sends a test message on the saved channel now (not queued), records it in the notification log and on the channel. Answers 200 when the send was attempted — check `ok` and `error`. Audited.
@@ -12967,6 +13155,19 @@ export class Operations {
   }
 
   /**
+   * Set the approvals matrix
+   *
+   * (v1.21.0) Needs finance:approve (403 otherwise). Replaces the rules; a kind left out keeps only the second-person rule. Audited as finance.approval_rules_saved.
+   *
+   * `PUT /v1/finance/approval-rules` · needs `payment:write`, `finance:approve`
+   */
+  setApprovalsMatrix(params: {
+    body: SetApprovalsMatrixBody;
+  }, options?: RequestOptions): Promise<SetApprovalsMatrixResponse> {
+    return this.transport.request<SetApprovalsMatrixResponse>({ method: "PUT", path: "/v1/finance/approval-rules", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the budget alert threshold
    *
    * (v1.20.0) From the 7th of the month, revenue below or energy cost above the pro-rated budget by more than this % raises finance.budget_off_track. Audited.
@@ -13023,6 +13224,19 @@ export class Operations {
   }
 
   /**
+   * Set a month's exchange rate
+   *
+   * (v1.21.0) How many units of the reporting currency one unit of `currency` is worth for the month. Audited as finance.fx_rate_saved.
+   *
+   * `PUT /v1/finance/fx-rates` · needs `payment:write`
+   */
+  setMonthExchangeRate(params: {
+    body: SetMonthExchangeRateBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/fx-rates", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the OCPI party of a country
    *
    * Adds or updates the party under which the operator publishes its sites in another country (MY, SG). The home party is set with PUT /v1/roaming/party. All parties are listed in our OCPI credentials (one CPO role each). Audited as roaming.party_set.
@@ -13048,6 +13262,19 @@ export class Operations {
     body: SetReminderScheduleBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/collections/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the reporting currency
+   *
+   * (v1.21.0) ISO code, or null to stop consolidating. Audited as finance.reporting_currency_saved.
+   *
+   * `PUT /v1/finance/fx-rates/reporting-currency` · needs `payment:write`
+   */
+  setReportingCurrency(params: {
+    body: SetReportingCurrencyBody;
+  }, options?: RequestOptions): Promise<SetReportingCurrencyResponse> {
+    return this.transport.request<SetReportingCurrencyResponse>({ method: "PUT", path: "/v1/finance/fx-rates/reporting-currency", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

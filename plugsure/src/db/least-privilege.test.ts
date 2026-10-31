@@ -29,7 +29,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'whatsapp_conversation', 'whatsapp_chat_message', 'gateway_transaction', 'gateway_balance_snapshot', 'gateway_sync_state', 'reconciliation_exception',
       'owner_bank_account', 'statement_payment', 'refund_transfer', 'payout_transfer', 'gateway_report', 'gateway_account_settings',
       'bank_statement', 'bank_statement_line', 'tax_withholding', 'owner_bank_change_request', 'accounting_export',
-      'site_energy_rate', 'site_energy_cost', 'finance_budget', 'finance_org_settings', 'receivable_note', 'dunning_reminder', 'receivable_write_off']]);
+      'site_energy_rate', 'site_energy_cost', 'finance_budget', 'finance_org_settings', 'receivable_note', 'dunning_reminder', 'receivable_write_off',
+      'fx_rate', 'finance_report_schedule']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -69,5 +70,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     receivable_note: 'INSERT,SELECT,UPDATE',
     dunning_reminder: 'INSERT,SELECT,UPDATE',
     receivable_write_off: 'INSERT,SELECT,UPDATE',
+    fx_rate: 'INSERT,SELECT,UPDATE',
+    finance_report_schedule: 'INSERT,SELECT,UPDATE',
   });
 });
