@@ -17,6 +17,42 @@ const PERIOD = [
 ];
 
 export const schemas: Record<string, Schema> = {
+  OwnerShare: {
+    type: 'object', required: ['statementId', 'number', 'period', 'ownerId', 'owner', 'currency', 'due', 'paid', 'outstanding', 'status'],
+    properties: {
+      statementId: { type: 'string', format: 'uuid' }, number: { type: 'string' }, period: { type: 'string', description: 'YYYY-MM.' }, ownerId: { type: 'string', format: 'uuid' }, owner: { type: 'string' },
+      currency: { type: 'string' }, due: count, paid: count, outstanding: count, status: { type: 'string', enum: ['due', 'partial', 'paid'] },
+      finalisedAt: nullable('string', { format: 'date-time' }), lastPaidOn: nullable('string', { format: 'date' }),
+      bank: { type: ['object', 'null'], properties: { bankName: { type: 'string' }, holderName: { type: 'string' }, accountMasked: { type: 'string' } } },
+    },
+  },
+  OperatorStatementDue: {
+    type: 'object', required: ['statementId', 'number', 'period', 'orgId', 'operator', 'currency', 'due', 'paid', 'outstanding', 'status'],
+    properties: {
+      statementId: { type: 'string', format: 'uuid' }, number: { type: 'string' }, period: { type: 'string' }, orgId: { type: 'string', format: 'uuid' }, operator: { type: 'string' },
+      currency: { type: 'string' }, due: count, paid: count, outstanding: count, status: { type: 'string', enum: ['due', 'partial', 'paid'] },
+      finalisedAt: nullable('string', { format: 'date-time' }), lastPaidOn: nullable('string', { format: 'date' }),
+    },
+  },
+  StatementDue: {
+    type: 'object', required: ['id', 'number', 'kind', 'currency', 'due', 'paid', 'outstanding', 'status'],
+    properties: {
+      id: { type: 'string', format: 'uuid' }, number: { type: 'string' }, kind: { type: 'string', enum: ['owner_payout', 'platform_fee'] }, currency: { type: 'string' },
+      due: count, paid: count, outstanding: count, status: { type: 'string', enum: ['due', 'partial', 'paid'] },
+    },
+  },
+  StatementPayment: {
+    type: 'object', required: ['id', 'amount', 'currency', 'paidOn', 'reference', 'voided'],
+    properties: {
+      id: { type: 'string' }, amount: count, currency: { type: 'string' }, paidOn: { type: 'string', format: 'date' }, reference: { type: 'string' }, note: nullable('string'),
+      recordedBy: nullable('string'), recordedAt: nullable('string', { format: 'date-time' }), voided: { type: 'boolean' }, voidedAt: nullable('string', { format: 'date-time' }),
+      voidedBy: nullable('string'), voidReason: nullable('string'),
+    },
+  },
+  OwnerBankAccount: {
+    type: 'object', required: ['ownerId', 'bankName', 'holderName', 'accountMasked'],
+    properties: { ownerId: { type: 'string', format: 'uuid' }, bankName: { type: 'string' }, bankCode: nullable('string'), holderName: { type: 'string' }, accountMasked: { type: 'string', description: '••••7890' }, updatedAt: DT },
+  },
   FinanceAccount: {
     type: 'object', required: ['id', 'provider', 'label'],
     properties: {
@@ -91,10 +127,10 @@ export const ops: Op[] = [
       rows: arrayOf(ref('GatewayTransaction')),
       fleetInvoices: arrayOf({ type: 'object', properties: { id: { type: 'string' }, number: { type: 'string' }, period: { type: 'string' }, total: money, currency: { type: 'string' }, dueDate: { type: 'string' }, account: nullable('string'), overdue: { type: 'boolean' } } }),
     } }),
-  acct('Payables', 'Refunds due on payments this account took (with the e-wallet\'s refund window and days left), and site owners\' shares on statements finalised in the last 120 days of the operators whose payments it took (listed as due; recording their payment comes later).',
+  acct('Payables', 'Refunds due on payments this account took (with the e-wallet\'s refund window and days left), and site owners\' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).',
     '/payables', { type: 'object', required: ['refunds', 'ownerShares'], properties: {
       refunds: arrayOf({ type: 'object', properties: { paymentId: { type: 'string' }, state: { type: 'string' }, amount: money, currency: { type: 'string' }, reason: nullable('string'), requestedAt: nullable('string', { format: 'date-time' }), channel: nullable('string'), paidAt: nullable('string', { format: 'date-time' }), reference: nullable('string'), operator: nullable('string'), refundWindowDays: { type: ['integer', 'null'] }, daysLeft: { type: ['integer', 'null'] } } }),
-      ownerShares: arrayOf({ type: 'object', properties: { statementId: { type: 'string' }, period: { type: 'string' }, owner: { type: 'string' }, operator: { type: 'string' }, amount: money, currency: { type: 'string' }, finalisedAt: DT, status: { type: 'string', enum: ['due'] } } }),
+      ownerShares: arrayOf({ type: 'object', properties: { statementId: { type: 'string' }, period: { type: 'string' }, owner: { type: 'string' }, operator: { type: 'string' }, amount: money, paid: money, currency: { type: 'string' }, finalisedAt: DT, status: { type: 'string', enum: ['due', 'partial', 'paid'] } } }),
     } }),
   acct('Gateway fees', 'Fees, VAT and withholding tax on payments by month and channel with the effective rate; and the QRIS fees Xendit charged against PlugSure\'s estimate (the one on owner statements).',
     '/fees', { type: 'object', required: ['rows', 'qris'], properties: {
@@ -135,5 +171,67 @@ export const ops: Op[] = [
     pathParams: ID, query: [...PERIOD, { name: 'format', schema: { type: 'string', enum: ['csv', 'xlsx', 'pdf'], default: 'xlsx' } }],
     responses: { 200: { description: 'The file (attachment)', contentType: 'application/octet-stream', schema: { type: 'string', format: 'binary' } } },
     errors: [400, 404],
+  },
+  // ─────────────────────────────────────────── (v1.14.0) payouts and statement payments, recorded
+  {
+    method: 'GET', path: '/v1/finance/owner-shares', tag: T, summary: 'Site owners\' shares and their payouts',
+    description: 'The organisation\'s owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner\'s bank (masked). PlugSure moves no money: the operator\'s bank does, and the transfer is recorded here.',
+    query: [{ name: 'status', schema: { type: 'string', enum: ['due', 'partial', 'paid'] } }],
+    responses: { 200: { description: 'Shares', schema: { type: 'object', required: ['shares'], properties: { shares: arrayOf(ref('OwnerShare')) } } } },
+    errors: [400],
+  },
+  {
+    method: 'GET', path: '/v1/finance/owner-shares/transfer-list.csv', tag: T, summary: 'Transfer list for the bank',
+    description: 'What is still owed to site owners, one line per statement, with each owner\'s bank, code, holder and FULL account number, for the bank\'s bulk transfer. payment:write; audited as finance.transfer_list_exported.',
+    responses: { 200: { description: 'CSV (attachment)', contentType: 'text/csv', schema: { type: 'string' } } },
+  },
+  {
+    method: 'GET', path: '/v1/finance/operator-statements', tag: T, summary: 'Operators\' statements to PlugSure',
+    description: 'Platform administrators: every operator\'s finalised statement to PlugSure (total due), what the operator paid (recorded), outstanding and status.',
+    query: [{ name: 'status', schema: { type: 'string', enum: ['due', 'partial', 'paid'] } }],
+    responses: { 200: { description: 'Statements', schema: { type: 'object', required: ['statements'], properties: { statements: arrayOf(ref('OperatorStatementDue')) } } } },
+    errors: [400],
+  },
+  {
+    method: 'GET', path: '/v1/finance/statements/:sid/payments', tag: T, summary: 'Payments recorded against a statement',
+    description: 'An owner statement of the caller\'s organisation, or (platform administrators) an operator\'s statement to PlugSure: what is due and paid, and every payment recorded, voided ones included.',
+    pathParams: { sid: 'The statement id.' },
+    responses: { 200: { description: 'The statement and its payments', schema: { type: 'object', required: ['statement', 'payments'], properties: { statement: ref('StatementDue'), payments: arrayOf(ref('StatementPayment')) } } } },
+    errors: [404, 409],
+  },
+  {
+    method: 'POST', path: '/v1/finance/statements/:sid/payments', tag: T, summary: 'Record a payout or statement payment',
+    description: 'Records a transfer the operator\'s bank made: to a site owner against an owner statement (finance.owner_payout_recorded), or from the operator to PlugSure against its statement (platform administrators; finance.platform_fee_recorded). amount is in the statement currency\'s minor units (rupiah: whole rupiah); more than is outstanding is refused; the statement must be finalised.',
+    pathParams: { sid: 'The statement id.' },
+    body: { required: true, schema: { type: 'object', required: ['amount', 'paidOn', 'reference'], properties: {
+      amount: { type: 'integer', minimum: 1 }, paidOn: { type: 'string', format: 'date' }, reference: { type: 'string', minLength: 1, maxLength: 120 }, note: { type: 'string', maxLength: 500 },
+    } }, example: { amount: 1250000, paidOn: '2026-11-05', reference: 'BCA 20261105-7781', note: 'October share' } },
+    responses: { 201: { description: 'Recorded', schema: { type: 'object', required: ['paymentId', 'statement'], properties: { paymentId: { type: 'string' }, statement: ref('StatementDue') } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/statement-payments/:pid/void', tag: T, summary: 'Void a recorded payment',
+    description: 'A payment recorded by mistake is voided (never deleted), with a reason; the statement is due again by its amount. Audited as finance.statement_payment_voided.',
+    pathParams: { pid: 'The payment id.' },
+    body: { required: true, schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 1, maxLength: 300 } } }, example: { reason: 'Recorded against the wrong month' } },
+    responses: { 200: { description: 'Voided', schema: { type: 'object', required: ['ok', 'statement'], properties: { ok: { type: 'boolean' }, statement: ref('StatementDue') } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/owners/:oid/bank-account', tag: T, summary: 'A site owner\'s bank details',
+    description: 'Where the owner is paid: bank, code, account holder; the account number masked (it is stored sealed). 404 when none are saved.',
+    pathParams: { oid: 'The site owner id.' },
+    responses: { 200: { description: 'Bank details', schema: { type: 'object', required: ['account'], properties: { account: ref('OwnerBankAccount') } } } },
+    errors: [404],
+  },
+  {
+    method: 'PUT', path: '/v1/finance/owners/:oid/bank-account', tag: T, summary: 'Set a site owner\'s bank details',
+    description: 'bankName and holderName are required; accountNumber (5–20 digits) is required the first time and kept when omitted later. payment:write; audited as finance.owner_bank_account_saved (masked).',
+    pathParams: { oid: 'The site owner id.' },
+    body: { required: true, schema: { type: 'object', required: ['bankName', 'holderName'], properties: {
+      bankName: { type: 'string', maxLength: 80 }, bankCode: { type: 'string', pattern: '^[A-Za-z0-9]{2,12}$' }, holderName: { type: 'string', maxLength: 120 }, accountNumber: { type: 'string', pattern: '^[0-9 .-]{5,24}$' },
+    } }, example: { bankName: 'BCA', bankCode: '014', holderName: 'PT Hotel Nusantara', accountNumber: '1234567890' } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object', required: ['account'], properties: { account: ref('OwnerBankAccount') } } } },
+    errors: [404, 422],
   },
 ];

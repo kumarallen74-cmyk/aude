@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.13.0";
+export const API_VERSION = "1.14.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -2285,6 +2285,21 @@ export interface OnboardingCharger {
   stage: "waiting" | "registered" | "refused" | "awaiting_activation" | "certificate_in_progress" | "needs_certificate" | "connected";
 }
 
+export interface OperatorStatementDue {
+  statementId: string;
+  number: string;
+  period: string;
+  orgId: string;
+  operator: string;
+  currency: string;
+  due: number;
+  paid: number;
+  outstanding: number;
+  status: "due" | "partial" | "paid";
+  finalisedAt?: string | null;
+  lastPaidOn?: string | null;
+}
+
 export interface OrgSettings {
   name?: string;
   /** ID, MY or SG. */
@@ -2325,6 +2340,16 @@ export interface OrgSettings {
   }[];
 }
 
+export interface OwnerBankAccount {
+  ownerId: string;
+  bankName: string;
+  bankCode?: string | null;
+  holderName: string;
+  /** ••••7890 */
+  accountMasked: string;
+  updatedAt?: string;
+}
+
 export interface OwnerInput {
   /** Required when creating. */
   name?: string;
@@ -2359,6 +2384,27 @@ export interface OwnerRow {
   }[];
   chargers: number;
   users: number;
+}
+
+export interface OwnerShare {
+  statementId: string;
+  number: string;
+  /** YYYY-MM. */
+  period: string;
+  ownerId: string;
+  owner: string;
+  currency: string;
+  due: number;
+  paid: number;
+  outstanding: number;
+  status: "due" | "partial" | "paid";
+  finalisedAt?: string | null;
+  lastPaidOn?: string | null;
+  bank?: {
+    bankName?: string;
+    holderName?: string;
+    accountMasked?: string;
+  } | null;
 }
 
 export interface PendingCharger {
@@ -3783,6 +3829,17 @@ export interface StatementChargerLine {
   feeIdr?: number;
 }
 
+export interface StatementDue {
+  id: string;
+  number: string;
+  kind: "owner_payout" | "platform_fee";
+  currency: string;
+  due: number;
+  paid: number;
+  outstanding: number;
+  status: "due" | "partial" | "paid";
+}
+
 export interface StatementFinalisedRow {
   /** A calendar month, YYYY-MM. */
   period: string;
@@ -3821,6 +3878,21 @@ export interface StatementParty {
   name: string;
   npwp?: string | null;
   address?: string | null;
+}
+
+export interface StatementPayment {
+  id: string;
+  amount: number;
+  currency: string;
+  paidOn: string;
+  reference: string;
+  note?: string | null;
+  recordedBy?: string | null;
+  recordedAt?: string | null;
+  voided: boolean;
+  voidedAt?: string | null;
+  voidedBy?: string | null;
+  voidReason?: string | null;
 }
 
 export interface StatementPlan {
@@ -6114,6 +6186,10 @@ export type OneWhatsAppSupportConversationResponse = {
   messages: WhatsAppChatMessage[];
 };
 
+export type OperatorsStatementsToPlugSureResponse = {
+  statements: OperatorStatementDue[];
+};
+
 export type PayablesResponse = {
   refunds: {
     paymentId?: string;
@@ -6135,9 +6211,10 @@ export type PayablesResponse = {
     owner?: string;
     operator?: string;
     amount?: number;
+    paid?: number;
     currency?: string;
     finalisedAt?: string;
-    status?: "due";
+    status?: "due" | "partial" | "paid";
   }[];
 };
 
@@ -6161,6 +6238,11 @@ export type PaymentsOnMyPositionsResponse = {
     /** Deprecated: the v1.6 name of `amount_minor`, present while the amount is in IDR. */
     amount_idr?: number;
   }[];
+};
+
+export type PaymentsRecordedAgainstStatementResponse = {
+  statement: StatementDue;
+  payments: StatementPayment[];
 };
 
 export type PlugChargeExchangeLogResponse = {
@@ -6326,6 +6408,18 @@ export type RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedResponse = {
 export type RecordPaymentOfFleetInvoiceBody = {
   paidAt?: string;
   reference?: string;
+};
+
+export type RecordPayoutOrStatementPaymentBody = {
+  amount: number;
+  paidOn: string;
+  reference: string;
+  note?: string;
+};
+
+export type RecordPayoutOrStatementPaymentResponse = {
+  paymentId: string;
+  statement: StatementDue;
 };
 
 export type RecordRefundPaidByBankTransferBody = {
@@ -6776,6 +6870,17 @@ export type SetSecurityProfileResponse = {
   profile: 0 | 1 | 2 | 3;
 };
 
+export type SetSiteOwnerBankDetailsBody = {
+  bankName: string;
+  bankCode?: string;
+  holderName: string;
+  accountNumber?: string;
+};
+
+export type SetSiteOwnerBankDetailsResponse = {
+  account: OwnerBankAccount;
+};
+
 export type SetSiteOwnerSitesBody = {
   siteIds: string[];
 };
@@ -6908,6 +7013,14 @@ export type SiteDriverQueueResponse = {
     left24h?: number;
     medianWaitMinutes?: number | null;
   };
+};
+
+export type SiteOwnerBankDetailsResponse = {
+  account: OwnerBankAccount;
+};
+
+export type SiteOwnersSharesAndTheirPayoutsResponse = {
+  shares: OwnerShare[];
 };
 
 export type StartSessionRemotelyBody = {
@@ -7093,6 +7206,15 @@ export type VoidFleetInvoiceBody = {
 export type VoidFleetInvoiceResponse = {
   invoice: FleetStatement;
   fakturWarning?: string | null;
+};
+
+export type VoidRecordedPaymentBody = {
+  reason: string;
+};
+
+export type VoidRecordedPaymentResponse = {
+  ok: boolean;
+  statement: StatementDue;
 };
 
 export type WhatsappAccountEventsResponse = {
@@ -10228,9 +10350,24 @@ export class Operations {
   }
 
   /**
+   * Operators' statements to PlugSure
+   *
+   * Platform administrators: every operator's finalised statement to PlugSure (total due), what the operator paid (recorded), outstanding and status.
+   *
+   * `GET /v1/finance/operator-statements` · needs `platform:admin`
+   */
+  operatorsStatementsToPlugSure(params?: {
+    query?: {
+      status?: "due" | "partial" | "paid";
+    };
+  }, options?: RequestOptions): Promise<OperatorsStatementsToPlugSureResponse> {
+    return this.transport.request<OperatorsStatementsToPlugSureResponse>({ method: "GET", path: "/v1/finance/operator-statements", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Payables
    *
-   * Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took (listed as due; recording their payment comes later).
+   * Refunds due on payments this account took (with the e-wallet's refund window and days left), and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).
    *
    * `GET /v1/finance/accounts/{id}/payables` · needs `payment:read`
    */
@@ -10265,6 +10402,20 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<PaymentsOnMyPositionsResponse> {
     return this.transport.request<PaymentsOnMyPositionsResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/payments", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Payments recorded against a statement
+   *
+   * An owner statement of the caller's organisation, or (platform administrators) an operator's statement to PlugSure: what is due and paid, and every payment recorded, voided ones included.
+   *
+   * `GET /v1/finance/statements/{sid}/payments` · needs `payment:read`
+   */
+  paymentsRecordedAgainstStatement(params: {
+    /** The statement id. */
+    sid: string;
+  }, options?: RequestOptions): Promise<PaymentsRecordedAgainstStatementResponse> {
+    return this.transport.request<PaymentsRecordedAgainstStatementResponse>({ method: "GET", path: "/v1/finance/statements/{sid}/payments", pathParams: { sid: params.sid }, accept: "json" }, options);
   }
 
   /**
@@ -10583,6 +10734,21 @@ export class Operations {
     body?: RecordPaymentOfFleetInvoiceBody;
   }, options?: RequestOptions): Promise<FleetStatement> {
     return this.transport.request<FleetStatement>({ method: "POST", path: "/v1/fleet-invoices/{id}/pay", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a payout or statement payment
+   *
+   * Records a transfer the operator's bank made: to a site owner against an owner statement (finance.owner_payout_recorded), or from the operator to PlugSure against its statement (platform administrators; finance.platform_fee_recorded). amount is in the statement currency's minor units (rupiah: whole rupiah); more than is outstanding is refused; the statement must be finalised.
+   *
+   * `POST /v1/finance/statements/{sid}/payments` · needs `payment:write`
+   */
+  recordPayoutOrStatementPayment(params: {
+    /** The statement id. */
+    sid: string;
+    body: RecordPayoutOrStatementPaymentBody;
+  }, options?: RequestOptions): Promise<RecordPayoutOrStatementPaymentResponse> {
+    return this.transport.request<RecordPayoutOrStatementPaymentResponse>({ method: "POST", path: "/v1/finance/statements/{sid}/payments", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11430,6 +11596,21 @@ export class Operations {
   }
 
   /**
+   * Set a site owner's bank details
+   *
+   * bankName and holderName are required; accountNumber (5–20 digits) is required the first time and kept when omitted later. payment:write; audited as finance.owner_bank_account_saved (masked).
+   *
+   * `PUT /v1/finance/owners/{oid}/bank-account` · needs `payment:write`
+   */
+  setSiteOwnerBankDetails(params: {
+    /** The site owner id. */
+    oid: string;
+    body: SetSiteOwnerBankDetailsBody;
+  }, options?: RequestOptions): Promise<SetSiteOwnerBankDetailsResponse> {
+    return this.transport.request<SetSiteOwnerBankDetailsResponse>({ method: "PUT", path: "/v1/finance/owners/{oid}/bank-account", pathParams: { oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set a site owner's commercial plan
    *
    * Sets the rates agreed with the owner from a month on (a new version, or a correction of that month's version); `plan: null` returns to the published rates. A month already finalised cannot be re-priced. Audited.
@@ -11568,6 +11749,35 @@ export class Operations {
     siteId: string;
   }, options?: RequestOptions): Promise<SiteDriverQueueResponse> {
     return this.transport.request<SiteDriverQueueResponse>({ method: "GET", path: "/v1/sites/{siteId}/queue", pathParams: { siteId: params.siteId }, accept: "json" }, options);
+  }
+
+  /**
+   * A site owner's bank details
+   *
+   * Where the owner is paid: bank, code, account holder; the account number masked (it is stored sealed). 404 when none are saved.
+   *
+   * `GET /v1/finance/owners/{oid}/bank-account` · needs `payment:read`
+   */
+  siteOwnerBankDetails(params: {
+    /** The site owner id. */
+    oid: string;
+  }, options?: RequestOptions): Promise<SiteOwnerBankDetailsResponse> {
+    return this.transport.request<SiteOwnerBankDetailsResponse>({ method: "GET", path: "/v1/finance/owners/{oid}/bank-account", pathParams: { oid: params.oid }, accept: "json" }, options);
+  }
+
+  /**
+   * Site owners' shares and their payouts
+   *
+   * The organisation's owner statements (finalised, with a share), newest first: the share due, what was paid against it (recorded transfers), outstanding, and status (due, partial, paid), with the owner's bank (masked). PlugSure moves no money: the operator's bank does, and the transfer is recorded here.
+   *
+   * `GET /v1/finance/owner-shares` · needs `payment:read`
+   */
+  siteOwnersSharesAndTheirPayouts(params?: {
+    query?: {
+      status?: "due" | "partial" | "paid";
+    };
+  }, options?: RequestOptions): Promise<SiteOwnersSharesAndTheirPayoutsResponse> {
+    return this.transport.request<SiteOwnersSharesAndTheirPayoutsResponse>({ method: "GET", path: "/v1/finance/owner-shares", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -11756,6 +11966,17 @@ export class Operations {
    */
   thisOperatorHubMembership(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/roaming/hub", accept: "json" }, options);
+  }
+
+  /**
+   * Transfer list for the bank
+   *
+   * What is still owed to site owners, one line per statement, with each owner's bank, code, holder and FULL account number, for the bank's bulk transfer. payment:write; audited as finance.transfer_list_exported.
+   *
+   * `GET /v1/finance/owner-shares/transfer-list.csv` · needs `payment:write`
+   */
+  transferListForBank(options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/owner-shares/transfer-list.csv", accept: "text" }, options);
   }
 
   /**
@@ -12087,6 +12308,21 @@ export class Operations {
     body: VoidFleetInvoiceBody;
   }, options?: RequestOptions): Promise<VoidFleetInvoiceResponse> {
     return this.transport.request<VoidFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a recorded payment
+   *
+   * A payment recorded by mistake is voided (never deleted), with a reason; the statement is due again by its amount. Audited as finance.statement_payment_voided.
+   *
+   * `POST /v1/finance/statement-payments/{pid}/void` · needs `payment:write`
+   */
+  voidRecordedPayment(params: {
+    /** The payment id. */
+    pid: string;
+    body: VoidRecordedPaymentBody;
+  }, options?: RequestOptions): Promise<VoidRecordedPaymentResponse> {
+    return this.transport.request<VoidRecordedPaymentResponse>({ method: "POST", path: "/v1/finance/statement-payments/{pid}/void", pathParams: { pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

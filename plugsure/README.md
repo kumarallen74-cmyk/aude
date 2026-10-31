@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.13.0 (31 October 2026), the current release:** Duitku as the fallback acquirer when Xendit does not answer, and in Finance. Notes: [`RELEASE-NOTES-v1.13.0.md`](RELEASE-NOTES-v1.13.0.md); setup: [`deploy/DUITKU.md`](deploy/DUITKU.md).
+**v1.14.0 (31 October 2026), the current release:** owner payouts and statement payments recorded in Finance: owners' shares due, part-paid or paid, owners' bank details, a transfer list for the bank. Notes: [`RELEASE-NOTES-v1.14.0.md`](RELEASE-NOTES-v1.14.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.13.0 (31 October 2026):** Duitku as the fallback acquirer when Xendit does not answer, and in Finance. Notes: [`RELEASE-NOTES-v1.13.0.md`](RELEASE-NOTES-v1.13.0.md); setup: [`deploy/DUITKU.md`](deploy/DUITKU.md).
 
 **v1.12.0 (31 October 2026):** Finance (Commercial → Finance): what Xendit collected, charged and settled, receivables, payables, fees, reconciliation against PlugSure's payments, and CSV / Excel / PDF exports. Notes: [`RELEASE-NOTES-v1.12.0.md`](RELEASE-NOTES-v1.12.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
