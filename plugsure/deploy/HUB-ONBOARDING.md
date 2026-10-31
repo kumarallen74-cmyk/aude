@@ -72,12 +72,12 @@ The hub's own endpoints are listed in its version details (`GET {versions URL}` 
 
 | Identifier | Role (the hub's) | URL |
 |---|---|---|
-| credentials | SENDER, RECEIVER | `https://hub.plugsure.asia/hub/ocpi/2.2.1/credentials` |
+| credentials | SENDER, RECEIVER | `https://hub.plugsure.co.id/hub/ocpi/2.2.1/credentials` |
 | hubclientinfo | SENDER | `…/2.2.1/hubclientinfo` |
 | locations, tariffs, sessions, cdrs, tokens, commands, chargingprofiles | SENDER | `…/2.2.1/sender/{module}` |
 | the same | RECEIVER | `…/2.2.1/receiver/{module}` |
 
-Always take the URLs from the version details, never hard-code them. `hub.plugsure.asia` is used in this guide as
+Always take the URLs from the version details, never hard-code them. `hub.plugsure.co.id` is used in this guide as
 the production host **[OWNER: final hostname]**.
 
 ## 4. Connecting: the credentials handshake
@@ -88,7 +88,7 @@ PlugSure creates your membership and a **connection**. There are two ways to run
 
 PlugSure sends you, over a secure channel:
 
-- the **versions URL**: `https://hub.plugsure.asia/hub/ocpi/versions`;
+- the **versions URL**: `https://hub.plugsure.co.id/hub/ocpi/versions`;
 - a **registration token (token A)**, valid until you complete the handshake.
 
 Tokens travel in the `Authorization` header as `Token <base64 of the token>` (OCPI 2.2.1). The hub also accepts the
@@ -99,15 +99,15 @@ raw token for clients still on the 2.1.1 convention.
 ```bash
 TOKEN_A='…token A as received…'
 AUTH="Authorization: Token $(printf %s "$TOKEN_A" | base64 -w0)"
-curl -sS https://hub.plugsure.asia/hub/ocpi/versions -H "$AUTH" \
+curl -sS https://hub.plugsure.co.id/hub/ocpi/versions -H "$AUTH" \
   -H "X-Request-ID: $(uuidgen)" -H "X-Correlation-ID: $(uuidgen)"
-# {"data":[{"version":"2.2.1","url":"https://hub.plugsure.asia/hub/ocpi/2.2.1"}],"status_code":1000,…}
+# {"data":[{"version":"2.2.1","url":"https://hub.plugsure.co.id/hub/ocpi/2.2.1"}],"status_code":1000,…}
 ```
 
 **Step 2 — version details** (the hub's endpoints):
 
 ```bash
-curl -sS https://hub.plugsure.asia/hub/ocpi/2.2.1 -H "$AUTH" \
+curl -sS https://hub.plugsure.co.id/hub/ocpi/2.2.1 -H "$AUTH" \
   -H "X-Request-ID: $(uuidgen)" -H "X-Correlation-ID: $(uuidgen)"
 ```
 
@@ -115,7 +115,7 @@ curl -sS https://hub.plugsure.asia/hub/ocpi/2.2.1 -H "$AUTH" \
 uses it to call you), your versions URL and your roles:
 
 ```bash
-curl -sS -X POST https://hub.plugsure.asia/hub/ocpi/2.2.1/credentials -H "$AUTH" \
+curl -sS -X POST https://hub.plugsure.co.id/hub/ocpi/2.2.1/credentials -H "$AUTH" \
   -H "X-Request-ID: $(uuidgen)" -H "X-Correlation-ID: $(uuidgen)" -H 'Content-Type: application/json' \
   -d '{
         "token": "your-token-B-a-long-random-string",
@@ -131,7 +131,7 @@ Token B is your own random secret (at most 255 characters). Before answering, th
 then answers with its own credentials:
 
 ```json
-{ "data": { "token": "…token C…", "url": "https://hub.plugsure.asia/hub/ocpi/versions",
+{ "data": { "token": "…token C…", "url": "https://hub.plugsure.co.id/hub/ocpi/versions",
             "roles": [ { "role": "HUB", "country_code": "ID", "party_id": "PSH", "business_details": { "name": "PlugSure Hub" } },
                        { "role": "HUB", "country_code": "MY", "party_id": "PSH", "business_details": { "name": "PlugSure Hub" } },
                        { "role": "HUB", "country_code": "SG", "party_id": "PSH", "business_details": { "name": "PlugSure Hub" } } ] },
@@ -225,7 +225,7 @@ your parties OFFLINE for your counterparties; any request from you, or a success
 
 ## 8. Test environment
 
-PlugSure runs a **sandbox hub** for integration **[OWNER: hostname, e.g. `https://hub-sandbox.plugsure.asia/hub/ocpi/versions`]**
+PlugSure runs a **sandbox hub** for integration **[OWNER: hostname, e.g. `https://hub-sandbox.plugsure.co.id/hub/ocpi/versions`]**
 with test parties of both roles, so you can test every flow before production:
 
 1. PlugSure issues a sandbox token A; run §4.1.
@@ -259,7 +259,7 @@ settlement guide **[OWNER: link once published]**.
 
 ## 11. Support
 
-- **Contact:** hub-support@plugsure.asia **[OWNER: final address / phone / hours]**.
+- **Contact:** hello@railsure.co.id **[OWNER: final address / phone / hours]**.
 - **Always quote** the `X-Correlation-ID` (and the time, in UTC) of the request in question: PlugSure support sees every
   leg of it.
 - PlugSure can turn on **body capture** for your connection for up to 72 hours to diagnose a problem; captured bodies

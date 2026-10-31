@@ -6,10 +6,10 @@ import { corsHeadersFor, parseWebOrigins, registerDriverCors } from './cors.js';
 /** DRIVER_WEB_ORIGINS: CORS for browser builds of the native app — driver API only, exact origins, off by default. */
 describe('driver API CORS (DRIVER_WEB_ORIGINS)', () => {
   test('exact origins only; http:// only outside production; junk ignored', () => {
-    assert.deepEqual(parseWebOrigins('http://localhost:8081, https://Preview.PlugSure.asia/ ,*,https://x.test/path,ftp://a', 'development'),
-      { origins: ['http://localhost:8081', 'https://preview.plugsure.asia'], ignored: ['*', 'https://x.test/path', 'ftp://a'] });
-    assert.deepEqual(parseWebOrigins('http://localhost:8081,https://preview.plugsure.asia', 'production'),
-      { origins: ['https://preview.plugsure.asia'], ignored: ['http://localhost:8081'] });
+    assert.deepEqual(parseWebOrigins('http://localhost:8081, https://Preview.PlugSure.com/ ,*,https://x.test/path,ftp://a', 'development'),
+      { origins: ['http://localhost:8081', 'https://preview.plugsure.com'], ignored: ['*', 'https://x.test/path', 'ftp://a'] });
+    assert.deepEqual(parseWebOrigins('http://localhost:8081,https://preview.plugsure.com', 'production'),
+      { origins: ['https://preview.plugsure.com'], ignored: ['http://localhost:8081'] });
     assert.deepEqual(parseWebOrigins(undefined, 'development'), { origins: [], ignored: [] });
   });
 

@@ -50,4 +50,4 @@ export const apiBase: string = resolveApiBase({ envApi, extraApi: extra.apiBase,
 export const isMockApi = apiBase === 'mock';
 export const appVersion: string = Constants.expoConfig?.version ?? '1.0.0';
 export const platform = Platform.OS as 'ios' | 'android' | 'web';
-export const linkHost = brand.linkHosts[0] ?? 'go.plugsure.asia';
+export const linkHost = brand.linkHosts[0] ?? 'app.plugsure.co.id';

@@ -479,7 +479,7 @@ export const config = {
    */
   hub: {
     enabled: bool(process.env.HUB_ENABLED, false),
-    /** Public origin of the hub surface (its own host, e.g. https://hub.plugsure.asia). Default (also when set empty, as in .env.example): OCPI_PUBLIC_URL. */
+    /** Public origin of the hub surface (its own host, e.g. https://hub.plugsure.co.id). Default (also when set empty, as in .env.example): OCPI_PUBLIC_URL. */
     publicUrl: (process.env.HUB_PUBLIC_URL || process.env.OCPI_PUBLIC_URL || process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
     /** The hub's own parties (role HUB), one per country: "ID*PSH,MY*PSH,SG*PSH" [OWNER: party ids]. */
     parties: hubPartiesFrom(process.env.HUB_PARTIES, bool(process.env.HUB_ENABLED, false)),

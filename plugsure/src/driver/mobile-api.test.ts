@@ -111,12 +111,12 @@ describe('map (G7)', () => {
 describe('deep links (G6)', () => {
   test('link domain paths, the web app\'s links and plain codes', () => {
     const id = '11111111-2222-4333-8444-555555555555';
-    assert.deepEqual(parseLink('https://go.plugsure.asia/c/AUTEL-DC60-SMB-002:1'), { kind: 'code', code: 'AUTEL-DC60-SMB-002:1' });
-    assert.deepEqual(parseLink('https://go.plugsure.asia/c/AUTEL-DC60-SMB-002/2'), { kind: 'code', code: 'AUTEL-DC60-SMB-002/2' });
-    assert.deepEqual(parseLink(`https://go.plugsure.asia/s/${id}`), { kind: 'site', siteId: id });
-    assert.deepEqual(parseLink(`https://go.plugsure.asia/r/charge/${id}`), { kind: 'receipt', chargeId: id });
-    assert.deepEqual(parseLink(`https://go.plugsure.asia/r/partner/${id}`), { kind: 'partner_receipt', cdrId: id });
-    assert.deepEqual(parseLink('https://go.plugsure.asia/paid?for=charge'), { kind: 'payment_return', for: 'charge' });
+    assert.deepEqual(parseLink('https://app.plugsure.co.id/c/AUTEL-DC60-SMB-002:1'), { kind: 'code', code: 'AUTEL-DC60-SMB-002:1' });
+    assert.deepEqual(parseLink('https://app.plugsure.co.id/c/AUTEL-DC60-SMB-002/2'), { kind: 'code', code: 'AUTEL-DC60-SMB-002/2' });
+    assert.deepEqual(parseLink(`https://app.plugsure.co.id/s/${id}`), { kind: 'site', siteId: id });
+    assert.deepEqual(parseLink(`https://app.plugsure.co.id/r/charge/${id}`), { kind: 'receipt', chargeId: id });
+    assert.deepEqual(parseLink(`https://app.plugsure.co.id/r/partner/${id}`), { kind: 'partner_receipt', cdrId: id });
+    assert.deepEqual(parseLink('https://app.plugsure.co.id/paid?for=charge'), { kind: 'payment_return', for: 'charge' });
     assert.deepEqual(parseLink('https://app.nusacharge.id/app/?code=AUTEL-AC22-SMB-001'), { kind: 'code', code: 'AUTEL-AC22-SMB-001' });
     assert.deepEqual(parseLink('https://x.id/app/#c/01.POSO.20.3275.010'), { kind: 'code', code: '01.POSO.20.3275.010' });
     assert.deepEqual(parseLink(`https://x.id/app/#s/${id}`), { kind: 'charge', chargeId: id });
@@ -142,8 +142,8 @@ describe('deep links (G6)', () => {
 const brand = (over: Partial<Brand> = {}): Brand => ({
   orgId: '00000000-0000-4000-8000-000000000009', slug: 'plugsure', status: 'live', appName: 'PlugSure', shortName: 'PlugSure',
   taglineId: null, taglineEn: null, descriptionId: null, descriptionEn: null, accentColor: '#2fd6a7', badgeColor: '#1b4d8c',
-  hasIcon: true, iconSha256: null, supportEmail: 'help@plugsure.asia', supportPhone: null, privacyUrl: 'https://plugsure.asia/privacy', termsUrl: 'https://plugsure.asia/terms',
-  hostname: 'go.plugsure.asia', androidPackage: 'asia.plugsure.app', androidCertSha256: ['AB:CD'], iosBundleId: 'asia.plugsure.app', iosTeamId: 'ABCDE12345',
+  hasIcon: true, iconSha256: null, supportEmail: 'hello@railsure.co.id', supportPhone: null, privacyUrl: 'https://plugsure.com/privacy', termsUrl: 'https://plugsure.com/terms',
+  hostname: 'app.plugsure.co.id', androidPackage: 'asia.plugsure.app', androidCertSha256: ['AB:CD'], iosBundleId: 'asia.plugsure.app', iosTeamId: 'ABCDE12345',
   versionName: '1.0.0', versionCode: 1, updatedAt: new Date().toISOString(), publishedAt: null,
   apnsKeyId: null, apnsConfigured: false, apnsCheckedAt: null, apnsCheckOk: null, apnsCheckDetail: null,
   scope: 'network', fcmProjectId: null, fcmClientEmail: null, fcmConfigured: false, fcmCheckedAt: null, fcmCheckOk: null, fcmCheckDetail: null, appConfig: {}, ...over,
@@ -180,14 +180,14 @@ describe('version gate and remote configuration (G8)', () => {
 
   test('force below the minimum, soft below the latest, maintenance in the driver\'s language', () => {
     const b = brand({ appConfig: { ios: { minSupported: '1.0.2', latest: '1.1.0' }, maintenance: { active: true, messageId: 'Perawatan', messageEn: 'Maintenance' }, features: { applePay: true } } });
-    const ctx = { brand: b, platform: 'ios' as const, version: '1.0.1', build: 42, lang: 'en' as const, roaming: true, origin: 'https://go.plugsure.asia' };
+    const ctx = { brand: b, platform: 'ios' as const, version: '1.0.1', build: 42, lang: 'en' as const, roaming: true, origin: 'https://app.plugsure.co.id' };
     const c = appConfigFor(ctx);
     assert.equal(c.force, true);
     assert.equal(c.softUpdate, true);
     assert.deepEqual(c.maintenance, { active: true, message: 'Maintenance' });
     assert.equal(c.features.applePay, true);
     assert.equal(c.features.roaming, true);
-    assert.equal(c.links.accountDeletion, 'https://go.plugsure.asia/account/delete');
+    assert.equal(c.links.accountDeletion, 'https://app.plugsure.co.id/account/delete');
     assert.equal(c.brand?.scope, 'network');
     assert.equal(appConfigFor({ ...ctx, version: '1.0.2' }).force, false);
     assert.equal(appConfigFor({ ...ctx, version: '1.1.0' }).softUpdate, false);
