@@ -330,6 +330,36 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   - `manifest.json` with each file's SHA-256 and the audit chain's check;
   - a README on verifying the checksums.
 
+## Summary, currencies, approvals and report e-mails (v1.21.0)
+
+- **Summary** (first tab). Per currency:
+  - revenue this month, against last month to the same day and last year;
+  - margin;
+  - what customers owe, and DSO (owed ÷ the last 90 days' revenue per day);
+  - cash (gateway balances plus the last bank statement);
+  - the fee and refund rates over 30 days;
+  - 12-month trends.
+
+  With a reporting currency set, consolidated totals come first.
+- **Currencies** (Settings). Choose the reporting currency, then for each
+  month and other currency enter a rate (1 MYR = n IDR) or *Fetch ECB
+  rates*. A currency without a rate is listed beside the consolidated
+  total, never counted at 1.
+- **Approvals** (Settings). Give your finance lead the **Finance Manager**
+  role (Govern → Users); it carries `finance:approve`. Then choose, for
+  refunds, owner payouts, write-offs and owner bank-detail changes:
+  - *A Finance Manager* above an amount: the approver must hold
+    `finance:approve`.
+  - *Two approvers* above an amount: two different people, neither the
+    requester. The first approval shows *1 of 2 approved*.
+
+  Only a Finance Manager (or owner) can change these rules.
+- **Report e-mails** (Settings). *New schedule* picks reports (summary,
+  margin, collections, budgets, forecast), weekly (a weekday, from 07:00)
+  or monthly (the 1st, for the month just ended), and up to 10 recipients.
+  It sends one Excel workbook through your e-mail channel. *Send now* tries
+  it at once.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

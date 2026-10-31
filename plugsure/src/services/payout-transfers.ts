@@ -1,4 +1,5 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
+import { gate, ApprovalError } from './finance-approvals.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { seal, unseal } from './secrets.js';
@@ -37,12 +38,15 @@ const OPEN = ['awaiting_approval', 'sending', 'sent'];
 export interface PayoutTransferView {
   id: string; statementId: string; number: string | null; owner: string | null; rail: 'duitku' | 'xendit'; state: string; amount: number; currency: string; bankCode: string; accountMasked: string;
   holderName: string; checkedName: string | null; namesMatch: boolean; note: string | null; requestedBy: string | null; requestedByName: string | null; requestedAt: string;
+  /** (v1.21.0) The first of two approvals, when the approvals matrix asks for two. */
+  firstApprovedBy: string | null;
   approvedBy: string | null; approvedByName: string | null; approvedAt: string | null; reason: string | null; responseCode: string | null; error: string | null; statementPaymentId: string | null;
 }
 const view = (r: any): PayoutTransferView => ({
   id: String(r.id), statementId: r.statement_id, number: r.number ?? null, owner: r.owner ?? null, rail: r.rail ?? 'duitku', state: r.state, amount: Number(r.amount_minor), currency: r.currency,
   bankCode: r.bank_code, accountMasked: `••••${r.account_last4}`, holderName: r.holder_name, checkedName: r.checked_name, namesMatch: namesMatch(r.holder_name, r.checked_name),
   note: r.note, requestedBy: r.requested_by, requestedByName: r.requested_by_name ?? null, requestedAt: iso(r.requested_at)!,
+  firstApprovedBy: r.first_approved_by ?? null,
   approvedBy: r.approved_by, approvedByName: r.approved_by_name ?? null, approvedAt: iso(r.approved_at), reason: r.reason, responseCode: r.response_code, error: r.error,
   statementPaymentId: r.statement_payment_id != null ? String(r.statement_payment_id) : null,
 });
@@ -146,10 +150,18 @@ export async function rejectPayout(orgId: string, id: string, reasonRaw: unknown
 }
 
 /** Step 2: a second person approves; the transfer is sent, once. */
-export async function approvePayout(orgId: string, id: string, userId: string | null): Promise<PayoutTransferView> {
+export async function approvePayout(orgId: string, id: string, userId: string | null, canApprove = false): Promise<PayoutTransferView> {
   const t = await row(orgId, id);
   if (t.state !== 'awaiting_approval') throw new TransferError(409, `The payout is ${t.state}.`);
-  if (!userId || t.requested_by === userId) throw new TransferError(403, 'A payout is approved by a second person: not the one who requested it.');
+  // (v1.21.0) The approvals matrix: a Finance Manager above a threshold, or two approvers (the first is recorded here).
+  try {
+    if (await gate('payout', orgId, { id: t.id, amount: Number(t.amount_minor), requested_by: t.requested_by, first_approved_by: t.first_approved_by }, { userId, canApprove }) === 'first') {
+      return view(await one<any>(`SELECT * FROM payout_transfer WHERE id = $1`, [t.id]));
+    }
+  } catch (e) {
+    if (e instanceof ApprovalError) throw new TransferError(e.statusCode, e.message);
+    throw e;
+  }
   const d = await railFor(t.integration_id);
   if (!d) throw new TransferError(409, 'Payouts are no longer set up on that account.');
   const lim = d.limits('payout');

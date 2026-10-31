@@ -2,6 +2,7 @@ import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { config } from '../config.js';
 import { month as energyMonth, lastMonths } from './energy-margin.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
+import { consolidate } from './fx.js';
 
 /**
  * Budgets vs actuals (v1.20.0). A budget is set per month for the organisation (all sites) or for one site, per
@@ -81,7 +82,22 @@ export async function compare(orgId: string, mRaw: unknown) {
     const b = rows.find((r) => r.site_id === s.siteId);
     return { siteId: s.siteId, site: s.site, currency: s.currency, budgeted: Boolean(b), estimated: s.source === 'estimate', lines: line(b, { revenue: s.revenue, energyCost: s.energyCost }, true) };
   });
-  return { month: m, alertPct: st.budgetAlertPct, organisation, sites };
+  // (v1.21.0) The organisation's lines consolidated into the reporting currency, when one is set.
+  let consolidated: null | { currency: string; missing: string[]; lines: Record<string, { budget: number; actual: number | null }> } = null;
+  if (organisation.length) {
+    const lines: Record<string, { budget: number; actual: number | null }> = {};
+    let cur = '';
+    const missing = new Set<string>();
+    for (const k of LINES) {
+      const b = await consolidate(orgId, m, Object.fromEntries(organisation.map((o) => [o.currency, (o.lines as any)[k].budget])));
+      const a = await consolidate(orgId, m, Object.fromEntries(organisation.map((o) => [o.currency, (o.lines as any)[k].actual ?? 0])));
+      if (!b || !a) break;
+      cur = b.currency; [...b.missing, ...a.missing].forEach((x) => missing.add(x));
+      lines[k] = { budget: b.amount, actual: a.amount };
+    }
+    if (cur) consolidated = { currency: cur, missing: [...missing], lines };
+  }
+  return { month: m, alertPct: st.budgetAlertPct, organisation, sites, consolidated };
 }
 
 /** Set (or replace) a budget line set for a month, organisation-wide (siteId null) or for a site. */

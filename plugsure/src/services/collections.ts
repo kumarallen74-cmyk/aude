@@ -5,6 +5,7 @@ import { unseal } from './secrets.js';
 import { sendEmail, sendWhatsApp } from './notify-transports.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { settings } from './budgets.js';
+import { gate, ApprovalError } from './finance-approvals.js';
 
 /**
  * Collections and dunning (v1.20.0). What customers owe, by age:
@@ -296,24 +297,35 @@ export async function requestWriteOff(orgId: string, platformAdmin: boolean, kin
   return { id, amount };
 }
 
-export async function decideWriteOff(orgId: string, id: string, approve: boolean, noteRaw: unknown, userId: string | null) {
+export async function decideWriteOff(orgId: string, id: string, approve: boolean, noteRaw: unknown, userId: string | null, canApprove = false) {
   if (!/^\d{1,18}$/.test(id)) throw new CollectionsError(404, 'No such write-off.');
   const note = noteRaw == null ? null : String(noteRaw).trim().slice(0, 300) || null;
   if (!approve && !note) throw new CollectionsError(422, 'Say why the write-off is rejected.');
   const w = await outsideRequestScope(() => one<any>(`SELECT * FROM receivable_write_off WHERE id = $1 AND org_id = $2 AND state = 'pending'`, [id, orgId]));
   if (!w) throw new CollectionsError(404, 'No pending write-off.');
   if (w.requested_by && userId && w.requested_by === userId) throw new CollectionsError(403, 'The person who asked for a write-off cannot approve it.');
+  if (approve) {
+    // (v1.21.0) The approvals matrix.
+    try {
+      if (await gate('write_off', orgId, { id: w.id, amount: Number(w.amount_minor), requested_by: w.requested_by, first_approved_by: w.first_approved_by }, { userId, canApprove }) === 'first') {
+        return { ok: true, state: 'pending' as const, firstApproval: true, kind: w.kind as Kind, ref: w.ref as string, amount: Number(w.amount_minor) };
+      }
+    } catch (e) {
+      if (e instanceof ApprovalError) throw new CollectionsError(e.statusCode, e.message);
+      throw e;
+    }
+  }
   const r = await outsideRequestScope(() => one(
     `UPDATE receivable_write_off SET state = $3, decided_by = $4, decided_at = now(), decision_note = $5 WHERE id = $1 AND org_id = $2 AND state = 'pending' RETURNING id`,
     [id, orgId, approve ? 'approved' : 'rejected', userId, note]));
   if (!r) throw new CollectionsError(409, 'Someone else decided it first.');
   await outsideRequestScope(() => resolveAlertsFor(orgId, WRITE_OFF_ALERT, 'receivable_write_off', id)).catch(() => 0);
-  return { ok: true, state: approve ? 'approved' : 'rejected', kind: w.kind as Kind, ref: w.ref as string, amount: Number(w.amount_minor) };
+  return { ok: true, state: approve ? 'approved' as const : 'rejected' as const, firstApproval: false, kind: w.kind as Kind, ref: w.ref as string, amount: Number(w.amount_minor) };
 }
 
 export async function pendingWriteOffs(orgId: string) {
   const rows = await outsideRequestScope(() => many<any>(
     `SELECT w.*, u.name AS requested_by_name FROM receivable_write_off w LEFT JOIN app_user u ON u.id = w.requested_by WHERE w.org_id = $1 AND w.state = 'pending' ORDER BY w.requested_at`, [orgId]));
-  return rows.map((w) => ({ id: String(w.id), kind: w.kind, ref: w.ref, amount: Number(w.amount_minor), currency: w.currency, reason: w.reason, requestedBy: w.requested_by_name ?? null, requestedById: w.requested_by, requestedAt: new Date(w.requested_at).toISOString() }));
+  return rows.map((w) => ({ id: String(w.id), kind: w.kind, ref: w.ref, amount: Number(w.amount_minor), currency: w.currency, reason: w.reason, requestedBy: w.requested_by_name ?? null, requestedById: w.requested_by, requestedAt: new Date(w.requested_at).toISOString(), firstApprovedBy: w.first_approved_by ?? null }));
 }
 

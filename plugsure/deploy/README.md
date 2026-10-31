@@ -502,6 +502,10 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      bills (Finance → Margin), budgets, and the reminder schedule (Finance →
      Collections); route finance.budget_off_track and
      finance.write_off_awaiting_approval ([FINANCE.md](FINANCE.md)).
+  14. (v1.21.0) Optionally give your finance lead the Finance Manager role,
+     set the approvals matrix, a reporting currency (FX_RATES_URL for
+     another rates source) and report e-mails (Finance → Settings)
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

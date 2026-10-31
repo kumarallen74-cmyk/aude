@@ -4,6 +4,7 @@ import type { Principal } from './authz.js';
 import { seal, unseal } from './secrets.js';
 import { bankAccount, saveBankAccount } from './payouts.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
+import { gate, ApprovalError } from './finance-approvals.js';
 
 /**
  * The Site Owner portal's money (v1.19.0). A Site Owner user (role site_owner, scope 'owner') already sees its sites,
@@ -65,7 +66,7 @@ export async function payouts(orgId: string, ownerId: string) {
 
 const reqView = (r: any) => r && ({
   id: String(r.id), bankName: r.bank_name, bankCode: r.bank_code, holderName: r.holder_name, accountMasked: `••••${r.account_last4}`, note: r.note,
-  state: r.state, requestedAt: iso(r.requested_at), requestedBy: r.requested_by_name ?? null, decidedAt: iso(r.decided_at), decidedBy: r.decided_by_name ?? null, decisionNote: r.decision_note,
+  state: r.state, firstApprovedBy: r.first_approved_by ?? null, requestedAt: iso(r.requested_at), requestedBy: r.requested_by_name ?? null, decidedAt: iso(r.decided_at), decidedBy: r.decided_by_name ?? null, decisionNote: r.decision_note,
   owner: r.owner_name ?? undefined, ownerId: r.owner_id,
 });
 
@@ -132,7 +133,7 @@ export async function pendingRequests(orgId: string) {
 }
 
 /** Approve: the requested account replaces the one on file (sealed as the owner's), or reject with a reason. */
-export async function decide(orgId: string, id: string, approve: boolean, noteRaw: unknown, userId: string | null) {
+export async function decide(orgId: string, id: string, approve: boolean, noteRaw: unknown, userId: string | null, canApprove = false) {
   if (!/^\d{1,18}$/.test(id)) throw new OwnerPortalError(404, 'No such request.');
   const note = noteRaw == null ? null : String(noteRaw).trim().slice(0, 300) || null;
   if (!approve && !note) throw new OwnerPortalError(422, 'Say why the change is rejected (the owner sees it).');
@@ -140,6 +141,15 @@ export async function decide(orgId: string, id: string, approve: boolean, noteRa
   if (!r) throw new OwnerPortalError(404, 'No pending request.');
   if (r.requested_by && userId && r.requested_by === userId) throw new OwnerPortalError(403, 'The person who asked for a change cannot approve it.');
   if (approve) {
+    // (v1.21.0) The approvals matrix (bank_change: every change when a rule is set).
+    try {
+      if (await gate('bank_change', orgId, { id: r.id, amount: null, requested_by: r.requested_by, first_approved_by: r.first_approved_by }, { userId, canApprove }) === 'first') {
+        return { ok: true, state: 'pending', firstApproval: true, ownerId: r.owner_id as string };
+      }
+    } catch (e) {
+      if (e instanceof ApprovalError) throw new OwnerPortalError(e.statusCode, e.message);
+      throw e;
+    }
     const number = unseal(r.account_number_sealed, AAD(id));
     await saveBankAccount(orgId, r.owner_id, { bankName: r.bank_name, bankCode: r.bank_code, holderName: r.holder_name, accountNumber: number }, userId);
   }
@@ -148,5 +158,5 @@ export async function decide(orgId: string, id: string, approve: boolean, noteRa
     [id, orgId, approve ? 'approved' : 'rejected', userId, note]));
   if (!won) throw new OwnerPortalError(409, 'Someone else decided it first.');
   await outsideRequestScope(() => resolveAlertsFor(orgId, BANK_CHANGE_ALERT, 'owner_bank_change_request', id)).catch(() => 0);
-  return { ok: true, state: approve ? 'approved' : 'rejected', ownerId: r.owner_id as string };
+  return { ok: true, state: approve ? 'approved' : 'rejected', firstApproval: false, ownerId: r.owner_id as string };
 }

@@ -19,6 +19,10 @@ import * as energy from '../services/energy-margin.js';
 import * as budgets from '../services/budgets.js';
 import * as collections from '../services/collections.js';
 import * as auditPack from '../services/audit-pack.js';
+import * as fx from '../services/fx.js';
+import * as approvals from '../services/finance-approvals.js';
+import * as reportSched from '../services/report-schedules.js';
+import * as finSummary from '../services/finance-summary.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -478,8 +482,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.post('/v1/refund-transfers/:tid/approve', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:write' });
     try {
-      const t = await xfer.approveTransfer(req.principal.orgId, tidParam(req), userUuid(req));
-      await auditX(req, 'refund.transfer_approved', t, { responseCode: t.responseCode, error: t.error });
+      const t = await xfer.approveTransfer(req.principal.orgId, tidParam(req), userUuid(req), can(req.principal, { permission: 'finance:approve' }));
+      await auditX(req, t.state === 'awaiting_approval' ? 'refund.transfer_first_approval' : 'refund.transfer_approved', t, { responseCode: t.responseCode, error: t.error });
       return { transfer: t };
     } catch (e) { return xferFailed(reply, e); }
   });
@@ -526,8 +530,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.post('/v1/finance/payout-transfers/:tid/approve', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:write' });
     try {
-      const t = await pxfer.approvePayout(req.principal.orgId, tidParam(req), userUuid(req));
-      await auditP(req, 'finance.owner_payout_approved', t, { responseCode: t.responseCode, error: t.error, statementPayment: t.statementPaymentId });
+      const t = await pxfer.approvePayout(req.principal.orgId, tidParam(req), userUuid(req), can(req.principal, { permission: 'finance:approve' }));
+      await auditP(req, t.state === 'awaiting_approval' ? 'finance.owner_payout_first_approval' : 'finance.owner_payout_approved', t, { responseCode: t.responseCode, error: t.error, statementPayment: t.statementPaymentId });
       return { transfer: t };
     } catch (e) { return xferFailed(reply, e); }
   });
@@ -668,8 +672,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     if (decision !== 'approve' && decision !== 'reject') return reply.status(404).send({ error: 'Not found' });
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const r = await ownerPortal.decide(req.principal.orgId, String(rid ?? ''), decision === 'approve', b.note, userUuid(req));
-      await auditPay(req, decision === 'approve' ? 'finance.owner_bank_change_approved' : 'finance.owner_bank_change_rejected', 'owner_bank_change_request', String(rid), { ownerId: r.ownerId, note: b.note ?? null });
+      const r = await ownerPortal.decide(req.principal.orgId, String(rid ?? ''), decision === 'approve', b.note, userUuid(req), can(req.principal, { permission: 'finance:approve' }));
+      await auditPay(req, r.firstApproval ? 'finance.owner_bank_change_first_approval' : decision === 'approve' ? 'finance.owner_bank_change_approved' : 'finance.owner_bank_change_rejected', 'owner_bank_change_request', String(rid), { ownerId: r.ownerId, note: b.note ?? null });
       return r;
     } catch (e) {
       if (e instanceof ownerPortal.OwnerPortalError) return reply.status(e.statusCode).send({ error: e.message });
@@ -792,8 +796,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     if (decision !== 'approve' && decision !== 'reject') return reply.status(404).send({ error: 'Not found' });
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const r = await collections.decideWriteOff(req.principal.orgId, prm(req, 'wid'), decision === 'approve', b.note, userUuid(req));
-      await auditPay(req, decision === 'approve' ? 'finance.write_off_approved' : 'finance.write_off_rejected', 'receivable_write_off', prm(req, 'wid'), { kind: r.kind, ref: r.ref, amount: r.amount, note: b.note ?? null });
+      const r = await collections.decideWriteOff(req.principal.orgId, prm(req, 'wid'), decision === 'approve', b.note, userUuid(req), can(req.principal, { permission: 'finance:approve' }));
+      await auditPay(req, r.firstApproval ? 'finance.write_off_first_approval' : decision === 'approve' ? 'finance.write_off_approved' : 'finance.write_off_rejected', 'receivable_write_off', prm(req, 'wid'), { kind: r.kind, ref: r.ref, amount: r.amount, note: b.note ?? null });
       return r;
     } catch (e) { return p9Failed(reply, e); }
   });
@@ -816,6 +820,90 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="plugsure-audit-pack-${p.from.toISOString().slice(0, 10)}.zip"`)
         .header('x-manifest-sha256', r.manifestSha256).send(r.body);
     } catch (e) { return failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.21.0) summary, currencies, approvals matrix, report e-mails
+
+  const p10Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof fx.FxError || e instanceof approvals.ApprovalError || e instanceof reportSched.ReportError) return reply.status(e.statusCode).send({ error: e.message });
+    return p9Failed(reply, e);
+  };
+  const canApprove = (req: FastifyRequest) => can(req.principal, { permission: 'finance:approve' });
+
+  app.get('/v1/finance/summary', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await finSummary.summary(req.principal.orgId); } catch (e) { return p10Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/fx-rates', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await fx.rates(req.principal.orgId, ((req.query ?? {}) as Record<string, string>).month); } catch (e) { return p10Failed(reply, e); }
+  });
+  app.put('/v1/finance/fx-rates/reporting-currency', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await fx.setReporting(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).currency, userUuid(req));
+      await auditPay(req, 'finance.reporting_currency_saved', 'organisation', req.principal.orgId, r);
+      return r;
+    } catch (e) { return p10Failed(reply, e); }
+  });
+  app.put('/v1/finance/fx-rates', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await fx.setRate(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.fx_rate_saved', 'fx_rate', `${r.month}:${r.currency}:${r.reporting}`, r);
+      return r;
+    } catch (e) { return p10Failed(reply, e); }
+  });
+  app.post('/v1/finance/fx-rates/fetch', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await fx.fetchEcb(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).month, userUuid(req));
+      await auditPay(req, 'finance.fx_rates_fetched', 'fx_rate', r.month, { rates: r.rates, failed: r.failed });
+      return r;
+    } catch (e) { return p10Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/approval-rules', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { rules: await approvals.rules(req.principal.orgId), canApprove: canApprove(req) }; } catch (e) { return p10Failed(reply, e); }
+  });
+  app.put('/v1/finance/approval-rules', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const rules = await approvals.saveRules(req.principal.orgId, ((req.body ?? {}) as Record<string, unknown>).rules, canApprove(req), userUuid(req));
+      await auditPay(req, 'finance.approval_rules_saved', 'organisation', req.principal.orgId, { rules });
+      return { rules, canApprove: true };
+    } catch (e) { return p10Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/report-schedules', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { schedules: await reportSched.list(req.principal.orgId), reports: reportSched.REPORTS }; } catch (e) { return p10Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-schedules', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await reportSched.create(req.principal.orgId, (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.report_schedule_created', 'finance_report_schedule', r.id, { name: r.name, reports: r.reports, frequency: r.frequency, recipients: r.recipients });
+      return reply.status(201).send(r);
+    } catch (e) { return p10Failed(reply, e); }
+  });
+  app.put('/v1/finance/report-schedules/:rid', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await reportSched.update(req.principal.orgId, prm(req, 'rid'), (req.body ?? {}) as Record<string, unknown>);
+      await auditPay(req, 'finance.report_schedule_saved', 'finance_report_schedule', r.id, { name: r.name, reports: r.reports, frequency: r.frequency, recipients: r.recipients, enabled: r.enabled, archived: (r as any).archived ?? false });
+      return r;
+    } catch (e) { return p10Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-schedules/:rid/send', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await reportSched.send(req.principal.orgId, prm(req, 'rid'));
+      await auditPay(req, 'finance.report_sent', 'finance_report_schedule', prm(req, 'rid'), { to: r.to });
+      return r;
+    } catch (e) { return p10Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

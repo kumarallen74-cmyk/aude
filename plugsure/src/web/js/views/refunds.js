@@ -141,7 +141,10 @@ registerView('refunds', {
               if (!canPay) return '';
               if (t.state === 'awaiting_approval') {
                 const mine = t.requestedBy && t.requestedBy === me;
-                return `<div class="row nowrap" style="gap:6px">${mine ? '<span class="cell-sub">needs another person</span>' : `<button class="btn sm primary" type="button" data-approve="${esc(t.id)}">Approve and send</button>`}<button class="btn sm" type="button" data-reject="${esc(t.id)}">${mine ? 'Withdraw' : 'Reject'}</button></div>`;
+                // (v1.21.0) Two approvers: after the first, the first approver cannot approve again.
+                const first = t.firstApprovedBy && t.firstApprovedBy === me;
+                const wait = mine ? 'needs another person' : first ? 'needs a second approver' : '';
+                return `<div class="row nowrap" style="gap:6px">${t.firstApprovedBy ? tag('t-info', '1 of 2 approved') : ''}${wait ? `<span class="cell-sub">${wait}</span>` : `<button class="btn sm primary" type="button" data-approve="${esc(t.id)}">${t.firstApprovedBy ? 'Second approval and send' : 'Approve and send'}</button>`}<button class="btn sm" type="button" data-reject="${esc(t.id)}">${mine ? 'Withdraw' : 'Reject'}</button></div>`;
               }
               if (t.state === 'sent') return `<button class="btn sm" type="button" data-settle="${esc(t.id)}">Settle by hand</button>`;
               return '';
@@ -165,7 +168,7 @@ registerView('refunds', {
         if (!ok) return;
         try {
           const r = (await api(`/v1/refund-transfers/${t.id}/approve`, { method: 'POST' })).transfer;
-          toast(r.state === 'succeeded' ? 'Paid: the refund is recorded' : r.state === 'sent' ? 'Sent; its result is checked automatically' : `Not paid: ${r.error ?? r.state}`, r.state === 'failed' ? 'crit' : 'ok');
+          toast(r.state === 'awaiting_approval' ? 'First approval recorded: a second approver sends it' : r.state === 'succeeded' ? 'Paid: the refund is recorded' : r.state === 'sent' ? 'Sent; its result is checked automatically' : `Not paid: ${r.error ?? r.state}`, r.state === 'failed' ? 'crit' : 'ok');
         } catch (e) { toast(e.message, 'crit'); }
         load(); loadTransfers();
         return;

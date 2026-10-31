@@ -123,9 +123,9 @@ try {
   const csrf = await ops.req('POST', '/v1/sites', { name: 'x' }, { csrf: false });
   check('auth: cookie write without CSRF header is refused (403)', csrf.status === 403, csrf);
   const meta = await ops.get('/v1/meta');
-  // The five roles of the spec's permission matrix, plus the Site Owner and Fleet customer portal roles.
+  // The five roles of the spec's permission matrix, the Finance Manager (v1.21.0), and the Site Owner and Fleet customer portal roles.
   const roleNames = (meta.data?.consoleRoles ?? []).map((r: any) => r.name).sort().join();
-  check('meta: reference data served', meta.status === 200 && roleNames === 'cpo_operations_manager,field_technician,financial_auditor,fleet_customer,site_host_landlord,site_owner,super_admin', roleNames);
+  check('meta: reference data served', meta.status === 200 && roleNames === 'cpo_operations_manager,field_technician,finance_manager,financial_auditor,fleet_customer,site_host_landlord,site_owner,super_admin', roleNames);
 
   // ---------------------------------------------------------------- 3 · sites
   const badSite = await ops.post('/v1/sites', { name: 'Bad', spkluId: '01.XXXX.20.3171.011', powerFactor: 1.4 });
