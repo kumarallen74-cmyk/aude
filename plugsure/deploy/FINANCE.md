@@ -293,6 +293,43 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   every change with the owner by phone first: changed bank details are how
   payouts get stolen.
 
+## Margin, budgets, collections and the audit pack (v1.20.0)
+
+- **Margin** (tab). Per site and month:
+
+  | Figure | What it is |
+  |---|---|
+  | revenue | what drivers paid, before tax |
+  | kWh | energy delivered |
+  | energy cost | the month's electricity bill (*Record bill*), else the site's cost per kWh (*Cost/kWh*, its PLN tariff with taxes) × kWh, shown as an estimate |
+  | margin | revenue − energy cost |
+
+  A bill's kWh beside the kWh delivered shows losses. The bill is split
+  between the site's chargers by kWh.
+- **Budgets** (tab). Set a month's budget for the organisation (revenue,
+  energy cost, gateway fees, owners' share) or a site (revenue and energy
+  cost).
+  - Actuals are shown beside it with the variance.
+  - *Copy to the next 12 months* repeats it.
+  - From the 7th, an alert (`finance.budget_off_track`) fires when the month
+    so far is off by more than the threshold (15% by default).
+- **Collections** (tab). What customers owe, by age: unpaid fleet invoices
+  and, for platform administrators, operators' statements.
+  - *Note* records a call or a promise to pay; a future promise pauses
+    reminders.
+  - *Remind* sends one now. *Settings* turns on the schedule: by default 3
+    days before, then 7, 14 and 30 days after the due date. The latest step
+    reached is sent once per channel. WhatsApp needs an approved template
+    with three parameters: customer, document and amount, due date.
+  - *Write off* asks a second person to approve; once approved it leaves
+    collections. The invoice is unchanged, so book the bad debt in your
+    accounts.
+- **Audit pack** (button). The period's records as one ZIP:
+  - journal, ledger, statements, payments, transfers, bank lines, tax,
+    write-offs and the audit log as CSV;
+  - `manifest.json` with each file's SHA-256 and the audit chain's check;
+  - a README on verifying the checksums.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

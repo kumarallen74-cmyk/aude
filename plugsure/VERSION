@@ -1,11 +1,18 @@
 PlugSure CSMS
-Version:   1.19.0
-Package:   plugsure-v1.19.0
-Prepared:  2026-10-31  (v1.18.0 + finance phase 8 — see RELEASE-NOTES-v1.19.0.md)
+Version:   1.20.0
+Package:   plugsure-v1.20.0
+Prepared:  2026-10-31  (v1.19.0 + finance phase 9 — see RELEASE-NOTES-v1.20.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (390 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (407 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.19.0 = v1.18.0 + finance phase 8: a cash-flow forecast (30/60/90 days, opening from the gateway and
+Status:    v1.20.0 = v1.19.0 + finance phase 9: energy cost and margin per site and charger (bills or the cost per
+           kWh, losses), budgets vs actuals (organisation and sites, an off-track alert), collections and dunning (aging,
+           notes and promises, scheduled e-mail / WhatsApp reminders, write-offs approved by a second person), and the
+           audit pack (one ZIP of the period's records with SHA-256 checksums and the audit chain's check).
+           Migration 088 (additive).
+
+v1.19.0 (2026-10-31):
+           v1.19.0 = v1.18.0 + finance phase 8: a cash-flow forecast (30/60/90 days, opening from the gateway and
            bank balances, committed flows in and out, the first shortfall), a gateway fee audit against the contracted
            rates per method (the overcharge and a claim CSV), accounting software exports (Jurnal.id, Accurate, generic)
            of closed months with a log, and payouts and bank details in the Site Owner portal (a change is sealed until

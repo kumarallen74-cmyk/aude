@@ -498,6 +498,10 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      accounting package (Finance → Settings), and route
      finance.owner_bank_change_requested to whoever looks after owners
      ([FINANCE.md](FINANCE.md)).
+  13. (v1.20.0) Optionally enter each site's electricity cost per kWh or its
+     bills (Finance → Margin), budgets, and the reminder schedule (Finance →
+     Collections); route finance.budget_off_track and
+     finance.write_off_awaiting_approval ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

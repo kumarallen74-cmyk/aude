@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.19.0";
+export const API_VERSION = "1.20.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4967,6 +4967,15 @@ export type AddEvidenceOrCommentToDisputeResponse = {
   notes: Record<string, unknown>[];
 };
 
+export type AddNoteOrPromiseToPayBody = {
+  note: string;
+  promiseDate?: string;
+};
+
+export type AddNoteOrPromiseToPayResponse = {
+  id?: string;
+};
+
 export type AddOnCallOverrideBody = {
   contactId: string;
   startsAt: string;
@@ -5079,6 +5088,15 @@ export type ApproveOrRejectSiteOwnerBankDetailChangeResponse = {
   ownerId?: string;
 };
 
+export type ApproveOrRejectWriteOffBody = {
+  note?: string;
+};
+
+export type ApproveOrRejectWriteOffResponse = {
+  ok?: boolean;
+  state?: string;
+};
+
 export type ArchiveFirmwareImageResponse = {
   ok: true;
 };
@@ -5114,6 +5132,16 @@ export type AskStationForItsVariableMonitorsGetMonitoringReportResponse = {
   requestId?: number;
   status?: string;
   state?: string;
+};
+
+export type AskToWriteOffWhatIsOutstandingBody = {
+  amount?: number;
+  reason: string;
+};
+
+export type AskToWriteOffWhatIsOutstandingResponse = {
+  id?: string;
+  amount?: number;
 };
 
 export type AskXenditToGenerateReportBody = {
@@ -5169,6 +5197,13 @@ export type BindClientCertificateResponse = {
   ok: true;
   /** 64 lowercase hex characters, or null when cleared. */
   fingerprint: string | null;
+};
+
+export type BudgetsVsActualsForMonthResponse = {
+  month?: string;
+  alertPct?: number;
+  organisation?: Record<string, unknown>[];
+  sites?: Record<string, unknown>[];
 };
 
 export type CancelFirmwareCampaignResponse = {
@@ -5405,6 +5440,15 @@ export type ConnectToRoamingPartnerBody = {
   versionsUrl: string;
   /** The credentials token the partner issued to us. */
   token: string;
+};
+
+export type CopyMonthBudgetForwardBody = {
+  from: string;
+  months: number;
+};
+
+export type CopyMonthBudgetForwardResponse = {
+  copied?: number;
 };
 
 export type CreateAlertContactResponse = {
@@ -5669,6 +5713,40 @@ export type EMailFleetInvoiceResponse = {
   ok: boolean;
   to: string;
   reference?: string | null;
+};
+
+export type EnergyCostAndMarginByMonthResponse = {
+  months?: {
+    month?: string;
+    currency?: string;
+    kwh?: number;
+    revenue?: number;
+    energyCost?: number;
+    estimated?: boolean;
+    margin?: number;
+  }[];
+};
+
+export type EnergyCostAndMarginForMonthResponse = {
+  month?: string;
+  sites?: {
+    siteId?: string;
+    site?: string;
+    currency?: string;
+    sessions?: number;
+    kwh?: number;
+    revenue?: number;
+    energyCost?: number | null;
+    source?: "bill" | "estimate" | "unknown";
+    ratePerKwh?: number | null;
+    costPerKwh?: number | null;
+    bill?: Record<string, unknown> | null;
+    lossPct?: number | null;
+    margin?: number | null;
+    marginPct?: number | null;
+    chargers?: Record<string, unknown>[];
+  }[];
+  totals?: Record<string, Record<string, unknown>>;
 };
 
 export type EnrolMemberBody = {
@@ -6554,6 +6632,13 @@ export type OneOfMyHubStatementsResponse = {
   };
 };
 
+export type OneReceivableHistoryResponse = {
+  receivable?: Record<string, unknown>;
+  notes?: Record<string, unknown>[];
+  reminders?: Record<string, unknown>[];
+  writeOffs?: Record<string, unknown>[];
+};
+
 export type OneWhatsAppSupportConversationResponse = {
   conversation: WhatsAppConversation;
   messages: WhatsAppChatMessage[];
@@ -6903,6 +6988,18 @@ export type RecordRefundPaidByBankTransferResponse = {
   ok: true;
   state: "refunded";
   refundRef: string;
+};
+
+export type RecordSiteElectricityBillBody = {
+  month: string;
+  amount: number;
+  kwhBilled?: number;
+  reference?: string;
+  note?: string;
+};
+
+export type RecordSiteElectricityBillResponse = {
+  id?: string;
 };
 
 export type RecordTaxRegistrationInCountryBody = {
@@ -7325,6 +7422,16 @@ export type SendMonthCloseEMailNowResponse = {
   reference?: string | null;
 };
 
+export type SendPaymentReminderNowBody = {
+  channel?: "email" | "whatsapp";
+  to?: string;
+};
+
+export type SendPaymentReminderNowResponse = {
+  ok?: boolean;
+  destination?: string | null;
+};
+
 export type SendTestAlertMessageBody = {
   /** E-mail address, or WhatsApp / mobile number (e.g. +62 812 3456 7890). */
   destination: string;
@@ -7369,12 +7476,30 @@ export type SetAllowedEMailDomainsResponse = {
   tenant: MicrosoftTenant;
 };
 
+export type SetBudgetAlertThresholdBody = {
+  budgetAlertPct: number;
+};
+
+export type SetBudgetAlertThresholdResponse = {
+  budgetAlertPct?: number;
+};
+
 export type SetConnectorLoadManagementPrioritiesResponse = {
   ok: true;
 };
 
 export type SetEvseAndConnectorTopologyResponse = {
   ok: true;
+};
+
+export type SetMonthBudgetBody = {
+  month: string;
+  siteId?: string;
+  currency?: string;
+  revenue?: number;
+  energyCost?: number;
+  fees?: number;
+  ownerShare?: number;
 };
 
 export type SetOcpiPartyOfCountryBody = {
@@ -7386,6 +7511,16 @@ export type SetOcpiPartyOfCountryBody = {
 
 export type SetOcpiPartyOfCountryResponse = {
   party: RoamingParty;
+};
+
+export type SetReminderScheduleBody = {
+  enabled?: boolean;
+  steps?: number[];
+  channels?: ("email" | "whatsapp")[];
+  whatsappTemplate?: {
+    name?: string;
+    lang?: string;
+  } | null;
 };
 
 export type SetRoamingIdentityBody = {
@@ -7408,6 +7543,16 @@ export type SetSecurityProfileBody = {
 export type SetSecurityProfileResponse = {
   ok: true;
   profile: 0 | 1 | 2 | 3;
+};
+
+export type SetSiteElectricityCostPerKWhBody = {
+  ratePerKwh: number;
+};
+
+export type SetSiteElectricityCostPerKWhResponse = {
+  siteId?: string;
+  ratePerKwh?: number;
+  currency?: string;
 };
 
 export type SetSiteOwnerBankDetailsBody = {
@@ -7817,6 +7962,14 @@ export type VoidCreditNoteBody = {
   reason: string;
 };
 
+export type VoidElectricityBillBody = {
+  reason: string;
+};
+
+export type VoidElectricityBillResponse = {
+  ok?: boolean;
+};
+
 export type VoidFleetInvoiceBody = {
   reason: string;
 };
@@ -7852,6 +8005,15 @@ export type WhatBankLineCouldBeResponse = {
     label?: string;
     reference?: string | null;
   }[];
+};
+
+export type WhatCustomersOweByAgeResponse = {
+  receivables?: Record<string, unknown>[];
+  writtenOff?: Record<string, unknown>[];
+  aging?: Record<string, unknown>;
+  buckets?: string[];
+  dunning?: Record<string, unknown>;
+  writeOffsPending?: Record<string, unknown>[];
 };
 
 export type WhatEachPaymentMethodCostsResponse = {
@@ -8137,6 +8299,23 @@ export class Operations {
   }
 
   /**
+   * Add a note or a promise to pay
+   *
+   * (v1.20.0) A promise to pay in the future pauses the reminders until that date. Audited as finance.collection_note_added.
+   *
+   * `POST /v1/finance/collections/{kind}/{ref}/notes` · needs `payment:write`
+   */
+  addNoteOrPromiseToPay(params: {
+    /** fleet_invoice or platform_statement. */
+    kind: string;
+    /** The invoice or statement id. */
+    ref: string;
+    body: AddNoteOrPromiseToPayBody;
+  }, options?: RequestOptions): Promise<AddNoteOrPromiseToPayResponse> {
+    return this.transport.request<AddNoteOrPromiseToPayResponse>({ method: "POST", path: "/v1/finance/collections/{kind}/{ref}/notes", pathParams: { kind: params.kind, ref: params.ref }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add an on-call override
    *
    * Puts someone else on duty for a period (leave, a swap), over the rotation. The most recently added override wins where they overlap. At most 92 days. Audited.
@@ -8299,6 +8478,23 @@ export class Operations {
   }
 
   /**
+   * Approve or reject a write-off
+   *
+   * (v1.20.0) decision: approve or reject (note required); not by the requester. Audited as finance.write_off_approved / _rejected.
+   *
+   * `POST /v1/finance/write-offs/{wid}/{decision}` · needs `payment:write`
+   */
+  approveOrRejectWriteOff(params: {
+    /** The write-off id. */
+    wid: string;
+    /** approve or reject. */
+    decision: string;
+    body?: ApproveOrRejectWriteOffBody;
+  }, options?: RequestOptions): Promise<ApproveOrRejectWriteOffResponse> {
+    return this.transport.request<ApproveOrRejectWriteOffResponse>({ method: "POST", path: "/v1/finance/write-offs/{wid}/{decision}", pathParams: { wid: params.wid, decision: params.decision }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Archive a firmware image
    *
    * Archives the image: new campaigns cannot use it and an uploaded file stops being served to chargers. Audited as firmware.image_archived.
@@ -8413,6 +8609,23 @@ export class Operations {
   }
 
   /**
+   * Ask to write off what is outstanding
+   *
+   * (v1.20.0) Up to the outstanding amount (default all of it), with a reason; a second person approves. The invoice or statement is not changed: the accountant books the bad debt. Audited as finance.write_off_requested.
+   *
+   * `POST /v1/finance/collections/{kind}/{ref}/write-off` · needs `payment:write`
+   */
+  askToWriteOffWhatIsOutstanding(params: {
+    /** fleet_invoice or platform_statement. */
+    kind: string;
+    /** The invoice or statement id. */
+    ref: string;
+    body: AskToWriteOffWhatIsOutstandingBody;
+  }, options?: RequestOptions): Promise<AskToWriteOffWhatIsOutstandingResponse> {
+    return this.transport.request<AskToWriteOffWhatIsOutstandingResponse>({ method: "POST", path: "/v1/finance/collections/{kind}/{ref}/write-off", pathParams: { kind: params.kind, ref: params.ref }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Ask Xendit to generate a report
    *
    * (v1.16.0) Xendit's Report API for the period (from, to): TRANSACTIONS, BALANCE_HISTORY or UPCOMING_TRANSACTIONS (the next 30 days whatever the period), as CSV. 409 for a Duitku account; 502 when Xendit refuses (the key needs the Report permission). Audited as finance.report_requested.
@@ -8464,6 +8677,26 @@ export class Operations {
   }
 
   /**
+   * The audit pack (ZIP)
+   *
+   * (v1.20.0) For the period: journal, gateway ledger, statements, statement payments, transfers, bank lines, tax withholdings, write-offs and the audit log as CSV, a manifest.json with each file's rows, bytes and SHA-256 and the audit chain's verification, and a README. X-Manifest-Sha256: the manifest's hash. Account numbers by their last four digits only. Audited as finance.audit_pack_exported.
+   *
+   * `GET /v1/finance/accounts/{id}/audit-pack` · needs `payment:read`
+   */
+  auditPackZip(params: {
+    /** The payments account (integration) id, from GET /v1/finance/accounts. */
+    id: string;
+    query?: {
+      /** First day (platform time zone). Default: the first of the current month. */
+      from?: string;
+      /** Last day, inclusive. Default: today. At most 400 days. */
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/accounts/{id}/audit-pack", pathParams: { id: params.id }, query: params.query, accept: "binary" }, options);
+  }
+
+  /**
    * Bank statement lines and their matches
    *
    * (v1.18.0) Up to 1000 lines, open first. statement: one upload; open=true: unmatched only. Amounts are signed (credits positive).
@@ -8492,6 +8725,21 @@ export class Operations {
     body: BindClientCertificateBody;
   }, options?: RequestOptions): Promise<BindClientCertificateResponse> {
     return this.transport.request<BindClientCertificateResponse>({ method: "PUT", path: "/v1/charge-points/{identity}/client-certificate", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Budgets vs actuals for a month
+   *
+   * (v1.20.0) The organisation's lines per currency (revenue, energy cost, gateway fees, owner share) and each site's (revenue, energy cost), budget beside actual with the variance (amount and %). alertPct: the off-track threshold.
+   *
+   * `GET /v1/finance/budgets` · needs `payment:read`
+   */
+  budgetsVsActualsForMonth(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<BudgetsVsActualsForMonthResponse> {
+    return this.transport.request<BudgetsVsActualsForMonthResponse>({ method: "GET", path: "/v1/finance/budgets", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -8830,6 +9078,19 @@ export class Operations {
     body: ConnectToRoamingPartnerBody;
   }, options?: RequestOptions): Promise<RoamingPartner> {
     return this.transport.request<RoamingPartner>({ method: "POST", path: "/v1/roaming/partners/{id}/connect", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Copy a month's budget forward
+   *
+   * (v1.20.0) Every line of `from` to the next `months` months (1–12), replacing them. Audited as finance.budget_copied.
+   *
+   * `POST /v1/finance/budgets/copy` · needs `payment:write`
+   */
+  copyMonthBudgetForward(params: {
+    body: CopyMonthBudgetForwardBody;
+  }, options?: RequestOptions): Promise<CopyMonthBudgetForwardResponse> {
+    return this.transport.request<CopyMonthBudgetForwardResponse>({ method: "POST", path: "/v1/finance/budgets/copy", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9378,6 +9639,38 @@ export class Operations {
     body?: EMailFleetInvoiceBody;
   }, options?: RequestOptions): Promise<EMailFleetInvoiceResponse> {
     return this.transport.request<EMailFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Energy cost and margin by month
+   *
+   * (v1.20.0) The last months (default 12, up to 24) for the organisation or one site: kWh, revenue, energy cost (estimated: true when part is estimated), margin, per currency.
+   *
+   * `GET /v1/finance/energy/trend` · needs `payment:read`
+   */
+  energyCostAndMarginByMonth(params?: {
+    query?: {
+      months?: number;
+      site?: string;
+    };
+  }, options?: RequestOptions): Promise<EnergyCostAndMarginByMonthResponse> {
+    return this.transport.request<EnergyCostAndMarginByMonthResponse>({ method: "GET", path: "/v1/finance/energy/trend", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Energy cost and margin for a month
+   *
+   * (v1.20.0) Per site: sessions, kWh delivered, revenue before tax (the charge records' subtotal), the energy cost (the month's bill when recorded, else the cost per kWh × kWh as an estimate, else unknown), the cost per kWh, losses against the kWh billed, the margin; per charger the bill allocated by kWh. Totals per currency. site: one site.
+   *
+   * `GET /v1/finance/energy` · needs `payment:read`
+   */
+  energyCostAndMarginForMonth(params?: {
+    query?: {
+      month?: string;
+      site?: string;
+    };
+  }, options?: RequestOptions): Promise<EnergyCostAndMarginForMonthResponse> {
+    return this.transport.request<EnergyCostAndMarginForMonthResponse>({ method: "GET", path: "/v1/finance/energy", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -11229,6 +11522,22 @@ export class Operations {
   }
 
   /**
+   * One receivable's history
+   *
+   * (v1.20.0) kind: fleet_invoice or platform_statement. Notes and promises, reminders sent (or failed), write-offs.
+   *
+   * `GET /v1/finance/collections/{kind}/{ref}` · needs `payment:read`
+   */
+  oneReceivableHistory(params: {
+    /** fleet_invoice or platform_statement. */
+    kind: string;
+    /** The invoice or statement id. */
+    ref: string;
+  }, options?: RequestOptions): Promise<OneReceivableHistoryResponse> {
+    return this.transport.request<OneReceivableHistoryResponse>({ method: "GET", path: "/v1/finance/collections/{kind}/{ref}", pathParams: { kind: params.kind, ref: params.ref }, accept: "json" }, options);
+  }
+
+  /**
    * One WhatsApp support conversation
    *
    * The conversation and its last 200 messages, oldest first, with each reply's delivery status. Opening it marks it read.
@@ -11761,6 +12070,21 @@ export class Operations {
     body: RecordRefundPaidByBankTransferBody;
   }, options?: RequestOptions): Promise<RecordRefundPaidByBankTransferResponse> {
     return this.transport.request<RecordRefundPaidByBankTransferResponse>({ method: "POST", path: "/v1/refunds/{id}/mark-refunded", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a site's electricity bill
+   *
+   * (v1.20.0) One live bill per site and month (void it to replace it): the amount (taxes included), the kWh billed, the bill's reference. Audited as finance.energy_bill_recorded.
+   *
+   * `POST /v1/finance/sites/{sid}/energy-bills` · needs `payment:write`
+   */
+  recordSiteElectricityBill(params: {
+    /** The site id. */
+    sid: string;
+    body: RecordSiteElectricityBillBody;
+  }, options?: RequestOptions): Promise<RecordSiteElectricityBillResponse> {
+    return this.transport.request<RecordSiteElectricityBillResponse>({ method: "POST", path: "/v1/finance/sites/{sid}/energy-bills", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12556,6 +12880,23 @@ export class Operations {
   }
 
   /**
+   * Send a payment reminder now
+   *
+   * (v1.20.0) By e-mail (the fleet account's billing address, or `to`) or WhatsApp (its phone; needs the reminder template), through the organisation's channels. 502 when the channel refuses. Audited as finance.collection_reminder_sent.
+   *
+   * `POST /v1/finance/collections/{kind}/{ref}/remind` · needs `payment:write`
+   */
+  sendPaymentReminderNow(params: {
+    /** fleet_invoice or platform_statement. */
+    kind: string;
+    /** The invoice or statement id. */
+    ref: string;
+    body?: SendPaymentReminderNowBody;
+  }, options?: RequestOptions): Promise<SendPaymentReminderNowResponse> {
+    return this.transport.request<SendPaymentReminderNowResponse>({ method: "POST", path: "/v1/finance/collections/{kind}/{ref}/remind", pathParams: { kind: params.kind, ref: params.ref }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Send a test alert message
    *
    * Sends a test message on the saved channel now (not queued), records it in the notification log and on the channel. Answers 200 when the send was attempted — check `ok` and `error`. Audited.
@@ -12626,6 +12967,19 @@ export class Operations {
   }
 
   /**
+   * Set the budget alert threshold
+   *
+   * (v1.20.0) From the 7th of the month, revenue below or energy cost above the pro-rated budget by more than this % raises finance.budget_off_track. Audited.
+   *
+   * `PUT /v1/finance/budgets/settings` · needs `payment:write`
+   */
+  setBudgetAlertThreshold(params: {
+    body: SetBudgetAlertThresholdBody;
+  }, options?: RequestOptions): Promise<SetBudgetAlertThresholdResponse> {
+    return this.transport.request<SetBudgetAlertThresholdResponse>({ method: "PUT", path: "/v1/finance/budgets/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set connector load-management priorities
    *
    * Sets the priority of each listed connector (clamped to -100..100; higher wins under the priority strategy). Every connector must be at this site, or the request is refused with 400; entries before the bad one are applied. Audited as site.power_priorities.changed.
@@ -12656,6 +13010,19 @@ export class Operations {
   }
 
   /**
+   * Set a month's budget
+   *
+   * (v1.20.0) For the organisation (currency) or a site (siteId; revenue and energy cost only), in the currency's minor unit. Replaces what was there. Audited as finance.budget_saved.
+   *
+   * `PUT /v1/finance/budgets` · needs `payment:write`
+   */
+  setMonthBudget(params: {
+    body: SetMonthBudgetBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/budgets", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the OCPI party of a country
    *
    * Adds or updates the party under which the operator publishes its sites in another country (MY, SG). The home party is set with PUT /v1/roaming/party. All parties are listed in our OCPI credentials (one CPO role each). Audited as roaming.party_set.
@@ -12668,6 +13035,19 @@ export class Operations {
     body: SetOcpiPartyOfCountryBody;
   }, options?: RequestOptions): Promise<SetOcpiPartyOfCountryResponse> {
     return this.transport.request<SetOcpiPartyOfCountryResponse>({ method: "PUT", path: "/v1/roaming/parties/{country}", pathParams: { country: params.country }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the reminder schedule
+   *
+   * (v1.20.0) enabled; steps (days from the due date, -30 to 365; the latest reached is sent once); channels (email, whatsapp); whatsappTemplate { name, lang } with three parameters (customer, document and amount, due date). Audited as finance.dunning_settings_saved.
+   *
+   * `PUT /v1/finance/collections/settings` · needs `payment:write`
+   */
+  setReminderSchedule(params: {
+    body: SetReminderScheduleBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/collections/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12696,6 +13076,21 @@ export class Operations {
     body: SetSecurityProfileBody;
   }, options?: RequestOptions): Promise<SetSecurityProfileResponse> {
     return this.transport.request<SetSecurityProfileResponse>({ method: "PUT", path: "/v1/charge-points/{identity}/security-profile", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set a site's electricity cost per kWh
+   *
+   * (v1.20.0) What the site pays per kWh, taxes included (its PLN tariff): the energy cost of months without a recorded bill. Audited as finance.energy_rate_saved.
+   *
+   * `PUT /v1/finance/sites/{sid}/energy-rate` · needs `payment:write`
+   */
+  setSiteElectricityCostPerKWh(params: {
+    /** The site id. */
+    sid: string;
+    body: SetSiteElectricityCostPerKWhBody;
+  }, options?: RequestOptions): Promise<SetSiteElectricityCostPerKWhResponse> {
+    return this.transport.request<SetSiteElectricityCostPerKWhResponse>({ method: "PUT", path: "/v1/finance/sites/{sid}/energy-rate", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13475,6 +13870,21 @@ export class Operations {
   }
 
   /**
+   * Void an electricity bill
+   *
+   * (v1.20.0) With a reason; never deleted. Audited as finance.energy_bill_voided.
+   *
+   * `POST /v1/finance/energy-bills/{bid}/void` · needs `payment:write`
+   */
+  voidElectricityBill(params: {
+    /** The bill id. */
+    bid: string;
+    body: VoidElectricityBillBody;
+  }, options?: RequestOptions): Promise<VoidElectricityBillResponse> {
+    return this.transport.request<VoidElectricityBillResponse>({ method: "POST", path: "/v1/finance/energy-bills/{bid}/void", pathParams: { bid: params.bid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void a fleet invoice
    *
    * The invoice keeps its number and is marked void; its sessions become billable again, so a corrected invoice can be issued. A paid invoice cannot be voided. If it was exported to e-Faktur, cancel or replace the faktur pajak in Coretax too (`fakturWarning`).
@@ -13531,6 +13941,17 @@ export class Operations {
     lid: string;
   }, options?: RequestOptions): Promise<WhatBankLineCouldBeResponse> {
     return this.transport.request<WhatBankLineCouldBeResponse>({ method: "GET", path: "/v1/finance/bank-lines/{lid}/candidates", pathParams: { lid: params.lid }, accept: "json" }, options);
+  }
+
+  /**
+   * What customers owe, by age
+   *
+   * (v1.20.0) Fleet invoices not paid (and, for platform administrators, operators' statements to PlugSure, due 14 days after finalisation) with what is outstanding, days past due and the bucket (current, 1-30, 31-60, 61-90, 90+), the last note or promise, the last reminder, a write-off; aging totals per currency; the dunning settings; write-offs waiting for approval.
+   *
+   * `GET /v1/finance/collections` · needs `payment:read`
+   */
+  whatCustomersOweByAge(options?: RequestOptions): Promise<WhatCustomersOweByAgeResponse> {
+    return this.transport.request<WhatCustomersOweByAgeResponse>({ method: "GET", path: "/v1/finance/collections", accept: "json" }, options);
   }
 
   /**
