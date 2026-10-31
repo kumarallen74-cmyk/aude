@@ -205,6 +205,59 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   enter Xendit's own (ID_BCA). Xendit's *SUCCEEDED* records the refund or
   payout; *FAILED*, *CANCELLED* or *REVERSED* makes it due again.
 
+## Bank statements, approval alerts, payout callbacks and tax (v1.18.0)
+
+- **Bank** (tab). Upload the operator's bank statement as the bank's CSV
+  export: BCA (one amount column with CR / DB), Mandiri (debit and credit),
+  BRI, or any bank whose export has a date, a description and an amount (or
+  debit and credit) column with headings. PlugSure reads the lines and
+  matches each one to what should appear on the account:
+
+  | Line | Matched to |
+  |---|---|
+  | credit | a withdrawal from the gateway to the bank (Finance's ledger) |
+  | debit | an owner payout recorded against a statement |
+  | debit | a refund paid by bank transfer (recorded by hand) |
+  | credit (platform administrators) | an operator's payment of PlugSure's statement |
+
+  A line matches a record of the same amount within 4 days; a reference
+  found in the description wins. Uploading an overlapping period skips the
+  lines already there. **Match** an open line by hand (the nearest
+  amounts and dates are offered), or ignore it with a note (a bank fee,
+  another business); **Undo** reopens it. A record matches one line only.
+  Uploads and matches are audited.
+- **Approval alerts.** A refund or owner payout waiting for a second person
+  raises the alert *finance.transfer_awaiting_approval*; route it to the
+  people who approve (Govern → Alert routing: e-mail, WhatsApp, SMS). Waiting
+  more than 24 hours, a critical alert follows
+  (*finance.transfer_approval_overdue*). Both resolve when the transfer is
+  approved or rejected. Refunds and Finance show the number waiting as a
+  badge.
+- **Payout callbacks.** Xendit's *payout.** events and Duitku Disbursement's
+  callback, at the account's notification URL, settle a sent transfer in
+  seconds instead of at the next 5-minute check. The callback only names the
+  transfer: PlugSure asks the gateway for the result itself, so a forged
+  callback cannot mark anything paid. In Xendit's dashboard, set the payout
+  callback URL to the same `/pay/notify/<key>` URL as payments.
+- **Tax** (tab).
+  - *PPh 23.* An operator that withholds PPh 23 withholds 2% of the services
+    it pays for. Per month, the tab suggests the base and 2% for the
+    gateway's fees (on the operator's own gateway accounts, from Finance's
+    ledger, excluding VAT) and for PlugSure's platform fee (its statements to
+    the operator, before PPN). **Record** what was withheld, with the bukti
+    potong's number and date (or add it later); a mistaken record is voided
+    with a reason. **CSV** exports the year's records for the tax adviser.
+    Platform administrators see what operators recorded on PlugSure's fee.
+  - *e-Faktur for PlugSure's fee* (platform administrators). A month's
+    finalised platform statements with PPN as Coretax's import XML, the same
+    format as fleet invoices: PlugSure the seller (`BILLING_ISSUER_NPWP` on
+    the API), each operator the buyer (the NPWP on its
+    organisation record), PPN on DPP nilai lain. Operators without a valid NPWP are
+    left out and counted.
+
+  The tax treatment is the operator's and its adviser's: Finance prepares
+  the figures and files nothing.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

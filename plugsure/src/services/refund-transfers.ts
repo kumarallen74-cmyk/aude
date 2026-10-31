@@ -8,6 +8,7 @@ import { DuitkuProvider } from './payments/duitku.js';
 import { completeRefund } from './refunds.js';
 import { persistAlert } from './alerts.js';
 import { railFor } from './payout-rails.js';
+import { notifyAwaiting, clearAwaiting } from './transfer-approvals.js';
 
 /**
  * Refunds sent to the driver's bank account, with two people (v1.15.0: Duitku Disbursement; v1.17.0: also Xendit
@@ -132,6 +133,9 @@ export async function requestTransfer(orgId: string, intentId: string, b: { bank
       `INSERT INTO refund_transfer (org_id, payment_intent_id, integration_id, amount_minor, currency, bank_code, account_number_sealed, account_last4, holder_name, checked_name, state, requested_by, rail)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'awaiting_approval', $11, $12) RETURNING *`,
       [orgId, intentId, d.integrationId, amount, pi.currency, bankCode, seal(number, AAD(orgId, intentId)), number.slice(-4), holder, q.accountName, userId, d.kind]);
+    // (v1.18.0) The approvers are told (alert routing).
+    const who = userId ? (await one<{ name: string }>(`SELECT name FROM app_user WHERE id = $1`, [userId]))?.name ?? null : null;
+    await notifyAwaiting('refund', r, who, `to ${holder}, ${d.kind === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}`);
     return view(r);
   } catch (e) {
     await query(`UPDATE payment_intent SET refund_state = 'due', refund_method = NULL, refund_error = NULL, updated_at = now() WHERE id = $1 AND refund_state = 'processing' AND refund_method = 'disbursement'`, [intentId]);
@@ -154,6 +158,7 @@ export async function rejectTransfer(orgId: string, id: string, reasonRaw: unkno
   const r = await one<any>(`UPDATE refund_transfer SET state = 'rejected', rejected_by = $3, reason = $4, updated_at = now() WHERE id = $1 AND org_id = $2 AND state = 'awaiting_approval' RETURNING *`,
     [id, orgId, userId, reason]);
   if (!r) throw new TransferError(409, `The transfer is ${t.state}: only one awaiting approval can be rejected.`);
+  await clearAwaiting('refund', orgId, id);
   await release(t.payment_intent_id, `Disbursement transfer rejected: ${reason}`, 'due');
   return view(r);
 }
@@ -178,11 +183,17 @@ export async function approveTransfer(orgId: string, id: string, userId: string 
   const won = await one<any>(`UPDATE refund_transfer SET state = 'sending', approved_by = $3, approved_at = now(), updated_at = now() WHERE id = $1 AND org_id = $2 AND state = 'awaiting_approval' RETURNING *`,
     [id, orgId, userId]);
   if (!won) throw new TransferError(409, 'The transfer changed meanwhile. Reload.');
+  await clearAwaiting('refund', orgId, id);
   const number = unseal(t.account_number_sealed, AAD(orgId, t.payment_intent_id));
   const res = await d.send({ idempotencyKey: `ps-refund-${t.id}`, bankCode: t.bank_code, account: number, holderName: t.holder_name, checkedName: t.checked_name,
     amount: Number(t.amount_minor), purpose: 'PlugSure refund' });
   if (res.ref || res.cust) await query(`UPDATE refund_transfer SET disburse_id = COALESCE($2, disburse_id), cust_ref = COALESCE($3, cust_ref), updated_at = now() WHERE id = $1`, [id, res.ref, res.cust]);
   return settle(orgId, { ...t, disburse_id: res.ref ?? t.disburse_id }, res.outcome, res.code, res.error, userId);
+}
+
+/** (v1.18.0) Settle a transfer from what its rail answered (services/transfer-callbacks.ts). */
+export async function settleTransfer(t: any, outcome: 'succeeded' | 'failed' | 'unknown', code: string, error: string | null): Promise<TransferView> {
+  return settle(t.org_id, t, outcome, code, error, null);
 }
 
 async function settle(orgId: string, t: any, outcome: 'succeeded' | 'failed' | 'unknown', code: string, error: string | null, actor: string | null): Promise<TransferView> {

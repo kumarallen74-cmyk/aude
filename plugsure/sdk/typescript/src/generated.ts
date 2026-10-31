@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.17.0";
+export const API_VERSION = "1.18.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4405,6 +4405,29 @@ export interface TariffRating {
   tariffSnapshot: Record<string, unknown>;
 }
 
+/** (v1.18.0) A PPh 23 withholding the operator recorded (with its bukti potong), or voided. */
+export interface TaxWithholding {
+  id: string;
+  kind: "gateway_fee" | "platform_fee";
+  period: string;
+  counterparty: string;
+  counterpartyNpwp?: string | null;
+  integrationId?: string | null;
+  statementId?: string | null;
+  base: number;
+  rateBps: number;
+  amount: number;
+  buktiNumber?: string | null;
+  buktiDate?: string | null;
+  note?: string | null;
+  recordedBy?: string | null;
+  recordedAt?: string | null;
+  voided: boolean;
+  voidReason?: string | null;
+  /** For platform administrators: the operator that withheld it. */
+  operator?: string;
+}
+
 export interface Token {
   id: string;
   uid: string;
@@ -4902,6 +4925,15 @@ export type ActivateChargePointResponse = {
   activated: boolean;
 };
 
+export type AddBuktiPotongToWithholdingBody = {
+  buktiNumber: string;
+  buktiDate: string;
+};
+
+export type AddBuktiPotongToWithholdingResponse = {
+  ok: boolean;
+};
+
 export type AddEvidenceOrCommentToDisputeBody = {
   note: string;
 };
@@ -5069,6 +5101,26 @@ export type AssignTariffBody = {
 export type AssignTariffResponse = {
   ok: true;
   flags: TariffFlag[];
+};
+
+export type BankStatementLinesAndTheirMatchesResponse = {
+  lines: {
+    id?: string;
+    statementId?: string;
+    date?: string;
+    description?: string;
+    reference?: string | null;
+    amount?: number;
+    balance?: number | null;
+    match?: {
+      kind?: "gateway_withdrawal" | "statement_payment" | "refund" | "ignored";
+      ref?: string | null;
+      auto?: boolean;
+      by?: string | null;
+      note?: string | null;
+      label?: string | null;
+    } | null;
+  }[];
 };
 
 export type BindClientCertificateBody = {
@@ -6071,6 +6123,17 @@ export type ListWebhookEndpointsResponse = {
   rows: WebhookEndpointRow[];
 };
 
+export type MatchIgnoreOrUnmatchBankLineBody = {
+  kind: "gateway_withdrawal" | "statement_payment" | "refund" | "ignored" | "none";
+  ref?: string;
+  note?: string;
+};
+
+export type MatchIgnoreOrUnmatchBankLineResponse = {
+  ok: boolean;
+  amountDiffers?: boolean;
+};
+
 export type MyCommissionTermsPerCurrencyResponse = {
   feePlans: Record<string, unknown>;
 };
@@ -6474,6 +6537,26 @@ export type PlugChargeExchangeLogResponse = {
   events: PncEvent[];
 };
 
+export type Pph23WithholdingForYearResponse = {
+  year?: number;
+  suggestions?: {
+    kind?: "gateway_fee" | "platform_fee";
+    period?: string;
+    counterparty?: string;
+    integrationId?: string | null;
+    statementId?: string | null;
+    number?: string | null;
+    base?: number;
+    rateBps?: number;
+    suggested?: number;
+    withheld?: number;
+    recorded?: number;
+    buktiMissing?: boolean;
+  }[];
+  recorded?: TaxWithholding[];
+  received?: TaxWithholding[];
+};
+
 export type PreviewTariffBody = {
   tariff: TariffDefinition;
   /** Default one hour ago. */
@@ -6667,6 +6750,26 @@ export type RecordPayoutOrStatementPaymentBody = {
 export type RecordPayoutOrStatementPaymentResponse = {
   paymentId: string;
   statement: StatementDue;
+};
+
+export type RecordPPh23WithholdingBody = {
+  kind: "gateway_fee" | "platform_fee";
+  period: string;
+  counterparty: string;
+  counterpartyNpwp?: string;
+  integrationId?: string;
+  statementId?: string;
+  base: number;
+  rateBps?: number;
+  amount?: number;
+  buktiNumber?: string;
+  buktiDate?: string;
+  note?: string;
+};
+
+export type RecordPPh23WithholdingResponse = {
+  id: string;
+  amount: number;
 };
 
 export type RecordRefundPaidByBankTransferBody = {
@@ -7439,6 +7542,13 @@ export type TestIntegrationResponse = {
   message: string;
 };
 
+export type TransfersWaitingForSecondPersonResponse = {
+  refunds: number;
+  payouts: number;
+  total: number;
+  forMe: number;
+};
+
 export type TriggerMessageFromChargePointBody = {
   /** BootNotification, Heartbeat, MeterValues, StatusNotification, DiagnosticsStatusNotification, FirmwareStatusNotification. */
   requestedMessage?: string;
@@ -7501,6 +7611,22 @@ export type UploadAppIconResponse = DriverAppView & {
   };
 };
 
+export type UploadBankStatementCsvBody = {
+  filename?: string;
+  csv: string;
+};
+
+export type UploadBankStatementCsvResponse = {
+  statementId?: string;
+  bank?: string;
+  from?: string;
+  to?: string;
+  lines?: number;
+  duplicates?: number;
+  skipped?: number;
+  matched?: number;
+};
+
 export type UploadConsoleLogoBody = {
   /** Base64 PNG (a data: URL is accepted). */
   png: string;
@@ -7513,6 +7639,20 @@ export type UploadConsoleLogoResponse = ConsoleBrandResult & {
     bytes: number;
     sha256: string;
   };
+};
+
+export type UploadedBankStatementsResponse = {
+  statements: {
+    id?: string;
+    bank?: string;
+    filename?: string;
+    from?: string | null;
+    to?: string | null;
+    lines?: number;
+    open?: number;
+    uploadedAt?: string;
+    uploadedBy?: string | null;
+  }[];
 };
 
 export type UploadIOSNotificationsKeyAPNsBody = {
@@ -7550,6 +7690,25 @@ export type VoidRecordedPaymentBody = {
 export type VoidRecordedPaymentResponse = {
   ok: boolean;
   statement: StatementDue;
+};
+
+export type VoidWithholdingRecordBody = {
+  reason: string;
+};
+
+export type VoidWithholdingRecordResponse = {
+  ok: boolean;
+};
+
+export type WhatBankLineCouldBeResponse = {
+  candidates: {
+    kind?: "gateway_withdrawal" | "statement_payment" | "refund";
+    ref?: string;
+    date?: string;
+    amount?: number;
+    label?: string;
+    reference?: string | null;
+  }[];
 };
 
 export type WhatEachPaymentMethodCostsResponse = {
@@ -7776,6 +7935,21 @@ export class Operations {
     identity: string;
   }, options?: RequestOptions): Promise<ActivateChargePointResponse> {
     return this.transport.request<ActivateChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/activate", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
+   * Add the bukti potong to a withholding
+   *
+   * (v1.18.0) Its number and date. payment:write; audited as finance.tax_withholding_bukti.
+   *
+   * `POST /v1/finance/tax/withholdings/{wid}/bukti` · needs `payment:write`
+   */
+  addBuktiPotongToWithholding(params: {
+    /** The withholding record id. */
+    wid: string;
+    body: AddBuktiPotongToWithholdingBody;
+  }, options?: RequestOptions): Promise<AddBuktiPotongToWithholdingResponse> {
+    return this.transport.request<AddBuktiPotongToWithholdingResponse>({ method: "POST", path: "/v1/finance/tax/withholdings/{wid}/bukti", pathParams: { wid: params.wid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -8113,6 +8287,22 @@ export class Operations {
     body: TariffAssignmentRequest;
   }, options?: RequestOptions): Promise<TariffAssignmentResult> {
     return this.transport.request<TariffAssignmentResult>({ method: "PUT", path: "/v1/sites/{siteId}/tariff", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Bank statement lines and their matches
+   *
+   * (v1.18.0) Up to 1000 lines, open first. statement: one upload; open=true: unmatched only. Amounts are signed (credits positive).
+   *
+   * `GET /v1/finance/bank-lines` · needs `payment:read`
+   */
+  bankStatementLinesAndTheirMatches(params?: {
+    query?: {
+      statement?: string;
+      open?: "true" | "false";
+    };
+  }, options?: RequestOptions): Promise<BankStatementLinesAndTheirMatchesResponse> {
+    return this.transport.request<BankStatementLinesAndTheirMatchesResponse>({ method: "GET", path: "/v1/finance/bank-lines", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -10562,6 +10752,21 @@ export class Operations {
   }
 
   /**
+   * Match, ignore or unmatch a bank line
+   *
+   * (v1.18.0) kind: a candidate's kind with its ref; ignored with a note (bank fee, another business); none to undo. A record matches one line only (409). payment:write; audited as finance.bank_line_matched.
+   *
+   * `POST /v1/finance/bank-lines/{lid}/match` · needs `payment:write`
+   */
+  matchIgnoreOrUnmatchBankLine(params: {
+    /** The line id. */
+    lid: string;
+    body: MatchIgnoreOrUnmatchBankLineBody;
+  }, options?: RequestOptions): Promise<MatchIgnoreOrUnmatchBankLineResponse> {
+    return this.transport.request<MatchIgnoreOrUnmatchBankLineResponse>({ method: "POST", path: "/v1/finance/bank-lines/{lid}/match", pathParams: { lid: params.lid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * My commission terms per currency
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -10976,6 +11181,40 @@ export class Operations {
   }
 
   /**
+   * PlugSure's platform-fee statements as e-Faktur XML
+   *
+   * (v1.18.0, platform administrators) A month's finalised platform-fee statements with PPN as Coretax's import XML: PlugSure (BILLING_ISSUER_NPWP) the seller, each operator (its NPWP) the buyer, PPN on DPP nilai lain. Operators without a valid NPWP are skipped (X-Efaktur-Skipped counts them). 409 without PlugSure's NPWP or with nothing to export. Audited as finance.platform_efaktur_exported.
+   *
+   * `GET /v1/finance/tax/platform-efaktur` · needs `platform:admin`
+   */
+  plugsurePlatformFeeStatementsAsEFakturXml(params: {
+    query: {
+      period: string;
+      itemOpt: "A" | "B";
+      itemCode: string;
+      unitCode: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/tax/platform-efaktur", query: params.query, accept: "text" }, options);
+  }
+
+  /**
+   * PPh 23 withholding for a year
+   *
+   * (v1.18.0) Per month, the suggested base and 2% for the gateway's fees (the operator's own accounts) and for PlugSure's platform fee (its statements to the operator), with what was recorded and whether a bukti potong is missing; the records; for platform administrators, the withholdings operators recorded on PlugSure's fee. format=csv: the records, for the tax adviser. Finance prepares the figures; it files nothing.
+   *
+   * `GET /v1/finance/tax/pph23` · needs `payment:read`
+   */
+  pph23WithholdingForYear(params?: {
+    query?: {
+      year?: number;
+      format?: "json" | "csv";
+    };
+  }, options?: RequestOptions): Promise<Pph23WithholdingForYearResponse> {
+    return this.transport.request<Pph23WithholdingForYearResponse>({ method: "GET", path: "/v1/finance/tax/pph23", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Preview a tariff
    *
    * Rates a hypothetical session under a tariff definition without saving anything: CDR lines, charging class, tax stack and regulatory flags.
@@ -11264,6 +11503,19 @@ export class Operations {
     body: RecordPayoutOrStatementPaymentBody;
   }, options?: RequestOptions): Promise<RecordPayoutOrStatementPaymentResponse> {
     return this.transport.request<RecordPayoutOrStatementPaymentResponse>({ method: "POST", path: "/v1/finance/statements/{sid}/payments", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a PPh 23 withholding
+   *
+   * (v1.18.0) What the operator withheld from a payee: kind, period (YYYY-MM), counterparty (and NPWP), the base in rupiah, the rate in basis points (default 200 = 2%), the amount (default base × rate), the bukti potong once issued. payment:write; audited as finance.tax_withholding_recorded.
+   *
+   * `POST /v1/finance/tax/withholdings` · needs `payment:write`
+   */
+  recordPPh23Withholding(params: {
+    body: RecordPPh23WithholdingBody;
+  }, options?: RequestOptions): Promise<RecordPPh23WithholdingResponse> {
+    return this.transport.request<RecordPPh23WithholdingResponse>({ method: "POST", path: "/v1/finance/tax/withholdings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12631,6 +12883,17 @@ export class Operations {
   }
 
   /**
+   * Transfers waiting for a second person
+   *
+   * (v1.18.0) How many refund and owner-payout transfers wait for approval, and how many of those the caller may approve (not their own). The console's badge on Refunds and Finance.
+   *
+   * `GET /v1/finance/approvals` · needs `payment:read`
+   */
+  transfersWaitingForSecondPerson(options?: RequestOptions): Promise<TransfersWaitingForSecondPersonResponse> {
+    return this.transport.request<TransfersWaitingForSecondPersonResponse>({ method: "GET", path: "/v1/finance/approvals", accept: "json" }, options);
+  }
+
+  /**
    * Trigger a message from a charge point
    *
    * Sends TriggerMessage, asking the charger to send a message now (StatusNotification by default). Audited.
@@ -12849,6 +13112,19 @@ export class Operations {
   }
 
   /**
+   * Upload a bank statement (CSV)
+   *
+   * (v1.18.0) The bank's CSV export (BCA, Mandiri, BRI or any with date, description and amount or debit/credit columns), up to 4 MB. Lines already uploaded are skipped; the new ones are matched automatically to gateway withdrawals, owner payouts (and, for platform administrators, platform-fee payments) and manual refunds: the same amount within 4 days, the reference in the description first. payment:write; audited as finance.bank_statement_uploaded.
+   *
+   * `POST /v1/finance/bank-statements` · needs `payment:write`
+   */
+  uploadBankStatementCsv(params: {
+    body: UploadBankStatementCsvBody;
+  }, options?: RequestOptions): Promise<UploadBankStatementCsvResponse> {
+    return this.transport.request<UploadBankStatementCsvResponse>({ method: "POST", path: "/v1/finance/bank-statements", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Upload the console logo
    *
    * A square PNG, 64 to 2048 pixels (256 or more is best), up to 1 MB, as base64. It is stored as 256 × 256. Needs the brand first (404).
@@ -12859,6 +13135,17 @@ export class Operations {
     body: UploadConsoleLogoBody;
   }, options?: RequestOptions): Promise<UploadConsoleLogoResponse> {
     return this.transport.request<UploadConsoleLogoResponse>({ method: "PUT", path: "/v1/console-brand/logo", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Uploaded bank statements
+   *
+   * (v1.18.0) The last 100 uploads, with how many of each one's lines are still open (unmatched).
+   *
+   * `GET /v1/finance/bank-statements` · needs `payment:read`
+   */
+  uploadedBankStatements(options?: RequestOptions): Promise<UploadedBankStatementsResponse> {
+    return this.transport.request<UploadedBankStatementsResponse>({ method: "GET", path: "/v1/finance/bank-statements", accept: "json" }, options);
   }
 
   /**
@@ -12974,6 +13261,35 @@ export class Operations {
     body: VoidRecordedPaymentBody;
   }, options?: RequestOptions): Promise<VoidRecordedPaymentResponse> {
     return this.transport.request<VoidRecordedPaymentResponse>({ method: "POST", path: "/v1/finance/statement-payments/{pid}/void", pathParams: { pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a withholding record
+   *
+   * (v1.18.0) A mistaken record is voided with a reason, never deleted. payment:write; audited as finance.tax_withholding_voided.
+   *
+   * `POST /v1/finance/tax/withholdings/{wid}/void` · needs `payment:write`
+   */
+  voidWithholdingRecord(params: {
+    /** The withholding record id. */
+    wid: string;
+    body: VoidWithholdingRecordBody;
+  }, options?: RequestOptions): Promise<VoidWithholdingRecordResponse> {
+    return this.transport.request<VoidWithholdingRecordResponse>({ method: "POST", path: "/v1/finance/tax/withholdings/{wid}/void", pathParams: { wid: params.wid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * What a bank line could be
+   *
+   * (v1.18.0) Unmatched records of the same direction around the line's date, the nearest amount first (up to 20).
+   *
+   * `GET /v1/finance/bank-lines/{lid}/candidates` · needs `payment:read`
+   */
+  whatBankLineCouldBe(params: {
+    /** The line id. */
+    lid: string;
+  }, options?: RequestOptions): Promise<WhatBankLineCouldBeResponse> {
+    return this.transport.request<WhatBankLineCouldBeResponse>({ method: "GET", path: "/v1/finance/bank-lines/{lid}/candidates", pathParams: { lid: params.lid }, accept: "json" }, options);
   }
 
   /**

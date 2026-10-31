@@ -313,7 +313,7 @@ function renderShell() {
         const items = visibleViews().filter((v) => v.group === g);
         if (!items.length) return '';
         return `<div class="nav-group"><div class="label">${esc(label)}</div>${items
-          .map((v) => `<a href="#/${esc(v.id)}" data-view="${esc(v.id)}" title="${esc(v.title)}">${icon(v.icon)}<span>${esc(v.title)}</span>${v.id === 'dashboard' ? '<b class="count hidden" data-alerts></b>' : ''}</a>`)
+          .map((v) => `<a href="#/${esc(v.id)}" data-view="${esc(v.id)}" title="${esc(v.title)}">${icon(v.icon)}<span>${esc(v.title)}</span>${v.id === 'dashboard' ? '<b class="count hidden" data-alerts></b>' : ''}${v.id === 'refunds' || v.id === 'finance' ? `<b class="count hidden" data-approvals="${v.id}" title="Transfers waiting for your approval"></b>` : ''}</a>`)
           .join('')}</div>`;
       }).join('')}</nav>
       <div class="sidebar-foot"><div>${esc(portalMode() ? `${me.owners[0].name} · operated by ${me.org?.name ?? ''}` : fleetMode() ? `${me.fleets[0].name} · billed by ${me.org?.name ?? ''}` : me.org?.name ?? '')}</div><div class="mono">${me.features?.version ? `v${esc(me.features.version)} · ` : ''}${esc(me.features?.env ?? '')}</div>${me.consoleBrand && me.consoleBrand.showPoweredBy !== false ? '<div class="powered-by">Powered by PlugSure</div>' : ''}</div>
@@ -388,6 +388,7 @@ function renderShell() {
   // The live event stream is org-wide; portal users do not get it (pages refresh on load).
   if (!portalMode() && !fleetMode()) startLive($('[data-live]', root));
   onLive((e) => { if (e.kind === 'alert.raised') refreshAlertCount(); });
+  setInterval(() => { refreshApprovals(); }, 120_000);
   refreshAlertCount();
 }
 
@@ -398,6 +399,20 @@ async function refreshAlertCount() {
   const n = d?.alerts?.critical ?? 0;
   badge.textContent = String(n);
   badge.classList.toggle('hidden', !n);
+  refreshApprovals();
+}
+
+/** (v1.18.0) Transfers waiting for a second person: Refunds counts refunds, Finance counts owner payouts. */
+async function refreshApprovals() {
+  const els = $$('[data-approvals]');
+  if (!els.length || !state.can('payment:write')) return;
+  const a = await api('/v1/finance/approvals').catch(() => null);
+  if (!a) return;
+  for (const el of els) {
+    const n = el.dataset.approvals === 'refunds' ? a.refunds : a.payouts;
+    el.textContent = String(n);
+    el.classList.toggle('hidden', !n);
+  }
 }
 
 // ------------------------------------------------------------------ global search

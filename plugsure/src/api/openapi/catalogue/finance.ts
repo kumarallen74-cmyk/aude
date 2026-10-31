@@ -59,6 +59,16 @@ export const schemas: Record<string, Schema> = {
       },
     },
   },
+  TaxWithholding: {
+    type: 'object', required: ['id', 'kind', 'period', 'counterparty', 'base', 'rateBps', 'amount', 'voided'],
+    description: '(v1.18.0) A PPh 23 withholding the operator recorded (with its bukti potong), or voided.',
+    properties: {
+      id: { type: 'string' }, kind: { type: 'string', enum: ['gateway_fee', 'platform_fee'] }, period: { type: 'string' }, counterparty: { type: 'string' }, counterpartyNpwp: nullable('string'),
+      integrationId: nullable('string'), statementId: nullable('string'), base: money, rateBps: count, amount: money, buktiNumber: nullable('string'), buktiDate: nullable('string', { format: 'date' }),
+      note: nullable('string'), recordedBy: nullable('string'), recordedAt: nullable('string', { format: 'date-time' }), voided: { type: 'boolean' }, voidReason: nullable('string'),
+      operator: { type: 'string', description: 'For platform administrators: the operator that withheld it.' },
+    },
+  },
   PayoutTransfer: {
     type: 'object', required: ['id', 'statementId', 'state', 'amount', 'currency', 'bankCode', 'accountMasked', 'holderName', 'namesMatch', 'requestedAt'],
     description: '(v1.16.0) An owner\'s share paid through Duitku Disbursement from the operator\'s own account, approved by a second person.',
@@ -425,5 +435,95 @@ export const ops: Op[] = [
     body: { required: false, schema: { type: 'object', properties: { month: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } } }, example: { month: '2026-10' } },
     responses: { 200: { description: 'Sent', schema: { type: 'object', required: ['ok', 'month', 'to'], properties: { ok: { type: 'boolean' }, month: { type: 'string' }, to: arrayOf({ type: 'string' }), reference: nullable('string') } } } },
     errors: [404, 409, 422, 502],
+  },
+  // ─────────────────────────── (v1.18.0) approvals, bank statements, PPh 23, platform e-Faktur
+  {
+    method: 'GET', path: '/v1/finance/approvals', tag: T, summary: 'Transfers waiting for a second person',
+    description: '(v1.18.0) How many refund and owner-payout transfers wait for approval, and how many of those the caller may approve (not their own). The console\'s badge on Refunds and Finance.',
+    responses: { 200: { description: 'Counts', schema: { type: 'object', required: ['refunds', 'payouts', 'total', 'forMe'], properties: { refunds: count, payouts: count, total: count, forMe: count } } } },
+  },
+  {
+    method: 'GET', path: '/v1/finance/bank-statements', tag: T, summary: 'Uploaded bank statements',
+    description: '(v1.18.0) The last 100 uploads, with how many of each one\'s lines are still open (unmatched).',
+    responses: { 200: { description: 'Statements', schema: { type: 'object', required: ['statements'], properties: { statements: arrayOf({ type: 'object', properties: {
+      id: { type: 'string' }, bank: { type: 'string' }, filename: { type: 'string' }, from: nullable('string', { format: 'date' }), to: nullable('string', { format: 'date' }), lines: count, open: count, uploadedAt: DT, uploadedBy: nullable('string') } }) } } } },
+  },
+  {
+    method: 'POST', path: '/v1/finance/bank-statements', tag: T, summary: 'Upload a bank statement (CSV)',
+    description: '(v1.18.0) The bank\'s CSV export (BCA, Mandiri, BRI or any with date, description and amount or debit/credit columns), up to 4 MB. Lines already uploaded are skipped; the new ones are matched automatically to gateway withdrawals, owner payouts (and, for platform administrators, platform-fee payments) and manual refunds: the same amount within 4 days, the reference in the description first. payment:write; audited as finance.bank_statement_uploaded.',
+    body: { required: true, schema: { type: 'object', required: ['csv'], properties: { filename: { type: 'string', maxLength: 120 }, csv: { type: 'string' } } }, example: { filename: 'mandiri-2026-10.csv', csv: 'Date,Description,Debit,Credit\n15/10/2026,XENDIT PAYOUT,0,120000' } },
+    responses: { 201: { description: 'Uploaded', schema: { type: 'object', properties: { statementId: { type: 'string' }, bank: { type: 'string' }, from: { type: 'string', format: 'date' }, to: { type: 'string', format: 'date' }, lines: count, duplicates: count, skipped: count, matched: count } } } },
+    errors: [413, 422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/bank-lines', tag: T, summary: 'Bank statement lines and their matches',
+    description: '(v1.18.0) Up to 1000 lines, open first. statement: one upload; open=true: unmatched only. Amounts are signed (credits positive).',
+    query: [{ name: 'statement', schema: { type: 'string' } }, { name: 'open', schema: { type: 'string', enum: ['true', 'false'] } }],
+    responses: { 200: { description: 'Lines', schema: { type: 'object', required: ['lines'], properties: { lines: arrayOf({ type: 'object', properties: {
+      id: { type: 'string' }, statementId: { type: 'string' }, date: { type: 'string', format: 'date' }, description: { type: 'string' }, reference: nullable('string'), amount: money, balance: { type: ['number', 'null'] },
+      match: { type: ['object', 'null'], properties: { kind: { type: 'string', enum: ['gateway_withdrawal', 'statement_payment', 'refund', 'ignored'] }, ref: nullable('string'), auto: { type: 'boolean' }, by: nullable('string'), note: nullable('string'), label: nullable('string') } },
+    } }) } } } },
+  },
+  {
+    method: 'GET', path: '/v1/finance/bank-lines/:lid/candidates', tag: T, summary: 'What a bank line could be',
+    description: '(v1.18.0) Unmatched records of the same direction around the line\'s date, the nearest amount first (up to 20).',
+    pathParams: { lid: 'The line id.' },
+    responses: { 200: { description: 'Candidates', schema: { type: 'object', required: ['candidates'], properties: { candidates: arrayOf({ type: 'object', properties: {
+      kind: { type: 'string', enum: ['gateway_withdrawal', 'statement_payment', 'refund'] }, ref: { type: 'string' }, date: { type: 'string', format: 'date' }, amount: money, label: { type: 'string' }, reference: nullable('string') } }) } } } },
+    errors: [404],
+  },
+  {
+    method: 'POST', path: '/v1/finance/bank-lines/:lid/match', tag: T, summary: 'Match, ignore or unmatch a bank line',
+    description: '(v1.18.0) kind: a candidate\'s kind with its ref; ignored with a note (bank fee, another business); none to undo. A record matches one line only (409). payment:write; audited as finance.bank_line_matched.',
+    pathParams: { lid: 'The line id.' },
+    body: { required: true, schema: { type: 'object', required: ['kind'], properties: { kind: { type: 'string', enum: ['gateway_withdrawal', 'statement_payment', 'refund', 'ignored', 'none'] }, ref: { type: 'string' }, note: { type: 'string', maxLength: 300 } } }, example: { kind: 'ignored', note: 'Bank fee' } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, amountDiffers: { type: 'boolean' } } } } },
+    errors: [404, 409, 422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/tax/pph23', tag: T, summary: 'PPh 23 withholding for a year',
+    description: '(v1.18.0) Per month, the suggested base and 2% for the gateway\'s fees (the operator\'s own accounts) and for PlugSure\'s platform fee (its statements to the operator), with what was recorded and whether a bukti potong is missing; the records; for platform administrators, the withholdings operators recorded on PlugSure\'s fee. format=csv: the records, for the tax adviser. Finance prepares the figures; it files nothing.',
+    query: [{ name: 'year', schema: { type: 'integer' } }, { name: 'format', schema: { type: 'string', enum: ['json', 'csv'] } }],
+    responses: { 200: { description: 'The year', schema: { type: 'object', properties: {
+      year: { type: 'integer' },
+      suggestions: arrayOf({ type: 'object', properties: { kind: { type: 'string', enum: ['gateway_fee', 'platform_fee'] }, period: { type: 'string' }, counterparty: { type: 'string' }, integrationId: nullable('string'), statementId: nullable('string'), number: nullable('string'), base: money, rateBps: count, suggested: money, withheld: money, recorded: count, buktiMissing: { type: 'boolean' } } }),
+      recorded: arrayOf(ref('TaxWithholding')), received: arrayOf(ref('TaxWithholding')),
+    } } } },
+    errors: [400],
+  },
+  {
+    method: 'POST', path: '/v1/finance/tax/withholdings', tag: T, summary: 'Record a PPh 23 withholding',
+    description: '(v1.18.0) What the operator withheld from a payee: kind, period (YYYY-MM), counterparty (and NPWP), the base in rupiah, the rate in basis points (default 200 = 2%), the amount (default base × rate), the bukti potong once issued. payment:write; audited as finance.tax_withholding_recorded.',
+    body: { required: true, schema: { type: 'object', required: ['kind', 'period', 'counterparty', 'base'], properties: {
+      kind: { type: 'string', enum: ['gateway_fee', 'platform_fee'] }, period: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, counterparty: { type: 'string', maxLength: 160 }, counterpartyNpwp: { type: 'string' },
+      integrationId: { type: 'string' }, statementId: { type: 'string' }, base: { type: 'integer', minimum: 0 }, rateBps: { type: 'integer', minimum: 0, maximum: 10000 }, amount: { type: 'integer', minimum: 0 },
+      buktiNumber: { type: 'string', maxLength: 60 }, buktiDate: { type: 'string', format: 'date' }, note: { type: 'string', maxLength: 300 } } },
+      example: { kind: 'gateway_fee', period: '2026-10', counterparty: 'PT Sinar Digital Terdepan (Xendit)', base: 1050000 } },
+    responses: { 201: { description: 'Recorded', schema: { type: 'object', required: ['id', 'amount'], properties: { id: { type: 'string' }, amount: money } } } },
+    errors: [422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/tax/withholdings/:wid/bukti', tag: T, summary: 'Add the bukti potong to a withholding',
+    description: '(v1.18.0) Its number and date. payment:write; audited as finance.tax_withholding_bukti.',
+    pathParams: { wid: 'The withholding record id.' },
+    body: { required: true, schema: { type: 'object', required: ['buktiNumber', 'buktiDate'], properties: { buktiNumber: { type: 'string', maxLength: 60 }, buktiDate: { type: 'string', format: 'date' } } }, example: { buktiNumber: '2300012345', buktiDate: '2026-11-10' } },
+    responses: { 200: { description: 'Saved', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'POST', path: '/v1/finance/tax/withholdings/:wid/void', tag: T, summary: 'Void a withholding record',
+    description: '(v1.18.0) A mistaken record is voided with a reason, never deleted. payment:write; audited as finance.tax_withholding_voided.',
+    pathParams: { wid: 'The withholding record id.' },
+    body: { required: true, schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 1, maxLength: 300 } } }, example: { reason: 'Entered twice' } },
+    responses: { 200: { description: 'Voided', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } } },
+    errors: [404, 422],
+  },
+  {
+    method: 'GET', path: '/v1/finance/tax/platform-efaktur', tag: T, summary: 'PlugSure\'s platform-fee statements as e-Faktur XML',
+    description: '(v1.18.0, platform administrators) A month\'s finalised platform-fee statements with PPN as Coretax\'s import XML: PlugSure (BILLING_ISSUER_NPWP) the seller, each operator (its NPWP) the buyer, PPN on DPP nilai lain. Operators without a valid NPWP are skipped (X-Efaktur-Skipped counts them). 409 without PlugSure\'s NPWP or with nothing to export. Audited as finance.platform_efaktur_exported.',
+    query: [{ name: 'period', required: true, schema: { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }, { name: 'itemOpt', required: true, schema: { type: 'string', enum: ['A', 'B'] } },
+      { name: 'itemCode', required: true, schema: { type: 'string', pattern: '^\\d{6}$' } }, { name: 'unitCode', required: true, schema: { type: 'string', pattern: '^UM\\.\\d{4}$' } }],
+    responses: { 200: { description: 'e-Faktur XML.', contentType: 'application/xml', schema: { type: 'string' } } },
+    errors: [403, 409, 422],
   },
 ];

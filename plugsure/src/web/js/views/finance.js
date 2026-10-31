@@ -13,6 +13,8 @@ import { formatMoney, LEGACY_CURRENCY, CURRENCIES } from '../money.js';
  *   Payables        refunds due (with the e-wallet's refund window), site owners' shares on finalised statements
  *   Fees            by month and channel, the effective rate; QRIS fees charged vs PlugSure's estimate
  *   Reconciliation  differences between the gateway and PlugSure: apply a missed payment, or resolve with a note
+ *   Bank            (v1.18.0) the bank's statement (CSV) matched to gateway payouts, owner payouts and manual refunds
+ *   Tax             (v1.18.0) PPh 23 withheld on the gateway's fees and PlugSure's fee; the platform e-Faktur
  *
  * The period and the account apply to every tab; exports (CSV, Excel, PDF) cover the period. Every value from the
  * API is escaped before it reaches markup.
@@ -445,6 +447,194 @@ async function operatorStatementsSection(el, canWrite) {
   }));
 }
 
+// ─────────────────────────────────────────── (v1.18.0) bank statements and tax
+
+const MATCH_LABEL = { gateway_withdrawal: 'Gateway payout', statement_payment: 'Statement payment', refund: 'Refund', ignored: 'Ignored' };
+
+/** Bank: upload the bank's CSV, see what matched, match the rest by hand. */
+async function bankSection(el, canWrite) {
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let st, ls;
+  try { [st, ls] = await Promise.all([api('/v1/finance/bank-statements'), api('/v1/finance/bank-lines')]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => bankSection(el, canWrite);
+  const open = ls.lines.filter((l) => !l.match);
+  el.innerHTML = `<div class="grid k3" style="margin-bottom:16px">${kpi('Lines', fmt.num(ls.lines.length))}${kpi('Matched', fmt.num(ls.lines.length - open.length))}${kpi('Open', fmt.num(open.length), open.length ? 'to match or ignore' : '')}</div>
+    <div class="card"><header><h3>Bank statements</h3>${canWrite ? `<label class="btn sm primary" style="cursor:pointer">${icon('upload')} Upload CSV<input type="file" accept=".csv,text/csv" data-up hidden></label>` : ''}</header>
+      <div class="body"><p class="cell-sub">Export the account's statement from the bank as CSV (BCA, Mandiri, BRI and others with date, description and amount columns). Lines already uploaded are skipped; each line is matched to a gateway payout, an owner payout or a manual refund of the same amount within 4 days.</p></div>
+      <div data-st></div></div>
+    <div class="card"><header><h3>Lines</h3><label class="row nowrap" style="gap:6px"><input type="checkbox" data-openonly> open only</label></header><div data-lines></div></div>`;
+  table($('[data-st]', el), {
+    columns: [
+      { label: 'Uploaded', render: (x) => `${esc(fmt.time(x.uploadedAt))}<div class="cell-sub">${esc(x.uploadedBy ?? '')}</div>` },
+      { label: 'File', render: (x) => `${esc(x.filename)}<div class="cell-sub">${esc(x.bank)}</div>` },
+      { label: 'Period', render: (x) => `${esc(x.from ?? '')} – ${esc(x.to ?? '')}` },
+      { label: 'New lines', num: true, render: (x) => esc(fmt.num(x.lines)) },
+      { label: 'Open', num: true, render: (x) => (x.open ? tag('t-warn', fmt.num(x.open)) : tag('t-ok', '0')) },
+    ],
+    rows: st.statements, empty: 'No statements uploaded yet.',
+  });
+  const drawLines = (rows) => table($('[data-lines]', el), {
+    columns: [
+      { label: 'Date', render: (l) => esc(fmt.date(`${l.date}T12:00:00Z`)) },
+      { label: 'Description', render: (l) => `${esc(l.description)}${l.reference ? `<div class="cell-sub mono">${esc(l.reference)}</div>` : ''}` },
+      { label: 'Amount', num: true, render: (l) => `<b style="color:${l.amount < 0 ? 'var(--crit)' : 'inherit'}">${esc(rp(l.amount))}</b>` },
+      { label: 'Matched to', render: (l) => (l.match ? `${tag(l.match.kind === 'ignored' ? 't-mute' : 't-ok', MATCH_LABEL[l.match.kind] ?? l.match.kind)}<div class="cell-sub">${esc(l.match.label ?? l.match.note ?? '')}${l.match.auto ? ' · automatic' : l.match.by ? ` · ${esc(l.match.by)}` : ''}</div>` : tag('t-warn', 'open')) },
+      { label: '', render: (l) => (!canWrite ? '' : l.match ? `<button class="btn sm" type="button" data-unmatch="${esc(l.id)}">Undo</button>` : `<button class="btn sm primary" type="button" data-match="${esc(l.id)}">Match</button>`) },
+    ],
+    rows, empty: 'No lines.',
+  });
+  drawLines(ls.lines);
+  $('[data-openonly]', el).addEventListener('change', (e) => drawLines(e.target.checked ? open : ls.lines));
+  $('[data-up]', el)?.addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const r = await api('/v1/finance/bank-statements', { method: 'POST', body: { filename: f.name, csv: await f.text() } });
+      toast(`${r.bank}: ${fmt.num(r.lines)} new line${r.lines === 1 ? '' : 's'}${r.duplicates ? `, ${fmt.num(r.duplicates)} already uploaded` : ''}; ${fmt.num(r.matched)} matched.`, 'ok');
+      reload();
+    } catch (err) { toast(err.message, 'crit'); }
+  });
+  $('[data-lines]', el).addEventListener('click', async (e) => {
+    const un = e.target.closest('[data-unmatch]'), mb = e.target.closest('[data-match]');
+    if (un) {
+      try { await api(`/v1/finance/bank-lines/${un.dataset.unmatch}/match`, { method: 'POST', body: { kind: 'none' } }); reload(); } catch (err) { toast(err.message, 'crit'); }
+      return;
+    }
+    if (!mb) return;
+    const l = ls.lines.find((x) => x.id === mb.dataset.match);
+    let cands = [];
+    try { cands = (await api(`/v1/finance/bank-lines/${l.id}/candidates`)).candidates; } catch (err) { toast(err.message, 'crit'); return; }
+    modal({
+      title: 'Match a bank line', subtitle: `${l.date} · ${rp(l.amount)} · ${l.description}`, size: 'lg',
+      body: `<div class="form one">${field('Matches', `<select name="cand"><option value="">— Ignore it (not PlugSure's money) —</option>${cands.map((c, i) => `<option value="${i}">${esc(MATCH_LABEL[c.kind])} · ${esc(c.date)} · ${esc(rp(c.amount))} · ${esc(c.label)}${c.amount !== l.amount ? ' (amount differs)' : ''}</option>`).join('')}</select>`)}
+        ${field('Note', '<input name="note" maxlength="300" placeholder="e.g. bank fee, another business">')}</div>${cands.length ? '' : callout('info', 'Nothing unmatched of this direction around this date: ignore it with a note.')}`,
+      actions: [{ label: 'Cancel' }, {
+        label: 'Save', kind: 'primary',
+        async onClick(ctx) {
+          const i = $('[name="cand"]', ctx.body).value, note = $('[name="note"]', ctx.body).value.trim();
+          const c = i === '' ? null : cands[Number(i)];
+          if (!c && !note) { $('[name="note"]', ctx.body).classList.add('invalid'); return false; }
+          try {
+            await api(`/v1/finance/bank-lines/${l.id}/match`, { method: 'POST', body: c ? { kind: c.kind, ref: c.ref, note: note || undefined } : { kind: 'ignored', note } });
+            toast('Saved.', 'ok');
+            reload();
+          } catch (err) { toast(err.message, 'crit'); return false; }
+        },
+      }],
+    });
+  });
+}
+
+/** Tax: PPh 23 withheld on the gateway's fees and PlugSure's fee; (platform administrators) the platform e-Faktur. */
+async function taxSection(el, canWrite, year = new Date().getFullYear()) {
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let y;
+  try { y = await api(`/v1/finance/tax/pph23?year=${year}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (yr = year) => taxSection(el, canWrite, yr);
+  const KIND = { gateway_fee: 'Gateway fees', platform_fee: 'PlugSure platform fee' };
+  const admin = state.can('platform:admin');
+  const thisYear = new Date().getFullYear();
+  el.innerHTML = `<div class="card"><header><h3>PPh 23 withheld</h3><div class="row nowrap" style="gap:6px"><select data-year>${[thisYear, thisYear - 1, thisYear - 2].map((v) => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select><button class="btn sm" type="button" data-csv>${icon('download')} CSV</button></div></header>
+      <div class="body">${callout('info', 'If your organisation withholds PPh 23, it withholds 2% of the services it pays for — the gateway\'s fees and PlugSure\'s platform fee — and gives the payee a bukti potong. Finance suggests each month\'s base; record what you withheld. Your tax adviser decides the treatment; Finance files nothing.')}</div>
+      <div data-sug></div></div>
+    <div class="card"><header><h3>Records</h3></header><div data-rec></div></div>
+    ${admin ? `<div class="card"><header><h3>Withheld on PlugSure's fee (by operators)</h3></header><div data-recv></div></div>
+    <div class="card"><header><h3>e-Faktur for PlugSure's platform fee</h3></header><div class="body"><div class="filters" style="margin-top:0">
+      ${field('Month', `<input type="month" name="ef_period" value="${esc(`${year}-${String(new Date().getMonth() || 12).padStart(2, '0')}`)}">`)}
+      ${field('Goods / services', '<select name="ef_opt"><option value="B">B · services</option><option value="A">A · goods</option></select>')}
+      ${field('Code (6 digits)', '<input name="ef_code" value="000000" maxlength="6" inputmode="numeric">')}
+      ${field('Unit (UM.nnnn)', '<input name="ef_unit" value="UM.0030" maxlength="7">')}
+      <div class="row" style="align-self:flex-end"><button class="btn primary" type="button" data-ef>${icon('download')} XML</button></div></div>
+      <p class="cell-sub">The month's finalised platform statements with PPN as Coretax's import XML: PlugSure the seller (BILLING_ISSUER_NPWP), each operator the buyer. Operators without an NPWP are left out.</p></div></div>` : ''}`;
+  table($('[data-sug]', el), {
+    columns: [
+      { label: 'Month', render: (s) => esc(s.period) },
+      { label: 'Paid to', render: (s) => `${esc(s.counterparty)}<div class="cell-sub">${esc(KIND[s.kind])}${s.number ? ` · <span class="mono">${esc(s.number)}</span>` : ''}</div>` },
+      { label: 'Base', num: true, render: (s) => esc(rp(s.base)) },
+      { label: '2%', num: true, render: (s) => esc(rp(s.suggested)) },
+      { label: 'Withheld', num: true, render: (s) => (s.recorded ? `${esc(rp(s.withheld))}${s.buktiMissing ? `<div>${tag('t-warn', 'bukti potong missing')}</div>` : ''}` : '<span class="cell-sub">—</span>') },
+      { label: '', render: (s, i) => (canWrite && !s.recorded ? `<button class="btn sm primary" type="button" data-rec="${i}">Record</button>` : '') },
+    ],
+    rows: y.suggestions, empty: 'No gateway fees or PlugSure statements this year.',
+  });
+  const recTable = (box, rows, withOperator) => table(box, {
+    columns: [
+      { label: 'Month', render: (w) => esc(w.period) },
+      ...(withOperator ? [{ label: 'Operator', render: (w) => esc(w.operator ?? '') }] : []),
+      { label: 'Paid to', render: (w) => `${esc(w.counterparty)}<div class="cell-sub">${esc(KIND[w.kind])}${w.counterpartyNpwp ? ` · NPWP ${esc(w.counterpartyNpwp)}` : ''}</div>` },
+      { label: 'Base', num: true, render: (w) => esc(rp(w.base)) },
+      { label: 'Withheld', num: true, render: (w) => `<b>${esc(rp(w.amount))}</b><div class="cell-sub">${esc(String(w.rateBps / 100))}%</div>` },
+      { label: 'Bukti potong', render: (w) => (w.buktiNumber ? `<span class="mono">${esc(w.buktiNumber)}</span><div class="cell-sub">${esc(w.buktiDate ?? '')}</div>` : tag('t-warn', 'missing')) },
+      { label: 'Status', render: (w) => (w.voided ? `${tag('t-mute', 'voided')}<div class="cell-sub">${esc(w.voidReason ?? '')}</div>` : tag('t-ok', 'recorded')) },
+      ...(withOperator ? [] : [{ label: '', render: (w) => (!canWrite || w.voided ? '' : `<div class="row nowrap" style="gap:6px">${w.buktiNumber ? '' : `<button class="btn sm" type="button" data-bukti="${esc(w.id)}">Add bukti</button>`}<button class="btn sm" type="button" data-void="${esc(w.id)}">Void</button></div>`) }]),
+    ],
+    rows, empty: withOperator ? 'No operator has recorded withholding on PlugSure\'s fee this year.' : 'Nothing recorded this year.',
+  });
+  recTable($('[data-rec]', el), y.recorded, false);
+  if (admin) recTable($('[data-recv]', el), y.received, true);
+  $('[data-year]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  $('[data-csv]', el).addEventListener('click', async () => {
+    try { const res = await api(`/v1/finance/tax/pph23?year=${year}&format=csv`, { raw: true }); download(`plugsure-pph23-${year}.csv`, await res.blob()); } catch (err) { toast(err.message, 'crit'); }
+  });
+  $('[data-ef]', el)?.addEventListener('click', async (e) => {
+    const v = (n) => $(`[name="${n}"]`, el).value.trim();
+    e.currentTarget.disabled = true;
+    try {
+      const q = new URLSearchParams({ period: v('ef_period'), itemOpt: v('ef_opt'), itemCode: v('ef_code'), unitCode: v('ef_unit') });
+      const res = await api(`/v1/finance/tax/platform-efaktur?${q}`, { raw: true });
+      download(`efaktur-platform-${v('ef_period')}.xml`, await res.blob());
+      const skipped = Number(res.headers.get('x-efaktur-skipped') ?? 0);
+      if (skipped) toast(`${skipped} statement${skipped === 1 ? '' : 's'} left out: the operator has no valid NPWP.`, 'warn');
+    } catch (err) { toast(err.message, 'crit'); }
+    e.currentTarget.disabled = false;
+  });
+  $('[data-sug]', el).addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rec]');
+    if (!b) return;
+    const s = y.suggestions[Number(b.dataset.rec)];
+    modal({
+      title: 'Record PPh 23 withheld', subtitle: `${s.period} · ${KIND[s.kind]}`,
+      body: `<div class="form">${field('Paid to', `<input name="cp" value="${esc(s.counterparty)}" maxlength="160">`)}${field('Their NPWP', '<input name="npwp" inputmode="numeric" maxlength="20">')}
+        ${field('Base (rupiah)', `<input name="base" type="number" min="0" step="1" value="${esc(String(s.base))}">`)}${field('Withheld (rupiah)', `<input name="amount" type="number" min="0" step="1" value="${esc(String(s.suggested))}">`)}
+        ${field('Bukti potong number', '<input name="bn" maxlength="60">')}${field('Bukti potong date', '<input name="bd" type="date">')}</div>`,
+      actions: [{ label: 'Cancel' }, {
+        label: 'Record', kind: 'primary',
+        async onClick(ctx) {
+          const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+          try {
+            await api('/v1/finance/tax/withholdings', { method: 'POST', body: {
+              kind: s.kind, period: s.period, counterparty: v('cp'), counterpartyNpwp: v('npwp') || undefined, integrationId: s.integrationId ?? undefined, statementId: s.statementId ?? undefined,
+              base: Number(v('base')), amount: Number(v('amount')), buktiNumber: v('bn') || undefined, buktiDate: v('bd') || undefined,
+            } });
+            toast('Recorded.', 'ok');
+            reload();
+          } catch (err) { toast(err.message, 'crit'); return false; }
+        },
+      }],
+    });
+  });
+  $('[data-rec]', el).addEventListener('click', (e) => {
+    const bk = e.target.closest('[data-bukti]'), vd = e.target.closest('[data-void]');
+    if (!bk && !vd) return;
+    const id = (bk ?? vd).dataset.bukti ?? (bk ?? vd).dataset.void;
+    modal({
+      title: bk ? 'Add the bukti potong' : 'Void the record',
+      body: bk ? `<div class="form">${field('Number', '<input name="bn" maxlength="60">')}${field('Date', '<input name="bd" type="date">')}</div>` : `<div class="form one">${field('Why', '<input name="why" maxlength="300">')}</div>`,
+      actions: [{ label: 'Cancel' }, {
+        label: bk ? 'Save' : 'Void', kind: bk ? 'primary' : 'danger',
+        async onClick(ctx) {
+          const v = (n) => $(`[name="${n}"]`, ctx.body).value.trim();
+          try {
+            await api(`/v1/finance/tax/withholdings/${id}/${bk ? 'bukti' : 'void'}`, { method: 'POST', body: bk ? { buktiNumber: v('bn'), buktiDate: v('bd') } : { reason: v('why') } });
+            toast('Saved.', 'ok');
+            reload();
+          } catch (err) { toast(err.message, 'crit'); return false; }
+        },
+      }],
+    });
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -457,7 +647,8 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' }, { id: 'settings', label: 'Settings' },
+      { id: 'payables', label: 'Payables' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -793,7 +984,8 @@ registerView('finance', {
       });
     };
 
-    const DRAW = { overview: drawOverview, payments: drawPayments, receivables: drawReceivables, payables: drawPayables, fees: drawFees, reconciliation: drawReconciliation, settings: drawSettings };
+    const DRAW = { overview: drawOverview, payments: drawPayments, receivables: drawReceivables, payables: drawPayables, fees: drawFees, reconciliation: drawReconciliation, settings: drawSettings,
+      bank: () => bankSection(body, canWrite), tax: () => taxSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

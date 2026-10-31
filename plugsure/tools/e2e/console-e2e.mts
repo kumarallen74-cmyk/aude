@@ -99,9 +99,12 @@ class RawCharger {
 function sim(args: string[]): ChildProcess {
   const cli = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   const p = spawn(process.execPath, [cli, 'tools/simulator/autel-sim.ts', '--url', OCPP, '--api', API, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-  p.stdout!.on('data', () => {}); p.stderr!.on('data', () => {});
+  // Kept (the last 200 lines) so a failed check can show what the charger did.
+  const keep = (d: Buffer) => { simOutput.push(...d.toString().split(/\r?\n|\r/).filter(Boolean)); simOutput.splice(0, Math.max(0, simOutput.length - 200)); };
+  p.stdout!.on('data', keep); p.stderr!.on('data', keep);
   return p;
 }
+const simOutput: string[] = [];
 
 // ================================================================== the run
 const ops = new Client();
@@ -232,6 +235,7 @@ try {
   const running = await until(() => ops.get('/v1/charge-points'), (r) => !!r.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId), 30_000, 1000);
   const conn1 = running.data.find((c: any) => c.ocpp_identity === ID)?.connectors?.find((k: any) => k.sessionId);
   check('cockpit: session visible live on the fleet table', !!conn1, conn1);
+  if (!conn1) console.log(`  the charger's last output:\n${simOutput.slice(-40).map((l) => `    ${l}`).join('\n')}`);
 
   // The simulator delivers ~2 kWh; the operator limit must stop it at ~1 kWh.
   const sessId = conn1?.sessionId;

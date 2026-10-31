@@ -9,6 +9,8 @@ import * as pay from '../services/payouts.js';
 import * as xfer from '../services/refund-transfers.js';
 import * as pxfer from '../services/payout-transfers.js';
 import * as fj from '../services/finance-journal.js';
+import * as bank from '../services/bank-recon.js';
+import * as wht from '../services/withholding.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -27,6 +29,11 @@ import * as fj from '../services/finance-journal.js';
  *   (v1.17.0) GET/PUT /v1/finance/accounts/:id/settings     the journal's chart of accounts; the monthly close e-mail
  *   GET  /v1/finance/accounts/:id/journal                   the period as double-entry journal entries (CSV, Excel, JSON)
  *   POST /v1/finance/accounts/:id/close-email/send          send a month's close now (body { month }, default last month)
+ *   (v1.18.0) GET /v1/finance/approvals                     transfers waiting for a second person
+ *   GET/POST /v1/finance/bank-statements                    bank statements uploaded (CSV), matched automatically
+ *   GET  /v1/finance/bank-lines                             their lines (?statement, ?open=true), each with its match
+ *   GET  /v1/finance/bank-lines/:lid/candidates             what an open line could be
+ *   POST /v1/finance/bank-lines/:lid/match                  match by hand, mark ignored (with a note), or undo
  *   (v1.16.0) owner payouts sent through Duitku Disbursement (two people)
  *   GET  /v1/finance/payout-transfers                       payouts (?open=true: not settled)
  *   POST /v1/finance/statements/:sid/payout                 request one: the owner's saved account, checked by name
@@ -385,6 +392,13 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     } catch (e) { return xferFailed(reply, e); }
   });
 
+  // (v1.18.0) How many transfers wait for a second person (the console's badge).
+  app.get('/v1/finance/approvals', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const { approvalsCount } = await import('../services/transfer-approvals.js');
+    return approvalsCount(req.principal.orgId, userUuid(req));
+  });
+
   app.get('/v1/refund-transfers', async (req) => {
     assertCan(req.principal, { permission: 'payment:read' });
     const open = String(((req.query ?? {}) as Record<string, string>).open ?? '') === 'true';
@@ -475,6 +489,111 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditP(req, 'finance.owner_payout_resolved', t, { outcome: b.outcome, note: String(b.note ?? '').slice(0, 300), statementPayment: t.statementPaymentId });
       return { transfer: t };
     } catch (e) { return xferFailed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.18.0) bank statements reconciled
+
+  const bankFailed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof bank.BankReconError) return reply.status(e.statusCode).send({ error: e.message });
+    throw e;
+  };
+
+  app.get('/v1/finance/bank-statements', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    return { statements: await bank.statements(req.principal.orgId) };
+  });
+
+  app.post('/v1/finance/bank-statements', { bodyLimit: 6 * 1024 * 1024 }, async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await bank.upload(req.principal.orgId, platform(req), (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      await auditPay(req, 'finance.bank_statement_uploaded', 'bank_statement', r.statementId, { bank: r.bank, from: r.from, to: r.to, lines: r.lines, matched: r.matched });
+      return reply.status(201).send(r);
+    } catch (e) { return bankFailed(reply, e); }
+  });
+
+  app.get('/v1/finance/bank-lines', async (req) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    const statementId = /^\d{1,18}$/.test(q.statement ?? '') ? q.statement : undefined;
+    return { lines: await bank.lines(req.principal.orgId, platform(req), { statementId, open: q.open === 'true' }) };
+  });
+
+  app.get('/v1/finance/bank-lines/:lid/candidates', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { candidates: await bank.lineCandidates(req.principal.orgId, platform(req), String((req.params as Record<string, string>).lid ?? '')) }; } catch (e) { return bankFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/bank-lines/:lid/match', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const lid = String((req.params as Record<string, string>).lid ?? '');
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await bank.setMatch(req.principal.orgId, platform(req), lid, b, userUuid(req));
+      await auditPay(req, 'finance.bank_line_matched', 'bank_statement_line', lid, { kind: b.kind, ref: b.ref ?? null, note: b.note ?? null });
+      return r;
+    } catch (e) { return bankFailed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.18.0) PPh 23 withholding, platform e-Faktur
+
+  const taxFailed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof wht.WithholdingError) return reply.status(e.statusCode).send({ error: e.message });
+    throw e;
+  };
+  const whtId = (req: FastifyRequest) => String((req.params as Record<string, string>).wid ?? '');
+
+  app.get('/v1/finance/tax/pph23', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try {
+      const y = await wht.pph23(req.principal.orgId, platform(req), Number(q.year ?? new Date().getFullYear()));
+      if (q.format === 'csv') {
+        return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="pph23-${y.year}.csv"`).send(wht.pph23Csv(y));
+      }
+      return y;
+    } catch (e) { return taxFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/tax/withholdings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await wht.record(req.principal.orgId, b, userUuid(req));
+      await auditPay(req, 'finance.tax_withholding_recorded', 'tax_withholding', r.id, { kind: b.kind, period: b.period, base: b.base, amount: r.amount, bukti: b.buktiNumber ?? null });
+      return reply.status(201).send(r);
+    } catch (e) { return taxFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/tax/withholdings/:wid/bukti', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await wht.setBukti(req.principal.orgId, whtId(req), b);
+      await auditPay(req, 'finance.tax_withholding_bukti', 'tax_withholding', whtId(req), { bukti: b.buktiNumber, date: b.buktiDate });
+      return r;
+    } catch (e) { return taxFailed(reply, e); }
+  });
+
+  app.post('/v1/finance/tax/withholdings/:wid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const r = await wht.voidRecord(req.principal.orgId, whtId(req), b.reason, userUuid(req));
+      await auditPay(req, 'finance.tax_withholding_voided', 'tax_withholding', whtId(req), { reason: String(b.reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return taxFailed(reply, e); }
+  });
+
+  app.get('/v1/finance/tax/platform-efaktur', async (req, reply) => {
+    assertCan(req.principal, { permission: 'platform:admin' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    try {
+      const r = await wht.platformEfaktur(String(q.period ?? ''), { itemOpt: q.itemOpt as 'A' | 'B', itemCode: q.itemCode, unitCode: q.unitCode });
+      await auditPay(req, 'finance.platform_efaktur_exported', 'commission_statement', q.period ?? '', { included: r.included.length, skipped: r.skipped.length });
+      return reply.header('content-type', 'application/xml; charset=utf-8').header('content-disposition', `attachment; filename="efaktur-platform-${q.period}.xml"`)
+        .header('x-efaktur-skipped', String(r.skipped.length)).send(r.xml);
+    } catch (e) { return taxFailed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
