@@ -25,7 +25,7 @@ function banner(f: Flow, text: string, fill: Rgb, color: Rgb) {
 }
 
 /** Seller and buyer side by side. */
-function parties(f: Flow, seller: any, buyer: any, sellerTaxLine?: string) {
+export function parties(f: Flow, seller: any, buyer: any, sellerTaxLine?: string) {
   const w = (f.width - 14) / 2;
   const box = (x: number, label: string, name: string, lines: string[]) => {
     let yy = f.y + 14;
@@ -47,7 +47,7 @@ function parties(f: Flow, seller: any, buyer: any, sellerTaxLine?: string) {
   f.y = top + h;
 }
 
-function footers(doc: PdfDoc, left: string) {
+export function footers(doc: PdfDoc, left: string) {
   const total = doc.pageCount;
   for (let i = 0; i < total; i++) {
     doc.onPage(i);

@@ -5,6 +5,7 @@ import { writeAudit } from '../services/audit.js';
 import * as fb from '../services/fleet-billing.js';
 import * as credit from '../services/fleet-credit.js';
 import { invoicePdf, creditNotePdf } from '../services/fleet-pdf.js';
+import * as soa from '../services/fleet-statements.js';
 
 /**
  * Fleet billing (Commercial → Fleet billing): fleet accounts, their monthly
@@ -22,6 +23,7 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
       return await fn();
     } catch (e) {
       if (e instanceof fb.FleetBillingError) return reply.status(e.status).send({ error: e.message });
+      if (e instanceof soa.StatementError) return reply.status(e.statusCode).send({ error: e.message });
       throw e;
     }
   };
@@ -254,6 +256,56 @@ export async function registerFleetRoutes(app: FastifyInstance): Promise<void> {
     return run(reply, async () => {
       const st = await fb.statementFor(org(req), id, String(q.period ?? ''), q.currency);
       return sendPdf(reply, `${st.number ?? `statement-${st.period}`}.pdf`, invoicePdf(st));
+    });
+  });
+
+  // ---------------------------------------------------------------- statements of account (v1.22.0)
+
+  const month = (req: FastifyRequest) => String(((req.query ?? {}) as Record<string, string>).month ?? '');
+  app.get('/v1/fleet-accounts/:id/account-statement', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    const { id } = req.params as { id: string };
+    return run(reply, () => soa.statement(org(req), id, month(req)));
+  });
+  app.get('/v1/fleet-accounts/:id/account-statement.pdf', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    const { id } = req.params as { id: string };
+    return run(reply, async () => {
+      const st = await soa.statement(org(req), id, month(req));
+      return sendPdf(reply, `statement-of-account-${safeName(st.account.name)}-${st.month}.pdf`, soa.statementPdf(st));
+    });
+  });
+  app.get('/v1/fleet-accounts/:id/account-statement.xlsx', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    const { id } = req.params as { id: string };
+    return run(reply, async () => {
+      const st = await soa.statement(org(req), id, month(req));
+      return reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .header('Content-Disposition', `attachment; filename="${safeName(`statement-of-account-${st.account.name}-${st.month}`)}.xlsx"`)
+        .header('Cache-Control', 'private, no-store').send(soa.statementXlsx(st));
+    });
+  });
+  app.post('/v1/fleet-accounts/:id/account-statement/send', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    return run(reply, async () => {
+      const r = await soa.send(org(req), id, b.month, { to: b.to, userId: req.principal.userId && /^[0-9a-f-]{36}$/i.test(req.principal.userId) ? req.principal.userId : null });
+      await audit(req, 'fleet_account.statement_sent', 'fleet_account', id, { month: r.month, to: r.to });
+      return r;
+    });
+  });
+  app.get('/v1/fleet-account-statements', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    const q = (req.query ?? {}) as Record<string, string>;
+    return run(reply, async () => ({ settings: await soa.settings(org(req)), sent: await soa.sends(org(req), q.account || undefined) }));
+  });
+  app.put('/v1/fleet-account-statements/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    return run(reply, async () => {
+      const r = await soa.saveSettings(org(req), (req.body ?? {}) as Record<string, unknown>, req.principal.userId && /^[0-9a-f-]{36}$/i.test(req.principal.userId) ? req.principal.userId : null);
+      await audit(req, 'fleet_account.statement_settings_saved', 'organisation', org(req), r);
+      return r;
     });
   });
 

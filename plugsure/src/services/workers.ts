@@ -189,6 +189,8 @@ export function startWorkers(): () => void {
   const financeDunning = once('finance-dunning', async () => { await (await import('./collections.js')).sweepDunning(); });
   // (v1.21.0) Scheduled report e-mails, hourly.
   const financeReports = once('finance-reports', async () => { await (await import('./report-schedules.js')).sendDue(); });
+  const financeRevenueDrops = once('finance-revenue-drops', async () => { await (await import('./revenue-anomalies.js')).sweep(); });
+  const fleetStatements = once('fleet-statements', async () => { await (await import('./fleet-statements.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -294,6 +296,8 @@ export function startWorkers(): () => void {
     every(financeBudgets, 6 * 60 * 60_000, 'finance-budgets'),
     every(financeDunning, 60 * 60_000, 'finance-dunning'),
     every(financeReports, 60 * 60_000, 'finance-reports'),
+    every(financeRevenueDrops, 3 * 60 * 60_000, 'finance-revenue-drops'),
+    every(fleetStatements, 60 * 60_000, 'fleet-statements'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

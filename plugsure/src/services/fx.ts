@@ -1,5 +1,6 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { logger } from '../logger.js';
+import { assertOpen } from './finance-periods.js';
 
 /**
  * Multi-currency consolidation (v1.21.0). An operator with sites in several currencies (IDR, MYR, SGD) sets a
@@ -63,6 +64,7 @@ export async function setRate(orgId: string, b: Record<string, unknown>, userId:
   if (!MONTH_RE.test(month)) throw new FxError(422, 'month is YYYY-MM.');
   if (!CUR_RE.test(cur) || cur === reporting) throw new FxError(422, `currency is another ISO code than ${reporting}.`);
   if (!Number.isFinite(rate) || rate <= 0 || rate > 1e9) throw new FxError(422, `rate is how many ${reporting} one ${cur} is worth (more than 0).`);
+  await assertOpen(orgId, month, 'An exchange rate', (st, msg) => new FxError(st, msg));
   await upsert(orgId, month, cur, reporting, rate, 'manual', userId);
   return { month, currency: cur, reporting, rate };
 }
@@ -80,6 +82,7 @@ export async function fetchEcb(orgId: string, monthRaw: unknown, userId: string 
   if (!reporting) throw new FxError(409, 'Choose the reporting currency first.');
   const month = String(monthRaw ?? '');
   if (!MONTH_RE.test(month)) throw new FxError(422, 'month is YYYY-MM.');
+  await assertOpen(orgId, month, 'An exchange rate', (st, msg) => new FxError(st, msg));
   const others = (await currencies(orgId)).filter((c) => c !== reporting);
   if (!others.length) throw new FxError(409, `All your sites use ${reporting}: there is nothing to convert.`);
   const last = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0));

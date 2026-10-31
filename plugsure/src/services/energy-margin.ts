@@ -1,6 +1,7 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { config } from '../config.js';
 import { consolidate } from './fx.js';
+import { assertOpen } from './finance-periods.js';
 
 /**
  * Energy cost and margin (v1.20.0), per site and month:
@@ -145,6 +146,7 @@ export async function recordBill(orgId: string, siteId: string, b: Record<string
   const s = await siteOf(orgId, siteId);
   const m = String(b.month ?? '');
   if (!MONTH_RE.test(m)) throw new EnergyError(422, 'month is YYYY-MM.');
+  await assertOpen(orgId, m, 'An energy bill', (st, msg) => new EnergyError(st, msg));
   const amount = Number(b.amount);
   if (!Number.isInteger(amount) || amount < 0) throw new EnergyError(422, 'The amount is a whole number, 0 or more (the bill\'s total, taxes included).');
   const kwh = b.kwhBilled == null || b.kwhBilled === '' ? null : Number(b.kwhBilled);
@@ -164,6 +166,8 @@ export async function voidBill(orgId: string, id: string, reasonRaw: unknown, us
   if (!/^\d{1,18}$/.test(id)) throw new EnergyError(404, 'No such bill.');
   const reason = String(reasonRaw ?? '').trim();
   if (!reason || reason.length > 300) throw new EnergyError(422, 'Say why the bill is voided (up to 300 characters).');
+  const bill = await outsideRequestScope(() => one<{ month: string }>(`SELECT month FROM site_energy_cost WHERE id = $1 AND org_id = $2`, [id, orgId]));
+  if (bill) await assertOpen(orgId, bill.month, 'An energy bill', (st, msg) => new EnergyError(st, msg));
   const r = await outsideRequestScope(() => one(`UPDATE site_energy_cost SET voided_at = now(), voided_by = $3, void_reason = $4 WHERE id = $1 AND org_id = $2 AND voided_at IS NULL RETURNING id`, [id, orgId, userId, reason]));
   if (!r) throw new EnergyError(404, 'No such bill, or already voided.');
   return { ok: true };

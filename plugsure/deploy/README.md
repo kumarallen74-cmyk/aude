@@ -506,6 +506,10 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      set the approvals matrix, a reporting currency (FX_RATES_URL for
      another rates source) and report e-mails (Finance → Settings)
      ([FINANCE.md](FINANCE.md)).
+  15. (v1.22.0) Optionally lock closed months (Finance → Close), record site
+     investments (Finance → Investments), turn on revenue drop alerts
+     (Finance → Settings; route finance.revenue_drop) and automatic fleet
+     statements of account (Fleet billing → Settings) ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

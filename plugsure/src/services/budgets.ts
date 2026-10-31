@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { month as energyMonth, lastMonths } from './energy-margin.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { consolidate } from './fx.js';
+import { assertOpen, lockedAmong } from './finance-periods.js';
 
 /**
  * Budgets vs actuals (v1.20.0). A budget is set per month for the organisation (all sites) or for one site, per
@@ -104,6 +105,7 @@ export async function compare(orgId: string, mRaw: unknown) {
 export async function save(orgId: string, b: Record<string, unknown>, userId: string | null) {
   const m = String(b.month ?? '');
   if (!MONTH_RE.test(m)) throw new BudgetError(422, 'month is YYYY-MM.');
+  await assertOpen(orgId, m, 'A budget', (st, msg) => new BudgetError(st, msg));
   let siteId: string | null = null, currency = String(b.currency ?? '');
   if (b.siteId) {
     const s = await outsideRequestScope(() => one<{ id: string; currency: string }>(
@@ -137,6 +139,11 @@ export async function copyForward(orgId: string, fromRaw: unknown, monthsRaw: un
   if (!Number.isInteger(n) || n < 1 || n > 12) throw new BudgetError(422, 'months is 1 to 12.');
   const rows = await outsideRequestScope(() => many<any>(`SELECT * FROM finance_budget WHERE org_id = $1 AND month = $2`, [orgId, from]));
   if (!rows.length) throw new BudgetError(409, `No budget for ${from} to copy.`);
+  // Refuse before copying anything when a target month is locked (not half a copy).
+  const targets: string[] = [];
+  { let [ty, tm] = from.split('-').map(Number) as [number, number]; for (let i = 0; i < n; i++) { tm++; if (tm === 13) { tm = 1; ty++; } targets.push(`${ty}-${String(tm).padStart(2, '0')}`); } }
+  const locked = await lockedAmong(orgId, targets);
+  if (locked.length) throw new BudgetError(409, `${locked.join(', ')} ${locked.length === 1 ? 'is' : 'are'} locked (Finance → Close): nothing was copied.`);
   let [y, m] = from.split('-').map(Number) as [number, number];
   let copied = 0;
   for (let i = 0; i < n; i++) {
