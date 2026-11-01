@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.32.0";
+export const API_VERSION = "1.33.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4997,6 +4997,19 @@ export type AddBuktiPotongToWithholdingResponse = {
   ok: boolean;
 };
 
+export type AddCapexProjectBody = {
+  name?: string;
+  siteId?: string;
+  currency?: string;
+  status?: "planned" | "active";
+  budget?: Record<string, unknown>;
+  startOn?: string;
+  targetOn?: string;
+  assetCategory?: string;
+  lifeMonths?: number;
+  note?: string;
+};
+
 export type AddCashAccountBody = {
   name: string;
   kind?: "bank" | "cash";
@@ -5014,6 +5027,29 @@ export type AddCashAccountResponse = {
   kind?: "bank" | "cash";
   currency?: string;
   minimum?: number | null;
+};
+
+export type AddEmployeeBody = {
+  name?: string;
+  email?: string;
+  nik?: string;
+  npwp?: string;
+  ptkp?: "TK/0" | "TK/1" | "TK/2" | "TK/3" | "K/0" | "K/1" | "K/2" | "K/3";
+  position?: string;
+  siteId?: string;
+  currency?: string;
+  baseSalary?: number;
+  allowance?: number;
+  bpjsKesehatan?: boolean;
+  bpjsKetenagakerjaan?: boolean;
+  jkkRatePct?: number;
+  bank?: {
+    name?: string;
+    accountNumber?: string;
+    accountName?: string;
+  };
+  startOn?: string;
+  endOn?: string;
 };
 
 export type AddEvidenceOrCommentToDisputeBody = {
@@ -5466,6 +5502,11 @@ export type BudgetsVsActualsForMonthResponse = {
   sites?: Record<string, unknown>[];
 };
 
+export type CancelCapexProjectBody = {
+  reason: string;
+  cancelledOn?: string;
+};
+
 export type CancelFirmwareCampaignResponse = {
   ok: true;
 };
@@ -5599,6 +5640,19 @@ export type ChangeBankMatchRuleBody = {
   enabled?: boolean;
 };
 
+export type ChangeCapexProjectBody = {
+  name?: string;
+  siteId?: string;
+  currency?: string;
+  status?: "planned" | "active";
+  budget?: Record<string, unknown>;
+  startOn?: string;
+  targetOn?: string;
+  assetCategory?: string;
+  lifeMonths?: number;
+  note?: string;
+};
+
 export type ChangeCashAccountBody = {
   name?: string;
   bankName?: string;
@@ -5639,6 +5693,29 @@ export type ChangeDriverAppRoamingSettingsResponse = {
   holdIdr?: Record<string, unknown>;
 };
 
+export type ChangeEmployeeBody = {
+  name?: string;
+  email?: string;
+  nik?: string;
+  npwp?: string;
+  ptkp?: "TK/0" | "TK/1" | "TK/2" | "TK/3" | "K/0" | "K/1" | "K/2" | "K/3";
+  position?: string;
+  siteId?: string;
+  currency?: string;
+  baseSalary?: number;
+  allowance?: number;
+  bpjsKesehatan?: boolean;
+  bpjsKetenagakerjaan?: boolean;
+  jkkRatePct?: number;
+  bank?: {
+    name?: string;
+    accountNumber?: string;
+    accountName?: string;
+  };
+  startOn?: string;
+  endOn?: string;
+};
+
 export type ChangeFleetAccountCardsBody = {
   add?: string[];
   remove?: string[];
@@ -5658,6 +5735,12 @@ export type ChangeHomeCountryReportingTimeZoneOrDefaultLanguageBody = {
 
 export type ChangeNativeAppsVersionGateAndRemoteConfigurationResponse = {
   appConfig: DriverAppConfig;
+};
+
+export type ChangePayrollLineBody = {
+  overtime?: number;
+  bonus?: number;
+  deduction?: number;
 };
 
 export type ChangeSupplierBody = {
@@ -5793,6 +5876,13 @@ export type CloseYearResponse = {
   year?: number;
   locked?: string[];
   alreadyLocked?: string[];
+};
+
+export type CompleteCapexProjectBody = {
+  completedOn?: string;
+  inService?: string;
+  category?: string;
+  lifeMonths?: number;
 };
 
 export type ConfirmPaymentWasReceivedPayeeResponse = {
@@ -6026,6 +6116,14 @@ export type CreateWebhookEndpointResponse = {
   secret: string;
 };
 
+export type DecideCreditReviewBody = {
+  decision: "approve" | "reject";
+  newLimit?: number;
+  hold?: boolean;
+  note?: string;
+  nextReviewOn?: string;
+};
+
 export type DecommissionChargePointBody = {
   reason?: string;
 };
@@ -6178,6 +6276,11 @@ export type DisputeWithItsNotesResponse = {
     claimed_idr?: number | null;
   };
   notes: Record<string, unknown>[];
+};
+
+export type DraftPayrollRunBody = {
+  month: string;
+  currency?: string;
 };
 
 export type DraftReportPackBody = {
@@ -6798,6 +6901,11 @@ export type HandWhatsAppConversationOverResponse = {
   conversation: WhatsAppConversation;
 };
 
+export type HoldOrReleaseAccountBody = {
+  hold: boolean;
+  reason?: string;
+};
+
 export type ImportPartnerNetworkResponse = {
   locations: number;
   tariffs: number;
@@ -7071,6 +7179,11 @@ export type LinkBankStatementToAccountBody = {
 export type LinkBankStatementToAccountResponse = {
   accountId?: string;
   statementId?: string;
+};
+
+export type LinkToCapexProjectBody = {
+  billId?: string;
+  orderId?: string;
 };
 
 export type ListAlertNotificationsResponse = {
@@ -8052,6 +8165,17 @@ export type RecordCreditNoteAsRefundedBody = {
   reference?: string;
 };
 
+export type RecordCustomerDepositBody = {
+  kind: "received" | "returned" | "applied";
+  amount: number;
+  currency?: string;
+  onDate?: string;
+  invoiceId?: string;
+  cashAccountId?: string;
+  reference?: string;
+  note?: string;
+};
+
 export type RecordDepositTopUpOrAdjustmentBody = {
   kind?: "topup" | "adjustment";
   amount: number;
@@ -8249,6 +8373,11 @@ export type RecordPayoutOrStatementPaymentBody = {
 export type RecordPayoutOrStatementPaymentResponse = {
   paymentId: string;
   statement: StatementDue;
+};
+
+export type RecordPayrollPaidBody = {
+  paidOn: string;
+  cashAccountId: string;
 };
 
 export type RecordPPh23WithholdingBody = {
@@ -9144,6 +9273,12 @@ export type SetBudgetAlertThresholdResponse = {
   budgetAlertPct?: number;
 };
 
+export type SetCashForecastBody = {
+  horizonDays?: number;
+  collectionsPct?: number;
+  alert?: boolean;
+};
+
 export type SetClosePolicyBody = {
   enforce?: boolean;
 };
@@ -9257,6 +9392,12 @@ export type SetOwnerPayoutRuleBody = {
   minAmount?: number | null;
   hold?: boolean;
   holdReason?: string;
+};
+
+export type SetPayrollRulesBody = {
+  kesCap?: number;
+  jpCap?: number;
+  ter?: Record<string, unknown>;
 };
 
 export type SetPettyCashFloatBody = {
@@ -9880,6 +10021,11 @@ export type UnbindUserFromTheirMicrosoftAccountResponse = {
   ok: true;
 };
 
+export type UnlinkFromCapexProjectBody = {
+  billId?: string;
+  orderId?: string;
+};
+
 export type UnlockConnectorBody = {
   connectorId?: number;
 };
@@ -10004,6 +10150,10 @@ export type VoidCreditNoteBody = {
   reason: string;
 };
 
+export type VoidCustomerDepositEntryBody = {
+  reason: string;
+};
+
 export type VoidElectricityBillBody = {
   reason: string;
 };
@@ -10063,6 +10213,10 @@ export type VoidPaymentToSupplierResponse = {
   balance?: number;
   status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
   dueDate?: string;
+};
+
+export type VoidPayrollRunBody = {
+  reason: string;
 };
 
 export type VoidRechargeBody = {
@@ -10511,6 +10665,19 @@ export class Operations {
   }
 
   /**
+   * Add a capex project
+   *
+   * (v1.33.0) Numbered CP-0001…; budget by bill category. Audited.
+   *
+   * `POST /v1/finance/projects`
+   */
+  addCapexProject(params: {
+    body: AddCapexProjectBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/projects", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a cash account
    *
    * (v1.29.0) name, kind (bank or cash), bankName, accountHint (the number's last digits: statements with them count for the account), currency, openingBalance and openingOn, minimum (alert below it, finance.cash_below_minimum). Audited.
@@ -10521,6 +10688,19 @@ export class Operations {
     body: AddCashAccountBody;
   }, options?: RequestOptions): Promise<AddCashAccountResponse> {
     return this.transport.request<AddCashAccountResponse>({ method: "POST", path: "/v1/finance/cash/accounts", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add an employee
+   *
+   * (v1.33.0) Numbered EMP-0001…; the bank account is sealed. Audited.
+   *
+   * `POST /v1/finance/payroll/employees`
+   */
+  addEmployee(params: {
+    body: AddEmployeeBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/employees", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10900,6 +11080,20 @@ export class Operations {
   }
 
   /**
+   * Approve a payroll run
+   *
+   * (v1.33.0) By someone other than the submitter, under the approvals matrix (kind payroll_run). Audited.
+   *
+   * `POST /v1/finance/payroll/runs/{id}/approve`
+   */
+  approvePayrollRun(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/runs/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Approve a purchase order
    *
    * (v1.30.0) By someone other than the submitter, under the approvals matrix (kind purchase_order). With two approvers the first approval is recorded and waitingForSecondApprover is true. Audited.
@@ -11258,6 +11452,21 @@ export class Operations {
   }
 
   /**
+   * Cancel a capex project
+   *
+   * (v1.33.0) reason, cancelledOn; what was spent is written off in the ledger. Audited.
+   *
+   * `POST /v1/finance/projects/{id}/cancel`
+   */
+  cancelCapexProject(params: {
+    /** The id. */
+    id: string;
+    body: CancelCapexProjectBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/projects/{id}/cancel", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Cancel a contract
    *
    * The car is refused from now on (certificate status ContractCancelled).
@@ -11330,6 +11539,35 @@ export class Operations {
   }
 
   /**
+   * Capex project
+   *
+   * (v1.33.0) The project with its budget by category, linked bills and orders.
+   *
+   * `GET /v1/finance/projects/{id}`
+   */
+  capexProject(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/projects/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Capex projects
+   *
+   * (v1.33.0) Projects with budget, actual (bills), committed (orders not billed), forecast and variance; totals of open projects per currency. format=xlsx for the workbook.
+   *
+   * `GET /v1/finance/projects`
+   */
+  capexProjects(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/projects", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Card holds and post-pay e-wallet charges
    *
    * Card payments taken as holds (Integrations → Payments → "hold, then charge only what is used"): held while charging, captured for the rated total when the session ends (the rest released at once), or released when unused. Post-pay sessions with linked e-wallets are listed too (kind postpay): nothing held at the start, the rated total charged to the e-wallet at the end, the same retries. Failed captures and releases come first, with the acquirer's error and the next automatic retry; captured and released holds of the last 14 days follow. At most 200 rows.
@@ -11373,6 +11611,24 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<CashFlowForecastResponse> {
     return this.transport.request<CashFlowForecastResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/forecast", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Cash forecast
+   *
+   * (v1.33.0) Daily, per currency: the committed flows, the collections learnt from 180 days of charging (weekday pattern, level and trend) with a pessimistic and an optimistic line, payroll and capex; the lowest point and the first day below the minimum; the model and its accuracy. Scenario: horizonDays (7–180), collectionsPct, delayBillsDays, capex.
+   *
+   * `GET /v1/finance/cash-forecast`
+   */
+  cashForecast(params?: {
+    query?: {
+      horizonDays?: number;
+      collectionsPct?: number;
+      delayBillsDays?: number;
+      capex?: boolean;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/cash-forecast", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -11436,6 +11692,21 @@ export class Operations {
   }
 
   /**
+   * Change a capex project
+   *
+   * (v1.33.0) As adding (not once completed or cancelled). Audited.
+   *
+   * `PUT /v1/finance/projects/{id}`
+   */
+  changeCapexProject(params: {
+    /** The id. */
+    id: string;
+    body: ChangeCapexProjectBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/projects/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a cash account
    *
    * (v1.29.0) name, bankName, accountHint, minimum, archived. Audited.
@@ -11494,6 +11765,21 @@ export class Operations {
   }
 
   /**
+   * Change an employee
+   *
+   * (v1.33.0) As adding; endOn for a leaver (the last month is computed on the year). Audited.
+   *
+   * `PUT /v1/finance/payroll/employees/{id}`
+   */
+  changeEmployee(params: {
+    /** The id. */
+    id: string;
+    body: ChangeEmployeeBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/payroll/employees/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a fleet account's cards
    *
    * Adds cards (by UID) to the account — they become fleet cards with its fleet name — and removes others. UIDs that are not registered cards are returned in `unknown`.
@@ -11547,6 +11833,23 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/report-schedules/{rid}", pathParams: { rid: params.rid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a payroll line
+   *
+   * (v1.33.0) overtime, bonus, deduction (draft only); the line and totals are recomputed.
+   *
+   * `PUT /v1/finance/payroll/runs/{id}/lines/{lid}`
+   */
+  changePayrollLine(params: {
+    /** The run. */
+    id: string;
+    /** The line. */
+    lid: string;
+    body: ChangePayrollLineBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/payroll/runs/{id}/lines/{lid}", pathParams: { id: params.id, lid: params.lid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11753,6 +12056,21 @@ export class Operations {
     year: string;
   }, options?: RequestOptions): Promise<CloseYearResponse> {
     return this.transport.request<CloseYearResponse>({ method: "POST", path: "/v1/finance/year-end/{year}/close", pathParams: { year: params.year }, accept: "json" }, options);
+  }
+
+  /**
+   * Complete a capex project
+   *
+   * (v1.33.0) completedOn, inService, category, lifeMonths: the actual cost (less bills capitalised on their own) becomes one asset. Every bill must be approved. Audited.
+   *
+   * `POST /v1/finance/projects/{id}/complete`
+   */
+  completeCapexProject(params: {
+    /** The id. */
+    id: string;
+    body: CompleteCapexProjectBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/projects/{id}/complete", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12060,6 +12378,57 @@ export class Operations {
     body: CurtailRequest;
   }, options?: RequestOptions): Promise<CurtailResult> {
     return this.transport.request<CurtailResult>({ method: "POST", path: "/v1/sites/{siteId}/power/curtail", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Customer credit
+   *
+   * (v1.33.0) Fleet accounts with their limit, hold, deposit held, last review (score, grade) and next review date; the open reviews.
+   *
+   * `GET /v1/finance/credit`
+   */
+  customerCredit(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/credit", accept: "json" }, options);
+  }
+
+  /**
+   * Customer credit account
+   *
+   * (v1.33.0) An account's credit factors now (paid late, days late, overdue, limit used, tenure, deposit, average monthly billing), its score, reviews and deposits.
+   *
+   * `GET /v1/finance/credit/accounts/{id}`
+   */
+  customerCreditAccount(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/credit/accounts/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Customer security deposits
+   *
+   * (v1.33.0) Every deposit entry (received, returned, applied) and the total held per currency.
+   *
+   * `GET /v1/finance/customer-deposits`
+   */
+  customerSecurityDeposits(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/customer-deposits", accept: "json" }, options);
+  }
+
+  /**
+   * Decide a credit review
+   *
+   * (v1.33.0) decision approve (newLimit, default the suggestion; hold true or false; nextReviewOn) or reject (note). finance:approve. Audited.
+   *
+   * `POST /v1/finance/credit/reviews/{id}/decide`
+   */
+  decideCreditReview(params: {
+    /** The id. */
+    id: string;
+    body: DecideCreditReviewBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/credit/reviews/{id}/decide", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12462,6 +12831,19 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/tax/slips/{month}/draft", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Draft a payroll run
+   *
+   * (v1.33.0) month and currency: one line per employee in service; BPJS and PPh 21 (TER, or the annual calculation in December and a leaver's last month) computed. Again on a draft refreshes it. Audited.
+   *
+   * `POST /v1/finance/payroll/runs`
+   */
+  draftPayrollRun(params: {
+    body: DraftPayrollRunBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/runs", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13682,6 +14064,21 @@ export class Operations {
   }
 
   /**
+   * Hold or release an account
+   *
+   * (v1.33.0) hold true (with a reason) blocks the account's cards; false releases them. finance:approve. Audited.
+   *
+   * `POST /v1/finance/credit/accounts/{id}/hold`
+   */
+  holdOrReleaseAccount(params: {
+    /** The id. */
+    id: string;
+    body: HoldOrReleaseAccountBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/credit/accounts/{id}/hold", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Import a partner’s network
    *
    * Pulls a connected CPO partner’s locations and tariffs now (409 when it is not connected).
@@ -14039,6 +14436,21 @@ export class Operations {
     body: LinkBankStatementToAccountBody;
   }, options?: RequestOptions): Promise<LinkBankStatementToAccountResponse> {
     return this.transport.request<LinkBankStatementToAccountResponse>({ method: "POST", path: "/v1/finance/cash/accounts/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Link to a capex project
+   *
+   * (v1.33.0) billId or orderId, in the project's currency. Audited.
+   *
+   * `POST /v1/finance/projects/{id}/link`
+   */
+  linkToCapexProject(params: {
+    /** The id. */
+    id: string;
+    body: LinkToCapexProjectBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/projects/{id}/link", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15130,6 +15542,20 @@ export class Operations {
   }
 
   /**
+   * Open a credit review
+   *
+   * (v1.33.0) Scores the account now and suggests a limit. One open review per account. Audited.
+   *
+   * `POST /v1/finance/credit/accounts/{id}/reviews`
+   */
+  openCreditReview(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/credit/accounts/{id}/reviews", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * The operator’s console brand
    *
    * The name, tagline, colours, logo and web address the operator’s console uses instead of PlugSure’s, and the colours as the console applies them in both themes.
@@ -15291,6 +15717,50 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<RefundOutcome> {
     return this.transport.request<RefundOutcome>({ method: "POST", path: "/v1/refunds/{id}/process", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Payroll
+   *
+   * (v1.33.0) The employees (salary, allowances, PTKP and TER category, BPJS, the last four digits of the bank account), the payroll runs and the BPJS caps.
+   *
+   * `GET /v1/finance/payroll`
+   */
+  payroll(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/payroll", accept: "json" }, options);
+  }
+
+  /**
+   * Payroll run
+   *
+   * (v1.33.0) The run with its lines and totals; format=xlsx for the workbook, transfers for the bank transfer list (CSV, payment:write, audited).
+   *
+   * `GET /v1/finance/payroll/runs/{id}`
+   */
+  payrollRun(params: {
+    /** The id. */
+    id: string;
+    query?: {
+      format?: "json" | "xlsx" | "transfers";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/payroll/runs/{id}", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Payslip
+   *
+   * (v1.33.0) One employee's payslip (PDF).
+   *
+   * `GET /v1/finance/payroll/runs/{id}/payslips/{lid}`
+   */
+  payslip(params: {
+    /** The run. */
+    id: string;
+    /** The line. */
+    lid: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/payroll/runs/{id}/payslips/{lid}", pathParams: { id: params.id, lid: params.lid }, accept: "binary" }, options);
   }
 
   /**
@@ -15771,6 +16241,21 @@ export class Operations {
   }
 
   /**
+   * Record a customer deposit
+   *
+   * (v1.33.0) kind received, returned (at most what is held) or applied (to an issued invoice, for its whole amount; the invoice is paid); amount, currency, onDate, cashAccountId, reference, note. Audited.
+   *
+   * `POST /v1/finance/credit/accounts/{id}/deposits`
+   */
+  recordCustomerDeposit(params: {
+    /** The id. */
+    id: string;
+    body: RecordCustomerDepositBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/credit/accounts/{id}/deposits", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a deposit top-up or adjustment
    *
    * (v1.24.0) Prepaid accounts: kind topup (amount above 0, the bank reference) or adjustment (a non-zero amount and a note). Audited.
@@ -15967,6 +16452,21 @@ export class Operations {
     body: RecordPayoutOrStatementPaymentBody;
   }, options?: RequestOptions): Promise<RecordPayoutOrStatementPaymentResponse> {
     return this.transport.request<RecordPayoutOrStatementPaymentResponse>({ method: "POST", path: "/v1/finance/statements/{sid}/payments", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a payroll paid
+   *
+   * (v1.33.0) paidOn and cashAccountId (same currency). Audited.
+   *
+   * `POST /v1/finance/payroll/runs/{id}/pay`
+   */
+  recordPayrollPaid(params: {
+    /** The id. */
+    id: string;
+    body: RecordPayrollPaidBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/runs/{id}/pay", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17450,6 +17950,19 @@ export class Operations {
   }
 
   /**
+   * Set the cash forecast
+   *
+   * (v1.33.0) horizonDays (30–180), collectionsPct (the default scenario), alert (the shortfall alert). Audited.
+   *
+   * `PUT /v1/finance/cash-forecast/settings`
+   */
+  setCashForecast(params: {
+    body: SetCashForecastBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/cash-forecast/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the close policy
    *
    * (v1.32.0) enforce: a month is locked only when every close step is signed off. finance:approve. Audited.
@@ -17667,6 +18180,19 @@ export class Operations {
     body: SetOwnerPayoutRuleBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/owner-payouts/automation/owners/{oid}", pathParams: { oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the payroll rules
+   *
+   * (v1.33.0) kesCap (BPJS Kesehatan wage cap), jpCap (JP wage cap), ter (replacement TER tables { A|B|C: [[upTo or null, ratePct], …] }, null for the built-in ones). finance:approve. Audited.
+   *
+   * `PUT /v1/finance/payroll/settings`
+   */
+  setPayrollRules(params: {
+    body: SetPayrollRulesBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/payroll/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18289,6 +18815,17 @@ export class Operations {
   }
 
   /**
+   * Store today's cash forecast
+   *
+   * (v1.33.0) Stores it (for the accuracy) and raises or resolves the shortfall alert; the worker does this daily.
+   *
+   * `POST /v1/finance/cash-forecast/snapshot`
+   */
+  storeTodayCashForecast(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/cash-forecast/snapshot", accept: "json" }, options);
+  }
+
+  /**
    * Stream live events
    *
    * Server-sent events for the caller’s organisation: each message is `data: {"kind": …, "payload": …}` (connector status, session energy, alerts, …). A comment ping is sent every 25 seconds. Events that cannot be attributed to the organisation are not delivered.
@@ -18355,6 +18892,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<SubmitJournalEntryResponse> {
     return this.transport.request<SubmitJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Submit a payroll run
+   *
+   * (v1.33.0) For approval. Audited.
+   *
+   * `POST /v1/finance/payroll/runs/{id}/submit`
+   */
+  submitPayrollRun(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/runs/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -18697,6 +19248,19 @@ export class Operations {
   }
 
   /**
+   * Unlink from a capex project
+   *
+   * (v1.33.0) billId or orderId (not from a completed or cancelled project). Audited.
+   *
+   * `POST /v1/finance/projects/unlink`
+   */
+  unlinkFromCapexProject(params: {
+    body: UnlinkFromCapexProjectBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/projects/unlink", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Unlock a connector
    *
    * Sends UnlockConnector, e.g. to release a cable stuck in the socket. Audited.
@@ -19023,6 +19587,21 @@ export class Operations {
   }
 
   /**
+   * Void a customer deposit entry
+   *
+   * (v1.33.0) reason; not an applied one. Audited.
+   *
+   * `POST /v1/finance/customer-deposits/{id}/void`
+   */
+  voidCustomerDepositEntry(params: {
+    /** The id. */
+    id: string;
+    body: VoidCustomerDepositEntryBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/customer-deposits/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void an electricity bill
    *
    * (v1.20.0) With a reason; never deleted. Audited as finance.energy_bill_voided.
@@ -19126,6 +19705,21 @@ export class Operations {
     body: VoidPaymentToSupplierBody;
   }, options?: RequestOptions): Promise<VoidPaymentToSupplierResponse> {
     return this.transport.request<VoidPaymentToSupplierResponse>({ method: "POST", path: "/v1/finance/bills/{id}/payments/{pid}/void", pathParams: { id: params.id, pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a payroll run
+   *
+   * (v1.33.0) reason; not once paid. Audited.
+   *
+   * `POST /v1/finance/payroll/runs/{id}/void`
+   */
+  voidPayrollRun(params: {
+    /** The id. */
+    id: string;
+    body: VoidPayrollRunBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/runs/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

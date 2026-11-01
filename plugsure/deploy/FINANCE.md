@@ -833,6 +833,54 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   month's finance actions from the audit log; the Financial Auditor role
   can read it and nothing else.
 
+## Payroll, credit, capex projects and the cash forecast (v1.33.0)
+
+- **Payroll** (tab). Employees with salary and fixed allowances, PTKP
+  status, NIK and NPWP, BPJS and the JKK rate, and the bank account
+  (sealed). *Draft a payroll* for a month and currency: one line per
+  employee in service; overtime, bonus and other deductions per line.
+  - **BPJS:** Kesehatan 5% (4% employer, 1% employee) of the salary and
+    fixed allowances up to the cap (default 12 million); JHT 3.7% + 2%;
+    JP 2% + 1% up to the cap (default 10 547 400); JKK at the employee's
+    rate and JKM 0.3%, the employer's.
+  - **PPh 21:** January to November, the TER rate of the employee's
+    category (A: TK/0, TK/1, K/0; B: TK/2, TK/3, K/1, K/2; C: K/3) on the
+    month's gross (salary, allowances, overtime, bonus and the employer's
+    JKK, JKM and Kesehatan). December, and a leaver's last month: the
+    year's tax at the Pasal 17 rates (gross less 5% occupational cost up to
+    6 million, the employee's JHT and JP, and the PTKP) less what was
+    withheld. 20% more without an NPWP or NIK. **Have a tax adviser confirm
+    the TER tables and the caps**; a Finance Manager can replace them.
+  - Submitted, approved under the approvals matrix (*Payroll runs*),
+    recorded paid from a cash account. Payslips (PDF), the bank transfer
+    list (CSV) and Excel. The ledger posts salaries (6100) and the
+    employer's BPJS (6105) against net pay (2170), PPh 21 (2151) and BPJS
+    payable (2180); the scorecard's operating costs include payroll.
+- **Credit** (tab). Fleet customers scored 0–100 from the last 12 months
+  of invoices (share paid late, days late, overdue now, limit used,
+  tenure; a security deposit helps) and graded A–E, with a suggested
+  limit (average monthly billing × 3, 2, 1.5, 1 or 0, plus the deposit).
+  A Finance Manager decides a review: the limit, a hold (the cards are
+  blocked until released) and the next review (6, 3 or 1 months by
+  grade). Reviews due are opened daily with finance.credit_review_due.
+  **Security deposits** are received, applied to an issued invoice (paid
+  in full from the deposit) or returned; the ledger holds them on 2200.
+- **Projects** (tab). Capex projects with a budget by category; link
+  purchase orders and bills. Committed (approved orders not billed),
+  actual (approved bills) and the forecast against the budget;
+  finance.capex_over_budget when it is over. Bills on a project post to
+  assets under construction (1610). *Complete* makes one asset of the cost
+  (bills capitalised on their own excepted) and moves it to 1600;
+  *Cancel* writes the spending off (8300).
+- **Cash forecast** (tab). Daily for 30 to 180 days per currency: the
+  committed flows of the 13-week view, the collections learnt from 180
+  days of charging (weekday pattern, level and trend; a band of about
+  80%), the next payrolls and open projects' remaining spend. Scenarios:
+  collections at a percentage, bills paid later, capex in or out. The
+  worker stores each day's forecast (its accuracy is shown) and raises
+  finance.cash_forecast_shortfall when the position is forecast below the
+  accounts' minimums.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

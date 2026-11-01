@@ -571,6 +571,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      enforced (Finance → Close steps). Give the external auditor the
      Financial Auditor role: it reads the close and its evidence pack
      ([FINANCE.md](FINANCE.md)).
+  26. (v1.33.0) Before the first payroll: have a tax adviser confirm the TER
+     tables and the BPJS caps (Finance → Payroll; a Finance Manager can
+     replace them), add the employees, and set the payroll_run row of the
+     approvals matrix. Review the fleet customers once (Finance → Credit) to
+     set their next review dates. Link building sites' orders and bills to
+     capex projects (Finance → Projects). Set the cash forecast's horizon and
+     route finance.cash_forecast_shortfall, finance.credit_review_due and
+     finance.capex_over_budget ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

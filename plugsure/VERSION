@@ -1,11 +1,21 @@
 PlugSure CSMS
-Version:   1.32.0
-Package:   plugsure-v1.32.0
-Prepared:  2026-11-01  (v1.31.0 + finance phase 21 — see RELEASE-NOTES-v1.32.0.md)
+Version:   1.33.0
+Package:   plugsure-v1.33.0
+Prepared:  2026-11-01  (v1.32.0 + finance phase 22 — see RELEASE-NOTES-v1.33.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (637 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (668 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.32.0 = v1.31.0 + finance phase 21: bank feeds (a bank account's mutations fetched hourly from an HTTPS
+Status:    v1.33.0 = v1.32.0 + finance phase 22: payroll (employees, BPJS with the caps, PPh 21 by the TER rates and the
+           year's Pasal 17 calculation in December, runs approved by a second person and paid, payslips, the bank transfer
+           list, the ledger), customer credit (fleet customers scored from their payment history and graded A to E,
+           reviews decided by a Finance Manager with the limit, a hold that blocks the cards and the next review) and
+           security deposits (received, applied to invoices, returned), capex projects (budget, committed and actual,
+           over-budget alerts, assets under construction completed into one asset or written off), and a cash forecast
+           that learns the collections from the charging history (weekday pattern, level and trend, an 80% band) with
+           payroll and capex, scenarios and an accuracy measure. Migration 101 (additive).
+
+v1.32.0 (2026-11-01):
+           v1.32.0 = v1.31.0 + finance phase 21: bank feeds (a bank account's mutations fetched hourly from an HTTPS
            JSON endpoint with a sealed token, stored once beside uploads and matched) with match rules (ignore bank fees,
            suggest a journal entry for approval), withholding on supplier bills by the supplier's kind (PPh 23, PPh 21
            for individuals on half the gross at the Pasal 17 rates, PPh 26 at the treaty rate) with the month's slips

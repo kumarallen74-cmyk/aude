@@ -1019,7 +1019,7 @@ async function summarySection(el) {
     <p class="cell-sub">Revenue is before tax. DSO (days sales outstanding) is what customers owe ÷ the last 90 days' revenue per day. Margin uses energy bills, or estimates from each site's cost per kWh.</p>`;
 }
 
-const KIND_LBL = { refund: 'Refunds', payout: 'Owner payouts', write_off: 'Write-offs', bank_change: 'Owner bank detail changes', supplier_bill: 'Supplier bills', purchase_order: 'Purchase orders', journal_entry: 'Manual journal entries', expense_claim: 'Expense claims' };
+const KIND_LBL = { refund: 'Refunds', payout: 'Owner payouts', write_off: 'Write-offs', bank_change: 'Owner bank detail changes', supplier_bill: 'Supplier bills', purchase_order: 'Purchase orders', journal_entry: 'Manual journal entries', expense_claim: 'Expense claims', payroll_run: 'Payroll runs' };
 
 async function phase10Settings(el, canWrite) {
   let fxr, ar, rs;
@@ -2356,6 +2356,283 @@ async function closeStepsSection(host, canWrite, month = lastMonthYm()) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.33.0) payroll
+
+const RUN_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], paid: ['t-ok', 'paid'], void: ['t-mute', 'void'] };
+
+async function payrollSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, accts;
+  try { [d, accts] = await Promise.all([api('/v1/finance/payroll'), api('/v1/finance/cash/accounts')]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => payrollSection(host, canWrite);
+  const active = d.employees.filter((e) => e.active);
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-yrun>${icon('plus')} Draft a payroll</button><button class="btn" type="button" data-ynew>${icon('plus')} Add an employee</button>` : ''}</div>
+    ${callout('info', 'BPJS Kesehatan 5% (4% employer, 1% employee) and JP 3% are capped; JHT 5.7%, JKK and JKM 0.3%. PPh 21 by the TER rates January to November and the year\'s Pasal 17 calculation in December (or a leaver\'s last month). Approved under the approvals matrix (Payroll runs).')}
+    <div class="grid k4 section">${kpi('Employees', String(active.length), `${d.employees.length - active.length} left`)}${kpi('Last run', d.runs[0] ? esc(d.runs[0].month) : '—', d.runs[0] ? RUN_ST[d.runs[0].status][1] : 'none yet')}${kpi('Net pay', d.runs[0]?.totals?.net != null ? esc(fmt.money(d.runs[0].totals.net, d.runs[0].currency)) : '—', 'last run')}${kpi('Employer cost', d.runs[0]?.totals?.cost != null ? esc(fmt.money(d.runs[0].totals.cost, d.runs[0].currency)) : '—', 'salaries and BPJS')}</div>
+    <div class="card section"><header><h3>Payroll runs</h3></header><div data-yl></div></div>
+    <div class="card section"><header><h3>Employees</h3></header><div data-ye></div></div>`;
+  table($('[data-yl]', el), { columns: [
+    { label: 'Month', render: (r) => `<b>${esc(r.month)}</b> <span class="cell-sub">${esc(r.currency)}</span>` },
+    { label: 'Employees', num: true, render: (r) => String(r.totals?.employees ?? 0) },
+    { label: 'Gross', num: true, render: (r) => esc(fmt.money(r.totals?.wages ?? 0, r.currency)) },
+    { label: 'PPh 21', num: true, render: (r) => esc(fmt.money(r.totals?.pph21 ?? 0, r.currency)) },
+    { label: 'Net pay', num: true, render: (r) => `<b>${esc(fmt.money(r.totals?.net ?? 0, r.currency))}</b>` },
+    { label: 'Status', render: (r) => `${tag(...RUN_ST[r.status])}${r.paidOn ? `<div class="cell-sub">paid ${esc(r.paidOn)}</div>` : ''}` },
+    { label: '', render: (r) => `<button ${BTN} data-yopen="${r.id}">Open</button>` },
+  ], rows: d.runs, empty: 'No payroll yet.' });
+  table($('[data-ye]', el), { columns: [
+    { label: 'Employee', render: (e) => `<b>${esc(e.name)}</b> <span class="cell-sub">${esc(e.number)}</span><div class="cell-sub">${esc(e.position ?? '')}${e.active ? '' : ` · left ${esc(e.endOn)}`}</div>` },
+    { label: 'PTKP', render: (e) => `${esc(e.ptkp)} <span class="cell-sub">TER ${esc(e.category)}</span>` },
+    { label: 'Salary', num: true, render: (e) => esc(fmt.money(e.baseSalary, e.currency)) },
+    { label: 'Allowances', num: true, render: (e) => esc(fmt.money(e.allowance, e.currency)) },
+    { label: 'BPJS', render: (e) => esc([e.bpjsKesehatan ? 'Kesehatan' : null, e.bpjsKetenagakerjaan ? `TK (JKK ${e.jkkRatePct}%)` : null].filter(Boolean).join(' · ') || 'none') },
+    { label: 'Bank', render: (e) => (e.bank ? `${esc(e.bank.name)} ···${esc(e.bank.accountLast4 ?? '')}` : '<span class="cell-sub">none</span>') },
+    { label: '', render: (e) => (canWrite ? `<button ${BTN} data-yedit="${e.id}">Edit</button>` : '') },
+  ], rows: d.employees, empty: 'No employees yet.' });
+  const empForm = (e) => modal({ title: e ? `${e.name} · ${e.number}` : 'Add an employee', size: 'lg', body: `<div class="form">${field('Name', `<input name="name" value="${esc(e?.name ?? '')}">`)}${field('Position', `<input name="pos" value="${esc(e?.position ?? '')}">`, { opt: true })}
+      ${field('NIK', `<input name="nik" maxlength="16" value="${esc(e?.nik ?? '')}">`, { opt: true })}${field('NPWP', `<input name="npwp" value="${esc(e?.npwp ?? '')}">`, { opt: true })}
+      ${field('PTKP', `<select name="ptkp">${['TK/0', 'TK/1', 'TK/2', 'TK/3', 'K/0', 'K/1', 'K/2', 'K/3'].map((p) => `<option${e?.ptkp === p ? ' selected' : ''}>${p}</option>`).join('')}</select>`)}${field('Currency', `<input name="cur" maxlength="3" value="${esc(e?.currency ?? LEGACY_CURRENCY)}">`)}
+      ${field('Base salary', `<input name="base" type="number" min="0" value="${e?.baseSalary ?? ''}">`)}${field('Fixed allowances', `<input name="alw" type="number" min="0" value="${e?.allowance ?? 0}">`)}
+      ${field('BPJS Kesehatan', `<select name="kes"><option value="true">Yes</option><option value="false"${e && !e.bpjsKesehatan ? ' selected' : ''}>No</option></select>`)}${field('BPJS Ketenagakerjaan', `<select name="tk"><option value="true">Yes</option><option value="false"${e && !e.bpjsKetenagakerjaan ? ' selected' : ''}>No</option></select>`)}
+      ${field('JKK rate %', `<input name="jkk" type="number" step="0.01" min="0" max="2" value="${e?.jkkRatePct ?? 0.24}">`)}${field('Started', `<input name="start" type="date" value="${esc(e?.startOn ?? '')}">`)}${field('Left', `<input name="end" type="date" value="${esc(e?.endOn ?? '')}">`, { opt: true })}
+      ${field('Bank', `<input name="bn" value="${esc(e?.bank?.name ?? '')}">`, { opt: true })}${field(e?.bank ? 'Account number (leave empty to keep)' : 'Account number', '<input name="ba" inputmode="numeric">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      const body = { name: v('name'), position: v('pos'), nik: v('nik'), npwp: v('npwp'), ptkp: v('ptkp'), currency: v('cur'), baseSalary: Number(v('base') || 0), allowance: Number(v('alw') || 0),
+        bpjsKesehatan: v('kes') === 'true', bpjsKetenagakerjaan: v('tk') === 'true', jkkRatePct: v('jkk'), startOn: v('start'), endOn: v('end') };
+      if (v('ba') || !e) body.bank = v('bn') ? { name: v('bn'), accountNumber: v('ba') || undefined } : null;
+      try { await api(e ? `/v1/finance/payroll/employees/${e.id}` : '/v1/finance/payroll/employees', { method: e ? 'PUT' : 'POST', body }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] });
+  const openRun = async (id) => {
+    let r;
+    try { r = await api(`/v1/finance/payroll/runs/${id}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const c = r.currency, m = (x) => fmt.money(x, c);
+    const act = async (path, body, msg) => { try { const x = await api(`/v1/finance/payroll/runs/${r.id}/${path}`, { method: 'POST', body: body ?? {} }); toast(x.waitingForSecondApprover ? 'First approval recorded: a second approver is needed.' : msg, 'ok'); reload(); return true; } catch (err) { toast(err.message, 'crit'); return false; } };
+    drawer({ title: `Payroll · ${r.month}`, subtitle: `${RUN_ST[r.status][1]} · ${c}`, tabs: [{ id: 'lines', label: 'Lines', render(body) {
+      body.innerHTML = `<div class="grid k4">${kpi('Gross', esc(m(r.totals.wages)), `${r.totals.employees} employee(s)`)}${kpi('PPh 21', esc(m(r.totals.pph21)), 'withheld')}${kpi('BPJS', esc(m(r.totals.employerBpjs + r.totals.employeeBpjs)), 'employer and employee')}${kpi('Net pay', esc(m(r.totals.net)), r.paidOn ? `paid ${esc(r.paidOn)}` : 'to transfer')}</div>
+        <div data-rl style="margin-top:10px"></div>
+        <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${canWrite && r.status === 'draft' ? `<button class="btn sm primary" type="button" data-rsub>Submit for approval</button>` : ''}${canWrite && r.status === 'awaiting_approval' ? `<button class="btn sm primary" type="button" data-rapp>Approve</button>` : ''}${canWrite && r.status === 'approved' ? `<button class="btn sm primary" type="button" data-rpay>Record paid…</button><button ${BTN} data-rtr>${icon('download')} Transfer list</button>` : ''}${canWrite && !['paid', 'void'].includes(r.status) ? `<button ${BTN} data-rvoid>Void…</button>` : ''}<button ${BTN} data-rx>${icon('download')} Excel</button></div>`;
+      table($('[data-rl]', body), { columns: [
+        { label: 'Employee', render: (l) => `<b>${esc(l.name)}</b><div class="cell-sub">${esc(l.ptkp)} · ${esc(l.method ?? '')}${l.terRate != null ? ` ${l.terRate}%` : ''}</div>` },
+        { label: 'Gross', num: true, render: (l) => esc(m(l.base + l.allowance + l.overtime + l.bonus)) },
+        { label: 'PPh 21', num: true, render: (l) => esc(m(l.pph21)) },
+        { label: 'BPJS', num: true, render: (l) => esc(m(l.employeeBpjs)) },
+        { label: 'Net', num: true, render: (l) => `<b>${esc(m(l.net))}</b>` },
+        { label: '', render: (l) => `<div class="row" style="gap:4px;justify-content:flex-end">${canWrite && r.status === 'draft' ? `<button ${BTN} data-ladj="${l.id}">Adjust</button>` : ''}<button ${BTN} data-lslip="${l.id}">Payslip</button></div>` },
+      ], rows: r.lines });
+      $('[data-rsub]', body)?.addEventListener('click', () => act('submit', null, 'Submitted for approval.'));
+      $('[data-rapp]', body)?.addEventListener('click', () => act('approve', null, 'Approved.'));
+      $('[data-rx]', body).addEventListener('click', () => fetchFile(`/v1/finance/payroll/runs/${r.id}?format=xlsx`, `payroll-${r.month}.xlsx`));
+      $('[data-rtr]', body)?.addEventListener('click', () => fetchFile(`/v1/finance/payroll/runs/${r.id}?format=transfers`, `payroll-transfers-${r.month}.csv`));
+      $('[data-rpay]', body)?.addEventListener('click', () => modal({ title: 'Record the payroll paid', body: `<div class="form">${field('Paid on', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('From', `<select name="acc">${(accts.accounts ?? []).filter((a) => a.currency === c).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>`)}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick: (mc) => act('pay', { paidOn: $('[name="on"]', mc.el).value, cashAccountId: $('[name="acc"]', mc.el).value }, 'Recorded.') }] }));
+      $('[data-rvoid]', body)?.addEventListener('click', () => modal({ title: 'Void the payroll', body: `<div class="form one">${field('Reason', '<input name="why">')}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Void', kind: 'danger', onClick: (mc) => act('void', { reason: $('[name="why"]', mc.el).value.trim() }, 'Voided.') }] }));
+      body.addEventListener('click', (e) => {
+        const a = e.target.closest('[data-ladj]'), s = e.target.closest('[data-lslip]');
+        if (s) fetchFile(`/v1/finance/payroll/runs/${r.id}/payslips/${s.dataset.lslip}`, `payslip-${r.month}.pdf`);
+        if (a) {
+          const l = r.lines.find((x) => x.id === a.dataset.ladj);
+          modal({ title: `Adjust · ${l.name}`, body: `<div class="form">${field('Overtime', `<input name="ot" type="number" min="0" value="${l.overtime}">`)}${field('Bonus', `<input name="bo" type="number" min="0" value="${l.bonus}">`)}${field('Other deductions', `<input name="de" type="number" min="0" value="${l.deduction}">`)}</div>`,
+            actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+              try { await api(`/v1/finance/payroll/runs/${r.id}/lines/${l.id}`, { method: 'PUT', body: { overtime: Number($('[name="ot"]', mc.el).value || 0), bonus: Number($('[name="bo"]', mc.el).value || 0), deduction: Number($('[name="de"]', mc.el).value || 0) } }); reload(); openRun(r.id); } catch (err) { toast(err.message, 'crit'); return false; }
+            } }] });
+        }
+      });
+    } }] });
+  };
+  $('[data-ynew]', el)?.addEventListener('click', () => empForm(null));
+  $('[data-yrun]', el)?.addEventListener('click', () => modal({ title: 'Draft a payroll', body: `<div class="form">${field('Month', `<input name="m" type="month" value="${esc(zonedYmd(new Date()).slice(0, 7))}">`)}${field('Currency', `<input name="c" maxlength="3" value="${esc(active[0]?.currency ?? LEGACY_CURRENCY)}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Draft', kind: 'primary', async onClick(mc) {
+      try { const r = await api('/v1/finance/payroll/runs', { method: 'POST', body: { month: $('[name="m"]', mc.el).value, currency: $('[name="c"]', mc.el).value.trim() } }); reload(); openRun(r.id); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+  el.addEventListener('click', (e) => {
+    const o = e.target.closest('[data-yopen]'), ed = e.target.closest('[data-yedit]');
+    if (o) openRun(o.dataset.yopen);
+    if (ed) empForm(d.employees.find((x) => x.id === ed.dataset.yedit));
+  });
+}
+
+// ─────────────────────────────────────────── (v1.33.0) customer credit and deposits
+
+const GRADE_TAG = { A: 't-ok', B: 't-ok', C: 't-warn', D: 't-crit', E: 't-crit' };
+
+async function creditSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/credit'); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => creditSection(host, canWrite);
+  const canApprove = state.can('finance:approve');
+  const held = {};
+  for (const a of d.accounts) held[a.currency] = (held[a.currency] ?? 0) + a.deposit;
+  el.innerHTML = `${callout('info', 'Fleet customers are scored from the last 12 months of invoices (paid late, days late, overdue now, limit used, tenure; a security deposit helps) and graded A to E. A Finance Manager decides each review: the limit, a hold (the cards are blocked) and the next review date.')}
+    <div class="grid k4 section">${kpi('Accounts', String(d.accounts.length), `${d.accounts.filter((a) => a.hold).length} on hold`, d.accounts.some((a) => a.hold) ? 'warn' : '')}${kpi('Reviews due', String(d.accounts.filter((a) => a.reviewDue).length), `${d.openReviews.length} open`, d.openReviews.length ? 'warn' : '')}${kpi('Deposits held', Object.entries(held).filter(([, v]) => v).map(([c, v]) => esc(fmt.money(v, c))).join(' + ') || '—', 'security deposits')}${kpi('Grades', ['A', 'B', 'C', 'D', 'E'].map((g) => [g, d.accounts.filter((a) => a.lastReview?.grade === g).length]).filter(([, n]) => n).map(([g, n]) => `${g}×${n}`).join(' ') || '—', 'from the last reviews')}</div>
+    ${d.openReviews.length ? '<div class="card section"><header><h3>Open reviews</h3></header><div data-co></div></div>' : ''}
+    <div class="card section"><header><h3>Accounts</h3></header><div data-ca></div></div>`;
+  if (d.openReviews.length) table($('[data-co]', el), { columns: [
+    { label: 'Account', render: (r) => `<b>${esc(r.account)}</b><div class="cell-sub">${esc((r.factors.reasons ?? []).join('; '))}</div>` },
+    { label: 'Score', render: (r) => `${tag(GRADE_TAG[r.grade], r.grade)} ${r.score}` },
+    { label: 'Limit now', num: true, render: (r) => esc(fmt.money(r.currentLimit, r.currency)) },
+    { label: 'Suggested', num: true, render: (r) => `<b>${esc(fmt.money(r.suggestedLimit, r.currency))}</b>` },
+    { label: '', render: (r) => (canWrite && canApprove ? `<button class="btn sm primary" style="white-space:nowrap" type="button" data-cdec="${r.id}">Decide…</button>` : '') },
+  ], rows: d.openReviews });
+  table($('[data-ca]', el), { columns: [
+    { label: 'Account', render: (a) => `<b>${esc(a.name)}</b><div class="cell-sub">${esc(a.mode)}${a.hold ? ` · on hold: ${esc(a.hold.reason ?? '')}` : ''}</div>` },
+    { label: 'Grade', render: (a) => (a.lastReview ? `${tag(GRADE_TAG[a.lastReview.grade], a.lastReview.grade)} ${a.lastReview.score}` : '<span class="cell-sub">not reviewed</span>') },
+    { label: 'Limit', num: true, render: (a) => esc(fmt.money(a.limit, a.currency)) },
+    { label: 'Deposit', num: true, render: (a) => (a.deposit ? esc(fmt.money(a.deposit, a.currency)) : '') },
+    { label: 'Next review', render: (a) => (a.nextReviewOn ? `${esc(a.nextReviewOn)}${a.reviewDue ? ` ${tag('t-warn', 'due')}` : ''}` : '<span class="cell-sub">—</span>') },
+    { label: '', render: (a) => (canWrite ? `<div class="row" style="gap:4px;justify-content:flex-end"><button ${BTN} data-crev="${a.id}">Review</button><button ${BTN} data-cdep="${a.id}">Deposit…</button>${canApprove ? `<button ${BTN} data-chold="${a.id}" data-on="${a.hold ? 'false' : 'true'}">${a.hold ? 'Release' : 'Hold…'}</button>` : ''}</div>` : '') },
+  ], rows: d.accounts, empty: 'No fleet accounts.' });
+  el.addEventListener('click', async (e) => {
+    const rv = e.target.closest('[data-crev]'), dc = e.target.closest('[data-cdec]'), dp = e.target.closest('[data-cdep]'), hd = e.target.closest('[data-chold]');
+    if (rv) { try { const r = await api(`/v1/finance/credit/accounts/${rv.dataset.crev}/reviews`, { method: 'POST', body: {} }); toast(`Scored ${r.score} (${r.grade}).`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } }
+    if (dc) {
+      const r = d.openReviews.find((x) => x.id === dc.dataset.cdec);
+      modal({ title: `Decide · ${r.account}`, subtitle: `Score ${r.score}, grade ${r.grade}`, body: `<div class="form">${field('Decision', '<select name="dec"><option value="approve">Approve</option><option value="reject">Reject</option></select>')}${field(`New limit (${r.currency})`, `<input name="lim" type="number" min="0" value="${r.suggestedLimit}">`)}
+          ${field('Hold', '<select name="hold"><option value="">Leave as it is</option><option value="true">Put on hold</option><option value="false">Release the hold</option></select>')}${field('Next review', '<input name="next" type="date">', { opt: true })}${field('Note', '<input name="note" maxlength="500">', { opt: true })}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Decide', kind: 'primary', async onClick(mc) {
+          const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+          try { await api(`/v1/finance/credit/reviews/${r.id}/decide`, { method: 'POST', body: { decision: v('dec'), newLimit: v('lim'), hold: v('hold') === '' ? undefined : v('hold') === 'true', nextReviewOn: v('next'), note: v('note') } }); toast('Decided.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] });
+    }
+    if (dp) {
+      const a = d.accounts.find((x) => x.id === dp.dataset.cdep);
+      modal({ title: `Security deposit · ${a.name}`, subtitle: `Held ${fmt.money(a.deposit, a.currency)}`, body: `<div class="form">${field('Kind', '<select name="k"><option value="received">Received</option><option value="returned">Returned</option><option value="applied">Applied to an invoice</option></select>')}${field(`Amount (${a.currency})`, '<input name="amt" type="number" min="1">')}
+          ${field('Date', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Invoice id (applied)', '<input name="inv">', { opt: true })}${field('Reference', '<input name="ref">', { opt: true })}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) {
+          const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+          try { await api(`/v1/finance/credit/accounts/${a.id}/deposits`, { method: 'POST', body: { kind: v('k'), amount: Number(v('amt')), onDate: v('on'), invoiceId: v('inv') || undefined, reference: v('ref') || undefined } }); toast('Recorded.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] });
+    }
+    if (hd) {
+      const on = hd.dataset.on === 'true';
+      if (!on) { try { await api(`/v1/finance/credit/accounts/${hd.dataset.chold}/hold`, { method: 'POST', body: { hold: false } }); toast('Released.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } return; }
+      modal({ title: 'Put the account on hold', subtitle: 'Its cards are blocked until the hold is released.', body: `<div class="form one">${field('Why', '<input name="why">')}</div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Hold', kind: 'danger', async onClick(mc) {
+          try { const r = await api(`/v1/finance/credit/accounts/${hd.dataset.chold}/hold`, { method: 'POST', body: { hold: true, reason: $('[name="why"]', mc.el).value.trim() } }); toast(`On hold; ${r.cardsBlocked} card(s) blocked.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+        } }] });
+    }
+  });
+}
+
+// ─────────────────────────────────────────── (v1.33.0) capex projects
+
+const PRJ_ST = { planned: ['t-mute', 'planned'], active: ['t-info', 'active'], completed: ['t-ok', 'completed'], cancelled: ['t-mute', 'cancelled'] };
+
+async function projectsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/projects'); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => projectsSection(host, canWrite);
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-pjnew>${icon('plus')} New project</button>` : ''}<button class="btn" type="button" data-pjx>${icon('download')} Excel</button></div>
+    ${callout('info', 'Link purchase orders and bills to a project: approved orders not yet billed are committed, approved bills are actual. Bills on a project post to assets under construction; completing it makes one asset of the cost.')}
+    ${Object.keys(d.totals).length ? `<div class="grid k4 section">${Object.entries(d.totals).map(([c, t]) => kpi(`Open projects · ${c}`, esc(fmt.money(t.budget, c)), `${fmt.money(t.actual, c)} spent, ${fmt.money(t.committed, c)} committed`)).join('')}</div>` : ''}
+    <div class="card section"><header><h3>Projects</h3></header><div data-pjl></div></div>`;
+  table($('[data-pjl]', el), { columns: [
+    { label: 'Project', render: (p) => `<b>${esc(p.number)}</b> ${esc(p.name)}<div class="cell-sub">${esc(p.site ?? 'no site')}${p.targetOn ? ` · target ${esc(p.targetOn)}` : ''}</div>` },
+    { label: 'Budget', num: true, render: (p) => esc(fmt.money(p.budget, p.currency)) },
+    { label: 'Actual', num: true, render: (p) => esc(fmt.money(p.actual, p.currency)) },
+    { label: 'Committed', num: true, render: (p) => esc(fmt.money(p.committed, p.currency)) },
+    { label: 'Forecast', num: true, render: (p) => `<b>${esc(fmt.money(p.forecast, p.currency))}</b>${p.variancePct != null && p.forecast ? `<div class="cell-sub">${p.variancePct > 0 ? '+' : ''}${p.variancePct}%</div>` : ''}` },
+    { label: 'Status', render: (p) => `${tag(...PRJ_ST[p.status])}${p.overBudget ? ` ${tag('t-crit', 'over budget')}` : ''}${p.asset ? `<div class="cell-sub">asset ${esc(p.asset.tag)}</div>` : ''}` },
+    { label: '', render: (p) => `<button ${BTN} data-pjopen="${p.id}">Open</button>` },
+  ], rows: d.projects, empty: 'No projects yet.' });
+  const form = (p) => modal({ title: p ? `${p.number} ${p.name}` : 'New capex project', size: 'lg', body: `<div class="form">${field('Name', `<input name="name" value="${esc(p?.name ?? '')}">`)}${field('Site', `<select name="site"><option value="">—</option></select>`, { opt: true })}
+      ${field('Status', `<select name="st"><option value="planned">Planned</option><option value="active"${p?.status === 'active' ? ' selected' : ''}>Active</option></select>`)}${field('Target date', `<input name="tg" type="date" value="${esc(p?.targetOn ?? '')}">`, { opt: true })}
+      ${d.categories.map((c) => field(`Budget · ${c}`, `<input name="b_${c}" type="number" min="0" value="${p?.categories?.find((x) => x.category === c)?.budget || ''}">`, { opt: true })).join('')}
+      ${field('Asset category', `<select name="ac">${d.assetCategories.map((c) => `<option${(p?.assetCategory ?? 'chargers') === c ? ' selected' : ''}>${c}</option>`).join('')}</select>`)}${field('Life (months)', `<input name="life" type="number" min="1" max="360" value="${p?.lifeMonths ?? 96}">`)}</div>`,
+    async onMount(mc) {
+      try { const sites = await sitesList(); const sel = $('[name="site"]', mc.el); sel.innerHTML = `<option value="">—</option>${sites.map((s) => `<option value="${esc(s.id)}"${p?.siteId === s.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}`; } catch { /* no sites */ }
+    },
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      const budget = Object.fromEntries(d.categories.map((c) => [c, v(`b_${c}`)]).filter(([, x]) => x !== '').map(([c, x]) => [c, Number(x)]));
+      try { await api(p ? `/v1/finance/projects/${p.id}` : '/v1/finance/projects', { method: p ? 'PUT' : 'POST', body: { name: v('name'), siteId: v('site') || null, status: v('st'), targetOn: v('tg'), budget, assetCategory: v('ac'), lifeMonths: Number(v('life')) } }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] });
+  const open = async (id) => {
+    let p;
+    try { p = await api(`/v1/finance/projects/${id}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const m = (x) => fmt.money(x, p.currency);
+    const live = p.status === 'planned' || p.status === 'active';
+    drawer({ title: `${p.number} · ${p.name}`, subtitle: `${PRJ_ST[p.status][1]} · ${p.currency}`, tabs: [
+      { id: 'budget', label: 'Budget', render(body) {
+        body.innerHTML = `<div class="grid k4">${kpi('Budget', esc(m(p.budget)), p.spentPct != null ? `${p.spentPct}% spent` : '')}${kpi('Actual', esc(m(p.actual)), `${p.bills.length} bill(s)`)}${kpi('Committed', esc(m(p.committed)), `${p.orders.length} order(s)`)}${kpi('Forecast', esc(m(p.forecast)), p.variancePct != null && p.forecast ? `${p.variancePct > 0 ? '+' : ''}${p.variancePct}% on budget` : 'nothing spent or committed', p.overBudget ? 'crit' : '')}</div><div data-pc style="margin-top:10px"></div>
+          <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${canWrite && live ? `<button ${BTN} data-pe>Edit</button><button ${BTN} data-pl>Link a bill or order…</button><button class="btn sm primary" type="button" data-pc2>Complete…</button><button ${BTN} data-pcan>Cancel…</button>` : ''}</div>`;
+        table($('[data-pc]', body), { columns: [{ label: 'Category', render: (c) => esc(c.category) }, { label: 'Budget', num: true, render: (c) => esc(m(c.budget)) }, { label: 'Actual', num: true, render: (c) => esc(m(c.actual)) }, { label: '', render: (c) => (c.budget && c.actual > c.budget ? tag('t-crit', 'over') : '') }], rows: p.categories, empty: 'No budget.' });
+        $('[data-pe]', body)?.addEventListener('click', () => form(p));
+        $('[data-pl]', body)?.addEventListener('click', () => modal({ title: 'Link to the project', body: `<div class="form">${field('Bill id', '<input name="b">', { opt: true })}${field('Purchase order id', '<input name="o">', { opt: true })}</div>`,
+          actions: [{ label: 'Cancel' }, { label: 'Link', kind: 'primary', async onClick(mc) {
+            const b = $('[name="b"]', mc.el).value.trim(), o = $('[name="o"]', mc.el).value.trim();
+            try { await api(`/v1/finance/projects/${p.id}/link`, { method: 'POST', body: b ? { billId: b } : { orderId: o } }); toast('Linked.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+          } }] }));
+        $('[data-pc2]', body)?.addEventListener('click', () => modal({ title: 'Complete the project', subtitle: `${m(p.actual)} becomes one asset (less bills capitalised on their own).`, body: `<div class="form">${field('Completed on', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('In service from', '<input name="ins" type="month">', { opt: true })}</div>`,
+          actions: [{ label: 'Cancel' }, { label: 'Complete', kind: 'primary', async onClick(mc) {
+            try { const r = await api(`/v1/finance/projects/${p.id}/complete`, { method: 'POST', body: { completedOn: $('[name="on"]', mc.el).value, inService: $('[name="ins"]', mc.el).value } }); toast(`Completed: ${m(r.capitalised)} capitalised.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+          } }] }));
+        $('[data-pcan]', body)?.addEventListener('click', () => modal({ title: 'Cancel the project', subtitle: 'What was spent is written off.', body: `<div class="form one">${field('Why', '<input name="why">')}</div>`,
+          actions: [{ label: 'Back' }, { label: 'Cancel the project', kind: 'danger', async onClick(mc) {
+            try { await api(`/v1/finance/projects/${p.id}/cancel`, { method: 'POST', body: { reason: $('[name="why"]', mc.el).value.trim() } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+          } }] }));
+      } },
+      { id: 'linked', label: 'Bills and orders', render(body) {
+        body.innerHTML = '<h4 style="margin:0 0 6px">Bills</h4><div data-pb></div><h4 style="margin:14px 0 6px">Purchase orders</h4><div data-po></div>';
+        table($('[data-pb]', body), { columns: [{ label: 'Bill', render: (b) => `<b>${esc(b.number)}</b> · ${esc(b.supplier)}<div class="cell-sub">${esc(b.date)} · ${esc(b.category)}</div>` }, { label: 'Subtotal', num: true, render: (b) => esc(m(b.subtotal)) }, { label: 'Status', render: (b) => esc(b.status.replace('_', ' ')) }], rows: p.bills, empty: 'No bills.' });
+        table($('[data-po]', body), { columns: [{ label: 'Order', render: (o) => `<b>${esc(o.number)}</b> · ${esc(o.supplier)}` }, { label: 'Total', num: true, render: (o) => esc(m(o.total)) }, { label: 'Billed', num: true, render: (o) => esc(m(o.billed)) }, { label: 'Open', num: true, render: (o) => esc(m(o.open)) }], rows: p.orders, empty: 'No orders.' });
+      } },
+    ] });
+  };
+  $('[data-pjnew]', el)?.addEventListener('click', () => form(null));
+  $('[data-pjx]', el).addEventListener('click', () => fetchFile('/v1/finance/projects?format=xlsx', 'plugsure-capex-projects.xlsx'));
+  el.addEventListener('click', (e) => { const o = e.target.closest('[data-pjopen]'); if (o) open(o.dataset.pjopen); });
+}
+
+// ─────────────────────────────────────────── (v1.33.0) cash forecast
+
+async function cashForecastSection(host, canWrite, sc = {}) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  const qp = new URLSearchParams(Object.entries(sc).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v)]));
+  try { d = await api(`/v1/finance/cash-forecast${qp.toString() ? `?${qp}` : ''}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (s = sc) => cashForecastSection(host, canWrite, s);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Days', `<select data-fh>${[30, 60, 90, 120, 180].map((h) => `<option${d.horizonDays === h ? ' selected' : ''}>${h}</option>`).join('')}</select>`)}${field('Collections %', `<input data-fp type="number" min="0" max="200" value="${d.scenario.collectionsPct}" style="width:90px">`)}${field('Pay bills later (days)', `<input data-fd type="number" min="0" max="90" value="${d.scenario.delayBillsDays}" style="width:90px">`)}${field('Capex', `<select data-fc><option value="true">Included</option><option value="false"${d.scenario.capex ? '' : ' selected'}>Left out</option></select>`)}
+      <div class="row" style="align-self:flex-end;gap:6px"><button class="btn" type="button" data-fgo>Recalculate</button>${canWrite ? '<button class="btn" type="button" data-fset>Save as default</button>' : ''}</div></div>
+    ${callout('info', 'Committed flows (gateway settlements, fleet invoices, owner shares, bills, leases, deposits) plus the collections learnt from 180 days of charging (a weekday pattern, a level and a trend; the band is about 80%), the next payrolls and open capex projects.')}
+    ${d.notes.length ? callout('warn', d.notes.map(esc).join('<br>')) : ''}<div data-fcur></div>`;
+  const host2 = $('[data-fcur]', el);
+  for (const c of d.currencies) {
+    const m = (x) => fmt.money(x, c.currency);
+    const acc = d.accuracy?.[c.currency];
+    const card = document.createElement('div');
+    card.className = 'section';
+    const min = Math.min(...c.days.map((x) => x.low), c.minimum, 0), max = Math.max(...c.days.map((x) => x.high), c.opening, 1);
+    const W = 720, H = 160, x = (i) => (i / Math.max(1, c.days.length - 1)) * W, y = (v) => H - ((v - min) / (max - min || 1)) * H;
+    const line = (k) => c.days.map((r, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(r[k]).toFixed(1)}`).join(' ');
+    card.innerHTML = `<div class="grid k4">${kpi(`Today · ${esc(c.currency)}`, esc(m(c.opening)), `minimum ${esc(m(c.minimum))}`)}${kpi('Lowest', esc(m(c.lowest.closing)), esc(c.lowest.day), c.lowest.closing < c.minimum ? 'crit' : '')}${kpi(`In ${d.horizonDays} days`, esc(m(c.closing)), `${esc(m(c.learnedTotal))} learnt collections`)}${kpi('Below the minimum', c.firstBelowMinimum ? esc(c.firstBelowMinimum) : 'never', c.firstBelowMinimumPessimistic ? `pessimistic: ${esc(c.firstBelowMinimumPessimistic)}` : 'not even pessimistically', c.firstBelowMinimum ? 'crit' : c.firstBelowMinimumPessimistic ? 'warn' : '')}</div>
+      ${c.message ? callout('info', esc(c.message)) : ''}
+      <div class="card" style="margin-top:10px;padding:12px;overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Cash forecast">
+        <path d="${line('high')} L${W},${y(c.days.at(-1).low)} ${c.days.slice().reverse().map((r, i) => `L${x(c.days.length - 1 - i).toFixed(1)},${y(r.low).toFixed(1)}`).join(' ')} Z" fill="var(--accent)" opacity="0.12"></path>
+        <path d="${line('closing')}" fill="none" stroke="var(--accent)" stroke-width="2"></path>
+        <line x1="0" x2="${W}" y1="${y(c.minimum)}" y2="${y(c.minimum)}" stroke="var(--crit, #c0392b)" stroke-dasharray="4 4" stroke-width="1"></line></svg>
+        <div class="cell-sub">${c.model ? `Learnt from ${c.model.days} days · trend ${c.model.trend > 0 ? '+' : ''}${fmt.num(Math.round(c.model.trend))} a day · fit error ${c.model.wape ?? '—'}%` : 'No model'}${acc ? ` · forecast accuracy ${acc.wape == null ? '—' : `${acc.wape}% error`} over ${acc.days} day(s)` : ''}</div></div>
+      <div class="card" style="margin-top:10px"><header><h3>Largest flows</h3></header><div data-fl></div></div>`;
+    host2.append(card);
+    table($('[data-fl]', card), { columns: [{ label: 'Day', render: (f) => esc(f.day) }, { label: 'What', render: (f) => `${esc(f.label)} <span class="cell-sub">${esc(f.kind.replace('_', ' '))}</span>` }, { label: 'Amount', num: true, render: (f) => `<span class="${f.amount < 0 ? 't-crit' : ''}">${esc(m(f.amount))}</span>` }], rows: c.largest, empty: 'No committed flows.' });
+  }
+  if (!d.currencies.length) host2.innerHTML = callout('info', 'Add a cash account (Finance → Cash) to forecast the cash position.');
+  const cur = () => ({ horizonDays: $('[data-fh]', el).value, collectionsPct: $('[data-fp]', el).value, delayBillsDays: $('[data-fd]', el).value, capex: $('[data-fc]', el).value });
+  $('[data-fgo]', el).addEventListener('click', () => reload(cur()));
+  $('[data-fset]', el)?.addEventListener('click', async () => { const c = cur(); try { await api('/v1/finance/cash-forecast/settings', { method: 'PUT', body: { horizonDays: Number(c.horizonDays) < 30 ? 30 : Number(c.horizonDays), collectionsPct: Number(c.collectionsPct) } }); toast('Saved as the default.', 'ok'); } catch (err) { toast(err.message, 'crit'); } });
+}
+
 // ─────────────────────────────────────────── (v1.30.0) purchase orders
 
 const PO_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], closed: ['t-ok', 'closed'], cancelled: ['t-mute', 'cancelled'], rejected: ['t-crit', 'rejected'] };
@@ -2930,7 +3207,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'scorecard', label: 'Scorecard' }, { id: 'reports', label: 'Reports' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'treasury', label: 'Treasury' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'feeds', label: 'Bank feeds' }, { id: 'tax', label: 'Tax' }, { id: 'slips', label: 'Withholding' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'leases', label: 'Leases' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'ledger', label: 'Ledger' }, { id: 'closesteps', label: 'Close steps' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'intercompany', label: 'Intercompany' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -3310,7 +3587,8 @@ registerView('finance', {
       assets: () => assetsSection(body, canWrite), bills: () => billsSection(body, canWrite), cash: () => cashSection(body, canWrite), benchmark: () => benchmarkSection(body),
       orders: () => ordersSection(body, canWrite), leases: () => leasesSection(body, canWrite), treasury: () => treasurySection(body, canWrite), review: () => reviewSection(body, canWrite),
       ledger: () => ledgerSection(body, canWrite), expenses: () => expensesSection(body, canWrite), intercompany: () => intercompanySection(body, canWrite), scorecard: () => scorecardSection(body, canWrite),
-      feeds: () => feedsSection(body, canWrite), slips: () => slipsSection(body, canWrite), reports: () => reportsSection(body, canWrite), closesteps: () => closeStepsSection(body, canWrite) };
+      feeds: () => feedsSection(body, canWrite), slips: () => slipsSection(body, canWrite), reports: () => reportsSection(body, canWrite), closesteps: () => closeStepsSection(body, canWrite),
+      payroll: () => payrollSection(body, canWrite), credit: () => creditSection(body, canWrite), projects: () => projectsSection(body, canWrite), cashforecast: () => cashForecastSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

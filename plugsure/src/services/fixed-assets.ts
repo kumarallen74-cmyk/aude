@@ -178,7 +178,7 @@ async function currencyFor(orgId: string, siteId: string | null, raw: unknown): 
 }
 
 /** Validate and insert an asset. Used by create(), the investment import and supplier bills. */
-export async function insert(orgId: string, b: Record<string, unknown>, userId: string | null, links: { siteInvestmentId?: string; supplierBillId?: string } = {}) {
+export async function insert(orgId: string, b: Record<string, unknown>, userId: string | null, links: { siteInvestmentId?: string; supplierBillId?: string; capexProjectId?: string } = {}) {
   const category = String(b.category ?? '');
   if (!(CATEGORIES as readonly string[]).includes(category)) throw new AssetError(422, `category is one of ${CATEGORIES.join(', ')}.`);
   const description = String(b.description ?? '').trim();
@@ -214,9 +214,9 @@ export async function insert(orgId: string, b: Record<string, unknown>, userId: 
   await assertOpen(orgId, acquiredOn.slice(0, 7), 'An asset', ERR);
   try {
     const r = await outsideRequestScope(() => one<any>(
-      `INSERT INTO fixed_asset (org_id, tag, category, description, site_id, charge_point_id, currency, cost_minor, residual_minor, acquired_on, in_service, life_months, method, rate_pct, site_investment_id, supplier_bill_id, recorded_by)
-       VALUES ($1, COALESCE($2, 'new-' || gen_random_uuid()::text), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id`,
-      [orgId, tag, category, description, siteId, chargePointId, currency, cost, residual, acquiredOn, inService, life, method, rate, links.siteInvestmentId ?? null, links.supplierBillId ?? null, userId]));
+      `INSERT INTO fixed_asset (org_id, tag, category, description, site_id, charge_point_id, currency, cost_minor, residual_minor, acquired_on, in_service, life_months, method, rate_pct, site_investment_id, supplier_bill_id, recorded_by, capex_project_id)
+       VALUES ($1, COALESCE($2, 'new-' || gen_random_uuid()::text), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id`,
+      [orgId, tag, category, description, siteId, chargePointId, currency, cost, residual, acquiredOn, inService, life, method, rate, links.siteInvestmentId ?? null, links.supplierBillId ?? null, userId, links.capexProjectId ?? null]));
     if (!tag) await outsideRequestScope(() => query(`UPDATE fixed_asset SET tag = 'FA-' || lpad(id::text, 5, '0') WHERE id = $1`, [r.id]));
     return String(r.id);
   } catch (e) {

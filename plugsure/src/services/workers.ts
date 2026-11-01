@@ -210,6 +210,9 @@ export function startWorkers(): () => void {
   // v1.31.0: the monthly KPI scorecard e-mail.
   const scorecardSend = once('finance-scorecard', async () => { await (await import('./kpi-scorecard.js')).sweep(); });
   const bankFeeds = once('bank-feeds', async () => { await (await import('./bank-feeds.js')).sweep(); });
+  const creditReviews = once('credit-reviews', async () => { await (await import('./customer-credit.js')).sweep(); });
+  const capexBudget = once('capex-budget', async () => { await (await import('./capex-projects.js')).sweep(); });
+  const cashForecast = once('cash-forecast', async () => { await (await import('./cash-forecast.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -333,6 +336,9 @@ export function startWorkers(): () => void {
     every(financeChecks, 24 * 60 * 60_000, 'finance-checks'),
     every(scorecardSend, 6 * 60 * 60_000, 'finance-scorecard'),
     every(bankFeeds, 60 * 60_000, 'bank-feeds'),
+    every(creditReviews, 24 * 60 * 60_000, 'credit-reviews'),
+    every(capexBudget, 24 * 60 * 60_000, 'capex-budget'),
+    every(cashForecast, 6 * 60 * 60_000, 'cash-forecast'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.
