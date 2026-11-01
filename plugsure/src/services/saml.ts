@@ -138,9 +138,14 @@ export async function getProvider(orgId: string): Promise<Provider | null> {
 
 /** The roles a group may map to: the organisation's assignable roles that are not administrator roles. */
 export async function mappableRoles(): Promise<Array<{ name: string }>> {
+  // (v1.43.0) Only roles granted organisation-wide: a group (SAML or SCIM) gives its role across the organisation, so a
+  // site-, owner- or fleet-limited role (Site Host / Landlord, the portals) would be widened to every site. Those are
+  // given in the console, with their sites.
+  const { CONSOLE_ROLES } = await import('./authz.js');
+  const limited = CONSOLE_ROLES.filter((r) => r.siteScoped || r.ownerScoped || r.fleetScoped).map((r) => r.name);
   return outsideRequestScope(() => many<{ name: string }>(
     `SELECT r.name FROM role r WHERE r.org_id IS NULL AND NOT EXISTS (SELECT 1 FROM unnest(r.permissions) p WHERE p LIKE 'platform:%' OR p = 'user:write')
-      AND r.name NOT IN ('fleet_customer', 'site_owner', 'api_client') ORDER BY r.name`));
+      AND r.name NOT IN ('fleet_customer', 'site_owner', 'api_client') AND NOT (r.name = ANY($1::text[])) ORDER BY r.name`, [limited]));
 }
 
 export async function saveProvider(orgId: string, b: Record<string, unknown>, userId: string | null): Promise<Provider> {
@@ -426,7 +431,7 @@ export async function resolveUser(orgId: string, id: Identity, opts: { onlyOrgId
       // Re-checked here: a role must still be non-administrative at the time it is granted.
       const roleRow = await outsideRequestScope(() => one<{ id: string; admin: boolean }>(
         `SELECT r.id, EXISTS (SELECT 1 FROM unnest(r.permissions) p WHERE p LIKE 'platform:%' OR p = 'user:write') AS admin FROM role r WHERE r.name = $1 AND r.org_id IS NULL`, [mapped.role]));
-      if (!roleRow || roleRow.admin) throw new SamlError('no_role', 'the mapped role cannot be given by single sign-on', 403);
+      if (!roleRow || roleRow.admin || !(await mappableRoles()).some((r) => r.name === mapped.role)) throw new SamlError('no_role', 'the mapped role cannot be given by single sign-on', 403);
       u = await outsideRequestScope(() => one<any>(
         `INSERT INTO app_user (org_id, email, name, status) VALUES ($1, $2, $3, 'active') RETURNING ${cols}`, [orgId, id.email, (id.name ?? id.email!.split('@')[0]!).slice(0, 120)]));
       await outsideRequestScope(() => query(`INSERT INTO user_role (user_id, role_id, scope_type) VALUES ($1, $2, 'org')`, [u.id, roleRow.id]));

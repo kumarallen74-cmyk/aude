@@ -18,6 +18,7 @@ import * as hubClearingCat from './catalogue/hub-clearing.js';
 import * as whatsappCat from './catalogue/whatsapp.js';
 import * as financeCat from './catalogue/finance.js';
 import * as phase30Cat from './catalogue/phase30.js';
+import * as phase31Cat from './catalogue/phase31.js';
 
 /**
  * Builds the published OpenAPI 3.1 document from the catalogue.
@@ -26,7 +27,7 @@ import * as phase30Cat from './catalogue/phase30.js';
  * when the committed file, the catalogue and the registered routes disagree.
  */
 
-const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat, financeCat, phase30Cat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
+const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat, financeCat, phase30Cat, phase31Cat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
 
 export function allOps(): Op[] {
   return CATALOGUES.flatMap((c) => c.ops);

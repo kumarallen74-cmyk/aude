@@ -14,6 +14,7 @@ import { rateSession, adjustmentTotals, type Tariff, type PriceAdjustment, type 
 import { redemptionFor, pointsToRedeem, pointsAdjustment, discountable, recordLoyalty, lockedBalance } from './loyalty.js';
 import { benefitsFor, adjustmentOptions, pickCheapest, recordBenefits, reservePromotion, type Who, type Benefits } from './benefits.js';
 import { loadTariffForConnector } from './tariff-store.js';
+import { factorNow as dynamicFactorNow, includeTimeFor, scaleTariff } from './dynamic-pricing.js';
 import type { CanonicalMeterValue, TransactionEvent } from '../domain/canonical.js';
 import { energyWhFrom, energySeriesFrom, powerWFrom } from '../domain/canonical.js';
 import { markRefundDue } from './refunds.js';
@@ -191,6 +192,10 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised:
   const skewFlag = clockSkewFlag(ev.timestamp);
   if (skewFlag) flags.push(skewFlag);
 
+  // (v1.43.0) Dynamic pricing: the site's price factor now — what the driver app showed — fixed on the session for its
+  // whole charge. A payment taken up front keeps the factor it was computed with instead (below). Off: null.
+  const dyn = unauthorised ? null : await dynamicFactorNow(c.site_id);
+
   /**
    * START IS ATOMIC PER CONNECTOR.
    *
@@ -261,8 +266,8 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised:
       `INSERT INTO charging_session
           (org_id, site_id, connector_uuid, charge_point_id, idem_key, ocpp_transaction_id,
            token_id, state, started_at, meter_start_wh, meter_start_unknown, energy_wh, payment_mode,
-           prepaid_amount_minor, prepaid_energy_wh, payment_intent_id, flags, needs_review, review_reason, currency)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16,$17,
+           prepaid_amount_minor, prepaid_energy_wh, payment_intent_id, flags, needs_review, review_reason, dynamic_price_bps, dynamic_price_reason, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,0,$11,$12,$13,$14,$15,$16,$17,$18,$19,
                -- Frozen here from the site's country, never re-derived (docs/MULTI-COUNTRY-DESIGN.md §5.5).
                (SELECT co.currency FROM site si JOIN country co ON co.code = si.country_code WHERE si.id = $2))
        ON CONFLICT (idem_key) DO UPDATE
@@ -287,6 +292,9 @@ async function startSession(ev: TransactionEvent, c: ConnectorRow, unauthorised:
         flags.some((f) => f.severity === 'violation'),
         // The reason the review queue shows: the first violation, decided at the start.
         flags.find((f) => f.severity === 'violation')?.code ?? null,
+        // The energy a payment taken up front bought was computed at ITS factor: the session is billed at that one.
+        prepaid ? prepaid.dynamic_price_bps ?? null : dyn?.bps ?? null,
+        prepaid ? (prepaid.dynamic_price_bps ? 'fixed when the driver paid' : null) : dyn?.reason ?? null,
       ],
     );
     const { inserted, ...row } = ins.rows[0]!;
@@ -1069,7 +1077,14 @@ async function priceSession(s: any, at: { endedAt: Date; energyWh: number; idleM
    * Rp 337,995 in the audit's reproduction.
    */
   const startedAt = new Date(s.started_at);
-  const { tariff, fallback } = await loadTariffForConnector(s.connector_uuid, s.org_id, startedAt);
+  const loaded = await loadTariffForConnector(s.connector_uuid, s.org_id, startedAt);
+  const fallback = loaded.fallback;
+  // (v1.43.0) The price factor fixed when the session started (dynamic-pricing.ts). Never for a roaming partner's
+  // driver: those sessions are priced on the tariff published to the partner. The regulated caps in rateSession apply
+  // to the scaled rates exactly as to the tariff's own.
+  const tariff = s.dynamic_price_bps && !s.ocpi_token_id
+    ? scaleTariff(loaded.tariff, Number(s.dynamic_price_bps), await includeTimeFor(s.org_id))
+    : loaded.tariff;
 
   // The session's currency was frozen at StartTransaction from the site's country
   // (never re-derived); the tax context is resolved once, at the supply date.
@@ -2038,6 +2053,7 @@ async function claimPrepaidIntent(
     amount_authorised_minor: number;
     allowance_wh: number;
     claim_id_tag: string | null;
+    dynamic_price_bps: number | null;
   }>(
     `UPDATE payment_intent
         -- A card hold stays authorised: it is captured for what the session costs when it is rated.
@@ -2062,7 +2078,7 @@ async function claimPrepaidIntent(
          ORDER BY (claim_id_tag IS NOT NULL) DESC, created_at ASC
          LIMIT 1
       )
-      RETURNING id, amount_authorised_minor, allowance_wh, claim_id_tag`,
+      RETURNING id, amount_authorised_minor, allowance_wh, claim_id_tag, dynamic_price_bps`,
     [connectorUuid, idTag, payerOnly],
   );
   return r.rows[0] ?? null;

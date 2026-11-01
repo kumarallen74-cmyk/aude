@@ -291,6 +291,8 @@ dbDescribe('Phase 30 through the routes', () => {
     const setup = { enabled: true, idpEntityId: `https://idp-${TAG}.example.test`, ssoUrl: `https://idp-${TAG}.example.test/sso`, certificates: [cert], allowedDomains: [`${TAG}.example.co.id`], jitEnabled: true };
     assert.equal((await call('PUT', '/v1/auth/saml', { ...setup, roleMap: [{ group: 'Owners', role: 'org_owner' }] })).statusCode, 422, 'never an administrator role by group');
     assert.equal((await call('PUT', '/v1/auth/saml', { ...setup, jitEnabled: true, roleMap: [] })).statusCode, 422, 'automatic set-up needs a mapping');
+    // (v1.43.0) A site-limited role would be granted organisation-wide by a group: never mappable.
+    assert.equal((await call('PUT', '/v1/auth/saml', { ...setup, roleMap: [{ group: 'Hosts', role: 'site_host_landlord' }] })).statusCode, 422, 'never a site-limited role by group');
     const put = await call('PUT', '/v1/auth/saml', { ...setup, roleMap: [{ group: 'CSMS Ops', role: 'cpo_operations_manager' }] });
     assert.equal(put.statusCode, 200, put.body);
     assert.equal(put.json().serviceProvider.acsUrl, `http://${HOST}/v1/auth/saml/${org}/acs`);

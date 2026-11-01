@@ -646,6 +646,15 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      To offer single sign-on, set `CONSOLE_PUBLIC_URL` and have each
      operator's administrator connect its identity provider (Users & Roles
      → Single sign-on (SAML), [SAML-SIGN-IN.md](SAML-SIGN-IN.md)).
+  36. (v1.43.0) Optional, per operator: provision console users from the
+     identity provider (Users & Roles → Provisioning (SCIM),
+     [SCIM.md](SCIM.md)); set dynamic pricing rules and check the preview
+     before switching it on (Commercial → Dynamic pricing,
+     [DYNAMIC-PRICING.md](DYNAMIC-PRICING.md)); enrol sites in a grid
+     demand-response programme and route grid.demand_response (Assets &
+     energy → Grid events, [DEMAND-RESPONSE.md](DEMAND-RESPONSE.md)); switch
+     on the public status page (Maintain → Status page,
+     [STATUS-PAGE.md](STATUS-PAGE.md)). Keep `CONSOLE_PUBLIC_URL` set.
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

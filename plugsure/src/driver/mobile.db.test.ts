@@ -119,13 +119,17 @@ dbDescribe('batched headline prices (G7)', () => {
     const at = new Date();
     const batch = await headlinePrices(all.map((r) => r.id), at);
     const single = await pricesOneByOne(all.map((r) => ({ connectorId: r.id, orgId: r.org_id })));
-    for (const r of all) assert.deepEqual(batch.get(r.id), single.get(r.id) ?? undefined, `connector ${r.id}`);
+    // (v1.43.0) The batch also says whether a headline is the PLN formula rate (dynamic pricing never scales it).
+    const priceOf = (x: { rate: number | null; inclusive: boolean; formula?: boolean } | undefined | null) => (x ? { rate: x.rate, inclusive: x.inclusive } : undefined);
+    for (const r of all) assert.deepEqual(priceOf(batch.get(r.id)), single.get(r.id) ?? undefined, `connector ${r.id}`);
     assert.equal(batch.get(conns.a1!)!.rate, 3000, 'connector beats site');
     assert.equal(batch.get(conns.a2!)!.rate, 2000, 'an AC-only site assignment beats the any-current one');
     assert.equal(batch.get(conns.a3!)!.rate, 2500);
     assert.equal(Math.round(batch.get(conns.b1!)!.rate!), Math.round(config.regulatory.id.curahBase * 1.2), 'closed assignment ignored; PLN formula');
-    assert.deepEqual(batch.get(conns.my1!), { rate: 1.1, inclusive: true }, 'the MY site: its own tariff, not the org-wide IDR one');
-    assert.deepEqual(batch.get(conns.sg1!), { rate: null, inclusive: false }, 'SG with nothing assigned: no price (fail closed)');
+    assert.deepEqual(priceOf(batch.get(conns.my1!)), { rate: 1.1, inclusive: true }, 'the MY site: its own tariff, not the org-wide IDR one');
+    assert.deepEqual(priceOf(batch.get(conns.sg1!)), { rate: null, inclusive: false }, 'SG with nothing assigned: no price (fail closed)');
+    assert.equal(batch.get(conns.b1!)!.formula, true, 'the PLN formula rate is marked');
+    assert.equal(batch.get(conns.a1!)!.formula, false);
   });
 
   test('listStations: the viewport only, same prices', async () => {

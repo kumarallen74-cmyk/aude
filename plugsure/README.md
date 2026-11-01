@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.42.0 (1 November 2026), the current release:** phase 30: solar and battery storage at a site (measured solar and battery discharge for the load manager, a battery set-point, peak shaving, savings), charger health and failure prediction, a custom report builder with saved and e-mailed reports, and SAML single sign-on for the console. Migration 109. Notes: [`RELEASE-NOTES-v1.42.0.md`](RELEASE-NOTES-v1.42.0.md); guides: [`deploy/ENERGY-STORAGE.md`](deploy/ENERGY-STORAGE.md), [`deploy/SAML-SIGN-IN.md`](deploy/SAML-SIGN-IN.md).
+**v1.43.0 (1 November 2026), the current release:** phase 31: SCIM user provisioning, dynamic pricing (time, peak, occupancy and solar rules, fixed per session, never past the regulated ceiling), grid demand response (webhook, OpenADR 3; measured reduction and incentive) and a public status page. Migration 110. Notes: [`RELEASE-NOTES-v1.43.0.md`](RELEASE-NOTES-v1.43.0.md); guides: [`deploy/SCIM.md`](deploy/SCIM.md), [`deploy/DYNAMIC-PRICING.md`](deploy/DYNAMIC-PRICING.md), [`deploy/DEMAND-RESPONSE.md`](deploy/DEMAND-RESPONSE.md), [`deploy/STATUS-PAGE.md`](deploy/STATUS-PAGE.md).
+
+**v1.42.0 (1 November 2026):** phase 30: solar and battery storage at a site (measured solar and battery discharge for the load manager, a battery set-point, peak shaving, savings), charger health and failure prediction, a custom report builder with saved and e-mailed reports, and SAML single sign-on for the console. Migration 109. Notes: [`RELEASE-NOTES-v1.42.0.md`](RELEASE-NOTES-v1.42.0.md); guides: [`deploy/ENERGY-STORAGE.md`](deploy/ENERGY-STORAGE.md), [`deploy/SAML-SIGN-IN.md`](deploy/SAML-SIGN-IN.md).
 
 **v1.41.1 (1 November 2026):** fixes from a whole-system review of every console page, tab and link for each role, every read API and every end-to-end suite. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.1.md`](RELEASE-NOTES-v1.41.1.md).
 

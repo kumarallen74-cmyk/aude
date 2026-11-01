@@ -19,6 +19,7 @@ import { logger } from '../logger.js';
  *                       conversation with no message left goes with them
  *   site_energy_reading (v1.42.0) solar, battery and grid readings: 400 days
  *   saml_login_tx       (v1.42.0) SAML sign-ins past their ten minutes
+ *   status_subscriber   (v1.43.0) status-page subscriptions never confirmed: 7 days
  *   gateway_balance_snapshot (v1.12.0) hourly gateway balances: 400 days (the ledger
  *                       itself, gateway_transaction, is a financial record and is kept)
  *
@@ -152,6 +153,7 @@ export async function runRetention(opts: {
   // (v1.42.0) Site energy readings (solar, battery, grid) for a year and a month; SAML sign-ins past their ten minutes.
   await query(`DELETE FROM site_energy_reading WHERE ts < now() - interval '400 days'`).catch(() => null);
   await query(`DELETE FROM saml_login_tx WHERE expires_at < now()`).catch(() => null);
+  await query(`DELETE FROM status_subscriber WHERE confirmed_at IS NULL AND created_at < now() - interval '7 days'`).catch(() => null);
   await query(
     `DELETE FROM whatsapp_conversation c WHERE c.last_message_at < now() - make_interval(days => $1)
         AND NOT EXISTS (SELECT 1 FROM whatsapp_chat_message m WHERE m.conversation_id = c.id)`, [WA_CHAT_DAYS]).catch(() => null);

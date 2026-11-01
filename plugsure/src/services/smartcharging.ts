@@ -5,6 +5,7 @@ import { setChargingProfile, clearChargingProfile, getCompositeSchedule } from '
 import { resolveQuirks, pickRateUnit } from '../ocpp/quirks.js';
 import { profileLimitAt, type ChargingProfileIn } from '../ocpi/mapping.js';
 import { planSite, type SitePlanResult } from './v2x.js';
+import { activeFor as activeDemandResponse, capW as drCapW, recordPass as recordDrPass } from './demand-response.js';
 import { forLoadManager } from './energy-storage.js';
 
 /**
@@ -363,10 +364,17 @@ export async function runControlLoop(siteId: string): Promise<Allocation[]> {
   // (v1.42.0) On-site solar and batteries (energy-storage.ts): the grid part (held at the peak-shaving target when on)
   // plus only what was MEASURED recently, at the site's trust share — never a forecast. A failure here falls back to the
   // grid budget alone, which is always safe.
+  // (v1.43.0) Grid demand response (demand-response.ts): an event on now caps the GRID part — a kW limit for the site, or
+  // a % reduction — before on-site solar and battery are added (they are not drawn from the grid). Measured below.
+  const dr = budget.curtailed ? null : await activeDemandResponse(siteId)
+    .catch((e) => { logger.warn({ siteId, err: (e as Error).message }, 'demand-response events unavailable — usual budget'); return null; });
+  let extraW = 0, withoutDrW = usableW;
   if (!budget.curtailed) {
     const lm = await forLoadManager(siteId, usableW)
       .catch((e) => { logger.warn({ siteId, err: (e as Error).message }, 'solar/battery figures unavailable — grid budget only'); return null; });
-    if (lm?.active) usableW = lm.gridW + lm.extra.extraW;
+    if (lm?.active) { usableW = lm.gridW; extraW = lm.extra.extraW; }
+    withoutDrW = usableW + extraW;
+    usableW = drCapW(usableW, dr) + extraW;
   }
   // Bidirectional charging (v2x.ts): which cars give energy back this pass. Without an export
   // agreement the pool is the site's own auxiliary load (the reserve), so nothing reaches PLN.
@@ -376,6 +384,13 @@ export async function runControlLoop(siteId: string): Promise<Allocation[]> {
   const demands = applyPartnerCaps(forStrategy(await collectDemands(siteId), budget.strategy), await partnerCapsW(siteId))
     .map((d) => (d.connectorUuid && v2x.discharge.has(d.connectorUuid) ? { ...d, active: false } : d));
   const allocations = allocate(usableW, demands);
+  if (dr) {
+    // What the chargers would have been given without the event (the baseline) and what they are given now.
+    const asked = demands.filter((d) => d.active).reduce((t, d) => t + d.maxPowerW, 0);
+    const baselineW = Math.min(asked, withoutDrW);
+    const actualW = allocations.reduce((t, a) => t + a.allocatedW, 0);
+    await recordDrPass(siteId, dr, baselineW, actualW).catch((e) => logger.warn({ siteId, err: (e as Error).message }, 'demand-response measurement failed'));
+  }
 
   // --- station-level ceiling: the breaker guard -------------------------
   //
