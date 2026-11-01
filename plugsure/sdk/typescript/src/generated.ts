@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.28.0";
+export const API_VERSION = "1.29.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4969,6 +4969,25 @@ export type AddBuktiPotongToWithholdingResponse = {
   ok: boolean;
 };
 
+export type AddCashAccountBody = {
+  name: string;
+  kind?: "bank" | "cash";
+  bankName?: string;
+  accountHint?: string;
+  currency: string;
+  openingBalance?: number;
+  openingOn?: string;
+  minimum?: number | null;
+};
+
+export type AddCashAccountResponse = {
+  id?: string;
+  name?: string;
+  kind?: "bank" | "cash";
+  currency?: string;
+  minimum?: number | null;
+};
+
 export type AddEvidenceOrCommentToDisputeBody = {
   note: string;
 };
@@ -4997,6 +5016,30 @@ export type AddOnCallOverrideResponse = {
   override: {
     id: string;
   };
+};
+
+export type AddSupplierBody = {
+  name: string;
+  taxId?: string;
+  email?: string;
+  phone?: string;
+  bank?: {
+    name?: string;
+    accountNumber?: string;
+    accountName?: string;
+  };
+  termsDays?: number;
+  whtPct?: number;
+  note?: string;
+  archived?: boolean;
+};
+
+export type AddSupplierResponse = {
+  id?: string;
+  name?: string;
+  termsDays?: number;
+  whtPct?: number;
+  archived?: boolean;
 };
 
 export type AddTrustAnchorBody = {
@@ -5148,6 +5191,18 @@ export type ApproveOrRejectWriteOffResponse = {
   state?: string;
 };
 
+export type ApproveSupplierBillResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
+};
+
 export type ArchiveFirmwareImageResponse = {
   ok: true;
 };
@@ -5203,6 +5258,17 @@ export type AskXenditToGenerateReportResponse = {
   report: GatewayReport;
 };
 
+export type AssetResponse = {
+  id?: string;
+  tag?: string;
+  schedule?: {
+    month?: string;
+    depreciation?: number;
+    accumulated?: number;
+    netBookValue?: number;
+  }[];
+};
+
 export type AssignTariffBody = {
   scopeType: "org" | "site" | "connector";
   /** Site or connector id; ignored for org. */
@@ -5240,7 +5306,7 @@ export type BankStatementLinesAndTheirMatchesResponse = {
     amount?: number;
     balance?: number | null;
     match?: {
-      kind?: "gateway_withdrawal" | "statement_payment" | "refund" | "ignored";
+      kind?: "gateway_withdrawal" | "statement_payment" | "refund" | "roaming_payment" | "supplier_payment" | "ignored";
       ref?: string | null;
       auto?: boolean;
       by?: string | null;
@@ -5297,6 +5363,16 @@ export type CardHoldsAndPostPayEWalletChargesResponse = {
   };
 };
 
+export type CashAccountsResponse = {
+  accounts?: {
+    id?: string;
+    name?: string;
+    kind?: "bank" | "cash";
+    currency?: string;
+    minimum?: number | null;
+  }[];
+};
+
 export type CashFlowForecastResponse = {
   days?: number;
   termsDays?: number;
@@ -5340,9 +5416,35 @@ export type CashFlowForecastResponse = {
   }[];
 };
 
+export type CashPositionResponse = {
+  date?: string;
+  accounts?: Record<string, unknown>[];
+  gateways?: Record<string, unknown>[];
+  totals?: Record<string, unknown>;
+  daily?: Record<string, unknown>;
+  stale?: string[];
+  transfers?: Record<string, unknown>[];
+};
+
 export type ChangeApiKeyNameOrRateLimitBody = {
   name?: string;
   rateLimitPerMin?: number | null;
+};
+
+export type ChangeCashAccountBody = {
+  name?: string;
+  bankName?: string;
+  accountHint?: string;
+  minimum?: number | null;
+  archived?: boolean;
+};
+
+export type ChangeCashAccountResponse = {
+  id?: string;
+  name?: string;
+  kind?: "bank" | "cash";
+  currency?: string;
+  minimum?: number | null;
 };
 
 export type ChangeConnectorAvailabilityBody = {
@@ -5388,6 +5490,30 @@ export type ChangeHomeCountryReportingTimeZoneOrDefaultLanguageBody = {
 
 export type ChangeNativeAppsVersionGateAndRemoteConfigurationResponse = {
   appConfig: DriverAppConfig;
+};
+
+export type ChangeSupplierBody = {
+  name?: string;
+  taxId?: string;
+  email?: string;
+  phone?: string;
+  bank?: {
+    name?: string;
+    accountNumber?: string;
+    accountName?: string;
+  };
+  termsDays?: number;
+  whtPct?: number;
+  note?: string;
+  archived?: boolean;
+};
+
+export type ChangeSupplierResponse = {
+  id?: string;
+  name?: string;
+  termsDays?: number;
+  whtPct?: number;
+  archived?: boolean;
 };
 
 export type ChargersAndTheirV2gCertificatesResponse = {
@@ -5737,6 +5863,23 @@ export type DisconnectRoamingPartnerResponse = {
   ok: true;
 };
 
+export type DisposeOfAssetBody = {
+  disposedOn: string;
+  proceeds?: number;
+  note: string;
+};
+
+export type DisposeOfAssetResponse = {
+  id?: string;
+  tag?: string;
+  category?: string;
+  currency?: string;
+  cost?: number;
+  accumulated?: number;
+  netBookValue?: number;
+  status?: string;
+};
+
 export type DisputeCdrEMSPSideWithinItsDisputeWindowBody = {
   reason: "unknown_token" | "not_authorized" | "duplicate" | "amount" | "energy" | "tariff_mismatch" | "session_not_found" | "other";
   message: string;
@@ -6078,6 +6221,25 @@ export type FinanceTodayResponse = {
   waiting?: number;
 };
 
+export type FixedAssetRegisterResponse = {
+  asOf?: string;
+  assets?: {
+    id?: string;
+    tag?: string;
+    category?: string;
+    currency?: string;
+    cost?: number;
+    accumulated?: number;
+    netBookValue?: number;
+    status?: string;
+  }[];
+  totals?: Record<string, unknown>;
+  byCategory?: Record<string, unknown>;
+  investmentsNotImported?: number;
+  runs?: Record<string, unknown>[];
+  accounts?: Record<string, unknown>;
+};
+
 export type FleetAccountCreditPositionResponse = {
   mode?: "none" | "credit" | "prepaid";
   currency?: string;
@@ -6318,6 +6480,12 @@ export type ImportPartnerNetworkResponse = {
   tariffs: number;
 };
 
+export type ImportSiteInvestmentsResponse = {
+  imported?: number;
+  assetIds?: string[];
+  skipped?: Record<string, unknown>[];
+};
+
 export type InstallTrustAnchorsOnChargerBody = {
   kinds?: ("V2GRootCertificate" | "MORootCertificate")[];
 };
@@ -6458,6 +6626,18 @@ export type IssueTestContractCertificateResponse = {
   }[];
 };
 
+export type KpiBenchmarkingResponse = {
+  by?: "site" | "owner";
+  from?: string;
+  to?: string;
+  months?: number;
+  hours?: number;
+  metrics?: string[];
+  lowerIsBetter?: string[];
+  stats?: Record<string, unknown>;
+  rows?: Record<string, unknown>[];
+};
+
 export type LedgerRowWholeTrailResponse = {
   transaction: GatewayTransaction;
   related: GatewayTransaction[];
@@ -6466,6 +6646,15 @@ export type LedgerRowWholeTrailResponse = {
   transfers: Record<string, unknown>[];
   pass?: Record<string, unknown> | null;
   exceptions: Record<string, unknown>[];
+};
+
+export type LinkBankStatementToAccountBody = {
+  statementId: string;
+};
+
+export type LinkBankStatementToAccountResponse = {
+  accountId?: string;
+  statementId?: string;
 };
 
 export type ListAlertNotificationsResponse = {
@@ -6609,7 +6798,7 @@ export type MarkTaxObligationFiledBody = {
 };
 
 export type MatchIgnoreOrUnmatchBankLineBody = {
-  kind: "gateway_withdrawal" | "statement_payment" | "refund" | "ignored" | "none";
+  kind: "gateway_withdrawal" | "statement_payment" | "refund" | "roaming_payment" | "supplier_payment" | "ignored" | "none";
   ref?: string;
   note?: string;
 };
@@ -6627,6 +6816,12 @@ export type MonthCloseChecklistResponse = {
     ok?: boolean;
     label?: string;
   }[];
+};
+
+export type MonthDepreciationJournalResponse = {
+  month?: string;
+  accounts?: Record<string, unknown>;
+  currencies?: Record<string, unknown>[];
 };
 
 export type MonthLocksResponse = {
@@ -7003,6 +7198,15 @@ export type PayablesResponse = {
   }[];
 };
 
+export type PayablesApAgeingResponse = {
+  asOf?: string;
+  buckets?: string[];
+  currencies?: Record<string, unknown>[];
+  dueSoon?: Record<string, unknown>[];
+  overdue?: Record<string, unknown>[];
+  awaitingApproval?: Record<string, unknown>;
+};
+
 export type PayInvoiceFromDepositResponse = {
   invoiceId?: string;
   number?: string;
@@ -7225,6 +7429,45 @@ export type ReconciliationExceptionsResponse = {
   exceptions: ReconciliationException[];
 };
 
+export type RecordAssetBody = {
+  category: string;
+  description: string;
+  siteId?: string;
+  chargePointId?: string;
+  currency?: string;
+  cost: number;
+  residual?: number;
+  acquiredOn: string;
+  inService?: string;
+  lifeMonths?: number;
+  method?: "straight_line" | "declining_balance";
+  ratePct?: number;
+  tag?: string;
+};
+
+export type RecordAssetResponse = {
+  id?: string;
+  tag?: string;
+  category?: string;
+  currency?: string;
+  cost?: number;
+  accumulated?: number;
+  netBookValue?: number;
+  status?: string;
+};
+
+export type RecordBalanceBody = {
+  balance: number;
+  onDate?: string;
+  note?: string;
+};
+
+export type RecordBalanceResponse = {
+  accountId?: string;
+  onDate?: string;
+  balance?: number;
+};
+
 export type RecordCreditNoteAsRefundedBody = {
   refundedAt?: string;
   reference?: string;
@@ -7264,6 +7507,11 @@ export type RecordIntercompanyEliminationBody = {
   description: string;
   amount: number;
   currency: string;
+};
+
+export type RecordMonthDepreciationResponse = {
+  month?: string;
+  recorded?: Record<string, unknown>[];
 };
 
 export type RecordMonthProvisionResponse = {
@@ -7338,6 +7586,26 @@ export type RecordPaymentOnPlanBody = {
   amount: number;
   paidOn?: string;
   reference: string;
+};
+
+export type RecordPaymentToSupplierBody = {
+  amount?: number;
+  paidOn?: string;
+  method?: "bank_transfer" | "cash" | "card" | "other";
+  reference?: string;
+  cashAccountId?: string;
+};
+
+export type RecordPaymentToSupplierResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
 };
 
 export type RecordPayoutOrStatementPaymentBody = {
@@ -7445,6 +7713,35 @@ export type RecordSiteInvestmentBody = {
   reference?: string;
 };
 
+export type RecordSupplierBillBody = {
+  supplierId: string;
+  number: string;
+  category: string;
+  siteId?: string;
+  description: string;
+  currency?: string;
+  subtotal: number;
+  vat?: number;
+  wht?: number;
+  billDate: string;
+  dueDate?: string;
+  capitalise?: boolean;
+  lifeMonths?: number;
+  draft?: boolean;
+};
+
+export type RecordSupplierBillResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
+};
+
 export type RecordTaxRegistrationInCountryBody = {
   countryCode: "ID" | "MY" | "SG";
   /** Default true. */
@@ -7466,6 +7763,21 @@ export type RecordTaxWithheldFromOwnerShareBody = {
   bukti?: string;
   buktiDate?: string;
   note?: string;
+};
+
+export type RecordTransferBetweenAccountsBody = {
+  fromAccountId: string;
+  toAccountId: string;
+  amount: number;
+  onDate?: string;
+  reference?: string;
+  note?: string;
+};
+
+export type RecordTransferBetweenAccountsResponse = {
+  id?: string;
+  amount?: number;
+  currency?: string;
 };
 
 export type RefundTransfersThroughDuitkuDisbursementResponse = {
@@ -7533,6 +7845,22 @@ export type RejectRefundTransferBeforeItIsSentBody = {
 
 export type RejectRefundTransferBeforeItIsSentResponse = {
   transfer: RefundTransfer;
+};
+
+export type RejectSupplierBillBody = {
+  reason: string;
+};
+
+export type RejectSupplierBillResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
 };
 
 export type RemoveAndroidNotificationsServiceAccountResponse = {
@@ -8019,6 +8347,10 @@ export type SetApprovalsMatrixResponse = {
   canApprove?: boolean;
 };
 
+export type SetAssetJournalAccountsBody = {
+  accounts: Record<string, unknown>;
+};
+
 export type SetAutomaticOwnerPayoutsBody = {
   enabled?: boolean;
   delayDays?: number;
@@ -8492,6 +8824,18 @@ export type StopSessionRemotelyBody = {
   transactionId: number | string;
 };
 
+export type SubmitBillForApprovalResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
+};
+
 export type SubscribeToFinanceDigestBody = {
   frequency?: "off" | "daily" | "weekly";
   channels?: ("email" | "whatsapp")[];
@@ -8516,6 +8860,36 @@ export type SubscriptionRevenueTwelveMonthsResponse = {
 export type SuggestWhatsAppReplyResponse = {
   draft: string | null;
   handoff: string | null;
+};
+
+export type SupplierBillResponse = {
+  id?: string;
+  status?: string;
+  payments?: Record<string, unknown>[];
+};
+
+export type SupplierBillsResponse = {
+  bills?: {
+    id?: string;
+    supplier?: string;
+    number?: string;
+    currency?: string;
+    payable?: number;
+    paid?: number;
+    balance?: number;
+    status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+    dueDate?: string;
+  }[];
+};
+
+export type SuppliersResponse = {
+  suppliers?: {
+    id?: string;
+    name?: string;
+    termsDays?: number;
+    whtPct?: number;
+    archived?: boolean;
+  }[];
 };
 
 export type SuspendChargePointBody = {
@@ -8722,6 +9096,15 @@ export type ValidateTariffResponse = {
   flags: TariffFlag[];
 };
 
+export type VoidAssetBody = {
+  reason: string;
+};
+
+export type VoidAssetResponse = {
+  id?: string;
+  voided?: boolean;
+};
+
 export type VoidCreditNoteBody = {
   reason: string;
 };
@@ -8749,6 +9132,22 @@ export type VoidFleetInvoiceBody = {
 export type VoidFleetInvoiceResponse = {
   invoice: FleetStatement;
   fakturWarning?: string | null;
+};
+
+export type VoidPaymentToSupplierBody = {
+  reason: string;
+};
+
+export type VoidPaymentToSupplierResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
 };
 
 export type VoidRecordedPaymentBody = {
@@ -8780,12 +9179,37 @@ export type VoidSiteInvestmentResponse = {
   ok?: boolean;
 };
 
+export type VoidSupplierBillBody = {
+  reason: string;
+};
+
+export type VoidSupplierBillResponse = {
+  id?: string;
+  supplier?: string;
+  number?: string;
+  currency?: string;
+  payable?: number;
+  paid?: number;
+  balance?: number;
+  status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+  dueDate?: string;
+};
+
 export type VoidTaxFilingMarkBody = {
   reason: string;
 };
 
 export type VoidTaxFilingMarkResponse = {
   ok?: boolean;
+};
+
+export type VoidTransferBody = {
+  reason: string;
+};
+
+export type VoidTransferResponse = {
+  id?: string;
+  voided?: boolean;
 };
 
 export type VoidWithholdingRecordBody = {
@@ -8796,9 +9220,17 @@ export type VoidWithholdingRecordResponse = {
   ok: boolean;
 };
 
+export type WeeklyCashView13WeeksResponse = {
+  from?: string;
+  to?: string;
+  position?: Record<string, unknown>;
+  currencies?: Record<string, unknown>[];
+  notes?: string[];
+};
+
 export type WhatBankLineCouldBeResponse = {
   candidates: {
-    kind?: "gateway_withdrawal" | "statement_payment" | "refund";
+    kind?: "gateway_withdrawal" | "statement_payment" | "refund" | "roaming_payment" | "supplier_payment";
     ref?: string;
     date?: string;
     amount?: number;
@@ -9097,6 +9529,19 @@ export class Operations {
   }
 
   /**
+   * Add a cash account
+   *
+   * (v1.29.0) name, kind (bank or cash), bankName, accountHint (the number's last digits: statements with them count for the account), currency, openingBalance and openingOn, minimum (alert below it, finance.cash_below_minimum). Audited.
+   *
+   * `POST /v1/finance/cash/accounts` · needs `payment:write`
+   */
+  addCashAccount(params: {
+    body: AddCashAccountBody;
+  }, options?: RequestOptions): Promise<AddCashAccountResponse> {
+    return this.transport.request<AddCashAccountResponse>({ method: "POST", path: "/v1/finance/cash/accounts", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add evidence or a comment to a dispute
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -9153,6 +9598,19 @@ export class Operations {
     body: AddOnCallOverrideBody;
   }, options?: RequestOptions): Promise<AddOnCallOverrideResponse> {
     return this.transport.request<AddOnCallOverrideResponse>({ method: "POST", path: "/v1/alert-routing/rotas/{id}/overrides", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a supplier
+   *
+   * (v1.29.0) name, taxId (NPWP), email, phone, bank (name, accountNumber, accountName), termsDays (default 30), whtPct (the PPh 23 rate withheld, default 0), note. Audited.
+   *
+   * `POST /v1/finance/suppliers` · needs `payment:write`
+   */
+  addSupplier(params: {
+    body: AddSupplierBody;
+  }, options?: RequestOptions): Promise<AddSupplierResponse> {
+    return this.transport.request<AddSupplierResponse>({ method: "POST", path: "/v1/finance/suppliers", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9378,6 +9836,20 @@ export class Operations {
   }
 
   /**
+   * Approve a supplier bill
+   *
+   * (v1.29.0) By someone other than the person who submitted it, under the approvals matrix (kind supplier_bill: a Finance Manager, or two approvers, above an amount). With two approvers the first approval is recorded and waitingForSecondApprover is true. A bill to capitalise becomes an asset (assetError says why if it could not). Audited.
+   *
+   * `POST /v1/finance/bills/{id}/approve` · needs `payment:write`
+   */
+  approveSupplierBill(params: {
+    /** The bill id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ApproveSupplierBillResponse> {
+    return this.transport.request<ApproveSupplierBillResponse>({ method: "POST", path: "/v1/finance/bills/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Archive a firmware image
    *
    * Archives the image: new campaigns cannot use it and an uploaded file stops being served to chargers. Audited as firmware.image_archived.
@@ -9527,6 +9999,20 @@ export class Operations {
     body: AskXenditToGenerateReportBody;
   }, options?: RequestOptions): Promise<AskXenditToGenerateReportResponse> {
     return this.transport.request<AskXenditToGenerateReportResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/reports", pathParams: { id: params.id }, query: params.query, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * An asset
+   *
+   * (v1.29.0) The asset with its whole schedule: each month of its life, its depreciation, accumulated and net book value.
+   *
+   * `GET /v1/finance/assets/{id}` · needs `payment:read`
+   */
+  asset(params: {
+    /** The asset id. */
+    id: string;
+  }, options?: RequestOptions): Promise<AssetResponse> {
+    return this.transport.request<AssetResponse>({ method: "GET", path: "/v1/finance/assets/{id}", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -9720,6 +10206,21 @@ export class Operations {
   }
 
   /**
+   * Cash accounts
+   *
+   * (v1.29.0) The organisation's bank and cash accounts (archived=true to include archived ones).
+   *
+   * `GET /v1/finance/cash/accounts` · needs `payment:read`
+   */
+  cashAccounts(params?: {
+    query?: {
+      archived?: "true" | "false";
+    };
+  }, options?: RequestOptions): Promise<CashAccountsResponse> {
+    return this.transport.request<CashAccountsResponse>({ method: "GET", path: "/v1/finance/cash/accounts", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Cash-flow forecast
    *
    * (v1.19.0) The next 30, 60 or 90 days: the opening position (the gateway's last balance plus the bank balance on the last uploaded statement), settlements, fleet invoices, Hub positions and post-pay sessions in; refunds due, owner shares and PlugSure's statements (finalisation + termsDays, default 14) and Hub positions out; per day the flows and the running position; the first shortfall. runRate=true adds the last 28 days' average daily collections as an estimate. format=csv: the flows.
@@ -9740,6 +10241,21 @@ export class Operations {
   }
 
   /**
+   * Cash position
+   *
+   * (v1.29.0) On a day (default today): each bank and cash account's balance (its latest anchor — a balance taken, a bank statement's balance, or the opening — plus transfers and supplier payments since), the anchor and its age, below its minimum; gateway balances from the gateway's snapshots; totals per currency (bank, cash, gateway); the last 30 days per currency; the latest transfers.
+   *
+   * `GET /v1/finance/cash` · needs `payment:read`
+   */
+  cashPosition(params?: {
+    query?: {
+      date?: string;
+    };
+  }, options?: RequestOptions): Promise<CashPositionResponse> {
+    return this.transport.request<CashPositionResponse>({ method: "GET", path: "/v1/finance/cash", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Change an API key’s name or rate limit
    *
    * Sets the key’s own rate limit (requests a minute; null returns it to the installation default) or renames it. A new limit applies from the key’s next request. Revoked keys cannot be changed (404). Audited as api_key.updated.
@@ -9752,6 +10268,21 @@ export class Operations {
     body: ChangeApiKeyNameOrRateLimitBody;
   }, options?: RequestOptions): Promise<ApiKey> {
     return this.transport.request<ApiKey>({ method: "PATCH", path: "/v1/api-keys/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a cash account
+   *
+   * (v1.29.0) name, bankName, accountHint, minimum, archived. Audited.
+   *
+   * `PUT /v1/finance/cash/accounts/{id}` · needs `payment:write`
+   */
+  changeCashAccount(params: {
+    /** The cash account id. */
+    id: string;
+    body: ChangeCashAccountBody;
+  }, options?: RequestOptions): Promise<ChangeCashAccountResponse> {
+    return this.transport.request<ChangeCashAccountResponse>({ method: "PUT", path: "/v1/finance/cash/accounts/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -9851,6 +10382,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/report-schedules/{rid}", pathParams: { rid: params.rid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a supplier
+   *
+   * (v1.29.0) Any of the fields; archived true or false. Bank details are audited in full.
+   *
+   * `PUT /v1/finance/suppliers/{id}` · needs `payment:write`
+   */
+  changeSupplier(params: {
+    /** The supplier id. */
+    id: string;
+    body: ChangeSupplierBody;
+  }, options?: RequestOptions): Promise<ChangeSupplierResponse> {
+    return this.transport.request<ChangeSupplierResponse>({ method: "PUT", path: "/v1/finance/suppliers/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10429,6 +10975,21 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<DisconnectRoamingPartnerResponse> {
     return this.transport.request<DisconnectRoamingPartnerResponse>({ method: "DELETE", path: "/v1/roaming/partners/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Dispose of an asset
+   *
+   * (v1.29.0) disposedOn (not in a future or locked month), proceeds (default 0), note (how). No depreciation from that month; the gain or loss (proceeds − net book value) goes in the month's journal. Audited.
+   *
+   * `POST /v1/finance/assets/{id}/dispose` · needs `payment:write`
+   */
+  disposeOfAsset(params: {
+    /** The asset id. */
+    id: string;
+    body: DisposeOfAssetBody;
+  }, options?: RequestOptions): Promise<DisposeOfAssetResponse> {
+    return this.transport.request<DisposeOfAssetResponse>({ method: "POST", path: "/v1/finance/assets/{id}/dispose", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11114,6 +11675,25 @@ export class Operations {
   }
 
   /**
+   * The fixed asset register
+   *
+   * (v1.29.0) Every asset (tag, category, site, charge point, cost, residual, acquired, in service, life, method, depreciation this month, accumulated, net book value, status in_service / not_in_service / fully_depreciated / disposed / voided) as of a month (default this month), totals and categories per currency, how many site investments are not in the register yet, the recorded depreciation runs and the journal's accounts. Filters category, siteId, status. format=xlsx for the register and the month's journal.
+   *
+   * `GET /v1/finance/assets` · needs `payment:read`
+   */
+  fixedAssetRegister(params?: {
+    query?: {
+      month?: string;
+      category?: string;
+      siteId?: string;
+      status?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<FixedAssetRegisterResponse> {
+    return this.transport.request<FixedAssetRegisterResponse>({ method: "GET", path: "/v1/finance/assets", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * A fleet account's credit position
    *
    * (v1.24.0) Mode, limit, deposit, owed, available, % used, cards blocked for credit, and the deposit's last 50 entries.
@@ -11777,6 +12357,17 @@ export class Operations {
   }
 
   /**
+   * Import site investments
+   *
+   * (v1.29.0) Makes an asset of every site investment (v1.22.0) not yet in the register: straight line over its months, from the month after it was paid. Those in a locked month are skipped and said so. Audited.
+   *
+   * `POST /v1/finance/assets/import-investments` · needs `payment:write`
+   */
+  importSiteInvestments(options?: RequestOptions): Promise<ImportSiteInvestmentsResponse> {
+    return this.transport.request<ImportSiteInvestmentsResponse>({ method: "POST", path: "/v1/finance/assets/import-investments", accept: "json" }, options);
+  }
+
+  /**
    * Install the trust anchors on a charger
    *
    * **Permissions checked:** `charge_point:command`.
@@ -11941,6 +12532,24 @@ export class Operations {
   }
 
   /**
+   * KPI benchmarking
+   *
+   * (v1.29.0) Sites (by=site) or site owners (by=owner) over the last months (1–12, default 3) ending at to (an ended month, default last month), against their peers in the same currency: revenue, revenue per kWh, utilisation %, margin %, revenue per connector a month, collection days (lower is better). Per metric the peers' quartiles and median, each one's percentile rank (100 best), outliers beyond 1.5 × IQR flagged good or bad, and a score (the average rank). format=xlsx for a workbook.
+   *
+   * `GET /v1/finance/benchmark` · needs `payment:read`
+   */
+  kpiBenchmarking(params?: {
+    query?: {
+      by?: "site" | "owner";
+      months?: number;
+      to?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<KpiBenchmarkingResponse> {
+    return this.transport.request<KpiBenchmarkingResponse>({ method: "GET", path: "/v1/finance/benchmark", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * A ledger row's whole trail
    *
    * (v1.16.0) The gateway transaction with its raw record (payer details masked), the other ledger rows of the same payment, PlugSure's payment with its state history and refund, the charging session (site, charger, energy, driver masked) and its charge record, Disbursement refund transfers, the membership pass it paid, and reconciliation exceptions.
@@ -11954,6 +12563,21 @@ export class Operations {
     tid: string;
   }, options?: RequestOptions): Promise<LedgerRowWholeTrailResponse> {
     return this.transport.request<LedgerRowWholeTrailResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/transactions/{tid}/trail", pathParams: { id: params.id, tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
+   * Link a bank statement to an account
+   *
+   * (v1.29.0) statementId: an uploaded bank statement (Bank reconciliation) whose balances are the account's. Audited.
+   *
+   * `POST /v1/finance/cash/accounts/{id}/statements` · needs `payment:write`
+   */
+  linkBankStatementToAccount(params: {
+    /** The cash account id. */
+    id: string;
+    body: LinkBankStatementToAccountBody;
+  }, options?: RequestOptions): Promise<LinkBankStatementToAccountResponse> {
+    return this.transport.request<LinkBankStatementToAccountResponse>({ method: "POST", path: "/v1/finance/cash/accounts/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12650,6 +13274,21 @@ export class Operations {
   }
 
   /**
+   * A month's depreciation journal
+   *
+   * (v1.29.0) Per currency (default last month): depreciation by category, disposals (cost, accumulated, proceeds, gain or loss), the journal lines (Dr depreciation expense / Cr accumulated depreciation; disposals: Dr accumulated, Dr bank, Cr cost, gain or loss) with debit = credit, and whether the month is recorded (and changed since).
+   *
+   * `GET /v1/finance/assets/journal` · needs `payment:read`
+   */
+  monthDepreciationJournal(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<MonthDepreciationJournalResponse> {
+    return this.transport.request<MonthDepreciationJournalResponse>({ method: "GET", path: "/v1/finance/assets/journal", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Month locks
    *
    * (v1.22.0) The last 24 months: locked or open, whether they can be locked (ended), who locked them, and each lock's history (reopened by whom and why).
@@ -13012,6 +13651,21 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<PayablesResponse> {
     return this.transport.request<PayablesResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/payables", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Payables (AP ageing)
+   *
+   * (v1.29.0) Approved bills not paid in full, per currency: total, overdue, by age from the due date (current, 1-30, 31-60, 61-90, 90+) and by supplier; what falls due in the next 14 days; what is overdue; bills awaiting approval. format=xlsx for a workbook.
+   *
+   * `GET /v1/finance/payables` · needs `payment:read`
+   */
+  payablesApAgeing(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<PayablesApAgeingResponse> {
+    return this.transport.request<PayablesApAgeingResponse>({ method: "GET", path: "/v1/finance/payables", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -13427,6 +14081,34 @@ export class Operations {
   }
 
   /**
+   * Record an asset
+   *
+   * (v1.29.0) category (chargers, installation, grid, equipment, vehicles, it, other), description, siteId and chargePointId (optional), currency (taken from the site when there is one), cost and residual (minor unit, before PPN), acquiredOn, inService (YYYY-MM, default the month after), lifeMonths (1–360, default 96), method straight_line (default) or declining_balance with ratePct (a year; default double the straight-line rate), tag (default FA-00001…). Not in a locked month. Audited.
+   *
+   * `POST /v1/finance/assets` · needs `payment:write`
+   */
+  recordAsset(params: {
+    body: RecordAssetBody;
+  }, options?: RequestOptions): Promise<RecordAssetResponse> {
+    return this.transport.request<RecordAssetResponse>({ method: "POST", path: "/v1/finance/assets", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a balance
+   *
+   * (v1.29.0) balance on onDate (default today; one per day, recording again replaces it), note. Audited.
+   *
+   * `POST /v1/finance/cash/accounts/{id}/balances` · needs `payment:write`
+   */
+  recordBalance(params: {
+    /** The cash account id. */
+    id: string;
+    body: RecordBalanceBody;
+  }, options?: RequestOptions): Promise<RecordBalanceResponse> {
+    return this.transport.request<RecordBalanceResponse>({ method: "POST", path: "/v1/finance/cash/accounts/{id}/balances", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a credit note as refunded
    *
    * For a credit note settled by refund: the date the money was paid back (default today) and a reference. Audited.
@@ -13498,6 +14180,20 @@ export class Operations {
   }
 
   /**
+   * Record a month's depreciation
+   *
+   * (v1.29.0) Keeps the month's depreciation, disposals and gain or loss per currency (recording again replaces it). The month has ended and is not locked. Audited.
+   *
+   * `POST /v1/finance/assets/journal/{month}/record` · needs `payment:write`
+   */
+  recordMonthDepreciation(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<RecordMonthDepreciationResponse> {
+    return this.transport.request<RecordMonthDepreciationResponse>({ method: "POST", path: "/v1/finance/assets/journal/{month}/record", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
    * Record a month's provision
    *
    * (v1.28.0) The provision now, per currency, with the previous month's and the movement (Dr bad-debt expense / Cr allowance, or a release). Recording the month again replaces it. Audited.
@@ -13552,6 +14248,21 @@ export class Operations {
     body: RecordPaymentOnPlanBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-plans/{id}/payments", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a payment to a supplier
+   *
+   * (v1.29.0) On an approved bill: amount (default the balance), paidOn (default today), method (bank_transfer, cash, card, other), reference, cashAccountId (same currency). When the payments reach the payable, the bill is paid. Bank transfers are candidates in bank reconciliation. Audited.
+   *
+   * `POST /v1/finance/bills/{id}/payments` · needs `payment:write`
+   */
+  recordPaymentToSupplier(params: {
+    /** The bill id. */
+    id: string;
+    body: RecordPaymentToSupplierBody;
+  }, options?: RequestOptions): Promise<RecordPaymentToSupplierResponse> {
+    return this.transport.request<RecordPaymentToSupplierResponse>({ method: "POST", path: "/v1/finance/bills/{id}/payments", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13669,6 +14380,19 @@ export class Operations {
   }
 
   /**
+   * Record a supplier bill
+   *
+   * (v1.29.0) supplierId, number (the supplier's), category (energy, maintenance, rent, installation, equipment, connectivity, services, other), siteId, description, currency (default the site's, else the reporting currency), subtotal, vat (PPN), wht (PPh 23; default the supplier's rate × the subtotal), billDate, dueDate (default the date + the supplier's terms), capitalise with lifeMonths (installation, equipment or other: an asset on approval), draft (true to keep it as a draft; otherwise it is submitted for approval). Not in a locked month. Audited.
+   *
+   * `POST /v1/finance/bills` · needs `payment:write`
+   */
+  recordSupplierBill(params: {
+    body: RecordSupplierBillBody;
+  }, options?: RequestOptions): Promise<RecordSupplierBillResponse> {
+    return this.transport.request<RecordSupplierBillResponse>({ method: "POST", path: "/v1/finance/bills", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a tax registration in a country
    *
    * From the date given, sessions in that country are taxed by it; the registration in force there before ends that day (409 when the new date is not after its start). `registered: false` records that the organisation is not registered from that date. Malaysia: service tax is charged on EV charging only with `evChargingTaxable: true`. An Indonesian registration in force today also sets the organisation's PKP / NPWP. Audited.
@@ -13694,6 +14418,19 @@ export class Operations {
     body: RecordTaxWithheldFromOwnerShareBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/owners/{oid}/withholdings", pathParams: { oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a transfer between accounts
+   *
+   * (v1.29.0) fromAccountId, toAccountId (same currency), amount, onDate (default today), reference, note. Audited.
+   *
+   * `POST /v1/finance/cash/transfers` · needs `payment:write`
+   */
+  recordTransferBetweenAccounts(params: {
+    body: RecordTransferBetweenAccountsBody;
+  }, options?: RequestOptions): Promise<RecordTransferBetweenAccountsResponse> {
+    return this.transport.request<RecordTransferBetweenAccountsResponse>({ method: "POST", path: "/v1/finance/cash/transfers", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13808,6 +14545,21 @@ export class Operations {
     body: RejectRefundTransferBeforeItIsSentBody;
   }, options?: RequestOptions): Promise<RejectRefundTransferBeforeItIsSentResponse> {
     return this.transport.request<RejectRefundTransferBeforeItIsSentResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/reject", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Reject a supplier bill
+   *
+   * (v1.29.0) With a reason, by someone other than the submitter; it can be corrected and submitted again. Audited.
+   *
+   * `POST /v1/finance/bills/{id}/reject` · needs `payment:write`
+   */
+  rejectSupplierBill(params: {
+    /** The bill id. */
+    id: string;
+    body: RejectSupplierBillBody;
+  }, options?: RequestOptions): Promise<RejectSupplierBillResponse> {
+    return this.transport.request<RejectSupplierBillResponse>({ method: "POST", path: "/v1/finance/bills/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14741,6 +15493,19 @@ export class Operations {
   }
 
   /**
+   * Set the asset journal's accounts
+   *
+   * (v1.29.0) accounts: by key (cost, accumulated, expense, gain, loss, bank) a code and a name. Audited.
+   *
+   * `PUT /v1/finance/assets/accounts` · needs `payment:write`
+   */
+  setAssetJournalAccounts(params: {
+    body: SetAssetJournalAccountsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/assets/accounts", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set automatic owner payouts
    *
    * (v1.26.0) enabled, delayDays (0–60 after finalising), minAmount. The worker requests the payout hourly; it still waits for the approvals. Audited.
@@ -15521,6 +16286,20 @@ export class Operations {
   }
 
   /**
+   * Submit a bill for approval
+   *
+   * (v1.29.0) A draft or a rejected bill goes to approval. Audited.
+   *
+   * `POST /v1/finance/bills/{id}/submit` · needs `payment:write`
+   */
+  submitBillForApproval(params: {
+    /** The bill id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SubmitBillForApprovalResponse> {
+    return this.transport.request<SubmitBillForApprovalResponse>({ method: "POST", path: "/v1/finance/bills/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Subscribe to the finance digest
    *
    * (v1.27.0) frequency (off, daily, weekly), channels (email, whatsapp), sections (figures, approvals, overdue, cash, anomalies), hour (0–23, billing time zone), weekday (1 Monday – 7 Sunday), phone (for WhatsApp).
@@ -15606,6 +16385,51 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<ConnectionAttemptStats> {
     return this.transport.request<ConnectionAttemptStats>({ method: "GET", path: "/v1/connection-attempts/stats", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A supplier bill
+   *
+   * (v1.29.0) The bill with its payments (date, amount, method, reference, cash account, voided).
+   *
+   * `GET /v1/finance/bills/{id}` · needs `payment:read`
+   */
+  supplierBill(params: {
+    /** The bill id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SupplierBillResponse> {
+    return this.transport.request<SupplierBillResponse>({ method: "GET", path: "/v1/finance/bills/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Supplier bills
+   *
+   * (v1.29.0) Bills (awaiting approval first, then approved by due date), filtered by status and supplierId: supplier, number, category, site, subtotal, PPN, PPh 23, payable, paid, balance, dates, overdue and days late, who submitted and approved.
+   *
+   * `GET /v1/finance/bills` · needs `payment:read`
+   */
+  supplierBills(params?: {
+    query?: {
+      status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
+      supplierId?: string;
+    };
+  }, options?: RequestOptions): Promise<SupplierBillsResponse> {
+    return this.transport.request<SupplierBillsResponse>({ method: "GET", path: "/v1/finance/bills", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Suppliers
+   *
+   * (v1.29.0) The organisation's suppliers (archived=true to include archived ones), with what is open on their approved bills.
+   *
+   * `GET /v1/finance/suppliers` · needs `payment:read`
+   */
+  suppliers(params?: {
+    query?: {
+      archived?: "true" | "false";
+    };
+  }, options?: RequestOptions): Promise<SuppliersResponse> {
+    return this.transport.request<SuppliersResponse>({ method: "GET", path: "/v1/finance/suppliers", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -16054,6 +16878,21 @@ export class Operations {
   }
 
   /**
+   * Void an asset
+   *
+   * (v1.29.0) For an asset recorded in error, with a reason. Refused once its depreciation is in a recorded month (dispose of it instead). Audited.
+   *
+   * `POST /v1/finance/assets/{id}/void` · needs `payment:write`
+   */
+  voidAsset(params: {
+    /** The asset id. */
+    id: string;
+    body: VoidAssetBody;
+  }, options?: RequestOptions): Promise<VoidAssetResponse> {
+    return this.transport.request<VoidAssetResponse>({ method: "POST", path: "/v1/finance/assets/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void a credit note
    *
    * Voids a credit note issued in error, while nothing has been done with it: not refunded, not deducted from a later invoice, and (when it reduced an unpaid invoice) that invoice not paid since. What it reduced is owed again. Audited.
@@ -16129,6 +16968,23 @@ export class Operations {
   }
 
   /**
+   * Void a payment to a supplier
+   *
+   * (v1.29.0) With a reason; not when it is matched to a bank statement line. A paid bill returns to approved. Audited.
+   *
+   * `POST /v1/finance/bills/{id}/payments/{pid}/void` · needs `payment:write`
+   */
+  voidPaymentToSupplier(params: {
+    /** The bill id. */
+    id: string;
+    /** The payment id. */
+    pid: string;
+    body: VoidPaymentToSupplierBody;
+  }, options?: RequestOptions): Promise<VoidPaymentToSupplierResponse> {
+    return this.transport.request<VoidPaymentToSupplierResponse>({ method: "POST", path: "/v1/finance/bills/{id}/payments/{pid}/void", pathParams: { id: params.id, pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void a recorded payment
    *
    * A payment recorded by mistake is voided (never deleted), with a reason; the statement is due again by its amount. Audited as finance.statement_payment_voided.
@@ -16189,6 +17045,21 @@ export class Operations {
   }
 
   /**
+   * Void a supplier bill
+   *
+   * (v1.29.0) With a reason; not once payments are recorded (void them first) or it was capitalised. Audited.
+   *
+   * `POST /v1/finance/bills/{id}/void` · needs `payment:write`
+   */
+  voidSupplierBill(params: {
+    /** The bill id. */
+    id: string;
+    body: VoidSupplierBillBody;
+  }, options?: RequestOptions): Promise<VoidSupplierBillResponse> {
+    return this.transport.request<VoidSupplierBillResponse>({ method: "POST", path: "/v1/finance/bills/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void a tax filing mark
    *
    * (v1.23.0) With a reason. Audited.
@@ -16204,6 +17075,21 @@ export class Operations {
   }
 
   /**
+   * Void a transfer
+   *
+   * (v1.29.0) With a reason. Audited.
+   *
+   * `POST /v1/finance/cash/transfers/{id}/void` · needs `payment:write`
+   */
+  voidTransfer(params: {
+    /** The transfer id. */
+    id: string;
+    body: VoidTransferBody;
+  }, options?: RequestOptions): Promise<VoidTransferResponse> {
+    return this.transport.request<VoidTransferResponse>({ method: "POST", path: "/v1/finance/cash/transfers/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Void a withholding record
    *
    * (v1.18.0) A mistaken record is voided with a reason, never deleted. payment:write; audited as finance.tax_withholding_voided.
@@ -16216,6 +17102,17 @@ export class Operations {
     body: VoidWithholdingRecordBody;
   }, options?: RequestOptions): Promise<VoidWithholdingRecordResponse> {
     return this.transport.request<VoidWithholdingRecordResponse>({ method: "POST", path: "/v1/finance/tax/withholdings/{wid}/void", pathParams: { wid: params.wid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Weekly cash view (13 weeks)
+   *
+   * (v1.29.0) From today's position per currency: week by week what the gateway forecast expects in and out (settlements, fleet invoices, Hub positions, refunds, owner shares, PlugSure statements) and supplier bills by due date; the closing position, the lowest, the first week below the accounts' minimums, the largest flows.
+   *
+   * `GET /v1/finance/cash/weeks` · needs `payment:read`
+   */
+  weeklyCashView13Weeks(options?: RequestOptions): Promise<WeeklyCashView13WeeksResponse> {
+    return this.transport.request<WeeklyCashView13WeeksResponse>({ method: "GET", path: "/v1/finance/cash/weeks", accept: "json" }, options);
   }
 
   /**

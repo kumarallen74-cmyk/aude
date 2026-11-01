@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.28.0",
+    "version": "1.29.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -33001,6 +33001,8 @@
                                   "gateway_withdrawal",
                                   "statement_payment",
                                   "refund",
+                                  "roaming_payment",
+                                  "supplier_payment",
                                   "ignored"
                                 ]
                               },
@@ -33099,7 +33101,9 @@
                             "enum": [
                               "gateway_withdrawal",
                               "statement_payment",
-                              "refund"
+                              "refund",
+                              "roaming_payment",
+                              "supplier_payment"
                             ]
                           },
                           "ref": {
@@ -33188,6 +33192,8 @@
                       "gateway_withdrawal",
                       "statement_payment",
                       "refund",
+                      "roaming_payment",
+                      "supplier_payment",
                       "ignored",
                       "none"
                     ]
@@ -43783,6 +43789,3170 @@
         },
         "x-permissions": [
           "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/assets": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "The fixed asset register",
+        "operationId": "fixedAssetRegister",
+        "description": "(v1.29.0) Every asset (tag, category, site, charge point, cost, residual, acquired, in service, life, method, depreciation this month, accumulated, net book value, status in_service / not_in_service / fully_depreciated / disposed / voided) as of a month (default this month), totals and categories per currency, how many site investments are not in the register yet, the recorded depreciation runs and the journal's accounts. Filters category, siteId, status. format=xlsx for the register and the month's journal.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "siteId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "asOf": {
+                      "type": "string"
+                    },
+                    "assets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "tag": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "cost": {
+                            "type": "integer"
+                          },
+                          "accumulated": {
+                            "type": "integer"
+                          },
+                          "netBookValue": {
+                            "type": "integer"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "totals": {
+                      "type": "object"
+                    },
+                    "byCategory": {
+                      "type": "object"
+                    },
+                    "investmentsNotImported": {
+                      "type": "integer"
+                    },
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "accounts": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record an asset",
+        "operationId": "recordAsset",
+        "description": "(v1.29.0) category (chargers, installation, grid, equipment, vehicles, it, other), description, siteId and chargePointId (optional), currency (taken from the site when there is one), cost and residual (minor unit, before PPN), acquiredOn, inService (YYYY-MM, default the month after), lifeMonths (1–360, default 96), method straight_line (default) or declining_balance with ratePct (a year; default double the straight-line rate), tag (default FA-00001…). Not in a locked month. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "category",
+                  "description",
+                  "cost",
+                  "acquiredOn"
+                ],
+                "properties": {
+                  "category": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "chargePointId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "cost": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "residual": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "acquiredOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "inService": {
+                    "type": "string"
+                  },
+                  "lifeMonths": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 360
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "straight_line",
+                      "declining_balance"
+                    ]
+                  },
+                  "ratePct": {
+                    "type": "number"
+                  },
+                  "tag": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "tag": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "cost": {
+                      "type": "integer"
+                    },
+                    "accumulated": {
+                      "type": "integer"
+                    },
+                    "netBookValue": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/assets/import-investments": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Import site investments",
+        "operationId": "importSiteInvestments",
+        "description": "(v1.29.0) Makes an asset of every site investment (v1.22.0) not yet in the register: straight line over its months, from the month after it was paid. Those in a locked month are skipped and said so. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "imported": {
+                      "type": "integer"
+                    },
+                    "assetIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/assets/journal": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A month's depreciation journal",
+        "operationId": "monthDepreciationJournal",
+        "description": "(v1.29.0) Per currency (default last month): depreciation by category, disposals (cost, accumulated, proceeds, gain or loss), the journal lines (Dr depreciation expense / Cr accumulated depreciation; disposals: Dr accumulated, Dr bank, Cr cost, gain or loss) with debit = credit, and whether the month is recorded (and changed since).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string"
+                    },
+                    "accounts": {
+                      "type": "object"
+                    },
+                    "currencies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/assets/journal/{month}/record": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a month's depreciation",
+        "operationId": "recordMonthDepreciation",
+        "description": "(v1.29.0) Keeps the month's depreciation, disposals and gain or loss per currency (recording again replaces it). The month has ended and is not locked. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "path",
+            "required": true,
+            "description": "YYYY-MM.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string"
+                    },
+                    "recorded": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/assets/accounts": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set the asset journal's accounts",
+        "operationId": "setAssetJournalAccounts",
+        "description": "(v1.29.0) accounts: by key (cost, accumulated, expense, gain, loss, bank) a code and a name. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "accounts"
+                ],
+                "properties": {
+                  "accounts": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/assets/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "An asset",
+        "operationId": "asset",
+        "description": "(v1.29.0) The asset with its whole schedule: each month of its life, its depreciation, accumulated and net book value.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The asset id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "tag": {
+                      "type": "string"
+                    },
+                    "schedule": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "month": {
+                            "type": "string"
+                          },
+                          "depreciation": {
+                            "type": "integer"
+                          },
+                          "accumulated": {
+                            "type": "integer"
+                          },
+                          "netBookValue": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/assets/{id}/dispose": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Dispose of an asset",
+        "operationId": "disposeOfAsset",
+        "description": "(v1.29.0) disposedOn (not in a future or locked month), proceeds (default 0), note (how). No depreciation from that month; the gain or loss (proceeds − net book value) goes in the month's journal. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The asset id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "disposedOn",
+                  "note"
+                ],
+                "properties": {
+                  "disposedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "proceeds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "tag": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "cost": {
+                      "type": "integer"
+                    },
+                    "accumulated": {
+                      "type": "integer"
+                    },
+                    "netBookValue": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/assets/{id}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void an asset",
+        "operationId": "voidAsset",
+        "description": "(v1.29.0) For an asset recorded in error, with a reason. Refused once its depreciation is in a recorded month (dispose of it instead). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The asset id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "voided": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/suppliers": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Suppliers",
+        "operationId": "suppliers",
+        "description": "(v1.29.0) The organisation's suppliers (archived=true to include archived ones), with what is open on their approved bills.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "suppliers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "termsDays": {
+                            "type": "integer"
+                          },
+                          "whtPct": {
+                            "type": "number"
+                          },
+                          "archived": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a supplier",
+        "operationId": "addSupplier",
+        "description": "(v1.29.0) name, taxId (NPWP), email, phone, bank (name, accountNumber, accountName), termsDays (default 30), whtPct (the PPh 23 rate withheld, default 0), note. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "taxId": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "bank": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "accountNumber": {
+                        "type": "string"
+                      },
+                      "accountName": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "termsDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 180
+                  },
+                  "whtPct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "termsDays": {
+                      "type": "integer"
+                    },
+                    "whtPct": {
+                      "type": "number"
+                    },
+                    "archived": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/suppliers/{id}": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a supplier",
+        "operationId": "changeSupplier",
+        "description": "(v1.29.0) Any of the fields; archived true or false. Bank details are audited in full.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The supplier id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "taxId": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "bank": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "accountNumber": {
+                        "type": "string"
+                      },
+                      "accountName": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "termsDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 180
+                  },
+                  "whtPct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "termsDays": {
+                      "type": "integer"
+                    },
+                    "whtPct": {
+                      "type": "number"
+                    },
+                    "archived": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Supplier bills",
+        "operationId": "supplierBills",
+        "description": "(v1.29.0) Bills (awaiting approval first, then approved by due date), filtered by status and supplierId: supplier, number, category, site, subtotal, PPN, PPh 23, payable, paid, balance, dates, overdue and days late, who submitted and approved.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "awaiting_approval",
+                "approved",
+                "paid",
+                "rejected",
+                "void"
+              ]
+            }
+          },
+          {
+            "name": "supplierId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "supplier": {
+                            "type": "string"
+                          },
+                          "number": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "payable": {
+                            "type": "integer"
+                          },
+                          "paid": {
+                            "type": "integer"
+                          },
+                          "balance": {
+                            "type": "integer"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "draft",
+                              "awaiting_approval",
+                              "approved",
+                              "paid",
+                              "rejected",
+                              "void"
+                            ]
+                          },
+                          "dueDate": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a supplier bill",
+        "operationId": "recordSupplierBill",
+        "description": "(v1.29.0) supplierId, number (the supplier's), category (energy, maintenance, rent, installation, equipment, connectivity, services, other), siteId, description, currency (default the site's, else the reporting currency), subtotal, vat (PPN), wht (PPh 23; default the supplier's rate × the subtotal), billDate, dueDate (default the date + the supplier's terms), capitalise with lifeMonths (installation, equipment or other: an asset on approval), draft (true to keep it as a draft; otherwise it is submitted for approval). Not in a locked month. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "supplierId",
+                  "number",
+                  "category",
+                  "description",
+                  "subtotal",
+                  "billDate"
+                ],
+                "properties": {
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "number": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "subtotal": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "vat": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "wht": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "billDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "capitalise": {
+                    "type": "boolean"
+                  },
+                  "lifeMonths": {
+                    "type": "integer"
+                  },
+                  "draft": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A supplier bill",
+        "operationId": "supplierBill",
+        "description": "(v1.29.0) The bill with its payments (date, amount, method, reference, cash account, voided).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "payments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}/submit": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Submit a bill for approval",
+        "operationId": "submitBillForApproval",
+        "description": "(v1.29.0) A draft or a rejected bill goes to approval. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}/approve": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Approve a supplier bill",
+        "operationId": "approveSupplierBill",
+        "description": "(v1.29.0) By someone other than the person who submitted it, under the approvals matrix (kind supplier_bill: a Finance Manager, or two approvers, above an amount). With two approvers the first approval is recorded and waitingForSecondApprover is true. A bill to capitalise becomes an asset (assetError says why if it could not). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}/reject": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Reject a supplier bill",
+        "operationId": "rejectSupplierBill",
+        "description": "(v1.29.0) With a reason, by someone other than the submitter; it can be corrected and submitted again. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a supplier bill",
+        "operationId": "voidSupplierBill",
+        "description": "(v1.29.0) With a reason; not once payments are recorded (void them first) or it was capitalised. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}/payments": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a payment to a supplier",
+        "operationId": "recordPaymentToSupplier",
+        "description": "(v1.29.0) On an approved bill: amount (default the balance), paidOn (default today), method (bank_transfer, cash, card, other), reference, cashAccountId (same currency). When the payments reach the payable, the bill is paid. Bank transfers are candidates in bank reconciliation. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "paidOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "bank_transfer",
+                      "cash",
+                      "card",
+                      "other"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "cashAccountId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/bills/{id}/payments/{pid}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a payment to a supplier",
+        "operationId": "voidPaymentToSupplier",
+        "description": "(v1.29.0) With a reason; not when it is matched to a bank statement line. A paid bill returns to approved. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The bill id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "description": "The payment id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "payable": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "paid",
+                        "rejected",
+                        "void"
+                      ]
+                    },
+                    "dueDate": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/payables": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Payables (AP ageing)",
+        "operationId": "payablesApAgeing",
+        "description": "(v1.29.0) Approved bills not paid in full, per currency: total, overdue, by age from the due date (current, 1-30, 31-60, 61-90, 90+) and by supplier; what falls due in the next 14 days; what is overdue; bills awaiting approval. format=xlsx for a workbook.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "asOf": {
+                      "type": "string"
+                    },
+                    "buckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "currencies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "dueSoon": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "overdue": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "awaitingApproval": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/cash": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Cash position",
+        "operationId": "cashPosition",
+        "description": "(v1.29.0) On a day (default today): each bank and cash account's balance (its latest anchor — a balance taken, a bank statement's balance, or the opening — plus transfers and supplier payments since), the anchor and its age, below its minimum; gateway balances from the gateway's snapshots; totals per currency (bank, cash, gateway); the last 30 days per currency; the latest transfers.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "gateways": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "totals": {
+                      "type": "object"
+                    },
+                    "daily": {
+                      "type": "object"
+                    },
+                    "stale": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/cash/weeks": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Weekly cash view (13 weeks)",
+        "operationId": "weeklyCashView13Weeks",
+        "description": "(v1.29.0) From today's position per currency: week by week what the gateway forecast expects in and out (settlements, fleet invoices, Hub positions, refunds, owner shares, PlugSure statements) and supplier bills by due date; the closing position, the lowest, the first week below the accounts' minimums, the largest flows.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "type": "object"
+                    },
+                    "currencies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "notes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/cash/accounts": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Cash accounts",
+        "operationId": "cashAccounts",
+        "description": "(v1.29.0) The organisation's bank and cash accounts (archived=true to include archived ones).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "bank",
+                              "cash"
+                            ]
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "minimum": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a cash account",
+        "operationId": "addCashAccount",
+        "description": "(v1.29.0) name, kind (bank or cash), bankName, accountHint (the number's last digits: statements with them count for the account), currency, openingBalance and openingOn, minimum (alert below it, finance.cash_below_minimum). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "currency"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "bank",
+                      "cash"
+                    ]
+                  },
+                  "bankName": {
+                    "type": "string"
+                  },
+                  "accountHint": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "openingBalance": {
+                    "type": "integer"
+                  },
+                  "openingOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "minimum": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "bank",
+                        "cash"
+                      ]
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "minimum": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/cash/accounts/{id}": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a cash account",
+        "operationId": "changeCashAccount",
+        "description": "(v1.29.0) name, bankName, accountHint, minimum, archived. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The cash account id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "bankName": {
+                    "type": "string"
+                  },
+                  "accountHint": {
+                    "type": "string"
+                  },
+                  "minimum": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "bank",
+                        "cash"
+                      ]
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "minimum": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/cash/accounts/{id}/balances": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a balance",
+        "operationId": "recordBalance",
+        "description": "(v1.29.0) balance on onDate (default today; one per day, recording again replaces it), note. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The cash account id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "balance"
+                ],
+                "properties": {
+                  "balance": {
+                    "type": "integer"
+                  },
+                  "onDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "onDate": {
+                      "type": "string"
+                    },
+                    "balance": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/cash/accounts/{id}/statements": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Link a bank statement to an account",
+        "operationId": "linkBankStatementToAccount",
+        "description": "(v1.29.0) statementId: an uploaded bank statement (Bank reconciliation) whose balances are the account's. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The cash account id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "statementId"
+                ],
+                "properties": {
+                  "statementId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "statementId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/cash/transfers": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a transfer between accounts",
+        "operationId": "recordTransferBetweenAccounts",
+        "description": "(v1.29.0) fromAccountId, toAccountId (same currency), amount, onDate (default today), reference, note. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "fromAccountId",
+                  "toAccountId",
+                  "amount"
+                ],
+                "properties": {
+                  "fromAccountId": {
+                    "type": "string"
+                  },
+                  "toAccountId": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "onDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "integer"
+                    },
+                    "currency": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/cash/transfers/{id}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a transfer",
+        "operationId": "voidTransfer",
+        "description": "(v1.29.0) With a reason. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The transfer id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "voided": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/finance/benchmark": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "KPI benchmarking",
+        "operationId": "kpiBenchmarking",
+        "description": "(v1.29.0) Sites (by=site) or site owners (by=owner) over the last months (1–12, default 3) ending at to (an ended month, default last month), against their peers in the same currency: revenue, revenue per kWh, utilisation %, margin %, revenue per connector a month, collection days (lower is better). Per metric the peers' quartiles and median, each one's percentile rank (100 best), outliers beyond 1.5 × IQR flagged good or bad, and a score (the average rank). format=xlsx for a workbook.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "site",
+                "owner"
+              ]
+            }
+          },
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "by": {
+                      "type": "string",
+                      "enum": [
+                        "site",
+                        "owner"
+                      ]
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "months": {
+                      "type": "integer"
+                    },
+                    "hours": {
+                      "type": "number"
+                    },
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "lowerIsBetter": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "stats": {
+                      "type": "object"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
         ]
       }
     }

@@ -146,12 +146,12 @@ export function parseStatement(text: string, now = new Date()): { bank: string; 
 
 // ─────────────────────────────────────────── candidates and matching
 
-export interface Candidate { kind: 'gateway_withdrawal' | 'statement_payment' | 'refund' | 'roaming_payment'; ref: string; date: string; amount: number; label: string; reference: string | null }
+export interface Candidate { kind: 'gateway_withdrawal' | 'statement_payment' | 'refund' | 'roaming_payment' | 'supplier_payment'; ref: string; date: string; amount: number; label: string; reference: string | null }
 
 /** What should appear on the operator's bank account between two dates (credits positive, debits negative). */
 export async function candidates(orgId: string, platformAdmin: boolean, from: string, to: string): Promise<Candidate[]> {
   return outsideRequestScope(async () => {
-    const [wd, sp, rf, rm] = await Promise.all([
+    const [wd, sp, rf, rm, su] = await Promise.all([
       many<any>(
         `SELECT g.id::text AS ref, to_char(g.gateway_created_at::date, 'YYYY-MM-DD') AS d, round(g.amount)::bigint AS amount, g.external_id, i.provider
            FROM gateway_transaction g JOIN integration i ON i.id = g.integration_id
@@ -167,6 +167,11 @@ export async function candidates(orgId: string, platformAdmin: boolean, from: st
            FROM payment_intent WHERE org_id = $1 AND refund_state = 'refunded' AND refund_method = 'manual'
             AND refunded_at >= ($2::date - 5) AND refunded_at < ($3::date + 6)`, [orgId, from, to]),
       roamingCandidates(orgId, from, to),
+      // (v1.29.0) payments to suppliers.
+      many<any>(
+        `SELECT p.id::text AS ref, to_char(p.paid_on, 'YYYY-MM-DD') AS d, p.amount_minor AS amount, p.reference, b.number, s.name AS supplier
+           FROM supplier_payment p JOIN supplier_bill b ON b.id = p.bill_id JOIN supplier s ON s.id = b.supplier_id
+          WHERE p.org_id = $1 AND p.voided_at IS NULL AND p.method = 'bank_transfer' AND p.paid_on BETWEEN ($2::date - 5) AND ($3::date + 5)`, [orgId, from, to]),
     ]);
     return [
       ...wd.map((x) => ({ kind: 'gateway_withdrawal' as const, ref: x.ref, date: x.d, amount: Number(x.amount), label: `${x.provider === 'xendit' ? 'Xendit' : x.provider} payout to the bank`, reference: x.external_id })),
@@ -174,6 +179,7 @@ export async function candidates(orgId: string, platformAdmin: boolean, from: st
         label: x.kind === 'owner_payout' ? `Owner payout · ${x.who ?? ''} · ${x.number}` : `Statement paid by ${x.who ?? 'operator'} · ${x.number}`, reference: x.reference })),
       ...rf.map((x) => ({ kind: 'refund' as const, ref: x.ref, date: x.d, amount: -Number(x.amount), label: 'Refund by bank transfer', reference: x.refund_ref })),
       ...rm,
+      ...su.map((x) => ({ kind: 'supplier_payment' as const, ref: x.ref, date: x.d, amount: -Number(x.amount), label: `Supplier payment · ${x.supplier} · ${x.number}`, reference: x.reference })),
     ];
   });
 }
@@ -284,7 +290,7 @@ export async function setMatch(orgId: string, platformAdmin: boolean, lineId: st
     await query(`UPDATE bank_statement_line SET matched_kind = 'ignored', matched_ref = NULL, matched_auto = false, matched_by = $3, matched_at = now(), note = $4 WHERE id = $1 AND org_id = $2`, [lineId, orgId, userId, note]);
     return { ok: true };
   }
-  if (!['gateway_withdrawal', 'statement_payment', 'refund', 'roaming_payment'].includes(kind)) throw new BankReconError(422, 'kind is gateway_withdrawal, statement_payment, refund, roaming_payment, ignored or none.');
+  if (!['gateway_withdrawal', 'statement_payment', 'refund', 'roaming_payment', 'supplier_payment'].includes(kind)) throw new BankReconError(422, 'kind is gateway_withdrawal, statement_payment, refund, roaming_payment, supplier_payment, ignored or none.');
   const ref = String(b.ref ?? '');
   const c = (await lineCandidates(orgId, platformAdmin, lineId)).find((x) => x.kind === kind && x.ref === ref);
   if (!c) throw new BankReconError(422, 'That record is not a candidate for this line (another direction, already matched, or not this organisation\'s).');

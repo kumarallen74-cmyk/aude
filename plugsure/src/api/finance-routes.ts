@@ -48,6 +48,10 @@ import * as funds from '../services/driver-funds.js';
 import * as group from '../services/group-consolidation.js';
 import * as rolling from '../services/rolling-forecast.js';
 import * as plans from '../services/payment-plans.js';
+import * as assets from '../services/fixed-assets.js';
+import * as bills from '../services/supplier-bills.js';
+import * as cash from '../services/cash-position.js';
+import * as bench from '../services/finance-benchmark.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -1695,6 +1699,249 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, 'finance.provision_recorded', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
       return r;
     } catch (e) { return p17Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.29.0) fixed assets, supplier bills, cash position, benchmarking
+
+  const p18Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof assets.AssetError || e instanceof bills.BillError || e instanceof cash.CashError || e instanceof bench.BenchmarkError) return reply.status(e.statusCode).send({ error: e.message });
+    return p17Failed(reply, e);
+  };
+  const xl = (reply: FastifyReply, name: string, buf: Buffer) => reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="${name}.xlsx"`).send(buf);
+
+  app.get('/v1/finance/assets', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const reg = await assets.register(req.principal.orgId, qs(req));
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-assets-${reg.asOf}`, assets.registerXlsx(reg, await assets.journal(req.principal.orgId, reg.asOf)));
+      return { ...reg, runs: await assets.runs(req.principal.orgId), accounts: await assets.accounts(req.principal.orgId) };
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/assets', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await assets.create(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.asset_recorded', 'fixed_asset', r.id, { tag: r.tag, cost: r.cost, currency: r.currency, method: r.method, lifeMonths: r.lifeMonths });
+      return reply.status(201).send(r);
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/assets/import-investments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await assets.importInvestments(req.principal.orgId, userUuid(req));
+      await auditPay(req, 'finance.assets_imported', 'organisation', req.principal.orgId, { imported: r.imported, skipped: r.skipped.length });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/assets/journal', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await assets.journal(req.principal.orgId, qs(req).month); } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/assets/journal/:month/record', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await assets.record(req.principal.orgId, prm(req, 'month'), userUuid(req));
+      await auditPay(req, 'finance.depreciation_recorded', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.put('/v1/finance/assets/accounts', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await assets.saveAccounts(req.principal.orgId, body(req).accounts, userUuid(req));
+      await auditPay(req, 'finance.asset_accounts_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/assets/:id', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await assets.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/assets/:id/dispose', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await assets.dispose(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await auditPay(req, 'finance.asset_disposed', 'fixed_asset', r.id, { on: r.disposal?.on, proceeds: r.disposal?.proceeds, gainLoss: r.disposal?.gainLoss });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/assets/:id/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await assets.voidAsset(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.asset_voided', 'fixed_asset', prm(req, 'id'), { reason });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/suppliers', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { suppliers: await bills.suppliers(req.principal.orgId, qs(req).archived === 'true') }; } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/suppliers', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await bills.createSupplier(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.supplier_created', 'supplier', r.id, { name: r.name });
+      return reply.status(201).send(r);
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.put('/v1/finance/suppliers/:id', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await bills.updateSupplier(req.principal.orgId, prm(req, 'id'), body(req));
+      // Bank details are audited in full: a changed account is how supplier fraud starts.
+      await auditPay(req, 'finance.supplier_updated', 'supplier', r.id, { name: r.name, bank: r.bank, archived: r.archived });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/bills', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { bills: await bills.list(req.principal.orgId, qs(req)) }; } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await bills.create(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.bill_recorded', 'supplier_bill', r.id, { supplier: r.supplier, number: r.number, payable: r.payable, currency: r.currency, status: r.status });
+      return reply.status(201).send(r);
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/bills/:id', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await bills.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills/:id/submit', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await bills.submit(req.principal.orgId, prm(req, 'id'), userUuid(req));
+      await auditPay(req, 'finance.bill_submitted', 'supplier_bill', r.id, { number: r.number });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills/:id/approve', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await bills.approve(req.principal.orgId, prm(req, 'id'), { userId: userUuid(req), canApprove: canApprove(req) });
+      await auditPay(req, 'waitingForSecondApprover' in r ? 'finance.bill_first_approval' : 'finance.bill_approved', 'supplier_bill', r.id, { number: r.number, payable: r.payable, assetId: r.assetId });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills/:id/reject', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await bills.reject(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.bill_rejected', 'supplier_bill', r.id, { reason });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills/:id/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await bills.voidBill(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.bill_voided', 'supplier_bill', r.id, { reason });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills/:id/payments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const b = body(req);
+      const r = await bills.pay(req.principal.orgId, prm(req, 'id'), b, userUuid(req));
+      await auditPay(req, 'finance.bill_paid', 'supplier_bill', r.id, { amount: b.amount ?? null, reference: b.reference ?? null, status: r.status, balance: r.balance });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/bills/:id/payments/:pid/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await bills.voidPayment(req.principal.orgId, prm(req, 'id'), prm(req, 'pid'), reason, userUuid(req));
+      await auditPay(req, 'finance.bill_payment_voided', 'supplier_bill', r.id, { payment: prm(req, 'pid'), reason });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/payables', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const p = await bills.payables(req.principal.orgId);
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-payables-${p.asOf}`, bills.payablesXlsx(p));
+      return p;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/cash', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { ...(await cash.position(req.principal.orgId, qs(req))), transfers: await cash.transfers(req.principal.orgId, 50) }; } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/cash/weeks', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await cash.weeks(req.principal.orgId); } catch (e) { return p18Failed(reply, e); }
+  });
+  app.get('/v1/finance/cash/accounts', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { accounts: await cash.listAccounts(req.principal.orgId, qs(req).archived === 'true') }; } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/cash/accounts', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await cash.createAccount(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.cash_account_created', 'cash_account', r.id, r as unknown as Record<string, unknown>);
+      return reply.status(201).send(r);
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.put('/v1/finance/cash/accounts/:id', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await cash.updateAccount(req.principal.orgId, prm(req, 'id'), body(req));
+      await auditPay(req, 'finance.cash_account_updated', 'cash_account', r.id, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/cash/accounts/:id/balances', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await cash.recordBalance(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await auditPay(req, 'finance.cash_balance_recorded', 'cash_account', prm(req, 'id'), r);
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/cash/accounts/:id/statements', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await cash.linkStatement(req.principal.orgId, prm(req, 'id'), body(req).statementId);
+      await auditPay(req, 'finance.cash_statement_linked', 'cash_account', prm(req, 'id'), r);
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/cash/transfers', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await cash.transfer(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.cash_transfer_recorded', 'cash_transfer', r.id, { from: r.from, to: r.to, amount: r.amount, currency: r.currency, onDate: r.onDate });
+      return reply.status(201).send(r);
+    } catch (e) { return p18Failed(reply, e); }
+  });
+  app.post('/v1/finance/cash/transfers/:id/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await cash.voidTransfer(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.cash_transfer_voided', 'cash_transfer', prm(req, 'id'), { reason });
+      return r;
+    } catch (e) { return p18Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/benchmark', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const b = await bench.benchmark(req.principal.orgId, qs(req));
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-benchmark-${b.by}-${b.from}-${b.to}`, bench.benchmarkXlsx(b));
+      return b;
+    } catch (e) { return p18Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
