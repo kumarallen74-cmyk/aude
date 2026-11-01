@@ -738,6 +738,50 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   finding whose condition is gone clears itself; a reviewed one keeps its
   review. Checks can be turned off one by one, and the thresholds set.
 
+## Ledger, expenses, intercompany and scorecard (v1.31.0)
+
+- **Ledger** (tab). The general ledger:
+  - **chart of accounts:** seeded with the codes the finance modules post
+    to; accounts can be added, renamed and deactivated (a type cannot
+    change once an account has posted lines);
+  - **sync:** *Sync* a month to post the modules' entries, one per source
+    and currency: the gateway journals, the recorded depreciation, lease
+    and provision journals, supplier bills and payments, deposits, expense
+    claims and intercompany. Syncing again keeps unchanged entries and
+    replaces changed ones (the old ones are kept as superseded). A locked
+    month cannot be synced;
+  - **journal entries:** manual entries with balanced lines are submitted
+    and post once a second person approves them (the approvals matrix's
+    *Manual journal entries* row can require a Finance Manager or two
+    approvers). A posted entry is reversed, never edited. Post the opening
+    balances this way first;
+  - **reports:** the trial balance to a month's end, profit and loss for
+    the month and the year to date, and the balance sheet (this year's
+    result in equity), per currency, with Excel.
+- **Expenses** (tab). Expense claims and petty cash:
+  - **claims:** a console user makes a claim with lines (date, category,
+    site, amount, PPN) and attaches receipts (images or PDFs, up to 3 MB);
+    a line at or above the receipt amount needs its receipt before the claim
+    is submitted;
+  - **approval:** by someone other than the claimant (the *Expense claims*
+    row of the approvals matrix); a line above its category's limit needs a
+    Finance Manager;
+  - **reimbursing:** from petty cash or a bank account; the cash position
+    counts it;
+  - **petty cash:** set the float; *Count* records the notes and coins, the
+    difference against the books, and makes the count the balance for the
+    day; top up with a transfer (Cash).
+- **Intercompany** (tab; organisations in a group). Recharges between the
+  parent and its subsidiaries: issued by the entity that carried the cost,
+  seen by both; *Allocate a cost* splits one across the group by kWh,
+  sessions, revenue or equally (draft recharges to review and issue);
+  *Settle* nets everything open with an entity and says who pays whom.
+- **Scorecard** (tab). Monthly targets for revenue, sessions, kWh, margin,
+  utilisation, collection days, cash and operating costs; each KPI green,
+  amber (within the band, default 10%) or red; six months' trend; e-mailed
+  on a day of the month to the recipients (the organisation's e-mail
+  channel).
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

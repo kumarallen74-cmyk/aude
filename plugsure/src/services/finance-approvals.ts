@@ -2,7 +2,7 @@ import { one, outsideRequestScope, query } from '../db/pool.js';
 
 /**
  * The approvals matrix (v1.21.0). Every refund, owner payout, write-off and owner bank-detail change already needs a
- * second person (not the requester), and (v1.29.0) so does every supplier bill and (v1.30.0) every purchase order. An organisation can require more, per kind (Finance → Settings → Approvals):
+ * second person (not the requester), and (v1.29.0) so does every supplier bill and (v1.30.0) every purchase order and (v1.31.0) every manual journal entry and expense claim. An organisation can require more, per kind (Finance → Settings → Approvals):
  *
  *   above     the amount (minor unit) from which the rule applies; for bank_change the rule applies to every change
  *   rule      'finance_approver'  the approver holds finance:approve (the Finance Manager role, owners, super admins)
@@ -16,14 +16,14 @@ export class ApprovalError extends Error {
   constructor(public statusCode: number, message: string) { super(message); }
 }
 
-export const KINDS = ['refund', 'payout', 'write_off', 'bank_change', 'supplier_bill', 'purchase_order'] as const;
+export const KINDS = ['refund', 'payout', 'write_off', 'bank_change', 'supplier_bill', 'purchase_order', 'journal_entry', 'expense_claim'] as const;
 export type Kind = typeof KINDS[number];
 export type Rule = 'finance_approver' | 'two_approvers';
 export interface KindRule { above: number; rule: Rule }
 export type Rules = Partial<Record<Kind, KindRule>>;
 
-const TABLE: Record<Kind, string> = { refund: 'refund_transfer', payout: 'payout_transfer', write_off: 'receivable_write_off', bank_change: 'owner_bank_change_request', supplier_bill: 'supplier_bill', purchase_order: 'purchase_order' };
-const LABEL: Record<Kind, string> = { refund: 'refund', payout: 'owner payout', write_off: 'write-off', bank_change: 'bank detail change', supplier_bill: 'supplier bill', purchase_order: 'purchase order' };
+const TABLE: Record<Kind, string> = { refund: 'refund_transfer', payout: 'payout_transfer', write_off: 'receivable_write_off', bank_change: 'owner_bank_change_request', supplier_bill: 'supplier_bill', purchase_order: 'purchase_order', journal_entry: 'gl_entry', expense_claim: 'expense_claim' };
+const LABEL: Record<Kind, string> = { refund: 'refund', payout: 'owner payout', write_off: 'write-off', bank_change: 'bank detail change', supplier_bill: 'supplier bill', purchase_order: 'purchase order', journal_entry: 'journal entry', expense_claim: 'expense claim' };
 
 export async function rules(orgId: string): Promise<Rules> {
   const r = await outsideRequestScope(() => one<{ approval_rules: Rules }>(`SELECT approval_rules FROM finance_org_settings WHERE org_id = $1`, [orgId]));
@@ -32,10 +32,10 @@ export async function rules(orgId: string): Promise<Rules> {
 
 export async function saveRules(orgId: string, raw: unknown, canApprove: boolean, userId: string | null): Promise<Rules> {
   if (!canApprove) throw new ApprovalError(403, 'Changing the approvals matrix needs the finance:approve permission (Finance Manager).');
-  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) throw new ApprovalError(422, 'rules is an object by kind: refund, payout, write_off, bank_change, supplier_bill, purchase_order.');
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) throw new ApprovalError(422, 'rules is an object by kind: refund, payout, write_off, bank_change, supplier_bill, purchase_order, journal_entry, expense_claim.');
   const out: Rules = {};
   for (const [k, v] of Object.entries(raw as Record<string, any>)) {
-    if (!KINDS.includes(k as Kind)) throw new ApprovalError(422, `Unknown kind "${k}" (refund, payout, write_off, bank_change, supplier_bill, purchase_order).`);
+    if (!KINDS.includes(k as Kind)) throw new ApprovalError(422, `Unknown kind "${k}" (refund, payout, write_off, bank_change, supplier_bill, purchase_order, journal_entry, expense_claim).`);
     if (v == null) continue;
     const rule = String(v.rule ?? '');
     if (rule !== 'finance_approver' && rule !== 'two_approvers') throw new ApprovalError(422, `${k}: rule is finance_approver or two_approvers.`);

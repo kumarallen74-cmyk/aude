@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.30.0";
+export const API_VERSION = "1.31.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4941,6 +4941,12 @@ export type AccountingJournalResponse = {
   }[];
 };
 
+export type AccountLinesResponse = {
+  code?: string;
+  month?: string;
+  lines?: Record<string, unknown>[];
+};
+
 export type AcknowledgeAlertResponse = {
   ok: true;
 };
@@ -4996,6 +5002,26 @@ export type AddEvidenceOrCommentToDisputeResponse = {
   notes: Record<string, unknown>[];
 };
 
+export type AddLineToClaimBody = {
+  spentOn: string;
+  category: "fuel" | "travel" | "meals" | "parking" | "tools" | "supplies" | "phone" | "other";
+  siteId?: string;
+  description: string;
+  amount: number;
+  vat?: number;
+};
+
+export type AddLineToClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
 export type AddNoteOrPromiseToPayBody = {
   note: string;
   promiseDate?: string;
@@ -5016,6 +5042,12 @@ export type AddOnCallOverrideResponse = {
   override: {
     id: string;
   };
+};
+
+export type AddOrChangeAccountBody = {
+  name?: string;
+  type?: "asset" | "liability" | "equity" | "revenue" | "expense" | "other";
+  active?: boolean;
 };
 
 export type AddSupplierBody = {
@@ -5096,6 +5128,31 @@ export type AgreePaymentPlanBody = {
   note?: string;
 };
 
+export type AllocateCostAcrossGroupBody = {
+  month: string;
+  description: string;
+  total: number;
+  currency: string;
+  basis?: "kwh" | "sessions" | "revenue" | "equal";
+};
+
+export type AllocateCostAcrossGroupResponse = {
+  basis?: string;
+  total?: number;
+  shares?: Record<string, unknown>[];
+  recharges?: {
+    id?: string;
+    number?: string;
+    direction?: "out" | "in";
+    from?: string;
+    to?: string;
+    month?: string;
+    amount?: number;
+    currency?: string;
+    status?: "draft" | "issued" | "settled" | "void";
+  }[];
+};
+
 export type AnswerDisputeCpoSideAcceptOrRejectBody = {
   action: "accept" | "reject";
   note?: string;
@@ -5158,6 +5215,28 @@ export type ApproveAndSendOwnerPayoutResponse = {
 
 export type ApproveAndSendRefundTransferResponse = {
   transfer: RefundTransfer;
+};
+
+export type ApproveExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
+export type ApproveJournalEntryResponse = {
+  id?: string;
+  number?: string;
+  date?: string;
+  currency?: string;
+  source?: string;
+  status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type ApproveOrRejectDriverRefundRequestBody = {
@@ -5293,6 +5372,23 @@ export type AssignTariffBody = {
 export type AssignTariffResponse = {
   ok: true;
   flags: TariffFlag[];
+};
+
+export type AttachReceiptBody = {
+  filename?: string;
+  mime: "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
+  data: string;
+};
+
+export type AttachReceiptResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type AutomaticOwnerPayoutsResponse = {
@@ -5564,6 +5660,15 @@ export type ChargersClientCertificatesResponse = {
   certificates: StationCertificate[];
 };
 
+export type ChartOfAccountsResponse = {
+  accounts?: {
+    code?: string;
+    name?: string;
+    type?: string;
+    active?: boolean;
+  }[];
+};
+
 export type CheckAndroidNotificationsServiceAccountWithGoogleAgainResponse = DriverAppView & {
   androidPushDevices?: number;
 };
@@ -5730,6 +5835,21 @@ export type CopyMonthBudgetForwardBody = {
 
 export type CopyMonthBudgetForwardResponse = {
   copied?: number;
+};
+
+export type CountPettyCashBody = {
+  countedOn?: string;
+  denominations?: Record<string, unknown>;
+  total?: number;
+  note?: string;
+};
+
+export type CountPettyCashResponse = {
+  accountId?: string;
+  countedOn?: string;
+  total?: number;
+  expected?: number | null;
+  difference?: number | null;
 };
 
 export type CreateAlertContactResponse = {
@@ -6158,6 +6278,32 @@ export type EscalateRejectedDisputeToPlatformEMSPSideResponse = {
   };
 };
 
+export type ExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
+export type ExpenseClaimsResponse = {
+  claims?: {
+    id?: string;
+    number?: string;
+    claimant?: string;
+    title?: string;
+    currency?: string;
+    status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+    total?: number;
+    lines?: Record<string, unknown>[];
+  }[];
+  toReimburse?: Record<string, unknown>;
+  policy?: Record<string, unknown>;
+};
+
 export type ExportClosedMonthToAccountingPackageBody = {
   month: string;
   package?: "jurnal" | "accurate" | "generic";
@@ -6296,6 +6442,20 @@ export type FinanceOverviewResponse = {
     complete?: boolean;
     lastReconciledAt?: string | null;
   } | null;
+};
+
+export type FinanceScorecardResponse = {
+  month?: string;
+  currency?: string | null;
+  kpis?: {
+    kpi?: string;
+    actual?: number | null;
+    target?: number | null;
+    rag?: string | null;
+  }[];
+  counts?: Record<string, unknown>;
+  trend?: Record<string, unknown>[];
+  settings?: Record<string, unknown>;
 };
 
 export type FinanceSettingsResponse = {
@@ -6658,6 +6818,24 @@ export type IntegrationsAndTheirStatusResponse = {
   }[];
 };
 
+export type IntercompanyResponse = {
+  group?: Record<string, unknown>[];
+  grouped?: boolean;
+  recharges?: {
+    id?: string;
+    number?: string;
+    direction?: "out" | "in";
+    from?: string;
+    to?: string;
+    month?: string;
+    amount?: number;
+    currency?: string;
+    status?: "draft" | "issued" | "settled" | "void";
+  }[];
+  balances?: Record<string, unknown>[];
+  settlements?: Record<string, unknown>[];
+};
+
 export type IssueApiKeyBody = {
   name?: string;
   /** Permission strings such as `charge_point:read`. */
@@ -6719,6 +6897,18 @@ export type IssueFleetAccountInvoiceForMonthBody = {
   currency?: "IDR" | "MYR" | "SGD";
 };
 
+export type IssueRechargeResponse = {
+  id?: string;
+  number?: string;
+  direction?: "out" | "in";
+  from?: string;
+  to?: string;
+  month?: string;
+  amount?: number;
+  currency?: string;
+  status?: "draft" | "issued" | "settled" | "void";
+};
+
 export type IssueTestContractCertificateBody = {
   emaid: string;
 };
@@ -6740,8 +6930,35 @@ export type IssueTestContractCertificateResponse = {
   }[];
 };
 
+export type JournalEntriesResponse = {
+  month?: string;
+  locked?: boolean;
+  entries?: {
+    id?: string;
+    number?: string;
+    date?: string;
+    currency?: string;
+    source?: string;
+    status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+    total?: number;
+    lines?: Record<string, unknown>[];
+  }[];
+  awaitingApproval?: number;
+};
+
+export type JournalEntryResponse = {
+  id?: string;
+  number?: string;
+  date?: string;
+  currency?: string;
+  source?: string;
+  status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
 export type KpiBenchmarkingResponse = {
-  by?: "site" | "owner";
+  by?: "site" | "owner" | "org";
   from?: string;
   to?: string;
   months?: number;
@@ -6771,6 +6988,16 @@ export type LeasesResponse = {
   }[];
   totals?: Record<string, unknown>;
   accounts?: Record<string, unknown>;
+};
+
+export type LedgerReportsResponse = {
+  month?: string;
+  currency?: string;
+  currencies?: string[];
+  locked?: boolean;
+  trialBalance?: Record<string, unknown>;
+  profitAndLoss?: Record<string, unknown>;
+  balanceSheet?: Record<string, unknown>;
 };
 
 export type LedgerRowWholeTrailResponse = {
@@ -6914,6 +7141,54 @@ export type LockMonthResponse = {
   id?: string;
   month?: string;
   locked?: boolean;
+};
+
+export type MakeExpenseClaimBody = {
+  title: string;
+  currency?: string;
+  lines?: {
+    spentOn: string;
+    category: "fuel" | "travel" | "meals" | "parking" | "tools" | "supplies" | "phone" | "other";
+    siteId?: string;
+    description: string;
+    amount: number;
+    vat?: number;
+  }[];
+};
+
+export type MakeExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
+export type MakeManualJournalEntryBody = {
+  date: string;
+  currency: string;
+  memo: string;
+  draft?: boolean;
+  lines: {
+    account: string;
+    debit?: number;
+    credit?: number;
+    description?: string;
+  }[];
+};
+
+export type MakeManualJournalEntryResponse = {
+  id?: string;
+  number?: string;
+  date?: string;
+  currency?: string;
+  source?: string;
+  status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type MakePaymentLinkForFleetInvoiceResponse = {
@@ -7410,6 +7685,18 @@ export type PeriodByOperatorAndSiteResponse = {
   }[];
 };
 
+export type PettyCashResponse = {
+  accounts?: {
+    id?: string;
+    name?: string;
+    currency?: string;
+    balance?: number | null;
+    float?: number | null;
+    topUp?: number;
+    lastCount?: Record<string, unknown> | null;
+  }[];
+};
+
 export type PlaceTimeDepositBody = {
   cashAccountId: string;
   bankName?: string;
@@ -7621,6 +7908,27 @@ export type ReceivablesResponse = {
     dueDate?: string;
     status?: string;
   }[];
+};
+
+export type RechargeGroupEntityBody = {
+  toOrgId: string;
+  month: string;
+  description: string;
+  amount: number;
+  currency: string;
+  draft?: boolean;
+};
+
+export type RechargeGroupEntityResponse = {
+  id?: string;
+  number?: string;
+  direction?: "out" | "in";
+  from?: string;
+  to?: string;
+  month?: string;
+  amount?: number;
+  currency?: string;
+  status?: "draft" | "issued" | "settled" | "void";
 };
 
 export type RecogniseMonthBreakageBody = {
@@ -8087,8 +8395,40 @@ export type RegisterContractBody = {
   notes?: string;
 };
 
+export type ReimburseExpenseClaimBody = {
+  cashAccountId: string;
+  reimbursedOn?: string;
+  reference?: string;
+};
+
+export type ReimburseExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
 export type ReinstateDecommissionedChargePointResponse = {
   ok: true;
+};
+
+export type RejectExpenseClaimBody = {
+  reason: string;
+};
+
+export type RejectExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type RejectHeldPartnerChargeRecordBody = {
@@ -8099,6 +8439,21 @@ export type RejectHeldPartnerChargeRecordBody = {
 export type RejectHeldPartnerChargeRecordResponse = {
   id: string;
   status: "rejected";
+};
+
+export type RejectJournalEntryBody = {
+  reason: string;
+};
+
+export type RejectJournalEntryResponse = {
+  id?: string;
+  number?: string;
+  date?: string;
+  currency?: string;
+  source?: string;
+  status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type RejectOwnerPayoutBeforeItIsSentBody = {
@@ -8171,6 +8526,17 @@ export type RemoveIntegrationConsoleSettingsResponse = {
 
 export type RemoveIOSNotificationsKeyResponse = {
   ok: true;
+};
+
+export type RemoveLineFromClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type RemoveOcpiPartyOfCountryResponse = {
@@ -8348,6 +8714,21 @@ export type RevenueDropAlertsResponse = {
     minBaseline?: number;
   };
   anomalies?: Record<string, unknown>[];
+};
+
+export type ReverseJournalEntryBody = {
+  date?: string;
+};
+
+export type ReverseJournalEntryResponse = {
+  id?: string;
+  number?: string;
+  date?: string;
+  currency?: string;
+  source?: string;
+  status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+  total?: number;
+  lines?: Record<string, unknown>[];
 };
 
 export type ReviewFindingBody = {
@@ -8599,6 +8980,16 @@ export type SendReportEMailNowResponse = {
   reference?: string | null;
 };
 
+export type SendScorecardNowBody = {
+  month?: string;
+};
+
+export type SendScorecardNowResponse = {
+  month?: string;
+  sent?: number;
+  error?: string | null;
+};
+
 export type SendTestAlertMessageBody = {
   /** E-mail address, or WhatsApp / mobile number (e.g. +62 812 3456 7890). */
   destination: string;
@@ -8715,6 +9106,11 @@ export type SetEvseAndConnectorTopologyResponse = {
   ok: true;
 };
 
+export type SetExpensePolicyBody = {
+  receiptAbove?: number;
+  limits?: Record<string, unknown>;
+};
+
 export type SetFinanceDataExportBody = {
   enabled?: boolean;
   target?: "local" | "s3";
@@ -8742,6 +9138,16 @@ export type SetFleetInvoicingAutomationBody = {
   requireEfaktur?: boolean;
   paymentLinks?: boolean;
   linkDays?: number;
+};
+
+export type SetKpiTargetsBody = {
+  targets?: Record<string, unknown>;
+  copyFrom?: string;
+};
+
+export type SetKpiTargetsResponse = {
+  month?: string;
+  targets?: Record<string, unknown>;
 };
 
 export type SetMatchToleranceBody = {
@@ -8780,6 +9186,10 @@ export type SetOwnerPayoutRuleBody = {
   minAmount?: number | null;
   hold?: boolean;
   holdReason?: string;
+};
+
+export type SetPettyCashFloatBody = {
+  float?: number | null;
 };
 
 export type SetProvisionRatesBody = {
@@ -8825,6 +9235,13 @@ export type SetRoamingIdentityBody = {
 
 export type SetRoamingIdentityResponse = {
   party: RoamingParty;
+};
+
+export type SetScorecardEMailBody = {
+  enabled?: boolean;
+  day?: number;
+  recipients?: string[];
+  amberPct?: number;
 };
 
 export type SetSecurityProfileBody = {
@@ -8935,6 +9352,23 @@ export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody = {
 
 export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse = {
   transfer: RefundTransfer;
+};
+
+export type SettleWithGroupEntityBody = {
+  otherOrgId: string;
+  currency: string;
+  settledOn?: string;
+  reference?: string;
+};
+
+export type SettleWithGroupEntityResponse = {
+  settlementId?: string;
+  other?: string;
+  currency?: string;
+  receivable?: number;
+  payable?: number;
+  net?: number;
+  direction?: string;
 };
 
 export type SetTreasurySettingsBody = {
@@ -9157,6 +9591,28 @@ export type SubmitBillForApprovalResponse = {
   dueDate?: string;
 };
 
+export type SubmitExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
+export type SubmitJournalEntryResponse = {
+  id?: string;
+  number?: string;
+  date?: string;
+  currency?: string;
+  source?: string;
+  status?: "draft" | "awaiting_approval" | "posted" | "rejected" | "superseded";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
 export type SubmitPurchaseOrderResponse = {
   id?: string;
   number?: string;
@@ -9272,6 +9728,13 @@ export type SyncAndReconcileNowResponse = {
     found?: number;
     cleared?: number;
   };
+};
+
+export type SyncMonthIntoLedgerResponse = {
+  month?: string;
+  posted?: number;
+  unchanged?: number;
+  superseded?: number;
 };
 
 export type TaxFilingCalendarResponse = {
@@ -9474,6 +9937,17 @@ export type VoidEliminationBody = {
   reason: string;
 };
 
+export type VoidExpenseClaimResponse = {
+  id?: string;
+  number?: string;
+  claimant?: string;
+  title?: string;
+  currency?: string;
+  status?: "draft" | "submitted" | "approved" | "rejected" | "reimbursed" | "void";
+  total?: number;
+  lines?: Record<string, unknown>[];
+};
+
 export type VoidFakturMasukanBody = {
   reason: string;
 };
@@ -9510,6 +9984,22 @@ export type VoidPaymentToSupplierResponse = {
   balance?: number;
   status?: "draft" | "awaiting_approval" | "approved" | "paid" | "rejected" | "void";
   dueDate?: string;
+};
+
+export type VoidRechargeBody = {
+  reason: string;
+};
+
+export type VoidRechargeResponse = {
+  id?: string;
+  number?: string;
+  direction?: "out" | "in";
+  from?: string;
+  to?: string;
+  month?: string;
+  amount?: number;
+  currency?: string;
+  status?: "draft" | "issued" | "settled" | "void";
 };
 
 export type VoidRecordedPaymentBody = {
@@ -9835,6 +10325,23 @@ export class Operations {
   }
 
   /**
+   * An account's lines
+   *
+   * (v1.31.0) The posted lines on an account in a month (default this month): entry, date, source, memo, debit, credit.
+   *
+   * `GET /v1/finance/ledger/accounts/{code}/lines`
+   */
+  accountLines(params: {
+    /** The account code. */
+    code: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<AccountLinesResponse> {
+    return this.transport.request<AccountLinesResponse>({ method: "GET", path: "/v1/finance/ledger/accounts/{code}/lines", pathParams: { code: params.code }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
    * Acknowledge an alert
    *
    * "I'm on it": records who acknowledged the alert and stops escalation notices. Only an open, not yet acknowledged alert can be acknowledged. Audited.
@@ -9931,6 +10438,21 @@ export class Operations {
   }
 
   /**
+   * Add a line to a claim
+   *
+   * (v1.31.0) While a draft or rejected; by the claimant.
+   *
+   * `POST /v1/finance/expenses/{id}/lines`
+   */
+  addLineToClaim(params: {
+    /** The claim id. */
+    id: string;
+    body: AddLineToClaimBody;
+  }, options?: RequestOptions): Promise<AddLineToClaimResponse> {
+    return this.transport.request<AddLineToClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/lines", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a note or a promise to pay
    *
    * (v1.20.0) A promise to pay in the future pauses the reminders until that date. Audited as finance.collection_note_added.
@@ -9960,6 +10482,21 @@ export class Operations {
     body: AddOnCallOverrideBody;
   }, options?: RequestOptions): Promise<AddOnCallOverrideResponse> {
     return this.transport.request<AddOnCallOverrideResponse>({ method: "POST", path: "/v1/alert-routing/rotas/{id}/overrides", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add or change an account
+   *
+   * (v1.31.0) name, type (not once the account has posted lines), active. Audited.
+   *
+   * `PUT /v1/finance/ledger/accounts/{code}`
+   */
+  addOrChangeAccount(params: {
+    /** The account code. */
+    code: string;
+    body: AddOrChangeAccountBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/ledger/accounts/{code}", pathParams: { code: params.code }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10044,6 +10581,19 @@ export class Operations {
     body: AgreePaymentPlanBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/fleet-invoices/{id}/payment-plan", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Allocate a cost across the group
+   *
+   * (v1.31.0) month, description, total, currency, basis (kwh, sessions, revenue or equal; the entities' charge records that month): each other entity's share becomes a draft recharge. Audited.
+   *
+   * `POST /v1/finance/intercompany/allocate`
+   */
+  allocateCostAcrossGroup(params: {
+    body: AllocateCostAcrossGroupBody;
+  }, options?: RequestOptions): Promise<AllocateCostAcrossGroupResponse> {
+    return this.transport.request<AllocateCostAcrossGroupResponse>({ method: "POST", path: "/v1/finance/intercompany/allocate", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10144,6 +10694,34 @@ export class Operations {
     tid: string;
   }, options?: RequestOptions): Promise<ApproveAndSendRefundTransferResponse> {
     return this.transport.request<ApproveAndSendRefundTransferResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/approve", pathParams: { tid: params.tid }, accept: "json" }, options);
+  }
+
+  /**
+   * Approve an expense claim
+   *
+   * (v1.31.0) By someone other than the claimant, under the approvals matrix (kind expense_claim); a line over its limit needs finance:approve. With two approvers the first approval is recorded. Audited.
+   *
+   * `POST /v1/finance/expenses/{id}/approve`
+   */
+  approveExpenseClaim(params: {
+    /** The claim id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ApproveExpenseClaimResponse> {
+    return this.transport.request<ApproveExpenseClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Approve a journal entry
+   *
+   * (v1.31.0) By someone other than the submitter, under the approvals matrix (kind journal_entry); it posts. With two approvers the first approval is recorded and waitingForSecondApprover is true. Audited.
+   *
+   * `POST /v1/finance/ledger/entries/{id}/approve`
+   */
+  approveJournalEntry(params: {
+    /** The entry id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ApproveJournalEntryResponse> {
+    return this.transport.request<ApproveJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -10419,6 +10997,23 @@ export class Operations {
     body: TariffAssignmentRequest;
   }, options?: RequestOptions): Promise<TariffAssignmentResult> {
     return this.transport.request<TariffAssignmentResult>({ method: "PUT", path: "/v1/sites/{siteId}/tariff", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Attach a receipt
+   *
+   * (v1.31.0) filename, mime (image/jpeg, image/png, image/webp, application/pdf), data (base64; at most 3 MB; the file must be the type it says). Audited.
+   *
+   * `POST /v1/finance/expenses/{id}/lines/{lid}/receipts`
+   */
+  attachReceipt(params: {
+    /** The claim id. */
+    id: string;
+    /** The line id. */
+    lid: string;
+    body: AttachReceiptBody;
+  }, options?: RequestOptions): Promise<AttachReceiptResponse> {
+    return this.transport.request<AttachReceiptResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/lines/{lid}/receipts", pathParams: { id: params.id, lid: params.lid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10835,6 +11430,17 @@ export class Operations {
   }
 
   /**
+   * Chart of accounts
+   *
+   * (v1.31.0) The organisation's accounts: code, name, type (asset, liability, equity, revenue, expense, other), active. Seeded with the codes the finance modules post to.
+   *
+   * `GET /v1/finance/ledger/accounts`
+   */
+  chartOfAccounts(options?: RequestOptions): Promise<ChartOfAccountsResponse> {
+    return this.transport.request<ChartOfAccountsResponse>({ method: "GET", path: "/v1/finance/ledger/accounts", accept: "json" }, options);
+  }
+
+  /**
    * Check the Android notifications service account with Google again
    *
    * A validate-only send to a token that cannot exist: Google checks the service account first, so nobody is notified.
@@ -11024,6 +11630,21 @@ export class Operations {
     body: CopyMonthBudgetForwardBody;
   }, options?: RequestOptions): Promise<CopyMonthBudgetForwardResponse> {
     return this.transport.request<CopyMonthBudgetForwardResponse>({ method: "POST", path: "/v1/finance/budgets/copy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Count the petty cash
+   *
+   * (v1.31.0) countedOn (default today), denominations (face value → how many; or total), note. The count is the account's balance for the day; the difference against what the books expected is kept. Audited.
+   *
+   * `POST /v1/finance/petty-cash/{id}/counts`
+   */
+  countPettyCash(params: {
+    /** The cash account id. */
+    id: string;
+    body: CountPettyCashBody;
+  }, options?: RequestOptions): Promise<CountPettyCashResponse> {
+    return this.transport.request<CountPettyCashResponse>({ method: "POST", path: "/v1/finance/petty-cash/{id}/counts", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11823,6 +12444,37 @@ export class Operations {
   }
 
   /**
+   * An expense claim
+   *
+   * (v1.31.0) The claim with its lines and receipts.
+   *
+   * `GET /v1/finance/expenses/{id}`
+   */
+  expenseClaim(params: {
+    /** The claim id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ExpenseClaimResponse> {
+    return this.transport.request<ExpenseClaimResponse>({ method: "GET", path: "/v1/finance/expenses/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Expense claims
+   *
+   * (v1.31.0) Claims (submitted first), filtered by status, mine=true for the caller's own: claimant, lines with receipts, receipts missing, over the limit, total; what is approved and not yet reimbursed per currency; the policy. format=xlsx for the lines.
+   *
+   * `GET /v1/finance/expenses`
+   */
+  expenseClaims(params?: {
+    query?: {
+      status?: string;
+      mine?: "true" | "false";
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<ExpenseClaimsResponse> {
+    return this.transport.request<ExpenseClaimsResponse>({ method: "GET", path: "/v1/finance/expenses", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Export charges on other networks as CSV
    *
    * Every charge record partners sent for our cards in the range, as a CSV attachment (columns start, end, partner, operator, location, city, card, contract_id, holder, fleet, kwh, currency, total_excl_vat, total_incl_vat, cdr_id, session_id).
@@ -12101,6 +12753,22 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<FinanceOverviewResponse> {
     return this.transport.request<FinanceOverviewResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/overview", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Finance scorecard
+   *
+   * (v1.31.0) For a month (default last month) in the organisation's main currency: each KPI (revenue, sessions, kwh, marginPct, utilisationPct, collectionDays, cash, opex) with its actual, target, variance and colour (green, amber within the band, red); the counts; six months' trend; the settings.
+   *
+   * `GET /v1/finance/scorecard`
+   */
+  financeScorecard(params?: {
+    query?: {
+      month?: string;
+      currency?: string;
+    };
+  }, options?: RequestOptions): Promise<FinanceScorecardResponse> {
+    return this.transport.request<FinanceScorecardResponse>({ method: "GET", path: "/v1/finance/scorecard", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -12876,6 +13544,21 @@ export class Operations {
   }
 
   /**
+   * Intercompany
+   *
+   * (v1.31.0) The group (a parent and its subsidiaries), the recharges the caller issued and received (drafts only its own), the balances per counterparty and currency (receivable, payable, net), the settlements.
+   *
+   * `GET /v1/finance/intercompany`
+   */
+  intercompany(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<IntercompanyResponse> {
+    return this.transport.request<IntercompanyResponse>({ method: "GET", path: "/v1/finance/intercompany", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Invite a console user
    *
    * Creates the account with one role and returns a one-time password — shown only in this response. The user must choose a new password at first sign-in. A Site Host needs at least one site; a Site Owner user needs an owner. Audited.
@@ -12973,6 +13656,20 @@ export class Operations {
   }
 
   /**
+   * Issue a recharge
+   *
+   * (v1.31.0) A draft recharge, by the entity that charges. Audited.
+   *
+   * `POST /v1/finance/intercompany/recharges/{id}/issue`
+   */
+  issueRecharge(params: {
+    /** The recharge id. */
+    id: string;
+  }, options?: RequestOptions): Promise<IssueRechargeResponse> {
+    return this.transport.request<IssueRechargeResponse>({ method: "POST", path: "/v1/finance/intercompany/recharges/{id}/issue", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Issue a test contract certificate
    *
    * Test PKI only (PNC_PKI=mock; never in production): a contract certificate for the eMAID, with the chain and the hash data a charger would send, to try Plug & Charge in a sandbox. Answers 409 with any other PKI.
@@ -12997,6 +13694,37 @@ export class Operations {
   }
 
   /**
+   * Journal entries
+   *
+   * (v1.31.0) A month's entries (default this month; superseded ones only when asked for by status), filtered by status and source; with status awaiting_approval, every entry waiting whatever its month; and how many wait for approval.
+   *
+   * `GET /v1/finance/ledger/entries`
+   */
+  journalEntries(params?: {
+    query?: {
+      month?: string;
+      status?: string;
+      source?: string;
+    };
+  }, options?: RequestOptions): Promise<JournalEntriesResponse> {
+    return this.transport.request<JournalEntriesResponse>({ method: "GET", path: "/v1/finance/ledger/entries", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A journal entry
+   *
+   * (v1.31.0) The entry with its lines, who submitted and approved it, and its reversal.
+   *
+   * `GET /v1/finance/ledger/entries/{id}`
+   */
+  journalEntry(params: {
+    /** The entry id. */
+    id: string;
+  }, options?: RequestOptions): Promise<JournalEntryResponse> {
+    return this.transport.request<JournalEntryResponse>({ method: "GET", path: "/v1/finance/ledger/entries/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * KPI benchmarking
    *
    * (v1.29.0) Sites (by=site) or site owners (by=owner) over the last months (1–12, default 3) ending at to (an ended month, default last month), against their peers in the same currency: revenue, revenue per kWh, utilisation %, margin %, revenue per connector a month, collection days (lower is better). Per metric the peers' quartiles and median, each one's percentile rank (100 best), outliers beyond 1.5 × IQR flagged good or bad, and a score (the average rank). format=xlsx for a workbook.
@@ -13005,7 +13733,7 @@ export class Operations {
    */
   kpiBenchmarking(params?: {
     query?: {
-      by?: "site" | "owner";
+      by?: "site" | "owner" | "org";
       months?: number;
       to?: string;
       format?: "json" | "xlsx";
@@ -13042,6 +13770,23 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<LeasesResponse> {
     return this.transport.request<LeasesResponse>({ method: "GET", path: "/v1/finance/leases", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Ledger reports
+   *
+   * (v1.31.0) For a month (default last month) and a currency (default the first the ledger has): the trial balance to the month's end (balanced or not), profit and loss for the month and the year to date (revenue, expenses, other income and expense, result), and the balance sheet at the month's end (assets, liabilities, equity with the result of earlier years and of this year; balanced or not). format=xlsx for a workbook.
+   *
+   * `GET /v1/finance/ledger`
+   */
+  ledgerReports(params?: {
+    query?: {
+      month?: string;
+      currency?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<LedgerReportsResponse> {
+    return this.transport.request<LedgerReportsResponse>({ method: "GET", path: "/v1/finance/ledger", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -13713,6 +14458,32 @@ export class Operations {
   }
 
   /**
+   * Make an expense claim
+   *
+   * (v1.31.0) By a console user, for themselves: title, currency (default the organisation's), lines (date, category, site, description, amount, PPN). Numbered EX-00001…. Audited.
+   *
+   * `POST /v1/finance/expenses`
+   */
+  makeExpenseClaim(params: {
+    body: MakeExpenseClaimBody;
+  }, options?: RequestOptions): Promise<MakeExpenseClaimResponse> {
+    return this.transport.request<MakeExpenseClaimResponse>({ method: "POST", path: "/v1/finance/expenses", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Make a manual journal entry
+   *
+   * (v1.31.0) date, currency, memo, lines (2–100: account, debit or credit, description) that balance, on active accounts; draft (true to keep it as a draft; otherwise it is submitted). It posts once approved by a second person. Not in a locked month. Audited.
+   *
+   * `POST /v1/finance/ledger/entries`
+   */
+  makeManualJournalEntry(params: {
+    body: MakeManualJournalEntryBody;
+  }, options?: RequestOptions): Promise<MakeManualJournalEntryResponse> {
+    return this.transport.request<MakeManualJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Make a payment link for a fleet invoice
    *
    * (v1.27.0) A Xendit invoice on the operator's own Xendit account for the balance (the open one if any); paid → the invoice marked paid. Audited.
@@ -14282,6 +15053,17 @@ export class Operations {
   }
 
   /**
+   * Petty cash
+   *
+   * (v1.31.0) Cash accounts of kind cash: balance, float, the top-up to the float, the last count (total, difference, note).
+   *
+   * `GET /v1/finance/petty-cash`
+   */
+  pettyCash(options?: RequestOptions): Promise<PettyCashResponse> {
+    return this.transport.request<PettyCashResponse>({ method: "GET", path: "/v1/finance/petty-cash", accept: "json" }, options);
+  }
+
+  /**
    * Place a time deposit
    *
    * (v1.30.0) cashAccountId (a bank account: the money leaves it), bankName, reference, principal, ratePct (a year), taxPct (final tax on the interest, default 20), placedOn (default today), and maturityOn, termMonths or termDays. Audited.
@@ -14591,6 +15373,20 @@ export class Operations {
   }
 
   /**
+   * A receipt
+   *
+   * (v1.31.0) The receipt file (an image or a PDF).
+   *
+   * `GET /v1/finance/expenses/receipts/{rid}` · needs `payment:write`
+   */
+  receipt(params: {
+    /** The receipt id. */
+    rid: string;
+  }, options?: RequestOptions): Promise<Blob> {
+    return this.transport.request<Blob>({ method: "GET", path: "/v1/finance/expenses/receipts/{rid}", pathParams: { rid: params.rid }, accept: "json" }, options);
+  }
+
+  /**
    * Receivables
    *
    * Collected and not yet settled to the bank: totals by expected settlement day (overdue flagged) and the rows; for an operator's own account, its fleet invoices issued and not paid. (v1.15.0) Also post-pay sessions not charged yet; for the platform's account PlugSure Hub's unpaid fee invoices, for an operator's the Hub settlement positions it is owed (hubPositions).
@@ -14602,6 +15398,19 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<ReceivablesResponse> {
     return this.transport.request<ReceivablesResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/receivables", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Recharge a group entity
+   *
+   * (v1.31.0) toOrgId (another entity of the group), month, description, amount, currency, draft (true to issue later). Numbered IC-00001…. Audited.
+   *
+   * `POST /v1/finance/intercompany/recharges`
+   */
+  rechargeGroupEntity(params: {
+    body: RechargeGroupEntityBody;
+  }, options?: RequestOptions): Promise<RechargeGroupEntityResponse> {
+    return this.transport.request<RechargeGroupEntityResponse>({ method: "POST", path: "/v1/finance/intercompany/recharges", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15097,6 +15906,21 @@ export class Operations {
   }
 
   /**
+   * Reimburse an expense claim
+   *
+   * (v1.31.0) An approved claim from a cash account (petty cash or a bank, same currency): cashAccountId, reimbursedOn (default today), reference. The cash position counts it out of the account. Audited.
+   *
+   * `POST /v1/finance/expenses/{id}/reimburse`
+   */
+  reimburseExpenseClaim(params: {
+    /** The claim id. */
+    id: string;
+    body: ReimburseExpenseClaimBody;
+  }, options?: RequestOptions): Promise<ReimburseExpenseClaimResponse> {
+    return this.transport.request<ReimburseExpenseClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/reimburse", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Reinstate a decommissioned charge point
    *
    * Returns a decommissioned unit to pending_adoption with security profile 0, so it goes through adoption again and needs new credentials. Has no effect on a unit that is not decommissioned, but still answers ok. Audited as charge_point.reinstated.
@@ -15108,6 +15932,21 @@ export class Operations {
     identity: string;
   }, options?: RequestOptions): Promise<ReinstateDecommissionedChargePointResponse> {
     return this.transport.request<ReinstateDecommissionedChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/reinstate", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
+   * Reject an expense claim
+   *
+   * (v1.31.0) With a reason, by someone other than the claimant; it can be corrected and submitted again. Audited.
+   *
+   * `POST /v1/finance/expenses/{id}/reject`
+   */
+  rejectExpenseClaim(params: {
+    /** The claim id. */
+    id: string;
+    body: RejectExpenseClaimBody;
+  }, options?: RequestOptions): Promise<RejectExpenseClaimResponse> {
+    return this.transport.request<RejectExpenseClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15123,6 +15962,21 @@ export class Operations {
     body?: RejectHeldPartnerChargeRecordBody;
   }, options?: RequestOptions): Promise<RejectHeldPartnerChargeRecordResponse> {
     return this.transport.request<RejectHeldPartnerChargeRecordResponse>({ method: "POST", path: "/v1/roaming/cdrs/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Reject a journal entry
+   *
+   * (v1.31.0) With a reason, by someone other than the submitter. Audited.
+   *
+   * `POST /v1/finance/ledger/entries/{id}/reject`
+   */
+  rejectJournalEntry(params: {
+    /** The entry id. */
+    id: string;
+    body: RejectJournalEntryBody;
+  }, options?: RequestOptions): Promise<RejectJournalEntryResponse> {
+    return this.transport.request<RejectJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15278,6 +16132,22 @@ export class Operations {
    */
   removeIOSNotificationsKey(options?: RequestOptions): Promise<RemoveIOSNotificationsKeyResponse> {
     return this.transport.request<RemoveIOSNotificationsKeyResponse>({ method: "DELETE", path: "/v1/driver-app/apns", accept: "json" }, options);
+  }
+
+  /**
+   * Remove a line from a claim
+   *
+   * (v1.31.0) While a draft or rejected; by the claimant.
+   *
+   * `POST /v1/finance/expenses/{id}/lines/{lid}/remove`
+   */
+  removeLineFromClaim(params: {
+    /** The claim id. */
+    id: string;
+    /** The line id. */
+    lid: string;
+  }, options?: RequestOptions): Promise<RemoveLineFromClaimResponse> {
+    return this.transport.request<RemoveLineFromClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/lines/{lid}/remove", pathParams: { id: params.id, lid: params.lid }, accept: "json" }, options);
   }
 
   /**
@@ -15722,6 +16592,21 @@ export class Operations {
   }
 
   /**
+   * Reverse a journal entry
+   *
+   * (v1.31.0) A posted manual entry, on a date (default its own; an open month): the same lines with debits and credits swapped, posted. A module's entry is corrected in the module and synced again. Audited.
+   *
+   * `POST /v1/finance/ledger/entries/{id}/reverse`
+   */
+  reverseJournalEntry(params: {
+    /** The entry id. */
+    id: string;
+    body: ReverseJournalEntryBody;
+  }, options?: RequestOptions): Promise<ReverseJournalEntryResponse> {
+    return this.transport.request<ReverseJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries/{id}/reverse", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Review a finding
    *
    * (v1.30.0) decision dismiss (it is fine) or confirm (it needs action: raises finance.anomaly_confirmed), with a note of what was checked. Audited.
@@ -16059,6 +16944,19 @@ export class Operations {
   }
 
   /**
+   * Send the scorecard now
+   *
+   * (v1.31.0) month (default last month) to the recipients by the organisation's e-mail channel. Audited.
+   *
+   * `POST /v1/finance/scorecard/send`
+   */
+  sendScorecardNow(params: {
+    body: SendScorecardNowBody;
+  }, options?: RequestOptions): Promise<SendScorecardNowResponse> {
+    return this.transport.request<SendScorecardNowResponse>({ method: "POST", path: "/v1/finance/scorecard/send", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Send a test alert message
    *
    * Sends a test message on the saved channel now (not queued), records it in the notification log and on the channel. Answers 200 when the send was attempted — check `ok` and `error`. Audited.
@@ -16289,6 +17187,19 @@ export class Operations {
   }
 
   /**
+   * Set the expense policy
+   *
+   * (v1.31.0) receiptAbove (a line at or above it needs its receipt; default 100 000), limits by category (a line above its limit needs a Finance Manager). Needs finance:approve. Audited.
+   *
+   * `PUT /v1/finance/expenses/policy` · needs `finance:approve`
+   */
+  setExpensePolicy(params: {
+    body: SetExpensePolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/expenses/policy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the finance data export
    *
    * (v1.24.0) enabled (nightly, for the day before); target local or s3 (endpoint, region, bucket, accessKeyId, secretAccessKey: kept sealed, leave empty to keep); format csv or ndjson (gzipped); prefix. Audited.
@@ -16327,6 +17238,21 @@ export class Operations {
     body: SetFleetInvoicingAutomationBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/fleet-automation", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the KPI targets
+   *
+   * (v1.31.0) targets by KPI (empty leaves it), copyFrom (a month whose targets to start from). Audited.
+   *
+   * `PUT /v1/finance/scorecard/targets/{month}`
+   */
+  setKpiTargets(params: {
+    /** YYYY-MM. */
+    month: string;
+    body: SetKpiTargetsBody;
+  }, options?: RequestOptions): Promise<SetKpiTargetsResponse> {
+    return this.transport.request<SetKpiTargetsResponse>({ method: "PUT", path: "/v1/finance/scorecard/targets/{month}", pathParams: { month: params.month }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16399,6 +17325,21 @@ export class Operations {
   }
 
   /**
+   * Set the petty cash float
+   *
+   * (v1.31.0) float (the imprest a top-up brings it back to; empty for none). Audited.
+   *
+   * `PUT /v1/finance/petty-cash/{id}/float`
+   */
+  setPettyCashFloat(params: {
+    /** The cash account id. */
+    id: string;
+    body: SetPettyCashFloatBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/petty-cash/{id}/float", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the provision rates
    *
    * (v1.28.0) A rate (0–100 %) per bucket: current, 1-30, 31-60, 61-90, 90+; older buckets at least as high. Needs finance:approve. Audited.
@@ -16461,6 +17402,19 @@ export class Operations {
     body: SetRoamingIdentityBody;
   }, options?: RequestOptions): Promise<SetRoamingIdentityResponse> {
     return this.transport.request<SetRoamingIdentityResponse>({ method: "PUT", path: "/v1/roaming/party", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the scorecard e-mail
+   *
+   * (v1.31.0) enabled, day of the month (1–28), recipients (up to 20 e-mail addresses), amberPct (the band, default 10). Audited.
+   *
+   * `PUT /v1/finance/scorecard/settings`
+   */
+  setScorecardEMail(params: {
+    body: SetScorecardEMailBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/scorecard/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16649,6 +17603,19 @@ export class Operations {
     body: SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody;
   }, options?: RequestOptions): Promise<SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse> {
     return this.transport.request<SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/resolve", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Settle with a group entity
+   *
+   * (v1.31.0) otherOrgId, currency, settledOn (default today), reference: the issued recharges both ways are netted and settled; says who pays whom. Audited.
+   *
+   * `POST /v1/finance/intercompany/settle`
+   */
+  settleWithGroupEntity(params: {
+    body: SettleWithGroupEntityBody;
+  }, options?: RequestOptions): Promise<SettleWithGroupEntityResponse> {
+    return this.transport.request<SettleWithGroupEntityResponse>({ method: "POST", path: "/v1/finance/intercompany/settle", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16988,6 +17955,34 @@ export class Operations {
   }
 
   /**
+   * Submit an expense claim
+   *
+   * (v1.31.0) By the claimant; every line at or above the receipt amount has its receipt. Audited.
+   *
+   * `POST /v1/finance/expenses/{id}/submit`
+   */
+  submitExpenseClaim(params: {
+    /** The claim id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SubmitExpenseClaimResponse> {
+    return this.transport.request<SubmitExpenseClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Submit a journal entry
+   *
+   * (v1.31.0) A draft or rejected manual entry goes to approval. Audited.
+   *
+   * `POST /v1/finance/ledger/entries/{id}/submit`
+   */
+  submitJournalEntry(params: {
+    /** The entry id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SubmitJournalEntryResponse> {
+    return this.transport.request<SubmitJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Submit a purchase order
    *
    * (v1.30.0) A draft or rejected order goes to approval. Audited.
@@ -17191,6 +18186,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<SyncAndReconcileNowResponse> {
     return this.transport.request<SyncAndReconcileNowResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/sync", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Sync a month into the ledger
+   *
+   * (v1.31.0) Posts the modules' entries for the month, one per source and currency: gateway journals, the recorded depreciation, lease and provision journals, supplier bills and payments, deposits, expense claims, intercompany recharges and settlements. Unchanged entries stay; changed ones are superseded by new ones. Not a locked or future month. Audited.
+   *
+   * `POST /v1/finance/ledger/sync/{month}`
+   */
+  syncMonthIntoLedger(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<SyncMonthIntoLedgerResponse> {
+    return this.transport.request<SyncMonthIntoLedgerResponse>({ method: "POST", path: "/v1/finance/ledger/sync/{month}", pathParams: { month: params.month }, accept: "json" }, options);
   }
 
   /**
@@ -17655,6 +18664,20 @@ export class Operations {
   }
 
   /**
+   * Void an expense claim
+   *
+   * (v1.31.0) A draft, rejected or submitted claim, by the claimant or a Finance Manager. Audited.
+   *
+   * `POST /v1/finance/expenses/{id}/void`
+   */
+  voidExpenseClaim(params: {
+    /** The claim id. */
+    id: string;
+  }, options?: RequestOptions): Promise<VoidExpenseClaimResponse> {
+    return this.transport.request<VoidExpenseClaimResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/void", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Void a faktur masukan
    *
    * (v1.26.0) With a reason. Audited.
@@ -17714,6 +18737,21 @@ export class Operations {
     body: VoidPaymentToSupplierBody;
   }, options?: RequestOptions): Promise<VoidPaymentToSupplierResponse> {
     return this.transport.request<VoidPaymentToSupplierResponse>({ method: "POST", path: "/v1/finance/bills/{id}/payments/{pid}/void", pathParams: { id: params.id, pid: params.pid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a recharge
+   *
+   * (v1.31.0) A draft or issued (not settled) recharge, by the entity that charges, with a reason. Audited.
+   *
+   * `POST /v1/finance/intercompany/recharges/{id}/void`
+   */
+  voidRecharge(params: {
+    /** The recharge id. */
+    id: string;
+    body: VoidRechargeBody;
+  }, options?: RequestOptions): Promise<VoidRechargeResponse> {
+    return this.transport.request<VoidRechargeResponse>({ method: "POST", path: "/v1/finance/intercompany/recharges/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

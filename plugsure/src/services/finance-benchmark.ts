@@ -100,7 +100,7 @@ export async function benchmark(orgId: string, q: Record<string, unknown> = {}, 
   const months = q.months == null || q.months === '' ? 3 : Number(q.months);
   if (!Number.isInteger(months) || months < 1 || months > 12) throw new BenchmarkError(422, 'months is 1 to 12.');
   const by = q.by == null || q.by === '' ? 'site' : String(q.by);
-  if (by !== 'site' && by !== 'owner') throw new BenchmarkError(422, 'by is site or owner.');
+  if (by !== 'site' && by !== 'owner' && by !== 'org') throw new BenchmarkError(422, 'by is site, owner or org.');
   const to = q.to == null || q.to === '' ? addMonths(thisMonth(now), -1) : String(q.to);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(to) || to >= thisMonth(now)) throw new BenchmarkError(422, 'to is an ended month (YYYY-MM).');
   const from = addMonths(to, -(months - 1));
@@ -158,11 +158,12 @@ export async function benchmark(orgId: string, q: Record<string, unknown> = {}, 
       ...{ ownerId: s.owner_id ?? null, owner: s.owner_name ?? null } } as Row & { ownerId: string | null; owner: string | null };
   }).filter((r) => r.sessions > 0);
   let rows: Row[] = siteRows;
-  if (by === 'owner') {
+  if (by === 'owner' || by === 'org') {
     const g = new Map<string, Row>();
     for (const r of siteRows as Array<Row & { ownerId: string | null; owner: string | null }>) {
-      const key = `${r.ownerId ?? 'operator'}|${r.currency}`;
-      const x = g.get(key) ?? { id: r.ownerId ?? 'operator', name: r.owner ?? 'Operator-owned sites', currency: r.currency, sites: 0, connectors: 0, sessions: 0, kwh: 0, revenue: 0, energyCost: 0, chargingHours: 0, collectionWeighted: 0, collectionBase: 0 };
+      // (v1.31.0) by=org: every site of the organisation together, per currency.
+      const key = by === 'org' ? `org|${r.currency}` : `${r.ownerId ?? 'operator'}|${r.currency}`;
+      const x = g.get(key) ?? { id: by === 'org' ? 'org' : r.ownerId ?? 'operator', name: by === 'org' ? 'Organisation' : r.owner ?? 'Operator-owned sites', currency: r.currency, sites: 0, connectors: 0, sessions: 0, kwh: 0, revenue: 0, energyCost: 0, chargingHours: 0, collectionWeighted: 0, collectionBase: 0 };
       x.sites++; x.connectors += r.connectors; x.sessions += r.sessions; x.kwh += r.kwh; x.revenue += r.revenue; x.chargingHours += r.chargingHours;
       x.energyCost = x.energyCost == null || r.energyCost == null ? null : x.energyCost + r.energyCost;
       x.collectionWeighted += r.collectionWeighted; x.collectionBase += r.collectionBase;

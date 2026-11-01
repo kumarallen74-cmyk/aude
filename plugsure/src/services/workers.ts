@@ -207,6 +207,8 @@ export function startWorkers(): () => void {
   // v1.30.0: deposits maturing (finance.deposit_maturing) and the finance anomaly checks.
   const depositsMaturing = once('deposits-maturing', async () => { await (await import('./treasury.js')).sweep(); });
   const financeChecks = once('finance-checks', async () => { await (await import('./finance-checks.js')).sweep(); });
+  // v1.31.0: the monthly KPI scorecard e-mail.
+  const scorecardSend = once('finance-scorecard', async () => { await (await import('./kpi-scorecard.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -328,6 +330,7 @@ export function startWorkers(): () => void {
     every(cashCheck, 24 * 60 * 60_000, 'cash-minimum-check'),
     every(depositsMaturing, 24 * 60 * 60_000, 'deposits-maturing'),
     every(financeChecks, 24 * 60 * 60_000, 'finance-checks'),
+    every(scorecardSend, 6 * 60 * 60_000, 'finance-scorecard'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

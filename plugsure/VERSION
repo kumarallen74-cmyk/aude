@@ -1,11 +1,20 @@
 PlugSure CSMS
-Version:   1.30.0
-Package:   plugsure-v1.30.0
-Prepared:  2026-11-01  (v1.29.0 + finance phase 19 — see RELEASE-NOTES-v1.30.0.md)
+Version:   1.31.0
+Package:   plugsure-v1.31.0
+Prepared:  2026-11-01  (v1.30.0 + finance phase 20 — see RELEASE-NOTES-v1.31.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (572 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (610 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.30.0 = v1.29.0 + finance phase 19: purchase orders (approved by a second person under the approvals
+Status:    v1.31.0 = v1.30.0 + finance phase 20: a general ledger (chart of accounts; each month synced from the
+           gateway journals, depreciation, leases, the provision, supplier bills and payments, deposits, expense claims
+           and intercompany; manual journal entries approved by a second person and reversed, never edited; trial
+           balance, profit and loss, balance sheet), expense claims (receipts, limits, a second approver, reimbursed from
+           petty cash or a bank) and petty cash (float, counts), intercompany recharges (issued, allocated across a
+           group, netted and settled) and a KPI scorecard (monthly targets, green/amber/red, six months, a monthly
+           e-mail). Migration 099 (additive).
+
+v1.30.0 (2026-11-01):
+           v1.30.0 = v1.29.0 + finance phase 19: purchase orders (approved by a second person under the approvals
            matrix, goods received, the three-way match of ordered, received and billed, commitments), lease accounting
            under PSAK 73 (the lease liability and right-of-use asset, the monthly schedule and journal, current and
            non-current, early ends, short-term and low-value leases expensed), treasury (time deposits out of and back
