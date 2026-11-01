@@ -1014,6 +1014,50 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   with commentary; a twelve-month trend of revenue and result; and *Slides*:
   the pack as a 16:9 deck (PDF).
 
+## Loyalty costs, tax audit, portfolio and budget planning (v1.37.0)
+
+- **Loyalty costs** (tab). Points not yet used are revenue deferred (PSAK
+  72 / IFRS 15, a material right): the points outstanding at a month's end
+  × the programme's point value, less breakage, the share that will never
+  be used. Breakage is learned (points expired ÷ points expired or
+  redeemed, twelve months) or set (Breakage…). The ledger's loyalty journal
+  books the month's change: up, Dr 4150 loyalty points deferred / Cr 2250
+  loyalty points liability; down, the reverse. Promotions: discounts given
+  and points redeemed per promotion and per site, with the share of the
+  site's revenue.
+- **Tax audit** (tab). For a year, per month (rupiah): the PPN return as
+  filed against today's figures (a difference means an amendment), the
+  charging revenue against PPN output's retail DPP (a PKP), the PPN on
+  approved bills not covered by the faktur masukan recorded, and the PPh withheld on bills
+  against the bukti potong issued. Each open item is listed (not filed,
+  filed differs, revenue against DPP, input PPN, no bukti potong, no
+  e-Faktur) and readiness is the share of ended months with none.
+  Differences under Rp 1,000 or 0.5% are ignored. The tax office's letters
+  (SP2DK, office or field audit): an SP2DK is answered within 14 days by
+  default; finance.tax_audit_due warns 7 days ahead (critical once past).
+  Status: open → responded → closed with no change, or assessed (the SKP
+  amount) → objected or paid. *Audit pack*: the workbook, the open items as
+  CSV, a README and a manifest with SHA-256s, as one ZIP.
+- **Portfolio** (tab). Each site over the last 3, 6 or 12 whole months:
+  revenue less energy, shared costs, rent (its landlord deal; fixed rent in
+  a lease left out), maintenance (work orders, net of warranty) and
+  insurance (the month's share of paid premiums) is the operating result;
+  less the depreciation of its investments and plus capital grants released
+  is the contribution. Ranked per currency, with a signal: review for
+  closure (an operating loss in most months and overall), fix (a
+  contribution below zero, rent over 30% or energy over 80% of revenue, or
+  maintenance per kWh over twice the portfolio's median), grow (top quarter
+  and improving) or keep. Excel and a PDF review.
+- **Budget planning** (tab). Versions per year and currency: seeded from the
+  rolling forecast (revenue and energy cost per site by calendar month) and
+  each site's last twelve months (rent, maintenance, insurance), grown by a
+  %, or copied from another version, or empty. Lines per site (revenue,
+  energy cost, rent, maintenance, insurance) and for the organisation
+  (staff, marketing, IT, other opex, capex). Submitted, then approved by a
+  second person with finance:approve (or rejected with a note). Approving
+  publishes each site's revenue and energy cost to Budgets for the months
+  not locked and supersedes the version approved before.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

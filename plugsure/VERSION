@@ -1,11 +1,20 @@
 PlugSure CSMS
-Version:   1.36.0
-Package:   plugsure-v1.36.0
-Prepared:  2026-11-01  (v1.35.0 + finance phase 25 — see RELEASE-NOTES-v1.36.0.md)
+Version:   1.37.0
+Package:   plugsure-v1.37.0
+Prepared:  2026-11-01  (v1.36.0 + finance phase 26 — see RELEASE-NOTES-v1.37.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (749 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (762 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.36.0 = v1.35.0 + finance phase 25: grants and incentives (capital grants deferred and released over
+Status:    v1.37.0 = v1.36.0 + finance phase 26: loyalty and promotion costs (the points liability less breakage,
+           learned or set, booked as deferred revenue; promotion and points cost per promotion and site), tax audit
+           readiness (the year's equalisation of PPN and PPh returns against the books, the open items per transaction,
+           the tax office's letters with their deadlines, the audit pack), the site portfolio review (each site's full
+           P&L with rent, maintenance, insurance and grants; ranked, with close, fix, grow and keep signals) and budget
+           planning (versions seeded from the forecast, edited per site and department, approved by a second person and
+           published to Budgets). Migration 105 (additive).
+
+v1.36.0 (2026-11-01):
+           v1.36.0 = v1.35.0 + finance phase 25: grants and incentives (capital grants deferred and released over
            their period, revenue and per-kWh grants claimed from the kWh charged, conditions with alerts, clawbacks),
            landlord deals (fixed rent, a share of revenue or margin, the higher of a share and a minimum guarantee,
            escalation, rent-free months, energy recharges; statements issued as the landlord's bills; rent accrued until
