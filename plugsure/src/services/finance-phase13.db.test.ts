@@ -228,6 +228,13 @@ dbDescribe('Fleet credit limits and prepay', () => {
 dbDescribe('The finance data export', () => {
   test('local files; an S3 store with signed PUTs; a refused store logged; the ZIP of a day', async () => {
     const day = addDays(today(), -1);
+    // A charge record at noon on that day (local): the helpers' "23 hours ago" is today after 23:00.
+    const sess = (await one<{ id: string }>(
+      `INSERT INTO charging_session (org_id, site_id, connector_uuid, charge_point_id, idem_key, started_at, ended_at, energy_wh, state)
+       VALUES ($1, $2, $3, $4, $5, ($6 || ' 11:00')::timestamp AT TIME ZONE $7, ($6 || ' 12:00')::timestamp AT TIME ZONE $7, 10000, 'rated') RETURNING id`,
+      [org, site, conn, cp, `p13-${randomUUID()}`, day, zone]))!.id;
+    await query(`INSERT INTO cdr (session_id, org_id, issued_at, lines, subtotal_minor, local_tax_rate_bps, local_tax_minor, tax_base_minor, tax_rate_bps, tax_minor, total_minor, tariff_snapshot, currency)
+                 VALUES ($1, $2, ($3 || ' 12:00')::timestamp AT TIME ZONE $4, '[]'::jsonb, 25000, 0, 0, 0, 0, 0, 25000, '{}'::jsonb, 'IDR')`, [sess, org, day, zone]);
     await query(`INSERT INTO tax_withholding (org_id, kind, period, counterparty, base_minor, rate_bps, amount_minor) VALUES ($1, 'gateway_fee', $2, 'Xendit', 1000000, 200, 20000)`, [org, day.slice(0, 7)]);
     assert.equal((await call('POST', '/v1/finance/warehouse/run', { day: today() })).statusCode, 422, 'only an ended day');
     await call('PUT', '/v1/finance/warehouse/settings', { enabled: true, target: 'local', format: 'csv', prefix: 'fin' });
