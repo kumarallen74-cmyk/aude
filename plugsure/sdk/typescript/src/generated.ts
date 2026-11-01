@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.41.1";
+export const API_VERSION = "1.42.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11747,6 +11747,19 @@ export class Operations {
   }
 
   /**
+   * Add a solar array or battery
+   *
+   * (v1.42.0) siteId, kind (solar | battery), name, capacityKw (the inverter's AC kW, or the battery's kW), peakKwp (solar), energyKwh, minSocPct, maxSocPct (battery), commissionedOn, costMinor, note. Audited.
+   *
+   * `POST /v1/energy/assets` · needs `site:write`
+   */
+  addSolarArrayOrBattery(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy/assets", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add the standard deadlines
    *
    * (v1.35.0) The usual Indonesian deadlines for a year (year, default this one), each once. Audited.
@@ -13177,6 +13190,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a saved report
+   *
+   * (v1.42.0) As saving, or archive: true. Audited.
+   *
+   * `PUT /v1/reports/saved/{id}` · needs `session:read`
+   */
+  changeOrArchiveSavedReport(params: {
+    /** The report. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/reports/saved/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a scenario
    *
    * (v1.40.0) name, assumptions, or archive: true. Audited.
@@ -13189,6 +13217,21 @@ export class Operations {
     body: ChangeOrArchiveScenarioBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/scenarios/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a solar array or battery
+   *
+   * (v1.42.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/energy/assets/{id}` · needs `site:write`
+   */
+  changeOrArchiveSolarArrayOrBattery(params: {
+    /** The asset. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/energy/assets/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13325,6 +13368,22 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/chargebacks", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Charger health
+   *
+   * (v1.42.0) Every charger's health over 30 days, worst first: the score (100 less outages, faults, reboots, failed starts and a fault now), the risk (ok, watch, at_risk) with its reasons, the score 7 and 30 days ago, and open work orders. Filter by risk or siteId.
+   *
+   * `GET /v1/charger-health` · needs `charge_point:read`
+   */
+  chargerHealth(params?: {
+    query?: {
+      risk?: "ok" | "watch" | "at_risk";
+      siteId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/charger-health", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -14624,6 +14683,20 @@ export class Operations {
     body?: EMailFleetInvoiceBody;
   }, options?: RequestOptions): Promise<EMailFleetInvoiceResponse> {
     return this.transport.request<EMailFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * E-mail a saved report now
+   *
+   * (v1.42.0) To its recipients, Excel attached, through the organisation's e-mail channel. Audited.
+   *
+   * `POST /v1/reports/saved/{id}/send` · needs `session:read`
+   */
+  eMailSavedReportNow(params: {
+    /** The report. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/reports/saved/{id}/send", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -17525,6 +17598,34 @@ export class Operations {
   }
 
   /**
+   * A new key for the site's energy box
+   *
+   * (v1.42.0) Returns the key once (pse_…); only its hash is kept and the previous key stops working. Audited.
+   *
+   * `POST /v1/energy/sites/{siteId}/key` · needs `site:write`
+   */
+  newKeyForSiteEnergyBox(params: {
+    /** The site. */
+    siteId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy/sites/{siteId}/key", pathParams: { siteId: params.siteId }, accept: "json" }, options);
+  }
+
+  /**
+   * One charger's health
+   *
+   * (v1.42.0) Its parts (outages and hours offline, faults by code, reboots, failed starts, a fault now), the score, the risk and reasons, and the daily history (90 days).
+   *
+   * `GET /v1/charger-health/{cpId}` · needs `charge_point:read`
+   */
+  oneChargerHealth(params: {
+    /** The charge point. */
+    cpId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/charger-health/{cpId}", pathParams: { cpId: params.cpId }, accept: "json" }, options);
+  }
+
+  /**
    * One of my hub CDRs
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -17618,6 +17719,20 @@ export class Operations {
     body: OpenWorkOrderBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/maintenance", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Open a work order from charger health
+   *
+   * (v1.42.0) A corrective work order for the charger carrying its health reasons. Needs charge_point:write or payment:write. Audited.
+   *
+   * `POST /v1/charger-health/{cpId}/work-order` · needs `charge_point:write`
+   */
+  openWorkOrderFromChargerHealth(params: {
+    /** The charge point. */
+    cpId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/charger-health/{cpId}/work-order", pathParams: { cpId: params.cpId }, accept: "json" }, options);
   }
 
   /**
@@ -17965,6 +18080,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/finance/tax/platform-efaktur", query: params.query, accept: "text" }, options);
+  }
+
+  /**
+   * Post solar, battery and grid readings
+   *
+   * (v1.42.0) For the site's inverter, EMS or gateway: Authorization: Bearer <site key> (or x-site-key). One reading or {readings: [...]} (≤ 500): ts, solarW, batteryW (+ discharging), batterySocPct, gridW (+ import). A reading already kept is ignored. The answer carries the battery's set-point for the next interval (batteryW: + discharge, − charge). At most 120 posts a minute per site.
+   *
+   * `POST /v1/energy/sites/{siteId}/readings`
+   */
+  postSolarBatteryAndGridReadings(params: {
+    /** The site. */
+    siteId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy/sites/{siteId}/readings", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -19515,6 +19645,17 @@ export class Operations {
   }
 
   /**
+   * Report builder catalogue
+   *
+   * (v1.42.0) The datasets this user may report on (sessions, chargers, outages, work orders, ledger lines), their fields and types, the aggregations, filter operators and date buckets.
+   *
+   * `GET /v1/reports/builder` · needs `session:read`
+   */
+  reportBuilderCatalogue(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/reports/builder", accept: "json" }, options);
+  }
+
+  /**
    * Report a claim
    *
    * (v1.35.0) kind, incidentOn (inside the term), description, loss, workOrderId. Numbered CL-00001…. Audited.
@@ -20056,6 +20197,22 @@ export class Operations {
   }
 
   /**
+   * Run a report
+   *
+   * (v1.42.0) dataset and spec. The report: `columns` [{field, agg?, bucket?}], `filters` [{field, op, value, value2?}], `groupBy` [{field, bucket?}], `sort` {index, dir}, `limit` (≤ 5000), `chart` {type: bar|line, x, y}. Fields, operators and aggregations come from GET /v1/reports/builder. format=xlsx for Excel. Each dataset needs its permission (sessions session:read, chargers and outages charge_point:read, work orders and the ledger payment:read).
+   *
+   * `POST /v1/reports/builder/run` · needs `session:read`
+   */
+  runReport(params: {
+    query?: {
+      format?: "xlsx";
+    };
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/reports/builder/run", query: params.query, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Run revenue assurance
    *
    * (v1.34.0) Check a month's sessions now (month, default last month); findings found again keep their review. Audited.
@@ -20066,6 +20223,34 @@ export class Operations {
     body: RunRevenueAssuranceBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/assurance/run", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Run a saved report
+   *
+   * (v1.42.0) Its rows now; format=xlsx for Excel.
+   *
+   * `GET /v1/reports/saved/{id}/run` · needs `session:read`
+   */
+  runSavedReport(params: {
+    /** The report. */
+    id: string;
+    query?: {
+      format?: "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/reports/saved/{id}/run", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * SAML single sign-on set-up
+   *
+   * (v1.42.0) The organisation's identity provider (entity id, sign-on URL, its certificates summarised, allowed domains, automatic set-up, the group → role map), what to enter at the identity provider (entity id, ACS URL, metadata) and the roles a group may map to (never an administrator role).
+   *
+   * `GET /v1/auth/saml` · needs `user:read`
+   */
+  samlSingleSignOnSetUp(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/auth/saml", accept: "json" }, options);
   }
 
   /**
@@ -20081,6 +20266,31 @@ export class Operations {
     body: SaveAlertChannelBody;
   }, options?: RequestOptions): Promise<SaveAlertChannelResponse> {
     return this.transport.request<SaveAlertChannelResponse>({ method: "PUT", path: "/v1/alert-routing/channels/{kind}", pathParams: { kind: params.kind }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A saved report
+   *
+   * **Permissions checked:** `session:read`.
+   *
+   * `GET /v1/reports/saved/{id}` · needs `session:read`
+   */
+  savedReport(params: {
+    /** The report. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/reports/saved/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Saved reports
+   *
+   * (v1.42.0) The organisation's saved reports on datasets this user may read.
+   *
+   * `GET /v1/reports/saved` · needs `session:read`
+   */
+  savedReports(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/reports/saved", accept: "json" }, options);
   }
 
   /**
@@ -20138,6 +20348,19 @@ export class Operations {
   }
 
   /**
+   * Save a report
+   *
+   * (v1.42.0) name, dataset, spec; optionally an e-mail schedule: frequency (daily, weekly with weekday 1–7, monthly), recipients (1–10). The report: `columns` [{field, agg?, bucket?}], `filters` [{field, op, value, value2?}], `groupBy` [{field, bucket?}], `sort` {index, dir}, `limit` (≤ 5000), `chart` {type: bar|line, x, y}. Fields, operators and aggregations come from GET /v1/reports/builder. A scheduled report is sent with the saver's organisation-wide permissions. Audited.
+   *
+   * `POST /v1/reports/saved` · needs `session:read`
+   */
+  saveReport(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/reports/saved", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Save a scenario
    *
    * (v1.40.0) name, currency, assumptions: tariffPct, elasticity (volume to price, 0 to −5), utilisationPct, energyPricePct, opexPct, newSites [{fromMonth, count, capexPerSite, revenuePerSiteMonth, opexPerSiteMonth, rampMonths}]. Audited.
@@ -20166,6 +20389,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/scenarios", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Score the chargers now
+   *
+   * (v1.42.0) What the daily run does, for this organisation now: keep each charger's day, raise charger.health_at_risk or resolve it.
+   *
+   * `POST /v1/charger-health/run` · needs `charge_point:write`
+   */
+  scoreChargersNow(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/charger-health/run", accept: "json" }, options);
   }
 
   /**
@@ -21239,6 +21473,19 @@ export class Operations {
   }
 
   /**
+   * Set up SAML single sign-on
+   *
+   * (v1.42.0) enabled, idpEntityId, ssoUrl (https, HTTP-Redirect), certificates (1–3 PEM, the identity provider's signing certificates), allowedDomains (one organisation per domain), jitEnabled (automatic account set-up: needs a mapping), groupAttribute, roleMap [{group, role}]. Audited.
+   *
+   * `PUT /v1/auth/saml` · needs `user:write`
+   */
+  setUpSamlSingleSignOn(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/auth/saml", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set a variable (SetVariables)
    *
    * Checks the value against what the station reported (data type, limits, allowed values, mutability) and sends SetVariables; the stored value changes when the station accepts (Accepted or RebootRequired). SecurityCtrlr variables, the network-connection priority and credentials are refused (400) — they have their own safe flows.
@@ -21507,6 +21754,50 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/portfolio", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Solar and battery results
+   *
+   * (v1.42.0) Over a period (from, to; 30 days by default, at most 400): solar produced and used on site (self-consumption), export, grid import, the battery's charge (from solar or the grid) and discharge, the grid peak against the peak without the battery, and the savings at the site's electricity tariff; day by day too.
+   *
+   * `GET /v1/energy/sites/{siteId}/results` · needs `site:read`
+   */
+  solarAndBatteryResults(params: {
+    /** The site. */
+    siteId: string;
+    query?: {
+      from?: string;
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/energy/sites/{siteId}/results", pathParams: { siteId: params.siteId }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Solar and battery sites
+   *
+   * (v1.42.0) Each site with on-site solar or a battery: its assets and settings, the latest reading, what the load manager counts now (the grid part, held at the peak-shaving target, plus only measured, recent solar and battery discharge at the trust share) and the battery's set-point.
+   *
+   * `GET /v1/energy` · needs `site:read`
+   */
+  solarAndBatterySites(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/energy", accept: "json" }, options);
+  }
+
+  /**
+   * Solar-first, peak shaving and trust
+   *
+   * (v1.42.0) solarFirst, peakShaving with peakTargetKw (the grid power to keep under), trustPct (the share of measured output the load manager may count, 80 by default) and maxAgeS (readings older are not counted, 120 by default). Audited.
+   *
+   * `PUT /v1/energy/sites/{siteId}/settings` · needs `site:write`
+   */
+  solarFirstPeakShavingAndTrust(params: {
+    /** The site. */
+    siteId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/energy/sites/{siteId}/settings", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

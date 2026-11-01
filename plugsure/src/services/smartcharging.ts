@@ -5,6 +5,7 @@ import { setChargingProfile, clearChargingProfile, getCompositeSchedule } from '
 import { resolveQuirks, pickRateUnit } from '../ocpp/quirks.js';
 import { profileLimitAt, type ChargingProfileIn } from '../ocpi/mapping.js';
 import { planSite, type SitePlanResult } from './v2x.js';
+import { forLoadManager } from './energy-storage.js';
 
 /**
  * Site load management.
@@ -358,7 +359,15 @@ export async function runControlLoop(siteId: string): Promise<Allocation[]> {
   const budget = await loadSiteBudget(siteId);
   if (!budget) return [];
 
-  const usableW = budget.curtailed ? 0 : Math.max(0, budget.ceilingW - budget.reserveW);
+  let usableW = budget.curtailed ? 0 : Math.max(0, budget.ceilingW - budget.reserveW);
+  // (v1.42.0) On-site solar and batteries (energy-storage.ts): the grid part (held at the peak-shaving target when on)
+  // plus only what was MEASURED recently, at the site's trust share — never a forecast. A failure here falls back to the
+  // grid budget alone, which is always safe.
+  if (!budget.curtailed) {
+    const lm = await forLoadManager(siteId, usableW)
+      .catch((e) => { logger.warn({ siteId, err: (e as Error).message }, 'solar/battery figures unavailable — grid budget only'); return null; });
+    if (lm?.active) usableW = lm.gridW + lm.extra.extraW;
+  }
   // Bidirectional charging (v2x.ts): which cars give energy back this pass. Without an export
   // agreement the pool is the site's own auxiliary load (the reserve), so nothing reaches PLN.
   // A discharging car takes no charging power.

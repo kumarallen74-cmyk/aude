@@ -226,9 +226,9 @@ export async function registerConsoleRoutes(app: FastifyInstance, h: RouteHelper
       return clientError(reply, r.locked ? 401 : 400, r.error, r.locked ? { code: 'mfa_locked' } : {});
     }
     setSessionCookie(reply, r.token);
-    await entry('auth.login', { secondFactor: r.method, ...(r.recoveryCodesLeft !== undefined ? { recoveryCodesLeft: r.recoveryCodesLeft } : {}), ...(r.authMethod === 'microsoft' ? { method: 'microsoft' } : {}) });
+    await entry('auth.login', { secondFactor: r.method, ...(r.recoveryCodesLeft !== undefined ? { recoveryCodesLeft: r.recoveryCodesLeft } : {}), ...(r.authMethod !== 'password' ? { method: r.authMethod } : {}) });
     // A Microsoft sign-in, now complete, ends a one-time password still waiting (microsoft-signin.ts).
-    if (r.authMethod === 'microsoft' && (await outsideRequestScope(() => endPendingOneTimePassword(userId)))) {
+    if (r.authMethod !== 'password' && (await outsideRequestScope(() => endPendingOneTimePassword(userId)))) {
       await entry('user.one_time_password_ended', { reason: 'signed in with Microsoft' });
     }
     const u = await one<{ must_change_password: boolean }>(`SELECT must_change_password FROM app_user WHERE id = $1`, [userId]);

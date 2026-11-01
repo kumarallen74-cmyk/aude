@@ -730,6 +730,7 @@ registerView('users', {
       { id: 'roles', label: 'Role permissions', render: renderMatrix },
       state.can('org:read') && { id: 'keys', label: 'API keys', render: renderKeys },
       state.can('user:read') && state.me?.features?.microsoftSignIn && { id: 'microsoft', label: 'Microsoft sign-in', render: renderMicrosoft },
+      state.can('user:read') && { id: 'saml', label: 'Single sign-on (SAML)', render: renderSaml },
     ].filter(Boolean);
 
     root.innerHTML = pageHead(
@@ -753,3 +754,58 @@ registerView('users', {
     await show(initial);
   },
 });
+
+// ─────────────────────────────────────────── (v1.42.0) SAML single sign-on
+
+async function renderSaml(box) {
+  const canWrite = state.can('user:write');
+  const r = await api('/v1/auth/saml');
+  const p = r.provider, sp = r.serviceProvider;
+  const roleOpts = (sel) => r.roles.map((x) => `<option value="${esc(x)}"${x === sel ? ' selected' : ''}>${esc(x.replace(/_/g, ' '))}</option>`).join('');
+  const mapRow = (m = { group: '', role: r.roles[0] }) => `<div class="row" data-map style="gap:8px;align-items:flex-end">
+      ${field('Group (as the identity provider sends it)', `<input name="g" value="${esc(m.group)}" placeholder="CSMS Operations"${canWrite ? '' : ' disabled'}>`)}
+      ${field('Role', `<select name="r"${canWrite ? '' : ' disabled'}>${roleOpts(m.role)}</select>`)}
+      ${canWrite ? `<button class="btn ghost icon" type="button" data-unmap title="Remove">${icon('x')}</button>` : ''}</div>`;
+  box.innerHTML = `<div class="card pad stack" style="gap:14px;max-width:880px">
+      <div class="row" style="gap:10px">${icon('key')}<h3 style="font-size:15px;margin:0">Single sign-on (SAML 2.0)</h3>
+        ${p?.enabled ? tag('t-ok', 'on') : p ? tag('t-mute', 'off') : tag('t-mute', 'not set up')}</div>
+      <p class="hint" style="margin:0">Your staff sign in with your identity provider (Okta, Microsoft Entra ID, Google Workspace, OneLogin, ADFS…). On the sign-in page they enter their work email and choose <b>Sign in with single sign-on</b>. Password sign-in stays available.</p>
+      ${sp ? `<div class="card pad" style="background:var(--panel-2)"><b>At your identity provider</b> — create a SAML application with:
+          <dl class="kv" style="margin-top:8px">
+            <dt>ACS URL (reply URL)</dt><dd class="mono">${esc(sp.acsUrl)} <button class="btn ghost sm" type="button" data-copy="${esc(sp.acsUrl)}">Copy</button></dd>
+            <dt>Entity ID (audience)</dt><dd class="mono">${esc(sp.entityId)} <button class="btn ghost sm" type="button" data-copy="${esc(sp.entityId)}">Copy</button></dd>
+            <dt>NameID</dt><dd>Email address <span class="muted">(${esc(sp.nameIdFormat)})</span></dd>
+            <dt>Attributes</dt><dd>email, displayName, and the user's groups (for automatic accounts)</dd>
+            <dt>Signing</dt><dd>Sign the assertion (or the response) with RSA-SHA256; no encryption</dd>
+            <dt>Metadata</dt><dd><a href="${esc(sp.metadataUrl)}" target="_blank" rel="noopener">${esc(sp.metadataUrl)}</a></dd>
+          </dl></div>` : callout('warn', 'Set PUBLIC_BASE_URL on the server: single sign-on needs the console\'s public address.')}
+      <form class="form stack" data-saml style="gap:12px">
+        <label class="row full" style="gap:8px"><input type="checkbox" name="enabled"${p?.enabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}> <b>Single sign-on is on</b></label>
+        ${field('Identity provider entity ID (issuer)', `<input name="idpEntityId" value="${esc(p?.idpEntityId ?? '')}" placeholder="http://www.okta.com/exk…"${canWrite ? '' : ' disabled'}>`)}
+        ${field('Sign-on URL (SAML 2.0, HTTP-Redirect)', `<input name="ssoUrl" value="${esc(p?.ssoUrl ?? '')}" placeholder="https://…/sso/saml"${canWrite ? '' : ' disabled'}>`)}
+        ${field('Signing certificate', `<textarea name="cert" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----"${canWrite ? '' : ' disabled'}></textarea>`,
+          { help: p ? `Current: ${p.certificates.map((c) => `${esc(c.subject)} (until ${c.notAfter ? esc(fmt.date(c.notAfter)) : '?'})`).join('; ')}. Paste a new one to replace them; separate two with a blank line during a rollover.` : 'From your identity provider (PEM). Two, separated by a blank line, during a certificate rollover.' })}
+        ${field('Allowed email domains', `<input name="allowedDomains" value="${esc((p?.allowedDomains ?? []).join(', '))}" placeholder="example.co.id"${canWrite ? '' : ' disabled'}>`, { help: 'The domains this identity provider vouches for; the sign-in page picks your organisation by them.' })}
+        <label class="row full" style="gap:8px"><input type="checkbox" name="jitEnabled"${p?.jitEnabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}> Create console users automatically, with the role their group maps to</label>
+        <p class="cell-sub full" style="margin:-6px 0 0">Off: only people you have invited can sign in (matched by email). On: a person in a mapped group gets an account at first sign-in. A group never gives an administrator role.</p>
+        ${field('Group attribute', `<input name="groupAttribute" value="${esc(p?.groupAttribute ?? '')}" placeholder="groups (default)"${canWrite ? '' : ' disabled'}>`, { opt: true })}
+        <div class="stack full" data-maps style="gap:8px"><b>Groups → roles</b>${(p?.roleMap?.length ? p.roleMap : []).map(mapRow).join('')}</div>
+        ${canWrite ? `<div class="row full" style="gap:8px"><button class="btn" type="button" data-addmap>${icon('plus')} Add a group</button><span class="grow"></span><button class="btn primary" type="submit">Save</button></div>` : ''}
+      </form></div>`;
+  box.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => copy(b.dataset.copy)));
+  const maps = $('[data-maps]', box);
+  maps.addEventListener('click', (e) => { const b = e.target.closest('[data-unmap]'); if (b) b.closest('[data-map]').remove(); });
+  $('[data-addmap]', box)?.addEventListener('click', () => maps.insertAdjacentHTML('beforeend', mapRow()));
+  $('[data-saml]', box).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.currentTarget;
+    const certs = f.cert.value.trim() ? f.cert.value.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean) : undefined;
+    const body = {
+      enabled: f.enabled.checked, idpEntityId: f.idpEntityId.value.trim(), ssoUrl: f.ssoUrl.value.trim(), allowedDomains: f.allowedDomains.value,
+      jitEnabled: f.jitEnabled.checked, groupAttribute: f.groupAttribute.value.trim() || null,
+      roleMap: [...maps.querySelectorAll('[data-map]')].map((row) => ({ group: $('[name=g]', row).value.trim(), role: $('[name=r]', row).value })).filter((m) => m.group),
+      ...(certs ? { certificates: certs } : {}),
+    };
+    try { await api('/v1/auth/saml', { method: 'PUT', body }); toast('Saved.', 'ok'); renderSaml(box); } catch (err) { toast(err.message, 'crit'); }
+  });
+}

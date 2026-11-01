@@ -4,13 +4,16 @@ import {
   applyBrand, brandLogo, productName, productTagline, titleSuffix, setOrgZone,
 } from './core.js';
 import { enrolDialog, mfaDialog } from './mfa.js';
-import { msSignInButton, msMessage, takeMsOutcome, microsoftOffered, signInMultiCountry } from './microsoft.js';
+import { msSignInButton, msMessage, takeMsOutcome, microsoftOffered, signInMultiCountry, samlOffered, ssoMessage, takeSsoOutcome } from './microsoft.js';
 
 // Views register themselves on import.
 import './views/dashboard.js';
 import './views/whatsapp.js';
 import './views/finance.js';
 import './views/finance-today.js';
+import './views/energy-storage.js';
+import './views/charger-health.js';
+import './views/report-builder.js';
 import './views/chargers.js';
 import './views/onboard.js';
 import './views/onboarding.js';
@@ -101,6 +104,8 @@ async function loadHostBrand() {
  */
 let msOn = false;
 let msOutcome = takeMsOutcome();
+/** (v1.42.0) Back from a refused SAML sign-in (/?sso=<code>). */
+let ssoOutcome = takeSsoOutcome();
 
 /** The sign-in page around a form (the password step, or the two-step verification code). */
 function loginPage(formHtml) {
@@ -129,6 +134,7 @@ function renderLogin(message = '') {
   // Back from Microsoft with a refusal: that says more than "your session has ended". It stays
   // until the person does something (boot can render this page more than once).
   if (msOutcome && msOutcome !== 'linked') message = msMessage(msOutcome);
+  if (ssoOutcome) message = ssoMessage(ssoOutcome);
   applyBrand(hostBrand ?? null);
   document.title = `Sign in — ${titleSuffix()}`;
   root.innerHTML = loginPage(`
@@ -139,13 +145,22 @@ function renderLogin(message = '') {
         ${field('Password', '<input name="password" type="password" autocomplete="current-password" required>')}
         <div class="err" data-error role="alert"></div>
         <button class="btn primary" type="submit" style="height:38px">Sign in</button>
-        ${msOn ? `<div class="login-or">or</div>${msSignInButton()}` : ''}
+        ${msOn || samlOffered() ? '<div class="login-or">or</div>' : ''}${msOn ? msSignInButton() : ''}
+        ${samlOffered() ? `<button class="btn" type="button" data-sso style="height:38px">${icon('key')} Sign in with single sign-on (SSO)</button>` : ''}
         <p class="small muted">Forgotten your password? Ask a Super Administrator to reset it from <b>Users &amp; Roles</b>.</p>
       </form>`);
   const form = $('form', root);
+  // (v1.42.0) SAML: the work email picks the organisation's identity provider; the browser goes there and back.
+  $('[data-sso]', form)?.addEventListener('click', () => {
+    const email = $('input[name=email]', form).value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { $('[data-error]', form).textContent = 'Enter your work email address first.'; $('input[name=email]', form).focus(); return; }
+    ssoOutcome = null;
+    location.href = `/v1/auth/saml/start?email=${encodeURIComponent(email)}`;
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     msOutcome = null;
+    ssoOutcome = null;
     const btn = $('button[type=submit]', form);
     btn.classList.add('busy');
     $('[data-error]', form).textContent = '';

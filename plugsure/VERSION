@@ -1,14 +1,20 @@
 PlugSure CSMS
-Version:   1.41.1
-Package:   plugsure-v1.41.1
-Prepared:  2026-11-01  (v1.41.0 + fixes from a whole-system review — see RELEASE-NOTES-v1.41.1.md)
+Version:   1.42.0
+Package:   plugsure-v1.42.0
+Prepared:  2026-11-01  (v1.41.1 + phase 30 — see RELEASE-NOTES-v1.42.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (823 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (844 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.41.1 = v1.41.0 + fixes from a whole-system review (every console page, tab and link for
-           each role; every read API; every end-to-end suite): role-aware tabs and links, a phone-width table
-           fix, the console's "where to find it" hints after the menu restructure, and a driver-app request
-           made before sign-in. No migration, no API change.
+Status:    v1.42.0 = v1.41.1 + phase 30: solar and battery storage at a site (assets, an energy box API, the load
+           manager counting measured solar and battery discharge, a battery set-point, peak shaving, results and
+           savings), charger health and failure prediction (a 30-day score, at-risk reasons, trend, a work order, a
+           daily alert), a custom report builder (datasets, columns, groups, filters, charts, Excel, saved and
+           e-mailed reports) and SAML 2.0 single sign-on for the console (per organisation, optional automatic
+           account set-up without administrator roles). Migration 109 (additive).
+
+v1.41.1 (2026-11-01):
+           v1.41.1 = v1.41.0 + fixes from a whole-system review (every console page, tab and link for each role;
+           every read API; every end-to-end suite). No migration, no API change.
 
 v1.39.0 (2026-11-01):
            v1.39.0 = v1.38.0 + finance phase 28: statutory financial statements (balance sheet, profit or loss,

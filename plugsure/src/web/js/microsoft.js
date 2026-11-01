@@ -76,6 +76,7 @@ export function takeMsOutcome() {
  */
 let offered;
 let multiCountry = false;
+let samlOn = false;
 export async function microsoftOffered() {
   if (offered !== undefined) return offered;
   try {
@@ -83,8 +84,49 @@ export async function microsoftOffered() {
     const j = r.ok ? await r.json() : {};
     offered = j.microsoft === true;
     multiCountry = j.multiCountry === true;
+    samlOn = j.saml === true;
   } catch { offered = false; }
   return offered;
 }
+/** (v1.42.0) Whether some organisation offers SAML single sign-on (known once microsoftOffered() has answered). */
+export const samlOffered = () => samlOn;
 /** Whether the deployment offers Malaysia and Singapore (known once microsoftOffered() has answered). */
 export const signInMultiCountry = () => multiCountry;
+
+// ------------------------------------------------------------------ SAML single sign-on (v1.42.0)
+
+/** What a refused SAML sign-in (/?sso=<code>) means for the person; the detail is in the audit log. */
+const SSO_MESSAGES = {
+  bad_email: 'Enter your work email address, then choose single sign-on.',
+  no_sso: 'Single sign-on is not set up for your email domain. Sign in with your password, or ask your administrator.',
+  not_enabled: 'Single sign-on is switched off for your organisation. Sign in with your password.',
+  not_configured: 'Single sign-on is not available on this installation yet.',
+  no_transaction: 'That sign-in took too long or was already used. Please try again.',
+  wrong_browser: 'The sign-in was started in another browser or tab. Start it again here.',
+  no_user: 'Your account is not a PlugSure console user yet. Ask your administrator to invite you.',
+  no_role: 'None of your groups gives a PlugSure role. Ask your administrator.',
+  domain_not_allowed: 'Your email domain is not allowed for this organisation\'s single sign-on.',
+  disabled: 'Your PlugSure console user is disabled. Ask your administrator.',
+  locked: 'Your PlugSure console user is temporarily locked. Try again later.',
+  admin_host: 'Administrator accounts sign in on the operations console address only.',
+  wrong_host: 'Single sign-on for your organisation is not available on this console address.',
+  idp_refused: 'Your identity provider did not sign you in.',
+  rate_limited: 'Too many sign-in attempts. Wait a minute and try again.',
+  failed: 'Single sign-on did not succeed. Please try again, or sign in with your password.',
+};
+export const ssoMessage = (code) => SSO_MESSAGES[code] ?? 'Single sign-on refused this sign-in. Ask your administrator to check the identity provider\'s set-up (the reason is in the audit log).';
+
+let ssoTaken = false;
+/** The outcome the server put in the address (/?sso=<code>), once (removed from the address bar). */
+export function takeSsoOutcome() {
+  if (ssoTaken) return null;
+  ssoTaken = true;
+  try {
+    const u = new URL(location.href);
+    const code = u.searchParams.get('sso');
+    if (!u.searchParams.has('sso')) return null;
+    u.searchParams.delete('sso');
+    history.replaceState(null, '', u.pathname + (u.searchParams.size ? `?${u.searchParams}` : '') + u.hash);
+    return code && /^[a-z_]{2,40}$/.test(code) ? code : null;
+  } catch { return null; }
+}

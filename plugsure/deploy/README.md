@@ -638,6 +638,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   34. (v1.41.0) Nothing to do: Finance is now in ten sections, each with its
      own tabs, and the sidebar has a Finance group. Old links keep working.
      Tell finance users where things moved (FINANCE.md, *Finding your way*).
+  35. (v1.42.0) Record each site's solar and battery and connect its energy
+     box with a site key (Assets → Solar & storage,
+     [ENERGY-STORAGE.md](ENERGY-STORAGE.md)). Read the charger health list
+     and route charger.health_at_risk (Maintenance → Charger health). Build
+     and schedule the reports people ask for (Operate → Report builder).
+     To offer single sign-on, keep `PUBLIC_BASE_URL` set and have each
+     operator's administrator connect its identity provider (Users & Roles
+     → Single sign-on (SAML), [SAML-SIGN-IN.md](SAML-SIGN-IN.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

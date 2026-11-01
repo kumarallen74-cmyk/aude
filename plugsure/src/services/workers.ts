@@ -229,6 +229,9 @@ export function startWorkers(): () => void {
   // (v1.40.0) Contract renewals and the finance data-quality score.
   const contractRenewals = once('contract-renewals', async () => { await (await import('./revenue-contracts.js')).sweep(); });
   const dataQuality = once('finance-data-quality', async () => { await (await import('./data-quality.js')).sweep(); });
+  // (v1.42.0) Charger health (daily) and the report builder's scheduled reports (hourly; each is due once per period).
+  const chargerHealth = once('charger-health', async () => { await (await import('./charger-health.js')).sweep(); });
+  const customReports = once('custom-reports', async () => { await (await import('./report-builder.js')).sendDue(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -368,6 +371,8 @@ export function startWorkers(): () => void {
     every(closeAutomation, 6 * 60 * 60_000, 'close-automation'),
     every(contractRenewals, 24 * 60 * 60_000, 'contract-renewals'),
     every(dataQuality, 24 * 60 * 60_000, 'finance-data-quality'),
+    every(chargerHealth, 24 * 60 * 60_000, 'charger-health'),
+    every(customReports, 60 * 60_000, 'custom-reports'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

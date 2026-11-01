@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.41.1",
+    "version": "1.42.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Governance → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Governance → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Governance → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Governance → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -81,6 +81,10 @@
     {
       "name": "Finance",
       "description": "The payment gateway's side of the money per gateway account (Xendit): the synced ledger with fees, VAT, net amounts and settlement status, receivables, payables, fees, reconciliation against PlugSure's payments, and CSV / Excel / PDF exports. Reading needs payment:read; the platform's own account also platform:admin."
+    },
+    {
+      "name": "Reports",
+      "description": "(v1.42.0) The custom report builder: datasets, columns, filters, grouping and charts; saved and e-mailed reports."
     },
     {
       "name": "RFID and tokens",
@@ -68716,6 +68720,1158 @@
             "$ref": "#/components/responses/E500"
           }
         }
+      }
+    },
+    "/v1/energy": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Solar and battery sites",
+        "operationId": "solarAndBatterySites",
+        "description": "(v1.42.0) Each site with on-site solar or a battery: its assets and settings, the latest reading, what the load manager counts now (the grid part, held at the peak-shaving target, plus only measured, recent solar and battery discharge at the trust share) and the battery's set-point.\n\n**Permissions checked:** `site:read`.",
+        "responses": {
+          "200": {
+            "description": "Sites.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/energy/sites/{siteId}/results": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Solar and battery results",
+        "operationId": "solarAndBatteryResults",
+        "description": "(v1.42.0) Over a period (from, to; 30 days by default, at most 400): solar produced and used on site (self-consumption), export, grid import, the battery's charge (from solar or the grid) and discharge, the grid peak against the peak without the battery, and the savings at the site's electricity tariff; day by day too.\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/energy/assets": {
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Add a solar array or battery",
+        "operationId": "addSolarArrayOrBattery",
+        "description": "(v1.42.0) siteId, kind (solar | battery), name, capacityKw (the inverter's AC kW, or the battery's kW), peakKwp (solar), energyKwh, minSocPct, maxSocPct (battery), commissionedOn, costMinor, note. Audited.\n\n**Permissions checked:** `site:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The asset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/energy/assets/{id}": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Change or archive a solar array or battery",
+        "operationId": "changeOrArchiveSolarArrayOrBattery",
+        "description": "(v1.42.0) The fields above, or archive: true. Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The asset.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The asset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/energy/sites/{siteId}/settings": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Solar-first, peak shaving and trust",
+        "operationId": "solarFirstPeakShavingAndTrust",
+        "description": "(v1.42.0) solarFirst, peakShaving with peakTargetKw (the grid power to keep under), trustPct (the share of measured output the load manager may count, 80 by default) and maxAgeS (readings older are not counted, 120 by default). Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/energy/sites/{siteId}/key": {
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "A new key for the site's energy box",
+        "operationId": "newKeyForSiteEnergyBox",
+        "description": "(v1.42.0) Returns the key once (pse_…); only its hash is kept and the previous key stops working. Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{key, hint}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/energy/sites/{siteId}/readings": {
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Post solar, battery and grid readings",
+        "operationId": "postSolarBatteryAndGridReadings",
+        "description": "(v1.42.0) For the site's inverter, EMS or gateway: Authorization: Bearer <site key> (or x-site-key). One reading or {readings: [...]} (≤ 500): ts, solarW, batteryW (+ discharging), batterySocPct, gridW (+ import). A reading already kept is ignored. The answer carries the battery's set-point for the next interval (batteryW: + discharge, − charge). At most 120 posts a minute per site.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{accepted, duplicates, setpoint}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/charger-health": {
+      "get": {
+        "tags": [
+          "Availability"
+        ],
+        "summary": "Charger health",
+        "operationId": "chargerHealth",
+        "description": "(v1.42.0) Every charger's health over 30 days, worst first: the score (100 less outages, faults, reboots, failed starts and a fault now), the risk (ok, watch, at_risk) with its reasons, the score 7 and 30 days ago, and open work orders. Filter by risk or siteId.\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "risk",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "watch",
+                "at_risk"
+              ]
+            }
+          },
+          {
+            "name": "siteId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chargers and a summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      }
+    },
+    "/v1/charger-health/{cpId}": {
+      "get": {
+        "tags": [
+          "Availability"
+        ],
+        "summary": "One charger's health",
+        "operationId": "oneChargerHealth",
+        "description": "(v1.42.0) Its parts (outages and hours offline, faults by code, reboots, failed starts, a fault now), the score, the risk and reasons, and the daily history (90 days).\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "cpId",
+            "in": "path",
+            "required": true,
+            "description": "The charge point.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The charger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      }
+    },
+    "/v1/charger-health/{cpId}/work-order": {
+      "post": {
+        "tags": [
+          "Availability"
+        ],
+        "summary": "Open a work order from charger health",
+        "operationId": "openWorkOrderFromChargerHealth",
+        "description": "(v1.42.0) A corrective work order for the charger carrying its health reasons. Needs charge_point:write or payment:write. Audited.\n\n**Permissions checked:** `charge_point:write`.",
+        "parameters": [
+          {
+            "name": "cpId",
+            "in": "path",
+            "required": true,
+            "description": "The charge point.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The work order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write"
+        ]
+      }
+    },
+    "/v1/charger-health/run": {
+      "post": {
+        "tags": [
+          "Availability"
+        ],
+        "summary": "Score the chargers now",
+        "operationId": "scoreChargersNow",
+        "description": "(v1.42.0) What the daily run does, for this organisation now: keep each charger's day, raise charger.health_at_risk or resolve it.\n\n**Permissions checked:** `charge_point:write`.",
+        "responses": {
+          "200": {
+            "description": "{chargers, alerts}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write"
+        ]
+      }
+    },
+    "/v1/reports/builder": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Report builder catalogue",
+        "operationId": "reportBuilderCatalogue",
+        "description": "(v1.42.0) The datasets this user may report on (sessions, chargers, outages, work orders, ledger lines), their fields and types, the aggregations, filter operators and date buckets.\n\n**Permissions checked:** `session:read`.",
+        "responses": {
+          "200": {
+            "description": "The catalogue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/reports/builder/run": {
+      "post": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Run a report",
+        "operationId": "runReport",
+        "description": "(v1.42.0) dataset and spec. The report: `columns` [{field, agg?, bucket?}], `filters` [{field, op, value, value2?}], `groupBy` [{field, bucket?}], `sort` {index, dir}, `limit` (≤ 5000), `chart` {type: bar|line, x, y}. Fields, operators and aggregations come from GET /v1/reports/builder. format=xlsx for Excel. Each dataset needs its permission (sessions session:read, chargers and outages charge_point:read, work orders and the ledger payment:read).\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Headers and rows (truncated when over the limit).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/reports/saved": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Saved reports",
+        "operationId": "savedReports",
+        "description": "(v1.42.0) The organisation's saved reports on datasets this user may read.\n\n**Permissions checked:** `session:read`.",
+        "responses": {
+          "200": {
+            "description": "Reports.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Save a report",
+        "operationId": "saveReport",
+        "description": "(v1.42.0) name, dataset, spec; optionally an e-mail schedule: frequency (daily, weekly with weekday 1–7, monthly), recipients (1–10). The report: `columns` [{field, agg?, bucket?}], `filters` [{field, op, value, value2?}], `groupBy` [{field, bucket?}], `sort` {index, dir}, `limit` (≤ 5000), `chart` {type: bar|line, x, y}. Fields, operators and aggregations come from GET /v1/reports/builder. A scheduled report is sent with the saver's organisation-wide permissions. Audited.\n\n**Permissions checked:** `session:read`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/reports/saved/{id}": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "A saved report",
+        "operationId": "savedReport",
+        "description": "**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The report.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Change or archive a saved report",
+        "operationId": "changeOrArchiveSavedReport",
+        "description": "(v1.42.0) As saving, or archive: true. Audited.\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The report.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/reports/saved/{id}/run": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Run a saved report",
+        "operationId": "runSavedReport",
+        "description": "(v1.42.0) Its rows now; format=xlsx for Excel.\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The report.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report and its rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/reports/saved/{id}/send": {
+      "post": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "E-mail a saved report now",
+        "operationId": "eMailSavedReportNow",
+        "description": "(v1.42.0) To its recipients, Excel attached, through the organisation's e-mail channel. Audited.\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The report.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ok, to, rows}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/auth/saml": {
+      "get": {
+        "tags": [
+          "Users and roles"
+        ],
+        "summary": "SAML single sign-on set-up",
+        "operationId": "samlSingleSignOnSetUp",
+        "description": "(v1.42.0) The organisation's identity provider (entity id, sign-on URL, its certificates summarised, allowed domains, automatic set-up, the group → role map), what to enter at the identity provider (entity id, ACS URL, metadata) and the roles a group may map to (never an administrator role).\n\n**Permissions checked:** `user:read`.",
+        "responses": {
+          "200": {
+            "description": "The set-up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "user:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Users and roles"
+        ],
+        "summary": "Set up SAML single sign-on",
+        "operationId": "setUpSamlSingleSignOn",
+        "description": "(v1.42.0) enabled, idpEntityId, ssoUrl (https, HTTP-Redirect), certificates (1–3 PEM, the identity provider's signing certificates), allowedDomains (one organisation per domain), jitEnabled (automatic account set-up: needs a mapping), groupAttribute, roleMap [{group, role}]. Audited.\n\n**Permissions checked:** `user:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The set-up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "user:write"
+        ]
       }
     }
   },

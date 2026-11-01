@@ -68,7 +68,9 @@ export interface AuthResult {
   idpMfa?: boolean;
 }
 
-export type AuthMethod = 'password' | 'microsoft';
+export type AuthMethod = 'password' | 'microsoft' | 'saml';
+/** (v1.42.0) A stored method as the type: SAML single sign-on joins password and Microsoft. */
+export const authMethodOf = (m: unknown): AuthMethod => (m === 'microsoft' || m === 'saml' ? m : 'password');
 
 // ------------------------------------------------------------------ two-step verification policy
 
@@ -315,7 +317,7 @@ export async function consumePendingSession(token: string, userId: string): Prom
       RETURNING auth_method`,
     [sha256(secret), userId],
   );
-  return r ? { authMethod: r.auth_method === 'microsoft' ? 'microsoft' : 'password' } : null;
+  return r ? { authMethod: authMethodOf(r.auth_method) } : null;
 }
 
 /**
@@ -366,7 +368,7 @@ async function authenticateSession(token: string, touch = true): Promise<AuthRes
   if (row.touch && touch) await query(`UPDATE auth_session SET last_seen_at = now() WHERE id = $1`, [row.id]);
 
   const grants = await loadAssignments(row.user_id, row.org_id);
-  const authMethod: AuthMethod = row.auth_method === 'microsoft' ? 'microsoft' : 'password';
+  const authMethod: AuthMethod = authMethodOf(row.auth_method);
   /*
    * A session let in on Microsoft's MFA after MS_TRUST_MFA_CLAIM was switched off: it never gave
    * the console's code, and a full session cannot be turned back into a pending one. Where the
