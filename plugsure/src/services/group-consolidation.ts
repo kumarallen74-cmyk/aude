@@ -1,7 +1,7 @@
 import { many, one, outsideRequestScope } from '../db/pool.js';
 import { config } from '../config.js';
 import { pnl } from './shared-costs.js';
-import { reportingCurrency } from './fx.js';
+import { convertExact, reportingCurrency } from './fx.js';
 
 /**
  * Multi-entity consolidation (v1.28.0). A group is a parent organisation and its subsidiaries
@@ -96,7 +96,7 @@ export async function consolidated(parentId: string, monthRaw?: unknown) {
     const rate = new Map(rs.map((r) => [r.currency, Number(r.rate)]));
     const conv = (m: Record<string, number>) => {
       let v = 0; const missing: string[] = [];
-      for (const [c, n] of Object.entries(m)) { if (!n) continue; if (c === reporting) v += n; else if (rate.has(c)) v += n * rate.get(c)!; else missing.push(c); }
+      for (const [c, n] of Object.entries(m)) { if (!n) continue; if (c === reporting) v += n; else if (rate.has(c)) v += convertExact(n, rate.get(c)!, c, reporting); else missing.push(c); }
       return { amount: Math.round(v), missing };
     };
     const rev = conv(Object.fromEntries(Object.entries(net).map(([c, x]) => [c, x.revenue])));

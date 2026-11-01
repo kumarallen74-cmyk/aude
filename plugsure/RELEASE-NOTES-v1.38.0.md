@@ -102,6 +102,10 @@ Each action's result (done, skipped or its error) is kept with the run. Nothing 
 
 **The trend:** the days from each month's end to its lock, over the last twelve months locked, with the average and the best.
 
+### Fixed: consolidated totals in other currencies
+
+Totals converted into the reporting currency (Summary, Margin, Budgets, Group) applied a rate per major unit (one MYR in rupiah) to amounts in minor units (sen), so MYR and SGD amounts came out 100 times too large in rupiah, or 100 times too small the other way. Conversions now scale by each currency's decimals: RM 100.00 at Rp 3,500 is Rp 350,000. Consolidated figures shown before were overstated wherever a site charges in MYR or SGD; nothing stored changes.
+
 ### API
 
 15 new operations (775 in the public specification; the owner portal's two are internal):

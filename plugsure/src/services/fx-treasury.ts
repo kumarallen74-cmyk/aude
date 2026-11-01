@@ -1,6 +1,7 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { config } from '../config.js';
-import { CURRENCIES } from '../domain/money.js';
+import { convert, exponentOf } from './fx.js';
+import { LEGACY_CURRENCY } from '../domain/money.js';
 import { assertOpen } from './finance-periods.js';
 import { xlsx } from './xlsx.js';
 
@@ -46,16 +47,10 @@ export function crossRate(rates: Map<string, number>, reporting: string, from: s
   return a == null || b == null || b === 0 ? null : a / b;
 }
 
-const ZERO_DECIMAL = new Set(['IDR', 'JPY', 'KRW', 'VND', 'CLP', 'ISK']);
-/** A currency's minor-unit exponent (the platform's own, else ISO: 0 for a few, 2 otherwise). */
-export const exponentOf = (c: string): number => (CURRENCIES as Record<string, { exponent: number }>)[c]?.exponent ?? (ZERO_DECIMAL.has(c) ? 0 : 2);
-/** An amount in minor units of `from` at a rate per major unit, in minor units of `to`. Pure. */
-export function convert(amountMinor: number, rate: number, from: string, to: string): number {
-  return Math.round((amountMinor / 10 ** exponentOf(from)) * rate * 10 ** exponentOf(to));
-}
+export { exponentOf, convert };
 
 /** A hedge's result in the currency sold at a rate (buy → sell): notional × (rate − contract rate), in minor units. Pure. */
-export function hedgeResult(notional: number, contractRate: number, marketRate: number, buy = 'IDR', sell = 'IDR'): number {
+export function hedgeResult(notional: number, contractRate: number, marketRate: number, buy = LEGACY_CURRENCY as string, sell = LEGACY_CURRENCY as string): number {
   return convert(notional, marketRate - contractRate, buy, sell);
 }
 

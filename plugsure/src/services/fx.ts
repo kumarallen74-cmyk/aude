@@ -1,6 +1,7 @@
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { assertOpen } from './finance-periods.js';
+import { CURRENCIES } from '../domain/money.js';
 
 /**
  * Multi-currency consolidation (v1.21.0). An operator with sites in several currencies (IDR, MYR, SGD) sets a
@@ -106,6 +107,19 @@ export async function fetchEcb(orgId: string, monthRaw: unknown, userId: string 
   return { month, reporting, date, rates: got, failed };
 }
 
+const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK']);
+/** A currency's minor-unit exponent (the platform's own, else ISO: 0 for a few, 2 otherwise). */
+export const exponentOf = (c: string): number => (CURRENCIES as Record<string, { exponent: number }>)[c]?.exponent ?? (ZERO_DECIMAL.has(c) ? 0 : 2);
+/**
+ * (v1.38.0) An amount in minor units of `from` at a rate per major unit (one MYR in IDR, as entered or fetched), in minor
+ * units of `to`: the rate applies to major units, so the two currencies' exponents scale it (sen into rupiah). Unrounded
+ * so totals round once. Pure.
+ */
+export function convertExact(amountMinor: number, rate: number, from: string, to: string): number {
+  return (amountMinor / 10 ** exponentOf(from)) * rate * 10 ** exponentOf(to);
+}
+export const convert = (amountMinor: number, rate: number, from: string, to: string): number => Math.round(convertExact(amountMinor, rate, from, to));
+
 /** Consolidate amounts per currency into the reporting currency for a month; the currencies without a rate are listed. */
 export async function consolidate(orgId: string, month: string, byCurrency: Record<string, number>) {
   const reporting = await reportingCurrency(orgId);
@@ -117,7 +131,7 @@ export async function consolidate(orgId: string, month: string, byCurrency: Reco
   for (const [cur, v] of Object.entries(byCurrency)) {
     if (!v) continue;
     if (cur === reporting) amount += v;
-    else if (rate.has(cur)) amount += v * rate.get(cur)!;
+    else if (rate.has(cur)) amount += convertExact(v, rate.get(cur)!, cur, reporting);
     else missing.push(cur);
   }
   return { currency: reporting, amount: Math.round(amount), missing };
