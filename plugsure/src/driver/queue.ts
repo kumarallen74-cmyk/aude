@@ -69,20 +69,40 @@ export function positionOf(entries: Array<Want & { id: string }>, id: string): n
   return 1 + entries.slice(0, i).filter((e) => overlaps(e, mine)).length;
 }
 
+/**
+ * (v1.44.0) Estimated waits: each busy connector frees up when its session reaches the site's typical length (at least
+ * 5 minutes from now); each waiting driver, in queue order, takes the earliest connector they can use, which is then
+ * busy again for a typical session. Minutes per entry id; null when no connector they can use is in service.
+ */
+export function estimateWaits(entries: Array<Want & { id: string }>, connectors: Array<{ current: Current; type: string; freeInMin: number }>, typicalMin: number): Map<string, number | null> {
+  const t = connectors.map((c) => ({ ...c, at: Math.max(0, c.freeInMin) }));
+  const out = new Map<string, number | null>();
+  for (const e of entries) {
+    const fit = t.filter((c) => fits(e, c)).sort((a, b) => a.at - b.at)[0];
+    if (!fit) { out.set(e.id, null); continue; }
+    out.set(e.id, Math.round(fit.at));
+    fit.at += typicalMin;
+  }
+  return out;
+}
+
+/** Round a wait for drivers: 0, then to 5 minutes. */
+export const roundWait = (m: number | null) => (m == null ? null : m <= 0 ? 0 : Math.max(5, Math.round(m / 5) * 5));
+
 /** The connector type a connector really has (unset: the usual plug for its current). */
 export const connectorTypeOf = (type: string | null, current: string) => type ?? (current === 'DC' ? 'cCCS2' : 'sType2');
 
 // ─────────────────────────────────────────────────────────── database
 
-interface SiteRow { id: string; org_id: string; name: string; timezone: string | null; queue_enabled: boolean; queue_offer_minutes: number; queue_max_length: number; queue_max_wait_minutes: number; archived_at: Date | null }
+interface SiteRow { id: string; org_id: string; name: string; timezone: string | null; queue_enabled: boolean; queue_offer_minutes: number; queue_max_length: number; queue_max_wait_minutes: number; queue_priority: 'none' | 'fleet' | 'members' | 'fleet_members'; archived_at: Date | null }
 interface ConnRow { connector_uuid: string; connector_no: number; connector_type: string | null; current_type: string; status: string; tera_status: string; in_maintenance: boolean; suspended: boolean; charge_point_id: string; ocpp_identity: string; org_id: string; country_code: string; held: boolean }
-interface EntryRow { id: string; org_id: string; site_id: string; device_id: string; app_driver_id: string | null; fleet_token_id: string | null; fleet_uid: string | null; current_type: Current | null; connector_type: string | null; state: string; joined_at: Date; offered_at: Date | null; ended_at: Date | null; end_reason: string | null }
+interface EntryRow { id: string; org_id: string; site_id: string; device_id: string; app_driver_id: string | null; fleet_token_id: string | null; fleet_uid: string | null; current_type: Current | null; connector_type: string | null; state: string; joined_at: Date; offered_at: Date | null; ended_at: Date | null; end_reason: string | null; priority: boolean }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LIVE = `('waiting','offered')`;
 
 const siteRow = (siteId: string) => one<SiteRow>(
-  `SELECT id, org_id, name, timezone, queue_enabled, queue_offer_minutes, queue_max_length, queue_max_wait_minutes, archived_at FROM site WHERE id = $1`, [siteId]);
+  `SELECT id, org_id, name, timezone, queue_enabled, queue_offer_minutes, queue_max_length, queue_max_wait_minutes, queue_priority, archived_at FROM site WHERE id = $1`, [siteId]);
 
 async function siteConnectors(siteId: string): Promise<ConnRow[]> {
   return many<ConnRow>(
@@ -102,15 +122,51 @@ const isFree = (c: ConnRow) => usable(c) && c.status === 'Available' && !c.held;
 const asFree = (c: ConnRow): FreeConnector => ({ id: c.connector_uuid, current: c.current_type === 'DC' ? 'DC' : 'AC', type: connectorTypeOf(c.connector_type, c.current_type) });
 const wantOf = (e: { current_type: Current | null; connector_type: string | null; id: string }) => ({ id: e.id, current: e.current_type, type: e.connector_type });
 
+const BUSY = new Set(['Charging', 'SuspendedEV', 'SuspendedEVSE', 'Preparing', 'Finishing', 'Occupied']);
+
+/** The site's typical session length (median of the last 30 days' sessions, 10–240 minutes; 45 with none). */
+async function typicalMinutes(siteId: string): Promise<number> {
+  const r = await one<{ m: number | null }>(
+    `SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_s) / 60.0 AS m FROM charging_session
+      WHERE site_id = $1 AND started_at > now() - interval '30 days' AND duration_s > 60 AND state IN ('ended', 'rated')`, [siteId]);
+  return r?.m == null ? 45 : Math.min(240, Math.max(10, Number(r.m)));
+}
+
+/** Each usable connector and when it is likely to be free (minutes from now). */
+async function connectorTimes(siteId: string, conns: ConnRow[], typical: number) {
+  const started = new Map((await many<{ connector_uuid: string; started_at: Date }>(
+    `SELECT connector_uuid, started_at FROM charging_session WHERE site_id = $1 AND state = 'active'`, [siteId])).map((r) => [r.connector_uuid, new Date(r.started_at).getTime()]));
+  return conns.filter(usable).map((c) => {
+    const f = asFree(c);
+    const st = started.get(c.connector_uuid);
+    const freeInMin = isFree(c) ? 0 : c.held ? typical : st ? Math.max(5, typical - (Date.now() - st) / 60_000) : BUSY.has(c.status) ? typical / 2 : typical;
+    return { current: f.current, type: f.type, freeInMin };
+  });
+}
+
+/** The estimated wait of every waiting entry at a site, and of a driver joining now (any connector). */
+export async function siteWaits(siteId: string): Promise<{ byEntry: Map<string, number | null>; newcomer: number | null; typicalMinutes: number }> {
+  const [conns, live, typical] = await Promise.all([siteConnectors(siteId), liveEntries(siteId), typicalMinutes(siteId)]);
+  const waiting = live.filter((e) => e.state === 'waiting').map(wantOf);
+  const times = await connectorTimes(siteId, conns, typical);
+  const all = estimateWaits([...waiting, { id: '__new', current: null, type: null }], times, typical);
+  const byEntry = new Map([...all].filter(([k]) => k !== '__new').map(([k, v]) => [k, roundWait(v)] as [string, number | null]));
+  return { byEntry, newcomer: roundWait(all.get('__new') ?? null), typicalMinutes: Math.round(typical) };
+}
+
 const liveEntries = (siteId: string) => many<EntryRow>(
   `SELECT q.*, t.uid AS fleet_uid FROM driver_queue_entry q LEFT JOIN token t ON t.id = q.fleet_token_id
-    WHERE q.site_id = $1 AND q.state IN ${LIVE} ORDER BY q.joined_at, q.id`, [siteId]);
+    WHERE q.site_id = $1 AND q.state IN ${LIVE} ORDER BY q.priority DESC, q.joined_at, q.id`, [siteId]);
 
 // ─────────────────────────────────────────────────────────── the driver
 
 export interface EntryView {
   id: string; siteId: string; siteName: string; state: string; joinedAt: string;
   position: number | null; waiting: number;
+  /** (v1.44.0) Minutes until a connector is likely to be offered (rounded to 5); null when it cannot be estimated. */
+  estimatedWaitMinutes: number | null;
+  /** In the site's priority lane (fleet or members). */
+  priority: boolean;
   want: { current: Current | null; type: string | null; typeLabel: string | null };
   offerMinutes: number; leaveBy: string;
   offer: { reservationId: string; connectorId: string; chargerName: string; connectorNo: number; expiresAt: string; minutesLeft: number } | null;
@@ -131,6 +187,8 @@ async function entryView(e: EntryRow, site?: SiteRow | null): Promise<EntryView>
     id: e.id, siteId: e.site_id, siteName: s.name, state: e.state, joinedAt: new Date(e.joined_at).toISOString(),
     position: e.state === 'waiting' ? positionOf(waitingOnly.map(wantOf), e.id) : null,
     waiting: waitingOnly.length,
+    estimatedWaitMinutes: e.state === 'waiting' ? (await siteWaits(e.site_id).catch(() => null))?.byEntry.get(e.id) ?? null : null,
+    priority: e.priority === true,
     want: { current: e.current_type, type: e.connector_type, typeLabel: e.connector_type ? CONNECTOR_LABEL[e.connector_type] ?? e.connector_type : null },
     offerMinutes: s.queue_offer_minutes,
     leaveBy: new Date(new Date(e.joined_at).getTime() + s.queue_max_wait_minutes * 60_000).toISOString(),
@@ -156,6 +214,10 @@ export async function myQueue(p: DriverPrincipal): Promise<{ entry: EntryView | 
 export interface SiteQueueView {
   enabled: boolean; offerMinutes: number; maxLength: number; maxWaitMinutes: number;
   waiting: number; full: boolean; freeNow: number;
+  /** (v1.44.0) A driver joining now would likely wait this long (minutes, rounded to 5); null when not known. */
+  estimatedWaitMinutes: number | null;
+  /** Who the priority lane is for, if any. */
+  priority: 'none' | 'fleet' | 'members' | 'fleet_members';
   types: Array<{ current: Current; type: string; typeLabel: string }>;
   mine: EntryView | null; canJoin: boolean; reason: string | null;
 }
@@ -186,8 +248,30 @@ export async function siteQueue(siteId: string, p: DriverPrincipal | null): Prom
     : null;
   return {
     enabled: s.queue_enabled, offerMinutes: s.queue_offer_minutes, maxLength: s.queue_max_length, maxWaitMinutes: s.queue_max_wait_minutes,
-    waiting, full, freeNow, types: [...types.values()], mine, canJoin: s.queue_enabled && !mine && !reason, reason,
+    waiting, full, freeNow, estimatedWaitMinutes: s.queue_enabled ? (await siteWaits(siteId).catch(() => null))?.newcomer ?? null : null, priority: s.queue_priority,
+    types: [...types.values()], mine, canJoin: s.queue_enabled && !mine && !reason, reason,
   };
+}
+
+/**
+ * (v1.44.0) The priority lane: a site may let fleet cards, members (an active membership: the driver's, the card's or
+ * its fleet's), or both, wait ahead of other drivers. Decided once, when the driver joins; never ahead of a driver who
+ * already has an offer.
+ */
+async function inPriorityLane(s: SiteRow, p: DriverPrincipal): Promise<boolean> {
+  const lane = s.queue_priority ?? 'none';
+  if (lane === 'none') return false;
+  if ((lane === 'fleet' || lane === 'fleet_members') && p.fleet) return true;
+  if (lane === 'members' || lane === 'fleet_members') {
+    const m = await one(
+      `SELECT 1 FROM subscription sub WHERE sub.org_id = $1 AND sub.status = 'active' AND (sub.current_period_end IS NULL OR sub.current_period_end > now())
+          AND ((sub.app_driver_id IS NOT NULL AND sub.app_driver_id = $2)
+            OR (sub.token_id IS NOT NULL AND sub.token_id = $3)
+            OR (sub.fleet_account_id IS NOT NULL AND sub.fleet_account_id = (SELECT fleet_account_id FROM token WHERE id = $3)))
+        LIMIT 1`, [s.org_id, p.appDriverId ?? null, p.fleet?.tokenId ?? null]);
+    return !!m;
+  }
+  return false;
 }
 
 /** Join a site's queue. */
@@ -224,12 +308,13 @@ export async function join(p: DriverPrincipal, siteId: string, w: { current?: un
   }
   if (live.length >= s.queue_max_length) return { ok: false, error: 'Antrean sedang penuh. Coba lagi nanti.' };
 
+  const priority = await inPriorityLane(s, p);
   let row: EntryRow | null;
   try {
     row = await one<EntryRow>(
-      `INSERT INTO driver_queue_entry (org_id, site_id, device_id, app_driver_id, fleet_token_id, current_type, connector_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *, NULL AS fleet_uid`,
-      [s.org_id, siteId, p.deviceId, p.appDriverId, p.fleet?.tokenId ?? null, want.current, want.type],
+      `INSERT INTO driver_queue_entry (org_id, site_id, device_id, app_driver_id, fleet_token_id, current_type, connector_type, priority)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *, NULL AS fleet_uid`,
+      [s.org_id, siteId, p.deviceId, p.appDriverId, p.fleet?.tokenId ?? null, want.current, want.type, priority],
     );
   } catch (e) {
     if ((e as { code?: string }).code === '23505') return { ok: false, error: 'Anda sudah dalam antrean.' };
@@ -415,14 +500,17 @@ export async function operatorQueue(siteId: string) {
        LEFT JOIN driver_reservation r ON r.queue_entry_id = q.id AND r.state = 'active'
        LEFT JOIN charge_point cp ON cp.id = r.charge_point_id
       WHERE q.site_id = $1 AND (q.state IN ${LIVE} OR q.ended_at > now() - interval '24 hours')
-      ORDER BY (q.state IN ${LIVE}) DESC, q.joined_at`, [siteId]);
+      ORDER BY (q.state IN ${LIVE}) DESC, q.priority DESC, q.joined_at`, [siteId]);
+  const waits = await siteWaits(siteId).catch(() => null);
   const waiting = rows.filter((r) => r.state === 'waiting');
   const today = rows.filter((r) => r.state !== 'waiting' && r.state !== 'offered');
-  const waits = today.filter((r) => r.state === 'served' && r.offered_at).map((r) => (new Date(r.offered_at!).getTime() - new Date(r.joined_at).getTime()) / 60_000);
+  const served = today.filter((r) => r.state === 'served' && r.offered_at).map((r) => (new Date(r.offered_at!).getTime() - new Date(r.joined_at).getTime()) / 60_000);
   return {
     entries: rows.map((r) => ({
       id: r.id, state: r.state, joinedAt: r.joined_at, offeredAt: r.offered_at, endedAt: r.ended_at, endReason: r.end_reason,
       position: r.state === 'waiting' ? positionOf(waiting.map(wantOf), r.id) : null,
+      estimatedWaitMinutes: r.state === 'waiting' ? waits?.byEntry.get(r.id) ?? null : null,
+      priority: r.priority === true,
       driver: r.fleet_uid ? `Fleet card ${r.fleet_uid}` : maskPhone(r.phone) ?? 'App driver',
       want: [r.current_type, r.connector_type ? CONNECTOR_LABEL[r.connector_type] ?? r.connector_type : null].filter(Boolean).join(' · ') || 'Any connector',
       offer: r.offer_expires_at ? { connector: r.offer_connector, expiresAt: r.offer_expires_at } : null,
@@ -433,7 +521,8 @@ export async function operatorQueue(siteId: string) {
       served24h: today.filter((r) => r.state === 'served').length,
       missed24h: today.filter((r) => r.state === 'missed').length,
       left24h: today.filter((r) => r.state === 'left').length,
-      medianWaitMinutes: waits.length ? Math.round(waits.sort((a, b) => a - b)[Math.floor(waits.length / 2)]!) : null,
+      medianWaitMinutes: served.length ? Math.round(served.sort((a, b) => a - b)[Math.floor(served.length / 2)]!) : null,
+      newcomerWaitMinutes: waits?.newcomer ?? null,
     },
   };
 }
@@ -449,4 +538,48 @@ export async function removeEntry(siteId: string, entryId: string): Promise<{ en
   const s = await siteRow(siteId);
   await notifyQueue(e.device_id, e.id, 'removed', s?.name ?? '', null);
   return { entryId: e.id, state: e.state };
+}
+// ─────────────────────────────────────────────────────────── (v1.44.0) analytics
+
+/**
+ * How the queue did over the last `days` days (one site, or every site of the organisation): places by day and how
+ * they ended, waits (joined → offered) as median and 90th percentile, no-shows (offers not taken: missed / (served +
+ * missed)), abandonment (left or waited too long, of all that ended), joins by hour of day (the site's zone), and the
+ * priority lane's share.
+ */
+export async function queueAnalytics(orgId: string, siteId: string | null, days = 30) {
+  const d = Math.min(365, Math.max(1, Math.round(days)));
+  const params: unknown[] = [orgId, d, siteId];
+  const where = `q.org_id = $1 AND q.joined_at > now() - make_interval(days => $2) AND ($3::uuid IS NULL OR q.site_id = $3)`;
+  const tz = siteId ? (await one<{ timezone: string }>(`SELECT timezone FROM site WHERE id = $1 AND org_id = $2`, [siteId, orgId]))?.timezone : null;
+  const zoneOf = tz ?? (await one<{ timezone: string }>(`SELECT timezone FROM site WHERE org_id = $1 ORDER BY created_at LIMIT 1`, [orgId]))?.timezone ?? 'UTC';
+  const [byDay, waits, hours, totals] = await Promise.all([
+    many<any>(`SELECT to_char(q.joined_at AT TIME ZONE $4, 'YYYY-MM-DD') AS day, count(*)::int AS joined,
+                      count(*) FILTER (WHERE q.state = 'served')::int AS served, count(*) FILTER (WHERE q.state = 'missed')::int AS missed,
+                      count(*) FILTER (WHERE q.state = 'left')::int AS left, count(*) FILTER (WHERE q.state = 'expired')::int AS expired,
+                      count(*) FILTER (WHERE q.state = 'removed')::int AS removed
+                 FROM driver_queue_entry q WHERE ${where} GROUP BY 1 ORDER BY 1`, [...params, zoneOf]),
+    one<any>(`SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.offered_at - q.joined_at)) / 60) AS p50,
+                     percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.offered_at - q.joined_at)) / 60) AS p90,
+                     percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.offered_at - q.joined_at)) / 60) FILTER (WHERE q.priority) AS p50_priority
+                FROM driver_queue_entry q WHERE ${where} AND q.offered_at IS NOT NULL`, params),
+    many<any>(`SELECT EXTRACT(HOUR FROM q.joined_at AT TIME ZONE $4)::int AS hour, count(*)::int AS joined FROM driver_queue_entry q WHERE ${where} GROUP BY 1 ORDER BY 1`, [...params, zoneOf]),
+    one<any>(`SELECT count(*)::int AS joined, count(*) FILTER (WHERE q.priority)::int AS priority,
+                     count(*) FILTER (WHERE q.state = 'served')::int AS served, count(*) FILTER (WHERE q.state = 'missed')::int AS missed,
+                     count(*) FILTER (WHERE q.state IN ('left', 'expired'))::int AS abandoned,
+                     count(*) FILTER (WHERE q.state NOT IN ('waiting', 'offered'))::int AS ended
+                FROM driver_queue_entry q WHERE ${where}`, params),
+  ]);
+  const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 1000) / 10 : null);
+  const r1 = (x: unknown) => (x == null ? null : Math.round(Number(x) * 10) / 10);
+  return {
+    days: d, siteId, timezone: zoneOf,
+    totals: {
+      joined: totals?.joined ?? 0, served: totals?.served ?? 0, missed: totals?.missed ?? 0, abandoned: totals?.abandoned ?? 0,
+      noShowPct: pct(totals?.missed ?? 0, (totals?.served ?? 0) + (totals?.missed ?? 0)), abandonmentPct: pct(totals?.abandoned ?? 0, totals?.ended ?? 0),
+      priorityPct: pct(totals?.priority ?? 0, totals?.joined ?? 0),
+      waitMedianMinutes: r1(waits?.p50), waitP90Minutes: r1(waits?.p90), priorityWaitMedianMinutes: r1(waits?.p50_priority),
+    },
+    byDay, byHour: Array.from({ length: 24 }, (_, h) => ({ hour: h, joined: hours.find((x) => x.hour === h)?.joined ?? 0 })),
+  };
 }

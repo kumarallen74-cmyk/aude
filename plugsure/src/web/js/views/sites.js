@@ -183,6 +183,10 @@ export function openSiteModal(site = null) {
           ${field('Time to start', `<div class="inputgroup"><input name="queueOfferMinutes" inputmode="numeric" placeholder="5"><span class="suffix">minutes</span></div>`, { help: '2 to 15. How long a freed connector is held for the next driver.' })}
           ${field('Longest queue', `<div class="inputgroup"><input name="queueMaxLength" inputmode="numeric" placeholder="20"><span class="suffix">drivers</span></div>`, { help: '1 to 200.' })}
           ${field('Longest wait', `<div class="inputgroup"><input name="queueMaxWaitMinutes" inputmode="numeric" placeholder="120"><span class="suffix">minutes</span></div>`, { help: '15 to 720. A place in the queue ends after this.' })}
+          ${field('Priority lane', `<select name="queuePriority"><option value="none">None: first come, first served</option><option value="fleet">Fleet cards wait ahead</option><option value="members">Members wait ahead</option><option value="fleet_members">Fleet cards and members wait ahead</option></select>`, { help: 'Decided when a driver joins; never ahead of a driver who already has a connector held.' })}
+        </div></fieldset>
+        <fieldset style="margin-top:14px"><legend>Carbon</legend><div class="form">
+          ${field('Grid emission factor', `<div class="inputgroup"><input name="gridKgPerKwh" inputmode="decimal" placeholder="the province's, else the default"><span class="suffix">kg CO₂e/kWh</span></div>`, { opt: true, help: 'Only if this site has its own figure (a captive grid, a supply contract with a stated mix). Otherwise Finance → Carbon sets it by province.' })}
         </div></fieldset>
         <fieldset style="margin-top:14px"><legend>Reservations</legend><div class="form">
           ${field('Reservation fee', `<div class="inputgroup"><input name="reservationFeeMinor" inputmode="numeric" placeholder="0 = free"><span class="suffix" data-cur>${esc(fmt.sym(countryCurrency(cc)))}</span></div>`, { help: `For holding a connector 15 minutes from the driver app, ${showCountry ? 'before tax (in Singapore and Malaysia: the price drivers pay). In the site’s currency.' : 'before PPN.'} App drivers pay it first; fleet cards are billed on the fleet invoice. Kept once the connector is held, charging or not; not charged if the charger refuses or the driver cancels within 2 minutes. Queue turns are always free.` })}
@@ -250,7 +254,7 @@ export function openSiteModal(site = null) {
     set('lat', s.lat); set('lon', s.lon); set('connectedKva', s.connected_kva); set('powerFactor', s.power_factor);
     set('spkluId', s.spklu_id); set('localTaxRateBps', s.local_tax_rate_bps); set('sloNumber', s.slo_number); set('sloIssuer', s.slo_issuer);
     set('sloIssuedAt', fmt.isoDate(s.slo_issued_at)); set('sloExpiresAt', fmt.isoDate(s.slo_expires_at)); set('offlineAlertMinutes', s.offline_alert_minutes);
-    set('queueOfferMinutes', s.queue_offer_minutes); set('queueMaxLength', s.queue_max_length); set('queueMaxWaitMinutes', s.queue_max_wait_minutes); set('reservationFeeMinor', s.reservation_fee_minor ? toMajor(s.reservation_fee_minor, countryCurrency(cc)) : '');
+    set('queueOfferMinutes', s.queue_offer_minutes); set('queueMaxLength', s.queue_max_length); set('queueMaxWaitMinutes', s.queue_max_wait_minutes); set('queuePriority', s.queue_priority ?? 'none'); set('gridKgPerKwh', s.grid_kg_per_kwh); set('reservationFeeMinor', s.reservation_fee_minor ? toMajor(s.reservation_fee_minor, countryCurrency(cc)) : '');
     set('v2xWindows', (s.v2x_windows ?? []).map((w) => `${w.from}-${w.to}`).join(', ')); set('v2xMinSocPercent', s.v2x_min_soc_percent); set('v2xCreditMinorPerKwh', s.v2x_credit_minor_per_kwh != null ? toMajor(s.v2x_credit_minor_per_kwh, countryCurrency(cc)) : null);
     set('v2xMaxDischargeKw', s.v2x_max_discharge_w ? s.v2x_max_discharge_w / 1000 : '');
     set('signedMeterPolicy', s.signed_meter_policy ?? 'record');
@@ -404,12 +408,28 @@ function queueTab(siteId) {
           ${kpi('Missed their turn', fmt.num(q.stats.missed24h), `${fmt.num(q.stats.left24h)} left · 24 h`, q.stats.missed24h > 0 ? 'warn' : '')}
         </div>
         <div class="section"><h2>In the queue now</h2><div class="card" data-live></div></div>
-        <div class="section"><h2>Last 24 hours</h2><div class="card" data-ended></div></div>`;
+        <div class="section"><h2>Last 24 hours</h2><div class="card" data-ended></div></div>
+        <div class="section"><h2>Last 30 days</h2><div class="card pad" data-analytics><div class="skeleton" style="height:90px"></div></div></div>`;
+      api(`/v1/sites/${encodeURIComponent(siteId)}/queue/analytics?days=30`).then((a) => {
+        const box = $('[data-analytics]', body);
+        if (!box) return;
+        const t = a.totals, max = Math.max(1, ...a.byHour.map((h) => h.joined));
+        box.innerHTML = !t.joined ? '<p class="muted">Nobody queued in the last 30 days.</p>' : `<div class="grid k4">
+            ${kpi('Joined', fmt.num(t.joined), `${fmt.num(t.served)} charged from the queue`)}
+            ${kpi('Wait', t.waitMedianMinutes == null ? '—' : `${fmt.num(t.waitMedianMinutes)} min`, t.waitP90Minutes == null ? 'median' : `median · 90% within ${fmt.num(t.waitP90Minutes)} min`)}
+            ${kpi('No-shows', t.noShowPct == null ? '—' : `${fmt.num(t.noShowPct, 1)}%`, 'offers not taken in time', t.noShowPct > 20 ? 'warn' : '')}
+            ${kpi('Gave up', t.abandonmentPct == null ? '—' : `${fmt.num(t.abandonmentPct, 1)}%`, 'left, or waited too long', t.abandonmentPct > 30 ? 'warn' : '')}</div>
+          ${t.priorityPct ? `<p class="cell-sub" style="margin:8px 0 0">Priority lane: ${fmt.num(t.priorityPct, 1)}% of drivers${t.priorityWaitMedianMinutes != null ? `, median wait ${fmt.num(t.priorityWaitMedianMinutes)} min` : ''}.</p>` : ''}
+          <div style="margin-top:12px"><b>When drivers join</b> <span class="cell-sub">(${esc(a.timezone)})</span>
+          <svg viewBox="0 0 240 60" style="width:100%;height:80px" role="img" aria-label="Joins by hour">${a.byHour.map((h) => `<rect x="${h.hour * 10 + 1}" y="${50 - (h.joined / max) * 48}" width="8" height="${(h.joined / max) * 48}" fill="var(--accent)"><title>${h.hour}:00 — ${h.joined}</title></rect>`).join('')}
+          ${[0, 6, 12, 18].map((h) => `<text x="${h * 10 + 1}" y="59" font-size="6" fill="var(--muted)">${h}:00</text>`).join('')}</svg></div>`;
+      }).catch((e) => { const box = $('[data-analytics]', body); if (box) box.innerHTML = callout('crit', esc(e.message)); });
       table($('[data-live]', body), {
         columns: [
           { label: '#', num: true, render: (e) => (e.position != null ? esc(e.position) : '—') },
           { label: 'Driver', render: (e) => `<span class="mono">${esc(e.driver)}</span>` },
-          { label: 'Wants', render: (e) => esc(e.want) },
+          { label: 'Wants', render: (e) => `${esc(e.want)}${e.priority ? ` ${tag('t-info', 'priority')}` : ''}` },
+          { label: 'Likely wait', num: true, render: (e) => (e.estimatedWaitMinutes == null ? '—' : `${fmt.num(e.estimatedWaitMinutes)} min`) },
           { label: 'Joined', render: (e) => `${esc(fmt.time(e.joinedAt))}<div class="cell-sub">${e.state === 'offered' ? `waited ${fmt.num(minsSince(e.joinedAt, e.offeredAt))} min` : `waiting ${fmt.num(minsSince(e.joinedAt))} min`}</div>` },
           { label: 'State', render: (e) => `${queueTag(e.state)}${e.offer ? `<div class="cell-sub">${esc(e.offer.connector)} until ${esc(fmt.time(e.offer.expiresAt))}</div>` : ''}` },
           { label: '', render: (e) => (canEdit ? `<button class="btn sm ghost" data-remove="${esc(e.id)}">Remove</button>` : '') },

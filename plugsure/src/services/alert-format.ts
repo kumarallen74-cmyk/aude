@@ -18,6 +18,8 @@ export const ALERT_KINDS: Record<string, string> = {
   'connector.faulted': 'Connector fault',
   // (v1.42.0) Charger health (services/charger-health.ts): a charger likely to fail.
   'charger.health_at_risk': 'Charger at risk of failing',
+  // (v1.44.0) Depot scheduling (services/depot.ts): a fleet vehicle that will not be ready by its departure.
+  'fleet.vehicle_not_ready': 'Fleet vehicle not ready in time',
   'charge_point.device_event': 'Hardware monitor alarm',
   'session.stuck': 'Session stuck',
   'session.orphaned': 'Orphaned session',

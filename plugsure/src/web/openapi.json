@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.43.0",
+    "version": "1.44.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Governance → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Governance → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Governance → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Governance → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -71154,6 +71154,846 @@
         },
         "x-permissions": [
           "user:write"
+        ]
+      }
+    },
+    "/v1/depot": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Depot charging: sites, departures and plans",
+        "operationId": "depotChargingSitesDeparturesAndPlans",
+        "description": "(v1.44.0) Each site and whether depot scheduling is on; every active session with a departure (when, the energy needed and delivered, the plan: on_track, deferred, at_risk, ready, missed; the estimated ready time); active sessions at depot sites without one; the fleet vehicles.\n\n**Permissions checked:** `smartcharging:read`.",
+        "responses": {
+          "200": {
+            "description": "{sites, sessions, without, vehicles}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:read"
+        ]
+      }
+    },
+    "/v1/depot/sites/{siteId}": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Switch depot scheduling on or off at a site",
+        "operationId": "switchDepotSchedulingOnOrOffAtSite",
+        "description": "(v1.44.0) enabled. On: the load manager plans each session with a departure so it is ready in time, using off-peak hours when there is time. Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{siteId, depotScheduling}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/depot/sessions/{sessionId}/departure": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Set a session's departure",
+        "operationId": "setSessionDeparture",
+        "description": "(v1.44.0) departureAt (5 minutes to 7 days ahead) and neededKwh (the energy the session must deliver in all). Overrides the vehicle's or the car's. Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "The charging session.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The departure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/fleet-vehicles": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Fleet vehicles",
+        "operationId": "fleetVehicles",
+        "description": "(v1.44.0) Each vehicle: name, plate, fleet account, battery, the card it charges with, its usual departure time and target.\n\n**Permissions checked:** `smartcharging:read`.",
+        "responses": {
+          "200": {
+            "description": "{vehicles}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Add a fleet vehicle",
+        "operationId": "addFleetVehicle",
+        "description": "(v1.44.0) name, plate, fleetAccountId, batteryKwh, tokenId (the card it charges with; one vehicle per card), departureTime (HH:MM, the site's time), targetKwh or targetSocPct (with batteryKwh). A session started with the card gets the next departure at that time. Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The vehicle.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/fleet-vehicles/{id}": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Change or archive a fleet vehicle",
+        "operationId": "changeOrArchiveFleetVehicle",
+        "description": "(v1.44.0) The fields above, or archive: true. Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The vehicle.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The vehicle.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/sites/{siteId}/queue/analytics": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "A site's queue over time",
+        "operationId": "siteQueueOverTime",
+        "description": "(v1.44.0) Over the last days (default 30): joins, charged from the queue, no-shows (missed / (served + missed)), abandonment (left or waited too long), median and 90th-percentile wait, the priority lane's share and wait, places by day and joins by hour.\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/queue/analytics": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Every site's queue over time",
+        "operationId": "everySiteQueueOverTime",
+        "description": "(v1.44.0) As the site's, across the organisation.\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/finance/carbon/sites": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Carbon per site",
+        "operationId": "carbonPerSite",
+        "description": "(v1.44.0) from, to (at most 92 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/finance/carbon/esg": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "The ESG workbook",
+        "operationId": "esgWorkbook",
+        "description": "(v1.44.0) The per-site report in Excel, with a summary and the methodology (factors, solar share, REC share).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An .xlsx file."
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/sessions/{id}/carbon": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "A session's carbon",
+        "operationId": "sessionCarbon",
+        "description": "(v1.44.0) kWh, the grid factor and its source, the solar share measured during the session, the REC share, emitted and avoided kg CO2e (against petrol). Also on the driver's receipt.\n\n**Permissions checked:** `session:read`, `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The charging session.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The carbon.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read",
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/diagnostics-bot/charge-points/{cpId}": {
+      "get": {
+        "tags": [
+          "Firmware and diagnostics"
+        ],
+        "summary": "A charger's diagnostics runs",
+        "operationId": "chargerDiagnosticsRuns",
+        "description": "(v1.44.0) The last 20 runs: steps, findings, verdict, summary, work order.\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "cpId",
+            "in": "path",
+            "required": true,
+            "description": "The charge point (id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{runs}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Firmware and diagnostics"
+        ],
+        "summary": "Run the diagnostics bot on a charger",
+        "operationId": "runDiagnosticsBotOnCharger",
+        "description": "(v1.44.0) allowReset (a SOFT reset only when a connector is Faulted and nothing is charging), openWorkOrder (when someone has to go or act). Reads the charger's connection and 7 days of errors; when connected, asks for a fresh status and reads its key configuration. Never a hard reset, never a configuration change. 202: the run continues in the background; poll it. Audited.\n\n**Permissions checked:** `charge_point:command`.",
+        "parameters": [
+          {
+            "name": "cpId",
+            "in": "path",
+            "required": true,
+            "description": "The charge point (id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "{id}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:command"
+        ]
+      }
+    },
+    "/v1/diagnostics-bot/runs/{id}": {
+      "get": {
+        "tags": [
+          "Firmware and diagnostics"
+        ],
+        "summary": "A diagnostics run",
+        "operationId": "diagnosticsRun",
+        "description": "(v1.44.0) Its status (running, done, failed), steps, findings, verdict (healthy, fixed, needs_attention, needs_visit, unreachable), summary and work order.\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The run.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      }
+    },
+    "/v1/diagnostics-bot/runs/{id}/work-order": {
+      "post": {
+        "tags": [
+          "Firmware and diagnostics"
+        ],
+        "summary": "Open a work order from a run",
+        "operationId": "openWorkOrderFromRun",
+        "description": "(v1.44.0) A corrective work order with the run's summary. Audited.\n\n**Permissions checked:** `charge_point:write`, `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The run.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "{id, number}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write",
+          "payment:write"
         ]
       }
     }

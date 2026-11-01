@@ -1,17 +1,21 @@
 PlugSure CSMS
-Version:   1.43.0
-Package:   plugsure-v1.43.0
-Prepared:  2026-11-01  (v1.42.0 + phase 31 — see RELEASE-NOTES-v1.43.0.md)
+Version:   1.44.0
+Package:   plugsure-v1.44.0
+Prepared:  2026-11-01  (v1.43.0 + phase 32 — see RELEASE-NOTES-v1.44.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (868 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html; SCIM 2.0 at /scim/v2
+API:       OpenAPI 3.1 at /openapi.json (883 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html; SCIM 2.0 at /scim/v2
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.43.0 = v1.42.0 + phase 31: SCIM 2.0 provisioning (users and groups from the identity provider, roles by
-           group, deactivation ends every session, administrators never touched), dynamic pricing (time, peak-hour,
-           occupancy and solar rules inside a floor and cap, never past the regulated energy ceiling, fixed per session
-           and per pre-paid charge, shown in the driver app), grid demand response (webhook, OpenADR 3 or by hand; the
-           load manager holds the grid part, measures the reduction and the incentive) and a public status page (live
-           site states, incidents, maintenance, e-mail updates). Fix: a group can no longer give a site-limited role.
-           Migration 110 (additive).
+Status:    v1.44.0 = v1.43.0 + phase 32: fleet depot scheduling (vehicles with a usual departure and target; the load
+           manager plans each session to be ready in time, off-peak when there is time, and alerts when it cannot),
+           driver queue improvements (an estimated wait for every place, shown to the driver, on the station and on
+           the status page; a priority lane for fleet cards and members; 30-day queue analytics), carbon per session
+           and site (grid factors by site and province, the measured solar share, a CO2 line on the receipt, an ESG
+           workbook) and a diagnostics bot (reads a charger's errors and configuration, asks it for a fresh status,
+           a soft reset only when allowed, a verdict and a work order). Migration 111 (additive).
+
+v1.43.0 (2026-11-01):
+           v1.43.0 = v1.42.0 + phase 31: SCIM 2.0 provisioning, dynamic pricing, grid demand response and a public
+           status page. Fix: a group can no longer give a site-limited role. Migration 110 (additive).
 
 v1.42.0 (2026-11-01):
            v1.42.0 = v1.41.1 + phase 30: solar and battery storage, charger health and failure prediction, a custom

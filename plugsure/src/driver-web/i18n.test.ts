@@ -27,6 +27,10 @@ const MESSAGES = [
   'Charger ini sementara tidak beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.',
   'Charger ini tidak lagi beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.',
   'Charger ini sementara tidak dapat dipesan. Biaya reservasi dikembalikan.',
+  // carbon on the receipt (v1.44.0)
+  'CO₂ dihindari dibanding bensin',
+  // queue waits (v1.44.0)
+  'Perkiraan 15 menit', 'Prioritas',
   // dynamic pricing (v1.43.0)
   'Harga dinamis saat ini lebih tinggi 15% dari tarif. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang.',
   'Harga dinamis saat ini lebih rendah 20% dari tarif. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang.',

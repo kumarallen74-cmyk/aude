@@ -683,13 +683,13 @@ input{font-family:inherit}
     'Berlaku 30 hari. Perpanjang sendiri, atau otomatis dengan kartu tersimpan atau e-wallet terhubung. Ganti paket kapan saja: sisa hari paket lama menjadi potongan. Harga member otomatis berlaku saat mengisi di operator tersebut.':'Valid 30 days. Renew yourself, or automatically with a saved card or linked e-wallet. Switch plans any time: the days left on the old plan come off the price. Member prices apply automatically when you charge with that operator.',
     // Bidirectional charging (V2G / V2B)
     'Kembalikan energi ke lokasi (V2G)':'Give energy back to the site (V2G)','Mobil Anda bisa mengembalikan listrik saat beban puncak lokasi.':'Your car can give electricity back while the site’s load peaks.',
-    'Meter bertanda tangan':'Signed meter data','Terverifikasi':'Verified','Cocok':'Matches','Tidak cocok':'Does not match','Tidak sah':'Not valid','Tidak lengkap':'Incomplete','Tidak ada':'None',
+    'CO₂ dihindari dibanding bensin':'CO₂ avoided against petrol',    'Meter bertanda tangan':'Signed meter data','Terverifikasi':'Verified','Cocok':'Matches','Tidak cocok':'Does not match','Tidak sah':'Not valid','Tidak lengkap':'Incomplete','Tidak ada':'None',
     'Batas baterai':'Battery floor','Izinkan':'Allow','Diizinkan':'Allowed','Diatur oleh armada Anda.':'Set by your fleet.','Kredit energi dikembalikan':'Credit for energy given back',
     'Di luar jam pengembalian energi':'Outside the give-back hours','Kurang dari satu jam sebelum Anda pergi':'Less than an hour before you leave','Level baterai belum diketahui':'Battery level not known yet',
     'Charger ini belum mendukung':'This charger does not support it yet','Mobil tidak menawarkan pengembalian energi':'The car did not offer to give energy back','Lokasi sedang tidak membutuhkan energi':'The site does not need energy right now','Menunggu giliran':'Waiting for a turn',
     'Poin':'Points','Poin dipakai':'Points used','Poin diperoleh':'Points earned','Pakai poin otomatis saat mengisi':'Use my points automatically when charging','Riwayat poin':'Points history',
     // Site queues (waitlist)
-    'Antrean':'Queue','Gabung antrean':'Join the queue','Keluar antrean':'Leave the queue','Lihat antrean':'See the queue','Konektor apa saja':'Any connector',
+    'Antrean':'Queue','Prioritas':'Priority','Gabung antrean':'Join the queue','Keluar antrean':'Leave the queue','Lihat antrean':'See the queue','Konektor apa saja':'Any connector',
     'Anda dalam antrean':'You’re in the queue','Anda masuk antrean.':'You joined the queue.','Anda keluar dari antrean.':'You left the queue.',
     'Giliran Anda!':'Your turn!','Lewati':'Skip','Giliran dilewati.':'Turn skipped.',
     'Saat konektor yang cocok kosong, charger menahannya untuk pengemudi pertama di antrean.':'When a suitable connector frees up, the charger holds it for the first driver in the queue.',
@@ -760,7 +760,7 @@ input{font-family:inherit}
     [/^Kredit (Rp [\d.]+) per kWh\. Baterai tidak turun di bawah (\d+)%, dan tidak dalam satu jam sebelum Anda pergi\.$/g,'Credit $1 per kWh. The battery never goes below $2%, nor in the hour before you leave.'],
     [/^Sedang mengembalikan ([\d.,]+) kW$/g,'Giving back $1 kW'],[/^Dikembalikan ([\d.,]+) kWh · kredit (Rp [\d.]+)$/g,'Given back $1 kWh · credit $2'],[/^Baterai sudah di batas (\d+)%$/g,'The battery is at its $1% floor'],
     // Site queues. First: the single-word "menit" pattern below would cut these in half.
-    [/^Ke-(\d+) dalam antrean$/g,'Number $1 in the queue'],[/^(\d+) menunggu$/g,'$1 waiting'],
+    [/^Ke-(\d+) dalam antrean$/g,'Number $1 in the queue'],[/^Perkiraan (\d+) menit$/g,'About $1 min'],[/^(\d+) menunggu$/g,'$1 waiting'],
     [/^Waktu mulai: (\d+) menit$/g,'Time to start: $1 min'],[/^Pesan (\d+) menit$/g,'Reserve for $1 min'],
     [/^Biaya reservasi (Rp [\d.]+)$/g,'Reservation fee $1'],[/ · Biaya reservasi$/g,' · Reservation fee'],[/ Biaya reservasi dikembalikan\.$/g,' The reservation fee is refunded.'],[/^Konektor ini baru saja dipesan orang lain\. /g,'Someone else just reserved this connector. '],[/^(\d+) stasiun lain di sini · lihat Daftar$/g,'$1 more here · see the List'],[/^Antre paling lama sampai (.+)$/g,'Waiting at most until $1'],
     [/Anda masuk sebagai pengemudi armada/g,'You’re signed in as fleet driver'],
@@ -1638,7 +1638,7 @@ async function loadQueue(slot){
 function queueCard(e){
   return `<div class="rescard"><div class="ic">${svg(I.queue)}</div>
       <div style="flex:1;min-width:0"><div class="k">Anda dalam antrean</div><div class="v">${esc(e.siteName)}</div>
-        <div class="s"><span>Ke-${e.position||1} dalam antrean</span> · <span>${e.waiting} menunggu</span></div>
+        <div class="s"><span>Ke-${e.position||1} dalam antrean</span> · <span>${e.waiting} menunggu</span>${e.estimatedWaitMinutes!=null?` · <span>Perkiraan ${e.estimatedWaitMinutes} menit</span>`:''}${e.priority?' · <span>Prioritas</span>':''}</div>
         <div class="s"><span>Waktu mulai: ${e.offerMinutes} menit</span> · <span>Antre paling lama sampai ${hhmm(e.leaveBy)}</span></div></div></div>
     <div class="small muted" style="margin-top:6px">Saat konektor yang cocok kosong, charger menahannya untuk pengemudi pertama di antrean.</div>
     <button class="cta ghost" id="qleave" style="margin-top:8px">Keluar antrean</button>`;
@@ -1664,7 +1664,7 @@ async function loadStationQueue(box,siteId){
   let pick='';
   const chips=q.types.length>1?`<div class="amounts" id="qtypes"><button class="chip sel" data-q="">Konektor apa saja</button>${q.types.map(t=>`<button class="chip" data-q="${esc(t.current+'|'+t.type)}">${esc(t.typeLabel)} · ${t.current}</button>`).join('')}</div>`:'';
   box.innerHTML=`<div class="seclabel">Antrean</div>
-    <div class="card soft small"><div><span>${q.waiting} menunggu</span> · <span>Waktu mulai: ${q.offerMinutes} menit</span></div>
+    <div class="card soft small"><div><span>${q.waiting} menunggu</span> · <span>Waktu mulai: ${q.offerMinutes} menit</span>${q.waiting>0&&q.estimatedWaitMinutes!=null?` · <span>Perkiraan ${q.estimatedWaitMinutes} menit</span>`:''}</div>
       ${q.reason&&!q.canJoin?`<div class="muted" style="margin-top:6px">${esc(q.reason)}</div>`:''}</div>
     ${q.canJoin?chips+`<button class="cta ghost" id="qjoin" style="margin-top:10px">${svg(I.queue)} Gabung antrean</button>
       <div class="small muted" style="text-align:center;margin-top:6px">Saat konektor yang cocok kosong, charger menahannya untuk pengemudi pertama di antrean.</div>`:''}`;
@@ -2703,6 +2703,7 @@ VIEWS.receipt=async(v)=>{
           <div class="rc-sep"></div>
           <div class="rc-line tot"><span class="d">Total</span><span class="a">${rp(t.totalMinor)}</span></div>
           ${r.loyalty&&r.loyalty.earnedPoints?`<div class="rc-line small muted"><span class="d">Poin diperoleh</span><span class="a">+${r.loyalty.earnedPoints.toLocaleString(ID_LOCALE)} poin</span></div>`:''}
+          ${r.carbon&&r.carbon.avoidedKg>0?`<div class="rc-line small muted"><span class="d">CO₂ dihindari dibanding bensin</span><span class="a">${String(r.carbon.avoidedKg).replace('.',',')} kg</span></div>`:''}
           ${r.signedData&&r.signedData.status?`<div class="rc-line small muted"><span class="d">Meter bertanda tangan</span><span class="a">${esc(({verified:'Terverifikasi',unverified_key:'Cocok',mismatch:'Tidak cocok',invalid:'Tidak sah',incomplete:'Tidak lengkap',missing:'Tidak ada'})[r.signedData.status]||r.signedData.status)}</span></div>`:''}`
           :`<div class="banner b-info" style="margin-top:8px">${svg(I.clock)}<div>Struk sedang diproses. Coba lagi sebentar.</div></div>`}
       </div>

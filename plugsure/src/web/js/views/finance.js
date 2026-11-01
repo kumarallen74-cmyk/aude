@@ -2881,7 +2881,25 @@ async function carbonSection(host, canWrite) {
     <div class="grid k4 section">${kpi(`Charged · ${esc(m.month)}`, `${t3(m.mwh)} MWh`, `${m.sites.reduce((a, s) => a + s.sessions, 0)} sessions`)}${kpi('Green share', `${m.greenPct}%`, `${t3(m.recMwh)} MWh of RECs retired`, m.greenPct >= 100 ? 'ok' : '')}${kpi('Avoided', `${t3(m.avoidedTonnes)} t CO2e`, 'against petrol cars')}${kpi('RECs held', `${t3(d.recsHeld)} MWh`, 'bought, not yet retired')}</div>
     <div class="card section"><header><h3>Six months</h3></header><div data-ct></div></div>
     <div class="grid k2 section"><div class="card"><header><h3>Renewable energy certificates</h3></header><div data-cr></div></div><div class="card"><header><h3>Carbon credits</h3></header><div data-cc></div></div></div>
-    <div class="card section"><header><h3>Sites · ${esc(m.month)}</h3></header><div data-cs></div></div>`;
+    <div class="card section"><header><h3>Sites · ${esc(m.month)}</h3></header><div data-cs></div></div>
+    <div class="card section"><header><h3>Per site, measured</h3><span class="cell-sub">Each session with its site's grid factor and the solar measured during it</span>
+      <div class="right row" style="gap:6px;flex-wrap:wrap"><input type="date" data-pf value="${esc(zonedYmd(new Date(Date.now() - 30 * 86_400_000)))}"><input type="date" data-pt value="${esc(zonedYmd(new Date()))}">
+      <button class="btn sm" type="button" data-prun>Show</button><button class="btn sm" type="button" data-pesg>${icon('download')} ESG report</button></div></header><div data-pr></div></div>`;
+  const perSite = async () => {
+    const box = $('[data-pr]', el), f = $('[data-pf]', el).value, t = $('[data-pt]', el).value;
+    box.innerHTML = '<div class="skeleton" style="height:80px"></div>';
+    try {
+      const r = await api(`/v1/finance/carbon/sites?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`);
+      const SRC = { site: 'the site\'s own', province: 'its province', default: 'the default' };
+      box.innerHTML = `<p class="cell-sub" style="margin:8px 12px">${fmt.num(r.totals.sessions)} sessions · ${t3(r.totals.kwh / 1000)} MWh · emitted ${t3(r.totals.emittedTonnes)} t · avoided ${t3(r.totals.avoidedTonnes)} t CO2e</p><div data-prt></div>`;
+      table($('[data-prt]', box), { columns: [{ label: 'Site', render: (x) => esc(x.site) }, { label: 'Sessions', num: true, render: (x) => fmt.num(x.sessions) }, { label: 'kWh', num: true, render: (x) => fmt.num(x.kwh, 1) },
+        { label: 'Grid factor', num: true, render: (x) => `${x.gridKgPerKwh}<div class="cell-sub">${esc(SRC[x.gridFactorSource])}</div>` }, { label: 'Solar', num: true, render: (x) => (x.solarSharePct == null ? '—' : `${x.solarSharePct}%`) },
+        { label: 'Emitted (kg)', num: true, render: (x) => fmt.num(x.emittedKg, 1) }, { label: 'Avoided (kg)', num: true, render: (x) => fmt.num(x.avoidedKg, 1) }], rows: r.sites, empty: 'No sites.' });
+    } catch (err) { box.innerHTML = callout('crit', esc(err.message)); }
+  };
+  $('[data-prun]', el).addEventListener('click', perSite);
+  $('[data-pesg]', el).addEventListener('click', () => { const f = $('[data-pf]', el).value, t = $('[data-pt]', el).value; fetchFile(`/v1/finance/carbon/esg?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`, `plugsure-esg-${f}-${t}.xlsx`); });
+  perSite();
   table($('[data-ct]', el), { columns: [{ label: 'Month', render: (x) => esc(x.month) }, { label: 'MWh', num: true, render: (x) => `${t3(x.mwh)} <span style="display:inline-block;height:8px;width:${Math.round((x.mwh / max) * 80)}px;background:var(--accent);border-radius:2px;vertical-align:middle"></span>` },
     { label: 'Green', num: true, render: (x) => `${x.greenPct}%` }, { label: 'Avoided (t)', num: true, render: (x) => t3(x.avoidedTonnes) }], rows: d.trend });
   table($('[data-cr]', el), { columns: [
@@ -2898,8 +2916,13 @@ async function carbonSection(host, canWrite) {
   table($('[data-cs]', el), { columns: [{ label: 'Site', render: (s) => esc(s.site) }, { label: 'MWh', num: true, render: (s) => t3(s.mwh) }, { label: 'REC MWh', num: true, render: (s) => t3(s.recMwh) }, { label: 'Green', num: true, render: (s) => `${s.greenPct}%` }, { label: 'Avoided (t)', num: true, render: (s) => t3(s.avoidedTonnes) }], rows: m.sites, empty: 'No sites.' });
   $('[data-cx]', el).addEventListener('click', () => fetchFile(`/v1/finance/carbon?format=xlsx&from=${from}&to=${to}`, `plugsure-carbon-${from}-${to}.xlsx`));
   const post = async (url, body, method = 'POST') => { try { await api(url, { method, body }); toast('Saved.', 'ok'); reload(); return true; } catch (err) { toast(err.message, 'crit'); return false; } };
-  $('[data-cset]', el)?.addEventListener('click', () => modal({ title: 'Emission factors', body: `<div class="form">${field('Grid (kg CO2e per kWh)', `<input name="g" type="number" step="0.001" min="0" value="${m.settings.gridKgPerKwh}">`)}${field('Petrol car (kg CO2e per kWh equivalent)', `<input name="i" type="number" step="0.001" min="0" value="${m.settings.iceKgPerKwh}">`)}</div>`,
-    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', onClick: (mc) => post('/v1/finance/carbon/settings', { gridKgPerKwh: Number($('[name="g"]', mc.el).value), iceKgPerKwh: Number($('[name="i"]', mc.el).value) }, 'PUT') }] }));
+  $('[data-cset]', el)?.addEventListener('click', () => modal({ title: 'Emission factors', size: 'lg', body: `<div class="form">${field('Grid, default (kg CO2e per kWh)', `<input name="g" type="number" step="0.001" min="0" value="${m.settings.gridKgPerKwh}">`)}${field('Petrol car (kg CO2e per kWh equivalent)', `<input name="i" type="number" step="0.001" min="0" value="${m.settings.iceKgPerKwh}">`)}
+      ${field('Grid by province', `<textarea name="p" rows="4" placeholder="31=0.87&#10;51=0.77">${esc(Object.entries(m.settings.provinceKgPerKwh ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'))}</textarea>`, { full: true, help: 'One per line: the BPS province code (the first two digits of a site\'s kabupaten/kota code) = kg CO2e per kWh, from the grid emission factors your methodology uses. A site\'s own factor (Sites → Edit → Carbon) comes first; sites with neither use the default.' })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', onClick(mc) {
+      const prov = {};
+      for (const line of $('[name="p"]', mc.el).value.split(/\n+/)) { const mm = /^\s*(\d{2})\s*[=:]\s*([\d.]+)\s*$/.exec(line); if (mm) prov[mm[1]] = Number(mm[2]); else if (line.trim()) { toast(`Not understood: ${line.trim()}`, 'crit'); return false; } }
+      return post('/v1/finance/carbon/settings', { gridKgPerKwh: Number($('[name="g"]', mc.el).value), iceKgPerKwh: Number($('[name="i"]', mc.el).value), provinceKgPerKwh: prov }, 'PUT');
+    } }] }));
   $('[data-cbuy]', el)?.addEventListener('click', () => modal({ title: 'RECs bought', size: 'lg', body: `<div class="form">${field('Registry', '<input name="r" placeholder="I-REC, PLN REC…">')}${field('Reference', '<input name="ref">', { opt: true })}${field('Vintage', `<input name="v" type="number" value="${new Date().getFullYear()}">`)}${field('MWh', '<input name="mwh" type="number" step="0.001" min="0">')}${field('Price', '<input name="p" type="number" min="0">')}${field('Currency', `<input name="c" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Bought on', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Site', '<select name="site"><option value="">Portfolio</option></select>', { opt: true })}</div>`,
     async onMount(mc) { const ss = await sitesList(); $('[name="site"]', mc.el).innerHTML = `<option value="">Portfolio</option>${ss.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}`; },
     actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value.trim(); return post('/v1/finance/carbon/recs', { registry: v('r'), reference: v('ref') || undefined, vintage: Number(v('v')), mwh: Number(v('mwh')), price: Number(v('p') || 0), currency: v('c'), boughtOn: v('on'), siteId: v('site') || undefined }); } }] }));

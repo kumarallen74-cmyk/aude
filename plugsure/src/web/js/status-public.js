@@ -28,7 +28,8 @@
     var logo = d.brand && d.brand.logo ? '<img src="' + esc(d.brand.logo) + '" alt="">' : '';
     var sites = d.sites.length ? d.sites.map(function (s) {
       var counts = s.connectors != null ? '<small>' + s.working + ' of ' + s.connectors + ' connectors working' + (s.state === 'operational' || s.state === 'degraded' ? ' · ' + s.available + ' free now' : '') + '</small>' : (s.address ? '<small>' + esc(s.address) + '</small>' : '');
-      return '<div class="site"><span class="dot ' + s.state + '"></span><div class="name">' + esc(s.name) + counts + '</div><span class="st ' + s.state + '">' + STATE[s.state] + '</span></div>';
+      var queue = s.queue && s.queue.waiting > 0 ? '<small>' + s.queue.waiting + ' waiting in the queue' + (s.queue.estimatedWaitMinutes != null ? ' · about ' + s.queue.estimatedWaitMinutes + ' min wait' : '') + '</small>' : '';
+      return '<div class="site"><span class="dot ' + s.state + '"></span><div class="name">' + esc(s.name) + counts + queue + '</div><span class="st ' + s.state + '">' + STATE[s.state] + '</span></div>';
     }).join('') : '<div class="pad muted">No sites listed.</div>';
     app.innerHTML =
       '<header class="top">' + logo + '<div><h1>' + esc(d.title) + '</h1>' + (d.intro ? '<div class="muted">' + esc(d.intro) + '</div>' : '') + '</div></header>' +

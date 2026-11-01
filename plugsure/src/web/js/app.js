@@ -16,6 +16,7 @@ import './views/charger-health.js';
 import './views/report-builder.js';
 import './views/dynamic-pricing.js';
 import './views/grid-events.js';
+import './views/depot-charging.js';
 import './views/status-page.js';
 import './views/chargers.js';
 import './views/onboard.js';

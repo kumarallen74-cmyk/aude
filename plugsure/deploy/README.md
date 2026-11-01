@@ -50,6 +50,12 @@
 >
 > Keep `RUN_WORKERS=true` on the (one) gateway; nothing else to configure.
 >
+> Since v1.44.0, each place in the queue shows an estimated wait. The estimate assumes a site's typical session (the
+> median over 30 days, between 10 minutes and 4 hours) and how long each busy connector has been charging. It is shown
+> to the driver, on the station and on the public status page. A site can give a *priority lane* to fleet cards,
+> subscription members, or both (Sites → Edit → Driver queue). Those drivers join ahead of the others, in the order
+> they joined. Sites → Queue shows 30 days of joins, no-shows, abandonment, waits and the busiest hours.
+>
 > **Partner-charger reservations** (migration 034). Fleet drivers with a roaming card
 > can reserve a partner operator's charger; PlugSure sends the operator OCPI
 > `RESERVE_NOW` / `CANCEL_RESERVATION`, and the charger's answer comes back to
@@ -655,6 +661,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      energy → Grid events, [DEMAND-RESPONSE.md](DEMAND-RESPONSE.md)); switch
      on the public status page (Maintain → Status page,
      [STATUS-PAGE.md](STATUS-PAGE.md)). Keep `CONSOLE_PUBLIC_URL` set.
+  37. (v1.44.0) Optional, per operator: switch depot scheduling on for
+     fleet depots and add the vehicles (Assets & energy → Depot charging,
+     [DEPOT-CHARGING.md](DEPOT-CHARGING.md)) and route
+     fleet.vehicle_not_ready; set a queue priority lane per site (Sites →
+     Edit → Driver queue); set grid factors per province or site for the
+     carbon report (Finance → Carbon → Emission factors, FINANCE.md); run
+     the diagnostics bot from a charger in Maintain → Charger health
+     ([DIAGNOSTICS-BOT.md](DIAGNOSTICS-BOT.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

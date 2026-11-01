@@ -85,6 +85,7 @@ import { registerWhatsAppRoutes } from './whatsapp-routes.js';
 import { registerFinanceRoutes } from './finance-routes.js';
 import { registerPhase30Routes, isPublicPhase30Route } from './phase30-routes.js';
 import { registerPhase31Routes, isPublicPhase31Route } from './phase31-routes.js';
+import { registerPhase32Routes } from './phase32-routes.js';
 import { registerBrandRoutes } from './brand-routes.js';
 import { registerConsoleBrandRoutes } from './console-brand-routes.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
@@ -1980,6 +1981,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerFinanceRoutes(app);
   await registerPhase30Routes(app);
   await registerPhase31Routes(app);
+  await registerPhase32Routes(app);
   await registerBrandRoutes(app);
   await registerConsoleBrandRoutes(app);
   await registerMicrosoftRoutes(app);

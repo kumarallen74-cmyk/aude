@@ -6,6 +6,7 @@ import { resolveQuirks, pickRateUnit } from '../ocpp/quirks.js';
 import { profileLimitAt, type ChargingProfileIn } from '../ocpi/mapping.js';
 import { planSite, type SitePlanResult } from './v2x.js';
 import { activeFor as activeDemandResponse, capW as drCapW, recordPass as recordDrPass } from './demand-response.js';
+import { needsFor as depotNeeds, planDepot, recordPlans as recordDepotPlans, type Plan as DepotPlan } from './depot.js';
 import { forLoadManager } from './energy-storage.js';
 
 /**
@@ -381,9 +382,17 @@ export async function runControlLoop(siteId: string): Promise<Allocation[]> {
   // A discharging car takes no charging power.
   const v2x: SitePlanResult = await planSite(siteId, budget.curtailed ? 0 : budget.reserveW)
     .catch((e) => { logger.warn({ siteId, err: (e as Error).message }, 'bidirectional plan failed — charging only'); return { discharge: new Map() }; });
-  const demands = applyPartnerCaps(forStrategy(await collectDemands(siteId), budget.strategy), await partnerCapsW(siteId))
+  let demands = applyPartnerCaps(forStrategy(await collectDemands(siteId), budget.strategy), await partnerCapsW(siteId))
     .map((d) => (d.connectorUuid && v2x.discharge.has(d.connectorUuid) ? { ...d, active: false } : d));
+  // (v1.44.0) Fleet depot scheduling (depot.ts): with it on, each session with a departure gets the minimum power its
+  // departure needs (or is held back in grid peak hours while off-peak hours can still make it), the most urgent shed
+  // last. A failure here charges as before.
+  const depot = await depotNeeds(siteId)
+    .catch((e) => { logger.warn({ siteId, err: (e as Error).message }, 'depot departures unavailable — usual sharing'); return null; });
+  let depotPlans: DepotPlan[] = [];
+  if (depot && depot.needs.size) ({ demands, plans: depotPlans } = planDepot(demands, depot.needs, new Date(), depot.isPeak));
   const allocations = allocate(usableW, demands);
+  if (depotPlans.length) await recordDepotPlans(siteId, depotPlans, allocations, depot!.needs).catch((e) => logger.warn({ siteId, err: (e as Error).message }, 'depot plans not recorded'));
   if (dr) {
     // What the chargers would have been given without the event (the baseline) and what they are given now.
     const asked = demands.filter((d) => d.active).reduce((t, d) => t + d.maxPowerW, 0);
