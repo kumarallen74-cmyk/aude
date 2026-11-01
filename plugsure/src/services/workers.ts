@@ -199,6 +199,8 @@ export function startWorkers(): () => void {
   const ownerPayoutAuto = once('owner-payout-automation', async () => { await (await import('./owner-payout-automation.js')).sweep(); });
   const financeDigest = once('finance-digest', async () => { await (await import('./finance-digest.js')).sweep(); });
   const fleetAutomation = once('fleet-automation', async () => { await (await import('./fleet-automation.js')).sweep(); });
+  const paymentPlans = once('payment-plans', async () => { await (await import('./payment-plans.js')).sweep(); });
+  const forecastCheck = once('finance-forecast-check', async () => { await (await import('./rolling-forecast.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -314,6 +316,8 @@ export function startWorkers(): () => void {
     every(ownerPayoutAuto, 60 * 60_000, 'owner-payout-automation'),
     every(financeDigest, 15 * 60_000, 'finance-digest'),
     every(fleetAutomation, 60 * 60_000, 'fleet-automation'),
+    every(paymentPlans, 6 * 60 * 60_000, 'payment-plans'),
+    every(forecastCheck, 24 * 60 * 60_000, 'finance-forecast-check'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

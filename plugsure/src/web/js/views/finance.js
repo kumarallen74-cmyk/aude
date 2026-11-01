@@ -1915,6 +1915,165 @@ function ownerDocsDrawer(ownerId, ownerName, canWrite) {
   } }] });
 }
 
+// ─────────────────────────────────────────── (v1.28.0) driver funds
+
+async function driverFundsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/driver-funds'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => driverFundsSection(host, canWrite);
+  const canApprove = state.can('finance:approve');
+  el.innerHTML = `${callout('info', `Money drivers paid ahead and the operator holds: a liability until used, refunded or, after ${d.position.breakageDays} days unused, recognised as breakage.`)}
+    <div class="row" style="gap:6px;margin:10px 0"><button class="btn" type="button" data-dfx>${icon('download')} Excel</button>${canWrite ? `<button class="btn" type="button" data-dfs>${icon('gear')} Breakage days</button>` : ''}</div>
+    ${d.position.currencies.map((c) => `<div class="grid k4 section">${kpi('Liability', esc(fmt.money(c.liability, c.currency)), c.currency)}${kpi('Unused (owed)', esc(fmt.money(c.unused, c.currency)), `${c.windowClosing ? `${fmt.money(c.windowClosing, c.currency)} refund window closing` : `${c.payments} payments`}`)}${kpi('In use / refund due', esc(fmt.money(c.inUse + c.refundDue, c.currency)), `${fmt.money(c.inUse, c.currency)} charging · ${fmt.money(c.refundDue, c.currency)} due`)}${kpi('Loyalty points', esc(fmt.money(c.loyaltyValue, c.currency)), `${fmt.num(c.loyaltyPoints)} points`)}</div>`).join('') || callout('info', 'No prepaid driver payments yet.')}
+    <div class="grid two section"><div class="card"><header><h3>Breakage</h3></header><div data-dfb></div></div><div class="card"><header><h3>This month</h3></header><div data-dfm></div></div></div>`;
+  table($('[data-dfb]', el), { columns: [
+    { label: 'Paid in', render: (b) => `${esc(b.month)}<div class="cell-sub">${b.payments} payments</div>` },
+    { label: 'Unused', num: true, render: (b) => esc(fmt.money(b.amount, b.currency)) },
+    { label: '', render: (b) => (canApprove ? `<button class="btn sm" type="button" data-dfr="${esc(b.month)}|${esc(b.currency)}">Recognise</button>` : '') },
+  ], rows: d.position.breakage, empty: 'Nothing past the breakage days.' });
+  table($('[data-dfm]', el), { columns: [
+    { label: 'Currency', render: (c) => esc(c.currency) },
+    { label: 'Collected', num: true, render: (c) => esc(fmt.money(c.collected, c.currency)) },
+    { label: 'Used', num: true, render: (c) => esc(fmt.money(c.used, c.currency)) },
+    { label: 'Refunded', num: true, render: (c) => esc(fmt.money(c.refunded, c.currency)) },
+    { label: 'Gateway', num: true, render: (c) => `${esc(fmt.money(c.gateway, c.currency))}${c.difference ? `<div class="cell-sub" style="color:var(--warn)">${esc(fmt.money(c.difference, c.currency))} apart</div>` : ''}` },
+  ], rows: d.movement.currencies, empty: 'No movement this month.' });
+  $('[data-dfx]', el).addEventListener('click', async () => { try { const res = await api('/v1/finance/driver-funds?format=xlsx', { raw: true }); download('plugsure-driver-funds.xlsx', await res.blob()); } catch (e) { toast(e.message, 'crit'); } });
+  el.querySelectorAll('[data-dfr]').forEach((b) => b.addEventListener('click', async () => {
+    const [month, currency] = b.dataset.dfr.split('|');
+    b.disabled = true;
+    try { const r = await api('/v1/finance/driver-funds/breakage', { method: 'POST', body: { month, currency } }); toast(`${fmt.money(r.amount, currency)} recognised as breakage.`, 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); b.disabled = false; }
+  }));
+  $('[data-dfs]', el)?.addEventListener('click', () => modal({ title: 'Breakage', body: field('An unused balance is breakage after (days)', `<input name="bd" type="number" min="30" max="1825" value="${d.position.breakageDays}">`),
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      try { await api('/v1/finance/driver-funds/settings', { method: 'PUT', body: { breakageDays: Number($('[name="bd"]', mc.el).value) } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.28.0) group consolidation
+
+async function groupSection(host, canWrite, month = lastMonthYm()) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let g;
+  try { g = await api(`/v1/finance/group?month=${month}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  if (!g.grouped) { el.innerHTML = callout('info', esc(g.message)); return; }
+  const reload = (m = month) => groupSection(host, canWrite, m);
+  const curs = Object.keys(g.net).sort();
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-gm value="${esc(g.month)}">`)}${canWrite ? '<div class="row" style="align-self:flex-end"><button class="btn" type="button" data-gel>Record elimination</button></div>' : ''}</div>
+    <div class="grid k4">${curs.map((c) => kpi(`Group revenue · ${c}`, esc(fmt.money(g.net[c].revenue, c)), 'after eliminations') + kpi(`Operating result · ${c}`, esc(fmt.money(g.net[c].operating, c)), '', g.net[c].operating < 0 ? 'crit' : '')).join('')}
+      ${g.reporting ? kpi(`In ${g.reporting.currency}`, esc(fmt.money(g.reporting.revenue, g.reporting.currency)), `result ${fmt.money(g.reporting.operating, g.reporting.currency)}${g.reporting.missing.length ? ` · no rate for ${g.reporting.missing.join(', ')}` : ''}`) : ''}</div>
+    <div class="card section"><header><h3>Entities</h3></header><div data-ge></div></div>
+    <div class="card section"><header><h3>Eliminations</h3></header><div data-gx></div><div class="body" data-gs></div></div>`;
+  const rows = g.entities.flatMap((e) => Object.entries(e.currencies).map(([c, l]) => ({ e, c, l })));
+  table($('[data-ge]', el), { columns: [
+    { label: 'Entity', render: (r) => `${esc(r.e.name)}${r.e.parent ? ` ${tag('t-info', 'parent')}` : ''}<div class="cell-sub">${r.e.sites} sites · ${r.e.sessions} sessions · ${fmt.num(r.e.kwh)} kWh</div>` },
+    { label: 'Revenue', num: true, render: (r) => esc(fmt.money(r.l.revenue, r.c)) },
+    { label: 'Energy + shared + depr.', num: true, render: (r) => esc(fmt.money(r.l.energyCost + r.l.shared + r.l.depreciation, r.c)) },
+    { label: 'Owners + fees', num: true, render: (r) => esc(fmt.money(r.l.ownerShares + r.l.platformFees, r.c)) },
+    { label: 'Operating', num: true, render: (r) => `<b style="color:${r.l.operating < 0 ? 'var(--crit)' : 'inherit'}">${esc(fmt.money(r.l.operating, r.c))}</b>` },
+  ], rows, empty: 'No figures this month.' });
+  table($('[data-gx]', el), { columns: [
+    { label: 'Elimination', render: (x) => `${esc(x.description)}<div class="cell-sub">${esc(x.kind)} · ${esc(x.by ?? '')}</div>` },
+    { label: 'Amount', num: true, render: (x) => esc(fmt.money(x.amount, x.currency)) },
+    { label: '', render: (x) => (canWrite ? `<button class="btn sm" type="button" data-gv="${esc(x.id)}">Void</button>` : '') },
+  ], rows: g.eliminations.recorded, empty: 'None recorded.' });
+  const sug = g.eliminations.suggestions.filter((x) => !x.recorded);
+  $('[data-gs]', el).innerHTML = sug.length ? `<div class="cell-sub" style="margin-bottom:6px">Suggested (fleet invoices between group entities):</div>${sug.map((x, i) => `<div class="row" style="justify-content:space-between;gap:8px;padding:3px 0"><span>${esc(x.description)}</span><span class="row" style="gap:6px"><b>${esc(fmt.money(x.amount, x.currency))}</b>${canWrite ? `<button class="btn sm" type="button" data-gsa="${i}">Eliminate</button>` : ''}</span></div>`).join('')}` : '';
+  const rec = async (body) => { try { await api('/v1/finance/group/eliminations', { method: 'POST', body: { month: g.month, ...body } }); toast('Recorded.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; } };
+  el.querySelectorAll('[data-gsa]').forEach((b) => b.addEventListener('click', () => { const x = sug[Number(b.dataset.gsa)]; rec({ kind: x.kind, description: x.description, amount: x.amount, currency: x.currency }); }));
+  el.querySelectorAll('[data-gv]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Void the elimination', body: field('Why', '<input name="why">'),
+    actions: [{ label: 'Cancel' }, { label: 'Void', kind: 'danger', async onClick(mc) { try { await api(`/v1/finance/group/eliminations/${b.dataset.gv}/void`, { method: 'POST', body: { reason: $('[name="why"]', mc.el).value.trim() } }); reload(); } catch (e) { toast(e.message, 'crit'); return false; } } }] })));
+  $('[data-gel]', el)?.addEventListener('click', () => modal({ title: 'Intercompany elimination', subtitle: g.month, body: `<div class="form">${field('Kind', '<select name="k"><option value="revenue">Revenue</option><option value="cost">Cost</option></select>')}${field('Description', '<input name="d">')}${field('Amount (minor units)', '<input name="a" type="number" min="1">')}${field('Currency', `<input name="c" value="${esc(curs[0] ?? LEGACY_CURRENCY)}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick: (mc) => rec({ kind: $('[name="k"]', mc.el).value, description: $('[name="d"]', mc.el).value.trim(), amount: Number($('[name="a"]', mc.el).value), currency: $('[name="c"]', mc.el).value.trim() }) }] }));
+  $('[data-gm]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+}
+
+// ─────────────────────────────────────────── (v1.28.0) rolling revenue forecast
+
+async function rollingSection(host, canWrite, q = '') {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let f;
+  try { f = await api(`/v1/finance/rolling-forecast${q}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const sc = f.scenario;
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Growth % a year', `<input type="number" data-rg value="${sc.growthPct}" style="width:100px">`)}${field('Price change %', `<input type="number" data-rp value="${sc.pricePct}" style="width:100px">`)}${field('Energy cost change %', `<input type="number" data-re value="${sc.energyPct}" style="width:100px">`)}${field('Alert below budget %', `<input type="number" data-ra value="${sc.alertPct}" style="width:100px">`)}
+      <div class="row" style="gap:6px;align-self:flex-end"><button class="btn" type="button" data-rgo>Apply</button>${canWrite ? '<button class="btn" type="button" data-rsv>Save as default</button>' : ''}</div></div>
+    ${callout('info', 'Each site\'s trend over the last 12 months (flat at the average with fewer than 6 months of history), with seasonality once there are 13 months, then your scenario. The energy cost follows each site\'s last 3 months.')}
+    ${Object.entries(f.totals).map(([c, t]) => `<div class="card section"><header><h3>Next 12 months · ${esc(c)}</h3><span class="right cell-sub">revenue ${esc(fmt.money(t.reduce((a, x) => a + x.revenue, 0), c))} · margin ${esc(fmt.money(t.reduce((a, x) => a + x.margin, 0), c))}</span></header><div data-rt="${esc(c)}"></div></div>`).join('')}
+    <div class="card section"><header><h3>Sites</h3></header><div data-rs></div></div>`;
+  for (const [c, t] of Object.entries(f.totals)) table($(`[data-rt="${c}"]`, el), { columns: [
+    { label: 'Month', render: (r) => esc(r.month) }, { label: 'Revenue', num: true, render: (r) => esc(fmt.money(r.revenue, c)) },
+    { label: 'Energy', num: true, render: (r) => esc(fmt.money(r.energyCost, c)) }, { label: 'Margin', num: true, render: (r) => esc(fmt.money(r.margin, c)) },
+    { label: 'Budget', num: true, render: (r) => (r.budget == null ? '<span class="cell-sub">—</span>' : `${esc(fmt.money(r.budget, c))}${r.revenue < r.budget ? `<div class="cell-sub" style="color:var(--warn)">${esc(fmt.money(r.revenue - r.budget, c))}</div>` : ''}`) },
+  ], rows: t, empty: '' });
+  table($('[data-rs]', el), { columns: [
+    { label: 'Site', render: (s) => `${esc(s.site)}${s.belowBudget ? ` ${tag('t-warn', 'below budget')}` : ''}<div class="cell-sub">${s.monthsOfHistory} months of history${s.flat ? ' · flat (a trend needs 6 months)' : ''}${s.seasonal ? ' · seasonal' : ''} · energy ${s.costRatioPct}% of revenue</div>` },
+    { label: 'Trend a month', num: true, render: (s) => esc(fmt.money(s.trendPerMonth, s.currency)) },
+    { label: 'Next 12 months', num: true, render: (s) => `<b>${esc(fmt.money(s.next12, s.currency))}</b>` },
+  ], rows: f.sites, empty: 'No sites.' });
+  const v = (k) => $(`[data-${k}]`, el).value;
+  const params = () => `?growthPct=${v('rg')}&pricePct=${v('rp')}&energyPct=${v('re')}&alertPct=${v('ra')}`;
+  $('[data-rgo]', el).addEventListener('click', () => rollingSection(host, canWrite, params()));
+  $('[data-rsv]', el)?.addEventListener('click', async () => {
+    try { await api('/v1/finance/rolling-forecast/settings', { method: 'PUT', body: { growthPct: Number(v('rg')), pricePct: Number(v('rp')), energyPct: Number(v('re')), alertPct: Number(v('ra')) } }); toast('Saved.', 'ok'); } catch (e) { toast(e.message, 'crit'); }
+  });
+}
+
+// ─────────────────────────────────────────── (v1.28.0) payment plans and the bad-debt provision
+
+async function plansSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let p, pr;
+  try { [p, pr] = await Promise.all([state.can('invoice:read') ? api('/v1/finance/payment-plans') : Promise.resolve({ plans: [] }), api('/v1/finance/provision')]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => plansSection(host, canWrite);
+  const canInv = state.can('invoice:write');
+  const ST = { active: 't-info', completed: 't-ok', defaulted: 't-crit', cancelled: 't-mute' };
+  el.innerHTML = `<div class="card"><header><h3>Payment plans</h3>${canInv ? '<span class="right"><button class="btn sm primary" type="button" data-pn>New plan</button></span>' : ''}</header><div data-pl></div></div>
+    <div class="card section"><header><h3>Bad-debt provision</h3><span class="right"><button class="btn sm" type="button" data-px>${icon('download')} Excel</button> ${canWrite ? `<button class="btn sm primary" type="button" data-pr>Record ${esc(lastMonthYm())}</button>` : ''}</span></header>
+      <div class="body"><p class="cell-sub" style="margin-top:0">Receivables by age × the rate (${Object.entries(pr.rates).map(([k, v]) => `${k}: ${v}%`).join(', ')}). An invoice on an active plan counts as current.</p></div><div data-pp></div><div data-ph></div></div>`;
+  table($('[data-pl]', el), { columns: [
+    { label: 'Invoice', render: (x) => `<span class="mono">${esc(x.number)}</span><div class="cell-sub">${esc(x.account)}</div>` },
+    { label: 'Instalments', render: (x) => x.instalments.map((i) => `<span title="${esc(i.due)}" class="tag ${i.status === 'paid' ? 't-ok' : i.status === 'late' ? 't-crit' : 't-mute'}">${esc(i.due.slice(5))}</span>`).join(' ') },
+    { label: 'Left', num: true, render: (x) => esc(fmt.money(x.outstanding, x.currency)) },
+    { label: 'Status', render: (x) => tag(ST[x.status] ?? 't-mute', x.status) },
+    { label: '', render: (x) => (canInv && x.status === 'active' ? `<button class="btn sm" type="button" data-ppay="${esc(x.id)}">Payment</button> <button class="btn sm" type="button" data-pc="${esc(x.id)}">Cancel</button>` : '') },
+  ], rows: p.plans, empty: 'No payment plans.' });
+  table($('[data-pp]', el), { columns: [
+    { label: 'Currency · bucket', render: (r) => `${esc(r.c)} · ${esc(r.b.bucket)}<div class="cell-sub">${r.b.count} receivable(s)</div>` },
+    { label: 'Receivables', num: true, render: (r) => esc(fmt.money(r.b.amount, r.c)) },
+    { label: 'Rate', num: true, render: (r) => `${r.b.ratePct}%` },
+    { label: 'Provision', num: true, render: (r) => esc(fmt.money(r.b.provision, r.c)) },
+  ], rows: pr.currencies.flatMap((c) => c.buckets.filter((b) => b.amount).map((b) => ({ c: c.currency, b }))), empty: 'No receivables.' });
+  $('[data-ph]', el).innerHTML = pr.currencies.map((c) => `<div class="body">${callout('info', `${esc(c.currency)}: provision <b>${esc(fmt.money(c.provision, c.currency))}</b>${c.last ? ` against ${esc(fmt.money(c.last.provision, c.currency))} recorded for ${esc(c.last.month)}` : ''} — movement ${esc(fmt.money(c.movement, c.currency))}.`)}</div>`).join('');
+  $('[data-px]', el).addEventListener('click', async () => { try { const res = await api('/v1/finance/provision?format=xlsx', { raw: true }); download('plugsure-provision.xlsx', await res.blob()); } catch (e) { toast(e.message, 'crit'); } });
+  $('[data-pr]', el)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { await api(`/v1/finance/provision/${lastMonthYm()}/record`, { method: 'POST' }); toast('Recorded.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+  });
+  el.querySelectorAll('[data-ppay]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Payment on the plan', body: `<div class="form">${field('Amount (minor units)', '<input name="a" type="number" min="1">')}${field('Paid on', `<input name="d" type="date" value="${zonedYmd(new Date())}">`)}${field('Bank reference', '<input name="r">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) { try { await api(`/v1/finance/payment-plans/${b.dataset.ppay}/payments`, { method: 'POST', body: { amount: Number($('[name="a"]', mc.el).value), paidOn: $('[name="d"]', mc.el).value, reference: $('[name="r"]', mc.el).value.trim() } }); toast('Recorded.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; } } }] })));
+  el.querySelectorAll('[data-pc]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Cancel the plan', body: field('Why', '<input name="w">'),
+    actions: [{ label: 'Back' }, { label: 'Cancel plan', kind: 'danger', async onClick(mc) { try { await api(`/v1/finance/payment-plans/${b.dataset.pc}/cancel`, { method: 'POST', body: { reason: $('[name="w"]', mc.el).value.trim() } }); reload(); } catch (e) { toast(e.message, 'crit'); return false; } } }] })));
+  $('[data-pn]', el)?.addEventListener('click', async () => {
+    let inv;
+    try { inv = (await api('/v1/fleet-invoices?status=issued')).invoices ?? []; } catch { inv = []; }
+    modal({ title: 'New payment plan', body: `<div class="form">${field('Invoice', `<select name="i">${inv.filter((i) => Number(i.balance_minor) > 0).map((i) => `<option value="${esc(i.id)}">${esc(i.number)}${i.overdue ? ' · overdue' : ''} · ${esc(fmt.money(Number(i.balance_minor), i.currency))}</option>`).join('')}</select>`)}
+        ${field('Instalments', '<input name="n" type="number" min="2" max="24" value="3">')}${field('First due', `<input name="f" type="date" value="${zonedYmd(new Date())}">`)}${field('Every (days; empty: monthly)', '<input name="e" type="number" min="7" max="92">')}${field('Grace days', '<input name="g" type="number" min="0" max="60" value="7">')}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Agree', kind: 'primary', async onClick(mc) {
+        const v = (n) => $(`[name="${n}"]`, mc.el).value;
+        try { await api(`/v1/fleet-invoices/${v('i')}/payment-plan`, { method: 'POST', body: { count: Number(v('n')), firstDue: v('f'), everyDays: v('e') ? Number(v('e')) : undefined, graceDays: Number(v('g')) } }); toast('Plan agreed.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+      } }] });
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -1927,8 +2086,8 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
+      { id: 'payables', label: 'Payables' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -2302,7 +2461,8 @@ registerView('finance', {
       yearend: () => yearEndSection(body, canWrite),
       roaming: () => roamingSection(body, canWrite), controls: () => controlsSection(body),
       subscriptions: () => subscriptionsSection(body, canWrite), ppn: () => ppnSection(body, canWrite), autopay: () => autoPayoutsSection(body, canWrite),
-      tariffs: () => tariffsSection(body, canWrite), fleetauto: () => fleetAutoSection(body) };
+      tariffs: () => tariffsSection(body, canWrite), fleetauto: () => fleetAutoSection(body),
+      funds: () => driverFundsSection(body, canWrite), group: () => groupSection(body, canWrite), rforecast: () => rollingSection(body, canWrite), plans: () => plansSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

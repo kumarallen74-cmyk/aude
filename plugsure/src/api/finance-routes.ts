@@ -44,6 +44,10 @@ import * as digest from '../services/finance-digest.js';
 import * as tariffs from '../services/energy-tariffs.js';
 import * as ownerDocs from '../services/owner-docs.js';
 import * as fleetAuto from '../services/fleet-automation.js';
+import * as funds from '../services/driver-funds.js';
+import * as group from '../services/group-consolidation.js';
+import * as rolling from '../services/rolling-forecast.js';
+import * as plans from '../services/payment-plans.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -1558,6 +1562,139 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, 'fleet_invoice.payment_link_created', 'fleet_invoice', prm(req, 'id'), r as unknown as Record<string, unknown>);
       return r;
     } catch (e) { return p16Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.28.0) driver funds, group consolidation, rolling forecast, plans and provision
+
+  const p17Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof funds.DriverFundsError || e instanceof group.GroupError || e instanceof rolling.ForecastError || e instanceof plans.PlanError) return reply.status(e.statusCode).send({ error: e.message });
+    return p16Failed(reply, e);
+  };
+
+  app.get('/v1/finance/driver-funds', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const [p, m, r] = await Promise.all([funds.position(req.principal.orgId), funds.movement(req.principal.orgId, qs(req).month), funds.recognised(req.principal.orgId)]);
+      if (qs(req).format === 'xlsx') return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="plugsure-driver-funds-${m.month}.xlsx"`).send(funds.reportXlsx(p, m));
+      return { position: p, movement: m, recognised: r };
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.put('/v1/finance/driver-funds/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await funds.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.driver_funds_settings_saved', 'organisation', req.principal.orgId, r);
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.post('/v1/finance/driver-funds/breakage', async (req, reply) => {
+    assertCan(req.principal, { permission: 'finance:approve' });
+    try {
+      const r = await funds.recogniseBreakage(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.driver_breakage_recognised', 'organisation', req.principal.orgId, r);
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/group', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { grouped: true, ...(await group.consolidated(req.principal.orgId, qs(req).month)) }; } catch (e) {
+      if (e instanceof group.GroupError && e.statusCode === 404) return { grouped: false, message: e.message };
+      return p17Failed(reply, e);
+    }
+  });
+  app.get('/v1/finance/group/trend', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return { grouped: true, ...(await group.trend(req.principal.orgId, qs(req).month)) }; } catch (e) {
+      if (e instanceof group.GroupError && e.statusCode === 404) return { grouped: false, message: e.message };
+      return p17Failed(reply, e);
+    }
+  });
+  app.post('/v1/finance/group/eliminations', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await group.recordElimination(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.group_elimination_recorded', 'consolidation_elimination', r.id, r);
+      return reply.status(201).send(r);
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.post('/v1/finance/group/eliminations/:id/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await group.voidElimination(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.group_elimination_voided', 'consolidation_elimination', prm(req, 'id'), { reason });
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/rolling-forecast', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await rolling.forecast(req.principal.orgId, qs(req)); } catch (e) { return p17Failed(reply, e); }
+  });
+  app.put('/v1/finance/rolling-forecast/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await rolling.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.forecast_settings_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/payment-plans', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    try { return { plans: await plans.list(req.principal.orgId, { status: qs(req).status }) }; } catch (e) { return p17Failed(reply, e); }
+  });
+  app.post('/v1/fleet-invoices/:id/payment-plan', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    try {
+      const r = await plans.create(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await auditPay(req, 'fleet_invoice.payment_plan_agreed', 'fleet_invoice', prm(req, 'id'), { plan: r.id, total: r.total, instalments: r.instalments.length });
+      return reply.status(201).send(r);
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-plans/:id/payments', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    try {
+      const b = body(req);
+      const r = await plans.pay(req.principal.orgId, prm(req, 'id'), b);
+      await auditPay(req, 'fleet_invoice.payment_plan_paid', 'payment_plan', prm(req, 'id'), { amount: b.amount, reference: b.reference, status: r.status });
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-plans/:id/cancel', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await plans.cancel(req.principal.orgId, prm(req, 'id'), reason);
+      await auditPay(req, 'fleet_invoice.payment_plan_cancelled', 'payment_plan', prm(req, 'id'), { reason });
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/provision', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const [p, h] = await Promise.all([plans.provision(req.principal.orgId, platform(req)), plans.history(req.principal.orgId)]);
+      if (qs(req).format === 'xlsx') return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="plugsure-provision-${p.asOf}.xlsx"`).send(plans.provisionXlsx(p, h));
+      return { ...p, history: h };
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.put('/v1/finance/provision/rates', async (req, reply) => {
+    assertCan(req.principal, { permission: 'finance:approve' });
+    try {
+      const r = await plans.saveRates(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.provision_rates_saved', 'organisation', req.principal.orgId, r);
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
+  });
+  app.post('/v1/finance/provision/:month/record', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await plans.record(req.principal.orgId, platform(req), prm(req, 'month'), userUuid(req));
+      await auditPay(req, 'finance.provision_recorded', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p17Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
