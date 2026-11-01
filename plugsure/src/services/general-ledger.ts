@@ -40,7 +40,7 @@ export class LedgerError extends Error {
 
 export const TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense', 'other'] as const;
 type AccountType = typeof TYPES[number];
-export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks', 'loyalty', 'fx', 'tax', 'cards', 'contracts'] as const;
+export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks', 'loyalty', 'fx', 'tax', 'cards', 'contracts', 'driver_credit'] as const;
 type Source = typeof SOURCES[number];
 
 export const SEED: Array<[string, string, AccountType]> = [
@@ -68,6 +68,7 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['1190', 'Disputed funds (chargebacks)', 'asset'], ['1350', 'Grants receivable', 'asset'], ['2420', 'Accrued rent', 'liability'], ['2600', 'Deferred grant income', 'liability'], ['2610', 'Grants repayable', 'liability'],
   ['4400', 'Grant income', 'revenue'], ['6520', 'Chargeback losses', 'expense'], ['6700', 'Grant clawbacks', 'expense'],
   ['2250', 'Loyalty points liability', 'liability'], ['4150', 'Loyalty points deferred', 'revenue'],
+  ['2260', 'Driver credit: gift cards', 'liability'], ['4110', 'Charging paid with driver credit', 'revenue'], ['4160', 'Gift card breakage', 'revenue'], ['6450', 'Driver credit promotions', 'expense'],
   ['1460', 'Prepaid income tax (PPh 25)', 'asset'], ['1465', 'Income tax withheld by others (PPh 22/23)', 'asset'], ['1470', 'Deferred tax assets', 'asset'], ['1480', 'Receivable from employees', 'asset'],
   ['2165', 'Corporate cards payable', 'liability'], ['2700', 'Corporate income tax payable', 'liability'], ['2710', 'Deferred tax liabilities', 'liability'],
   ['6380', 'Software and subscriptions', 'expense'], ['1370', 'Contract receivables', 'asset'], ['2280', 'Contract liabilities (deferred revenue)', 'liability'], ['4500', 'Contract revenue', 'revenue'], ['9100', 'Current income tax', 'other'], ['9110', 'Deferred income tax', 'other'],
@@ -397,7 +398,7 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
   }
   for (const [c, L] of Object.entries(inLines)) add('insurance', c, `Insurance, ${month}`, L);
   // (v1.36.0) Grants, landlord rent accruals and chargebacks, each module's own journal (imported here: no cycles).
-  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks'], ['loyalty', './loyalty-accounting.js', 'Loyalty points'], ['fx', './fx-treasury.js', 'FX hedges settled'], ['tax', './corporate-tax.js', 'Corporate income tax'], ['cards', './corporate-cards.js', 'Corporate cards'], ['contracts', './revenue-contracts.js', 'Customer contracts']] as const) {
+  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks'], ['loyalty', './loyalty-accounting.js', 'Loyalty points'], ['fx', './fx-treasury.js', 'FX hedges settled'], ['tax', './corporate-tax.js', 'Corporate income tax'], ['cards', './corporate-cards.js', 'Corporate cards'], ['contracts', './revenue-contracts.js', 'Customer contracts'], ['driver_credit', './driver-credit.js', 'Driver credit']] as const) {
     const j: Record<string, Line[]> = await (await import(mod)).journal(orgId, month);
     for (const [c, L] of Object.entries(j)) if (L.length) add(src, c, `${label}, ${month}`, L);
   }

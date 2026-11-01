@@ -53,6 +53,23 @@ departure.
 A session that turns *at risk* raises **fleet.vehicle_not_ready** once. Route it under Governance → Alert routing. It
 is resolved when the session is ready.
 
+## Telematics (v1.45.0)
+
+Most AC chargers, and OCPP 1.6 chargers, do not report the battery. A fleet's telematics platform (the car maker's or
+its own) can supply it. Connect it under Depot charging → Telematics:
+
+- **The platform posts to PlugSure.** Its address, `…/v1/telematics/ingest/<key>`, is shown once.
+- **PlugSure reads the platform.** It reads an https URL with an Authorization header (kept sealed) every 5 to 1,440
+  minutes. Reads go through the outbound guard: public addresses only, no redirects, 15 seconds and 1 MB at most.
+
+A field map says where each value is in the platform's JSON, as dot paths: the list, the vehicle id, state of charge
+(or a 0–1 share), range, latitude, longitude, odometer, charging and the time. Link each vehicle to its id there (often
+its VIN) in the vehicle's form. Readings for vehicles not linked are counted, not stored.
+
+A reading from the last 30 minutes stands in for the car's own state of charge. With the vehicle's battery size and
+target state of charge, the energy still needed is worked out from it. The Vehicles table shows each one's latest
+reading.
+
 ## API
 
 - `GET /v1/depot`
@@ -60,5 +77,8 @@ is resolved when the session is ready.
 - `PUT /v1/depot/sessions/{sessionId}/departure` with `{departureAt, neededKwh}`
 - `GET`, `POST /v1/fleet-vehicles`
 - `PUT /v1/fleet-vehicles/{id}` (with `{archive: true}` to archive)
+- `GET`, `POST /v1/telematics/connections`, `PUT /v1/telematics/connections/{id}`, `POST …/{id}/poll`
+- `PUT /v1/fleet-vehicles/{id}/telematics`
+- `POST /v1/telematics/ingest/{key}` (the platform)
 
 Every change is audited (`depot.*`, `fleet_vehicle.saved`).

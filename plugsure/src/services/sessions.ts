@@ -1384,6 +1384,18 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedMinor: nu
    * repeat run does not raise them twice.
    */
 
+  // (v1.45.0) Credit held at checkout pays its part: a card hold or post-pay captures only what credit does not cover; a
+  // pre-purchase uses the money already paid first, then credit (so credit never comes back as a cash refund). The
+  // charge record stays at the full price. Settled once; a later run reuses what was settled.
+  const credit = await import('./driver-credit.js');
+  const held = await credit.heldFor(intent.id);
+  const creditPart = (capturedSoFar: number) => (held ? (held.settled ? Number(held.usedMinor ?? 0) : credit.creditShare(intent.mode, held.heldMinor, invoicedMinor, capturedSoFar)) : 0);
+  if (held && (intent.mode === 'preauth' || intent.mode === 'postpay')) {
+    const used = creditPart(0);
+    if (!held.settled) await credit.settle(held.driverChargeId, used);
+    invoicedMinor -= used;
+  }
+
   // A card hold: capture what the session cost (up to the hold); the rest is released, nothing to refund.
   let captured = Number(intent.captured ?? 0);
   if (intent.mode === 'preauth' || intent.mode === 'postpay') {
@@ -1395,6 +1407,11 @@ async function settlePrepaid(sessionId: string, orgId: string, invoicedMinor: nu
       // again would reset a failed or expired capture's retries and alerts: the hold worker owns it from here.
       captured = Number(intent.hold_capture ?? 0);
     }
+  }
+  if (held && !(intent.mode === 'preauth' || intent.mode === 'postpay')) {
+    const used = creditPart(captured);
+    if (!held.settled) await credit.settle(held.driverChargeId, used);
+    invoicedMinor -= used;
   }
   const delta = invoicedMinor - captured;
 

@@ -86,6 +86,7 @@ import { registerFinanceRoutes } from './finance-routes.js';
 import { registerPhase30Routes, isPublicPhase30Route } from './phase30-routes.js';
 import { registerPhase31Routes, isPublicPhase31Route } from './phase31-routes.js';
 import { registerPhase32Routes } from './phase32-routes.js';
+import { registerPhase33Routes, isPublicPhase33Route } from './phase33-routes.js';
 import { registerBrandRoutes } from './brand-routes.js';
 import { registerConsoleBrandRoutes } from './console-brand-routes.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
@@ -321,6 +322,8 @@ export async function buildApi(): Promise<FastifyInstance> {
     if (isPublicPhase30Route(route, req.method)) return;
     // (v1.43.0) The demand-response webhook (its programme key) and the public status page.
     if (isPublicPhase31Route(route, req.method)) return;
+    // (v1.45.0) The support desk's inbound e-mail and the telematics webhook (their own keys).
+    if (isPublicPhase33Route(route, req.method)) return;
     try {
       const auth = await authenticate(req.headers as Record<string, unknown>);
       req.principal = auth.principal;
@@ -1982,6 +1985,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerPhase30Routes(app);
   await registerPhase31Routes(app);
   await registerPhase32Routes(app);
+  await registerPhase33Routes(app);
   await registerBrandRoutes(app);
   await registerConsoleBrandRoutes(app);
   await registerMicrosoftRoutes(app);

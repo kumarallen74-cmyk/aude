@@ -683,7 +683,9 @@ input{font-family:inherit}
     'Berlaku 30 hari. Perpanjang sendiri, atau otomatis dengan kartu tersimpan atau e-wallet terhubung. Ganti paket kapan saja: sisa hari paket lama menjadi potongan. Harga member otomatis berlaku saat mengisi di operator tersebut.':'Valid 30 days. Renew yourself, or automatically with a saved card or linked e-wallet. Switch plans any time: the days left on the old plan come off the price. Member prices apply automatically when you charge with that operator.',
     // Bidirectional charging (V2G / V2B)
     'Kembalikan energi ke lokasi (V2G)':'Give energy back to the site (V2G)','Mobil Anda bisa mengembalikan listrik saat beban puncak lokasi.':'Your car can give electricity back while the site’s load peaks.',
-    'CO₂ dihindari dibanding bensin':'CO₂ avoided against petrol',    'Meter bertanda tangan':'Signed meter data','Terverifikasi':'Verified','Cocok':'Matches','Tidak cocok':'Does not match','Tidak sah':'Not valid','Tidak lengkap':'Incomplete','Tidak ada':'None',
+    'CO₂ dihindari dibanding bensin':'CO₂ avoided against petrol',
+    // (v1.45.0) credit, referrals, reporting a problem
+    'Laporkan masalah':'Report a problem','Masalahnya tentang':'What is it about','Pengembalian dana':'Refund','Charger rusak':'Charger broken','Ceritakan':'Tell us what happened','Apa yang terjadi?':'What happened?','Kirim laporan':'Send the report','Laporan terhubung dengan sesi ini. Balasan muncul di Akun → Laporan saya.':'The report is linked to this session. Replies appear in Account → My reports.','Baru':'New','Diproses':'In progress','Menunggu balasan Anda':'Waiting for your reply','Ditutup':'Closed','Seberapa puas Anda?':'How satisfied are you?','Tulis pesan':'Write a message','Kirim':'Send','Layanan pelanggan':'Customer service','Kredit':'Credit','Punya kode kartu hadiah atau voucher?':'Have a gift card or voucher code?','Tukarkan':'Redeem','Bagikan kode':'Share the code','Punya kode referal dari teman?':'Have a referral code from a friend?','Kode referal':'Referral code','Pakai kode':'Use the code','Riwayat kredit':'Credit history','Kartu hadiah':'Gift card','Referal':'Referral','Dipakai mengisi':'Used for charging','Kembali dari sesi':'Back from a session','Laporan saya':'My reports','Dibayar dengan kredit':'Paid with credit','Kode disalin.':'Code copied.','Pembayaran':'Payment','Penyesuaian':'Adjustment','Voucher':'Voucher',    'Meter bertanda tangan':'Signed meter data','Terverifikasi':'Verified','Cocok':'Matches','Tidak cocok':'Does not match','Tidak sah':'Not valid','Tidak lengkap':'Incomplete','Tidak ada':'None',
     'Batas baterai':'Battery floor','Izinkan':'Allow','Diizinkan':'Allowed','Diatur oleh armada Anda.':'Set by your fleet.','Kredit energi dikembalikan':'Credit for energy given back',
     'Di luar jam pengembalian energi':'Outside the give-back hours','Kurang dari satu jam sebelum Anda pergi':'Less than an hour before you leave','Level baterai belum diketahui':'Battery level not known yet',
     'Charger ini belum mendukung':'This charger does not support it yet','Mobil tidak menawarkan pengembalian energi':'The car did not offer to give energy back','Lokasi sedang tidak membutuhkan energi':'The site does not need energy right now','Menunggu giliran':'Waiting for a turn',
@@ -760,6 +762,13 @@ input{font-family:inherit}
     [/^Kredit (Rp [\d.]+) per kWh\. Baterai tidak turun di bawah (\d+)%, dan tidak dalam satu jam sebelum Anda pergi\.$/g,'Credit $1 per kWh. The battery never goes below $2%, nor in the hour before you leave.'],
     [/^Sedang mengembalikan ([\d.,]+) kW$/g,'Giving back $1 kW'],[/^Dikembalikan ([\d.,]+) kWh · kredit (Rp [\d.]+)$/g,'Given back $1 kWh · credit $2'],[/^Baterai sudah di batas (\d+)%$/g,'The battery is at its $1% floor'],
     // Site queues. First: the single-word "menit" pattern below would cut these in half.
+    // (v1.45.0) Credit, referrals, reports. Before the generic word patterns below.
+    [/^Pakai kredit (.+)$/g,'Use credit: $1'],[/^Saldo kredit (.+)\. Yang tidak terpakai kembali menjadi kredit\.$/g,'Credit balance $1. What a session does not use comes back as credit.'],
+    [/^±([\d.,]+) kWh · kredit (.+)$/g,'±$1 kWh · credit $2'],[/^Sebagian kedaluwarsa (.+)$/g,'Some expires $1'],
+    [/^Ajak teman ke (.+): Anda dapat (.+), teman Anda (.+) setelah pengisian pertamanya\.$/g,'Invite a friend to $1: you get $2, your friend $3 after their first charge.'],
+    [/^Laporan (PS-\d+) terkirim\.$/g,'Report $1 sent.'],[/^Kredit (.+) ditambahkan\.$/g,'Credit $1 added.'],
+    [/^Kode diterima\. Kredit (.+) masuk setelah pengisian pertama Anda\.$/g,'Code accepted. Credit $1 arrives after your first charge.'],
+    [/^Nilai Anda: (\d)\/5\. Terima kasih\.$/g,'Your rating: $1/5. Thank you.'],
     [/^Ke-(\d+) dalam antrean$/g,'Number $1 in the queue'],[/^Perkiraan (\d+) menit$/g,'About $1 min'],[/^(\d+) menunggu$/g,'$1 waiting'],
     [/^Waktu mulai: (\d+) menit$/g,'Time to start: $1 min'],[/^Pesan (\d+) menit$/g,'Reserve for $1 min'],
     [/^Biaya reservasi (Rp [\d.]+)$/g,'Reservation fee $1'],[/ · Biaya reservasi$/g,' · Reservation fee'],[/ Biaya reservasi dikembalikan\.$/g,' The reservation fee is refunded.'],[/^Konektor ini baru saja dipesan orang lain\. /g,'Someone else just reserved this connector. '],[/^(\d+) stasiun lain di sini · lihat Daftar$/g,'$1 more here · see the List'],[/^Antre paling lama sampai (.+)$/g,'Waiting at most until $1'],
@@ -1473,6 +1482,7 @@ function handleHash(){
   if(h.startsWith('s/')&&UUIDISH.test(h.slice(2))){ clear(); go('session',{chargeId:h.slice(2),_back:()=>go('home')}); return true; }
   if(h.startsWith('rr/')&&UUIDISH.test(h.slice(3))){ clear(); go('rreceipt',{cdrId:h.slice(3),_back:()=>go('history')}); return true; }
   if(h==='home'||h==='history'||h==='account'){ clear(); go(h); return true; }
+  if(h.startsWith('help/')&&/^\d{1,12}$/.test(h.slice(5))){ clear(); go('case',{id:h.slice(5),_back:()=>go('account')}); return true; }
   // Back from an e-wallet app or the card page (paid.html): the payment screen it left.
   if(h==='paid'){ clear(); if(!resumeCheckout()) go('home'); return true; }
   return false;
@@ -2164,6 +2174,7 @@ VIEWS.connector=async(v)=>{
     <div class="custom-in"><span>${esc(CURS[CUR].sym)}</span><input id="custom" inputmode="${CUR===RUPIAH?'numeric':'decimal'}" placeholder="Jumlah lain" /></div>
     <div class="custom-in promo-in"><span>${svg(I.gift)}</span><input id="promo" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="30" placeholder="Kode promo (opsional)" /></div>
     <div class="quote-line" id="quote" style="display:none"></div>
+    <div id="creditbox"></div>
     <div id="methodbox"></div>
     ${feeRows?`<div class="seclabel" style="margin-top:20px">Rincian biaya</div><div class="card">${feeRows}<div class="rc-line small muted" style="padding-top:6px">${c.countryCode&&c.countryCode!=='ID'?(c.pricesIncludeTax?'Harga sudah termasuk pajak.':'Pajak ditambahkan saat sesi selesai.'):'Harga sudah termasuk PBJT & PPN saat sesi selesai.'}</div></div>`:''}
     <button class="cta stickycta" id="pay" disabled>${svg(I.bolt)} Pilih jumlah dulu</button>`;
@@ -2174,8 +2185,11 @@ VIEWS.connector=async(v)=>{
   const quote=$('#quote'), payBtn=$('#pay');
   let pick=null, lastQ=null;
   // Post-pay with a linked e-wallet: nothing is paid now, so the button starts the charge.
+  // (v1.45.0) Credit pays part of it: only the rest goes through the payment.
+  const useCredit=()=>!!($('#usecredit')&&$('#usecredit').checked&&lastQ&&lastQ.creditUsableMinor>0);
+  const toPay=()=>amount-(useCredit()?lastQ.creditUsableMinor:0);
   const payLabel=()=>{ if(!lastQ||paying) return; const post=pick&&pick.postpay&&pick.postpay()&&amount<=(lastQ.postpayLimitIdr||0);
-    payBtn.innerHTML=svg(I.bolt)+(post?`<span class="cta-2l"><span>Mulai isi · bayar setelah selesai</span><small>batas ${rp(amount)} · ±${kwh(lastQ.allowanceKwh)} kWh</small></span>`:`<span class="cta-2l"><span>Bayar ${rp(amount)}</span><small>±${kwh(lastQ.allowanceKwh)} kWh</small></span>`); };
+    payBtn.innerHTML=svg(I.bolt)+(post?`<span class="cta-2l"><span>Mulai isi · bayar setelah selesai</span><small>batas ${rp(amount)} · ±${kwh(lastQ.allowanceKwh)} kWh</small></span>`:`<span class="cta-2l"><span>Bayar ${rp(toPay())}</span><small>±${kwh(lastQ.allowanceKwh)} kWh${useCredit()?` · kredit ${rp(lastQ.creditUsableMinor)}`:''}</small></span>`); };
   const promoCode=()=>($('#promo')?.value||'').trim().toUpperCase();
   $('#promo').addEventListener('input',()=>{ if(amount) setAmount(amount); });
   const setAmount=(a)=>{ if(paying) return;
@@ -2195,7 +2209,11 @@ VIEWS.connector=async(v)=>{
         quote.querySelector('svg').style.cssText='width:30px;height:30px;color:var(--arus);opacity:.6';
         if(!pick) pick=methodPicker($('#methodbox'),q.paymentMethods,{savedCards:q.savedCards,canSaveCard:q.canSaveCard,cardHolds:q.cardHolds,
           linkedWallets:q.linkedWallets,linkableWallets:q.linkableWallets,walletPostpay:q.walletPostpay,postpayLimitIdr:q.postpayLimitIdr,postpayBlocked:q.postpayBlocked,onChange:()=>payLabel(),onLink:(ch,phone)=>startWalletLink({connectorId:c.connectorId,channel:ch,phone},{view:'connector',params:{connectorId:c.connectorId}})});
-        lastQ=q; payBtn.disabled=false; payLabel();
+        lastQ=q;
+        const cb=$('#creditbox'); const wasOn=$('#usecredit')?$('#usecredit').checked:true;
+        cb.innerHTML=q.creditUsableMinor>0?`<label class="card soft small" style="display:flex;gap:10px;align-items:center;margin-top:12px"><input type="checkbox" id="usecredit"${wasOn?' checked':''}> <span>Pakai kredit ${rp(q.creditUsableMinor)}<br><span class="muted">Saldo kredit ${rp(q.creditMinor)}. Yang tidak terpakai kembali menjadi kredit.</span></span></label>`:'';
+        if($('#usecredit')) $('#usecredit').onchange=()=>payLabel();
+        payBtn.disabled=false; payLabel();
         quote.scrollIntoView({block:'nearest',behavior:'smooth'});
       }catch(e){
         if(stale()) return;
@@ -2212,7 +2230,7 @@ VIEWS.connector=async(v)=>{
     const raw=e.target.value.replace(/\D/g,''); e.target.value=raw?Number(raw).toLocaleString(ID_LOCALE):''; setAmount(Number(raw)); $('#amts').querySelectorAll('.chip').forEach(ch=>ch.classList.remove('sel')); };
   payBtn.onclick=async()=>{ if(!amount||paying)return; paying=true; quoteSeq++; payBtn.disabled=true; payBtn.innerHTML='<span class="spinner"></span>';
     try{ const m=pick?pick.value():{};
-      const r=await moneyPost('/v1/charge/prepaid',{connectorId:c.connectorId,amountMinor:amount,promoCode:promoCode()||undefined,...m});
+      const r=await moneyPost('/v1/charge/prepaid',{connectorId:c.connectorId,amountMinor:amount,promoCode:promoCode()||undefined,useCredit:useCredit(),...m});
       state._checkout=r; state._con=c;
       // A saved card that went through at once: straight to charging.
       if(r.payment&&r.payment.action==='done'){ return onPaid(r); }
@@ -2703,6 +2721,7 @@ VIEWS.receipt=async(v)=>{
           <div class="rc-sep"></div>
           <div class="rc-line tot"><span class="d">Total</span><span class="a">${rp(t.totalMinor)}</span></div>
           ${r.loyalty&&r.loyalty.earnedPoints?`<div class="rc-line small muted"><span class="d">Poin diperoleh</span><span class="a">+${r.loyalty.earnedPoints.toLocaleString(ID_LOCALE)} poin</span></div>`:''}
+          ${r.creditUsedMinor>0?`<div class="rc-line small muted"><span class="d">Dibayar dengan kredit</span><span class="a">${rp(r.creditUsedMinor)}</span></div>`:''}
           ${r.carbon&&r.carbon.avoidedKg>0?`<div class="rc-line small muted"><span class="d">CO₂ dihindari dibanding bensin</span><span class="a">${String(r.carbon.avoidedKg).replace('.',',')} kg</span></div>`:''}
           ${r.signedData&&r.signedData.status?`<div class="rc-line small muted"><span class="d">Meter bertanda tangan</span><span class="a">${esc(({verified:'Terverifikasi',unverified_key:'Cocok',mismatch:'Tidak cocok',invalid:'Tidak sah',incomplete:'Tidak lengkap',missing:'Tidak ada'})[r.signedData.status]||r.signedData.status)}</span></div>`:''}`
           :`<div class="banner b-info" style="margin-top:8px">${svg(I.clock)}<div>Struk sedang diproses. Coba lagi sebentar.</div></div>`}
@@ -2713,9 +2732,11 @@ VIEWS.receipt=async(v)=>{
     </div>
     ${t?`<button class="cta ghost" id="taxdoc" style="margin-top:16px">Unduh struk pajak</button>`:''}
     ${r.mode!=='fleet'?'<div id="rfbox" style="margin-top:10px"></div>':''}
+    ${state.me&&state.me.account?'<button class="cta ghost" id="report" style="margin-top:10px">Laporkan masalah</button>':''}
     <button class="cta ghost" id="done" style="margin-top:10px">Selesai</button>`;
   $('.rc-head svg')&&($('.rc-head .chk svg').style.cssText='width:28px;height:28px');
   $('#done').onclick=()=>go('home');
+  if($('#report')) $('#report').onclick=()=>go('report',{chargeId:id,_back:()=>go('receipt',{chargeId:id})});
   if($('#paynow')) $('#paynow').onclick=async()=>{ const b=$('#paynow'); b.disabled=true; b.innerHTML='<span class="spinner"></span>';
     if(set.postpay.checkoutUrl){ location.href=set.postpay.checkoutUrl; return; }
     try{ const r=await moneyPost('/v1/charge/'+id+'/pay-now',{});
@@ -2898,6 +2919,8 @@ VIEWS.account=async(v)=>{
   const mrow=el('<div></div>'); body.appendChild(mrow); paintMembership(mrow);
   // Points belong to a phone-number account: no request (and no 401) before the driver signs in.
   const lrow=el('<div></div>'); body.appendChild(lrow); if(state.me&&state.me.account) paintLoyalty(lrow);
+  const krow=el('<div></div>'); body.appendChild(krow); if(state.me&&state.me.account) paintCredit(krow);
+  const srow=el('<div></div>'); body.appendChild(srow); if(state.me&&state.me.account) paintReports(srow);
   const crow=el('<div></div>'); body.appendChild(crow); paintCards(crow);
   const hrow=el('<div></div>'); body.appendChild(hrow); paintHelp(hrow);
   if(me.account) $('#savename').onclick=async()=>{ await api('/v1/account/name',{method:'POST',body:JSON.stringify({name:$('#nm').value})}); state.me=null; alertBanner('Nama tersimpan.'); go('account'); };
@@ -3063,6 +3086,81 @@ async function paintLoyalty(row){
   row.querySelectorAll('[data-autoredeem]').forEach((x)=>x.onchange=async()=>{ x.disabled=true;
     try{ await api('/v1/loyalty/'+x.dataset.autoredeem,{method:'PUT',body:JSON.stringify({autoRedeem:x.checked})}); haptic(); }
     catch(e){ alertBanner(e.message); x.checked=!x.checked; } finally{ x.disabled=false; } });
+}
+
+/** (v1.45.0) Reporting a problem with a charge: the operator's support desk gets a case linked to it. */
+VIEWS.report=async(v)=>{ const p=state.params;
+  v.innerHTML=topbar('Laporkan masalah','',{back:1})+`<div class="pad">
+    <div class="seclabel">Masalahnya tentang</div>
+    <div class="seg" id="rcat" style="flex-wrap:wrap"><button data-c="charging" class="on">Pengisian</button><button data-c="payment">Pembayaran</button><button data-c="refund">Pengembalian dana</button><button data-c="charger_fault">Charger rusak</button><button data-c="other">Lainnya</button></div>
+    <div class="seclabel" style="margin-top:16px">Ceritakan</div>
+    <textarea id="rtext" rows="6" maxlength="5000" style="width:100%" placeholder="Apa yang terjadi?"></textarea>
+    <button class="cta" id="rsend" style="margin-top:14px">Kirim laporan</button>
+    <p class="small muted" style="margin-top:10px">Laporan terhubung dengan sesi ini. Balasan muncul di Akun → Laporan saya.</p></div>`;
+  let cat='charging';
+  v.querySelectorAll('#rcat button').forEach((b)=>b.onclick=()=>{ cat=b.dataset.c; v.querySelectorAll('#rcat button').forEach((x)=>x.classList.toggle('on',x===b)); });
+  $('#rsend').onclick=async()=>{ const b=$('#rsend'); b.disabled=true;
+    try{ const c=await api('/v1/support/cases',{method:'POST',body:JSON.stringify({chargeId:p.chargeId,category:cat,body:$('#rtext').value})});
+      haptic(); alertBanner('Laporan '+c.ref+' terkirim.'); go('case',{id:c.id,_back:()=>go('account')}); }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+};
+
+/** (v1.45.0) One report: the conversation with support, a reply, and a rating once it is resolved. */
+VIEWS.case=async(v)=>{ const p=state.params;
+  let c; try{ c=await api('/v1/support/cases/'+encodeURIComponent(p.id)); }catch(e){ alertBanner(e.message); return go('account'); }
+  const ST={new:'Baru',open:'Diproses',pending:'Menunggu balasan Anda',resolved:'Selesai',closed:'Ditutup'};
+  const paint=()=>{
+    v.innerHTML=topbar(c.ref,ST[c.status]||c.status,{back:1})+`<div class="pad">
+      <div class="seclabel">${esc(c.subject)}</div>
+      ${c.messages.map((m)=>`<div class="card ${m.from==='you'?'':'soft'}" style="margin:0 0 8px;${m.from==='you'?'margin-left:24px':''}"><div class="small muted">${m.from==='you'?'Anda':'Layanan pelanggan'} · ${esc(new Date(m.at).toLocaleString(dloc(),{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</div><div style="white-space:pre-wrap;margin-top:4px">${esc(m.body)}</div></div>`).join('')}
+      ${(c.status==='resolved'||c.status==='closed')&&!c.satisfaction?`<div class="seclabel" style="margin-top:14px">Seberapa puas Anda?</div><div class="seg" id="rate">${[1,2,3,4,5].map((n)=>`<button data-n="${n}">${n}</button>`).join('')}</div>`:''}
+      ${c.satisfaction?`<p class="small muted">Nilai Anda: ${c.satisfaction}/5. Terima kasih.</p>`:''}
+      <textarea id="ctext" rows="3" maxlength="5000" style="width:100%;margin-top:14px" placeholder="Tulis pesan"></textarea>
+      <button class="cta" id="csend" style="margin-top:10px">Kirim</button></div>`;
+    $('#csend').onclick=async()=>{ const b=$('#csend'); b.disabled=true;
+      try{ c=await api('/v1/support/cases/'+encodeURIComponent(c.id)+'/messages',{method:'POST',body:JSON.stringify({body:$('#ctext').value})}); haptic(); paint(); }
+      catch(e){ alertBanner(e.message); b.disabled=false; } };
+    v.querySelectorAll('#rate button').forEach((b)=>b.onclick=async()=>{
+      try{ c=await api('/v1/support/cases/'+encodeURIComponent(c.id)+'/messages',{method:'POST',body:JSON.stringify({satisfaction:Number(b.dataset.n)})}); haptic(); paint(); }
+      catch(e){ alertBanner(e.message); } });
+  };
+  paint();
+};
+
+/** (v1.45.0) Credit: the balance with each operator, a gift card or voucher code, referral codes to share or enter. */
+async function paintCredit(row){
+  let d; try{ d=await api('/v1/credit'); }catch(e){ return; }
+  if(!row.isConnected) return;
+  const KIND={gift_card:'Kartu hadiah',voucher:'Voucher',referral:'Referal',adjust:'Penyesuaian',hold:'Dipakai mengisi',release:'Kembali dari sesi',expire:'Kedaluwarsa'};
+  const day=(iso)=>new Date(iso).toLocaleDateString(dloc(),{day:'numeric',month:'short'});
+  row.innerHTML=`<div class="seclabel">Kredit</div>
+    ${d.balances.map((b)=>`<div class="plan mine"><div class="op">${esc(b.orgName)}</div><div class="nm">${rp(b.balanceMinor,b.currency)}</div>${b.nextExpiry?`<div class="perks">Sebagian kedaluwarsa ${esc(new Date(b.nextExpiry).toLocaleDateString(dloc(),{day:'numeric',month:'short',year:'numeric'}))}</div>`:''}</div>`).join('')}
+    <div class="card soft"><div class="small">Punya kode kartu hadiah atau voucher?</div>
+      <div class="custom-in" style="margin-top:8px"><span>${svg(I.gift)}</span><input id="giftcode" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="20" placeholder="XXXX-XXXX-XXXX"></div>
+      <button class="cta ghost" id="redeem" style="margin-top:8px">Tukarkan</button></div>
+    ${d.referralCodes.map((r)=>`<div class="card soft" style="margin-top:8px"><div class="small">Ajak teman ke ${esc(r.orgName)}: Anda dapat ${rp(r.youGetMinor,r.currency)}, teman Anda ${rp(r.friendGetsMinor,r.currency)} setelah pengisian pertamanya.</div>
+      <div class="nm" style="margin-top:6px;letter-spacing:.08em">${esc(r.code)}</div><button class="cta ghost" data-share="${esc(r.code)}" style="margin-top:8px">Bagikan kode</button></div>`).join('')}
+    <details style="margin-top:8px"><summary class="small">Punya kode referal dari teman?</summary>
+      <div class="custom-in" style="margin-top:8px"><input id="refcode" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="12" placeholder="Kode referal"></div>
+      <button class="cta ghost" id="applyref" style="margin-top:8px">Pakai kode</button></details>
+    ${d.entries.length?`<details style="margin-top:8px"><summary class="small">Riwayat kredit</summary>${d.entries.map((e)=>`<div class="rc-line small"><span class="d">${esc(KIND[e.kind]||e.kind)} · ${esc(day(e.createdAt))}</span><span class="a">${e.amountMinor>0?'+':'−'}${rp(Math.abs(e.amountMinor),e.currency)}</span></div>`).join('')}</details>`:''}`;
+  $('#redeem').onclick=async()=>{ const b=$('#redeem'); b.disabled=true;
+    try{ const r=await api('/v1/credit/redeem',{method:'POST',body:JSON.stringify({code:$('#giftcode').value})}); haptic(); alertBanner('Kredit '+rp(r.amountMinor,r.currency)+' ditambahkan.'); paintCredit(row); }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+  $('#applyref').onclick=async()=>{ const b=$('#applyref'); b.disabled=true;
+    try{ const r=await api('/v1/credit/referral',{method:'POST',body:JSON.stringify({code:$('#refcode').value})}); haptic(); alertBanner('Kode diterima. Kredit '+rp(r.refereeRewardMinor,r.currency)+' masuk setelah pengisian pertama Anda.'); paintCredit(row); }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+  row.querySelectorAll('[data-share]').forEach((b)=>b.onclick=async()=>{ const t='Pakai kode '+b.dataset.share+' di aplikasi pengisian kendaraan listrik.';
+    try{ if(navigator.share) await navigator.share({text:t}); else { await navigator.clipboard.writeText(b.dataset.share); alertBanner('Kode disalin.'); } }catch(e){} });
+}
+
+/** (v1.45.0) The driver's reports to support. */
+async function paintReports(row){
+  let d; try{ d=await api('/v1/support/cases'); }catch(e){ return; }
+  if(!row.isConnected||!d.cases.length) return;
+  const ST={new:'Baru',open:'Diproses',pending:'Menunggu balasan Anda',resolved:'Selesai',closed:'Ditutup'};
+  row.innerHTML=`<div class="seclabel">Laporan saya</div><div class="card soft">${d.cases.map((c)=>`<a class="helprow" href="#help/${esc(c.id)}" data-case="${esc(c.id)}">${svg(I.info)}<span>${esc(c.ref)} · ${esc(c.subject)}<br><span class="small muted">${esc(ST[c.status]||c.status)}</span></span></a>`).join('')}</div>`;
+  row.querySelectorAll('[data-case]').forEach((a)=>a.onclick=(e)=>{ e.preventDefault(); go('case',{id:a.dataset.case,_back:()=>go('account')}); });
 }
 
 /** Paying a reservation fee: QRIS here, or the e-wallet / card page; the connector is held once it is paid. */

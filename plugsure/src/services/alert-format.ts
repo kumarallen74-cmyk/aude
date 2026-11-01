@@ -20,6 +20,8 @@ export const ALERT_KINDS: Record<string, string> = {
   'charger.health_at_risk': 'Charger at risk of failing',
   // (v1.44.0) Depot scheduling (services/depot.ts): a fleet vehicle that will not be ready by its departure.
   'fleet.vehicle_not_ready': 'Fleet vehicle not ready in time',
+  // (v1.45.0) The support desk (services/support-desk.ts): a case past its first-answer or resolution time.
+  'support.sla_breach': 'Support case past its SLA',
   'charge_point.device_event': 'Hardware monitor alarm',
   'session.stuck': 'Session stuck',
   'session.orphaned': 'Orphaned session',
