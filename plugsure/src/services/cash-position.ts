@@ -199,6 +199,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
   const [payMoves, custMoves] = await Promise.all([payrollMoves(orgId, upTo), customerDepositMoves(orgId, upTo)]);
   // (v1.34.0) loans: drawdowns into and payments out of the loan's account (imported here: lenders reads the position).
   const loanMoves = await (await import('./lenders.js')).cashMoves(orgId, upTo);
+  // (v1.35.0) RECs bought and carbon credits sold; insurance premiums paid and claims settled.
+  const [carbonMoves, insuranceMoves] = await Promise.all([(await import('./carbon.js')).cashMoves(orgId, upTo), (await import('./insurance.js')).cashMoves(orgId, upTo)]);
   return {
     accounts,
     manual: manual.map((m) => ({ account_id: m.account_id, d: m.d, balance: Number(m.balance_minor) })),
@@ -211,6 +213,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
       ...payMoves,
       ...custMoves,
       ...loanMoves,
+      ...carbonMoves,
+      ...insuranceMoves,
     ],
   };
 }

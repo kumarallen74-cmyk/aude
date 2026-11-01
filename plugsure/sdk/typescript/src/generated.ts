@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.34.0";
+export const API_VERSION = "1.35.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4966,6 +4966,16 @@ export type ActivateChargePointResponse = {
   activated: boolean;
 };
 
+export type AddAuditorRequestBody = {
+  audit: string;
+  ref?: string;
+  item: string;
+  requestedOn?: string;
+  dueOn?: string;
+  ownerId?: string;
+  note?: string;
+};
+
 export type AddBankFeedBody = {
   name?: string;
   cashAccountId?: string;
@@ -5027,6 +5037,17 @@ export type AddCashAccountResponse = {
   kind?: "bank" | "cash";
   currency?: string;
   minimum?: number | null;
+};
+
+export type AddComplianceTaskBody = {
+  title?: string;
+  category?: "financial_statements" | "regulator" | "licence" | "corporate" | "tax_other" | "audit" | "other";
+  authority?: string;
+  dueOn?: string;
+  recurrence?: "none" | "monthly" | "quarterly" | "yearly";
+  ownerId?: string;
+  remindDays?: number;
+  note?: string;
 };
 
 export type AddCovenantBody = {
@@ -5130,6 +5151,28 @@ export type AddOrChangeAccountBody = {
   name?: string;
   type?: "asset" | "liability" | "equity" | "revenue" | "expense" | "other";
   active?: boolean;
+};
+
+export type AddPolicyBody = {
+  insurer?: string;
+  policyNo?: string;
+  kind?: "property" | "equipment" | "liability" | "business_interruption" | "vehicle" | "other";
+  siteId?: string;
+  chargePointId?: string;
+  currency?: string;
+  cover?: number;
+  premium?: number;
+  excess?: number;
+  startOn?: string;
+  endOn?: string;
+  paidOn?: string;
+  cashAccountId?: string;
+  status?: "active" | "cancelled";
+  note?: string;
+};
+
+export type AddStandardDeadlinesBody = {
+  year?: number;
 };
 
 export type AddStockItemBody = {
@@ -5474,6 +5517,18 @@ export type AssignTariffResponse = {
   flags: TariffFlag[];
 };
 
+export type AttachEvidenceToRequestBody = {
+  filename?: string;
+  mime: "application/pdf" | "image/png" | "image/jpeg" | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" | "text/csv";
+  data: string;
+};
+
+export type AttachEvidenceToTaskBody = {
+  filename?: string;
+  mime: "application/pdf" | "image/png" | "image/jpeg" | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" | "text/csv";
+  data: string;
+};
+
 export type AttachReceiptBody = {
   filename?: string;
   mime: "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
@@ -5711,6 +5766,17 @@ export type ChangeCashAccountResponse = {
   minimum?: number | null;
 };
 
+export type ChangeComplianceTaskBody = {
+  title?: string;
+  category?: "financial_statements" | "regulator" | "licence" | "corporate" | "tax_other" | "audit" | "other";
+  authority?: string;
+  dueOn?: string;
+  recurrence?: "none" | "monthly" | "quarterly" | "yearly";
+  ownerId?: string;
+  remindDays?: number;
+  note?: string;
+};
+
 export type ChangeConnectorAvailabilityBody = {
   /** 0 = the whole station. */
   connectorId?: number;
@@ -5807,6 +5873,24 @@ export type ChangePayrollLineBody = {
   overtime?: number;
   bonus?: number;
   deduction?: number;
+};
+
+export type ChangePolicyBody = {
+  insurer?: string;
+  policyNo?: string;
+  kind?: "property" | "equipment" | "liability" | "business_interruption" | "vehicle" | "other";
+  siteId?: string;
+  chargePointId?: string;
+  currency?: string;
+  cover?: number;
+  premium?: number;
+  excess?: number;
+  startOn?: string;
+  endOn?: string;
+  paidOn?: string;
+  cashAccountId?: string;
+  status?: "active" | "cancelled";
+  note?: string;
 };
 
 export type ChangeStockItemBody = {
@@ -5990,6 +6074,12 @@ export type CompleteCapexProjectBody = {
   inService?: string;
   category?: string;
   lifeMonths?: number;
+};
+
+export type CompleteComplianceTaskBody = {
+  status: "done" | "waived" | "open";
+  doneOn?: string;
+  note?: string;
 };
 
 export type ConfirmPaymentWasReceivedPayeeResponse = {
@@ -6535,6 +6625,11 @@ export type EscalateRejectedDisputeToPlatformEMSPSideResponse = {
     /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
     claimed_idr?: number | null;
   };
+};
+
+export type EstimateCarbonCreditsBody = {
+  from: string;
+  to: string;
 };
 
 export type ExpenseClaimResponse = {
@@ -8064,6 +8159,16 @@ export type PreviewTariffBody = {
   pbjtRateBps?: number;
 };
 
+export type PriceWhatIfBody = {
+  dimension?: "totals" | "tariff" | "connector" | "band" | "site";
+  key?: string;
+  currency?: string;
+  changePct: number;
+  elasticity?: number;
+  months?: number;
+  siteId?: string;
+};
+
 export type ProvisionDefaultChargingProfilesResponse = {
   applied: number;
 };
@@ -8551,6 +8656,18 @@ export type RecordPpnReturnAsFiledResponse = {
   carriedForward?: number;
 };
 
+export type RecordRECsBoughtBody = {
+  registry: string;
+  reference?: string;
+  vintage: number;
+  mwh: number;
+  price?: number;
+  currency: string;
+  boughtOn?: string;
+  siteId?: string;
+  cashAccountId?: string;
+};
+
 export type RecordRefundPaidByBankTransferBody = {
   /** Bank transfer reference. */
   reference: string;
@@ -8894,6 +9011,16 @@ export type RenameSuspendOrResumePartnerBody = {
   state?: "suspended" | "connected";
 };
 
+export type RenewPolicyBody = {
+  policyNo?: string;
+  endOn?: string;
+  premium?: number;
+  cover?: number;
+  excess?: number;
+  paidOn?: string;
+  cashAccountId?: string;
+};
+
 export type ReopenLockedMonthBody = {
   reason: string;
 };
@@ -8943,6 +9070,14 @@ export type ReplyToWhatsAppCustomerBody = {
 
 export type ReplyToWhatsAppCustomerResponse = {
   ok: boolean;
+};
+
+export type ReportClaimBody = {
+  kind: "damage" | "theft" | "liability" | "interruption" | "other";
+  incidentOn: string;
+  description: string;
+  loss: number;
+  workOrderId?: string;
 };
 
 export type ReportEMailSchedulesResponse = {
@@ -9023,6 +9158,10 @@ export type ResolveReconciliationExceptionResponse = {
 
 export type ResumeSuspendedChargePointResponse = {
   ok: true;
+};
+
+export type RetireRECsBody = {
+  month: string;
 };
 
 export type RetryCardHoldCaptureOrReleaseNowResponse = {
@@ -9242,6 +9381,16 @@ export type SaveLoyaltyProgramBody = {
   pointValueIdr?: number;
 };
 
+export type SellCarbonCreditsBody = {
+  buyer: string;
+  tonnes: number;
+  amount: number;
+  currency: string;
+  soldOn?: string;
+  cashAccountId?: string;
+  reference?: string;
+};
+
 export type SendCommandToChargePointBody = {
   connectorId?: number;
   /** remote-start. */
@@ -9421,7 +9570,7 @@ export type SetAutomaticStatementsOfAccountBody = {
   day?: number;
 };
 
-export type SetBillAPOSsStockAndWorkOrderBody = {
+export type SetBillStockAndWorkOrderBody = {
   stock?: boolean;
   workOrderId?: string;
 };
@@ -9471,6 +9620,11 @@ export type SetDriverRefundPolicyBody = {
   enabled?: boolean;
   autoApproveUpTo?: number;
   windowDays?: number;
+};
+
+export type SetEmissionFactorsBody = {
+  gridKgPerKwh?: number;
+  iceKgPerKwh?: number;
 };
 
 export type SetEvseAndConnectorTopologyResponse = {
@@ -10199,8 +10353,31 @@ export type UnlockConnectorBody = {
   connectorId?: number;
 };
 
+export type UpdateAuditorRequestBody = {
+  status?: "requested" | "in_progress" | "provided" | "accepted";
+  ownerId?: string;
+  dueOn?: string;
+  note?: string;
+};
+
+export type UpdateCarbonCreditsBody = {
+  status?: "estimated" | "verified" | "issued" | "void";
+  tonnes?: number;
+  standard?: string;
+  serial?: string;
+  note?: string;
+};
+
 export type UpdateChargePointProfileResponse = {
   ok: true;
+};
+
+export type UpdateClaimBody = {
+  status: "submitted" | "accepted" | "rejected" | "paid" | "closed";
+  settled?: number;
+  paidOn?: string;
+  insurerRef?: string;
+  note?: string;
 };
 
 export type UpdateConsoleUserResponse = {
@@ -10800,6 +10977,19 @@ export class Operations {
   }
 
   /**
+   * Add an auditor request
+   *
+   * (v1.35.0) audit, ref, item, requestedOn, dueOn, ownerId, note. Audited.
+   *
+   * `POST /v1/finance/compliance/pbc`
+   */
+  addAuditorRequest(params: {
+    body: AddAuditorRequestBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/pbc", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a bank feed
    *
    * (v1.32.0) name, cashAccountId (a bank account), url (https; GET url?from=YYYY-MM-DD answering JSON transactions), token (sent as a bearer, sealed), enabled, since. Audited.
@@ -10864,6 +11054,19 @@ export class Operations {
     body: AddCashAccountBody;
   }, options?: RequestOptions): Promise<AddCashAccountResponse> {
     return this.transport.request<AddCashAccountResponse>({ method: "POST", path: "/v1/finance/cash/accounts", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a compliance task
+   *
+   * (v1.35.0) Title, category, authority, due date, recurrence, owner, reminder days. Audited.
+   *
+   * `POST /v1/finance/compliance/tasks`
+   */
+  addComplianceTask(params: {
+    body: AddComplianceTaskBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/tasks", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10992,6 +11195,32 @@ export class Operations {
     body: AddOrChangeAccountBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/ledger/accounts/{code}", pathParams: { code: params.code }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a policy
+   *
+   * (v1.35.0) Insurer, number, kind, site or charger, cover, premium, excess, term, when paid and from which account. Audited.
+   *
+   * `POST /v1/finance/insurance/policies`
+   */
+  addPolicy(params: {
+    body: AddPolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/insurance/policies", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add the standard deadlines
+   *
+   * (v1.35.0) The usual Indonesian deadlines for a year (year, default this one), each once. Audited.
+   *
+   * `POST /v1/finance/compliance/templates`
+   */
+  addStandardDeadlines(params: {
+    body: AddStandardDeadlinesBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/templates", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11560,6 +11789,36 @@ export class Operations {
   }
 
   /**
+   * Attach evidence to a request
+   *
+   * (v1.35.0) As for a task. Audited.
+   *
+   * `POST /v1/finance/compliance/pbc/{id}/evidence`
+   */
+  attachEvidenceToRequest(params: {
+    /** The id. */
+    id: string;
+    body: AttachEvidenceToRequestBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/pbc/{id}/evidence", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Attach evidence to a task
+   *
+   * (v1.35.0) A file up to 5 MB (base64): PDF, PNG, JPEG, XLSX, DOCX or CSV, checked against its first bytes. Audited.
+   *
+   * `POST /v1/finance/compliance/tasks/{id}/evidence`
+   */
+  attachEvidenceToTask(params: {
+    /** The id. */
+    id: string;
+    body: AttachEvidenceToTaskBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/tasks/{id}/evidence", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Attach a receipt
    *
    * (v1.31.0) filename, mime (image/jpeg, image/png, image/webp, application/pdf), data (base64; at most 3 MB; the file must be the type it says). Audited.
@@ -11574,6 +11833,20 @@ export class Operations {
     body: AttachReceiptBody;
   }, options?: RequestOptions): Promise<AttachReceiptResponse> {
     return this.transport.request<AttachReceiptResponse>({ method: "POST", path: "/v1/finance/expenses/{id}/lines/{lid}/receipts", pathParams: { id: params.id, lid: params.lid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Auditor request
+   *
+   * (v1.35.0) With its files.
+   *
+   * `GET /v1/finance/compliance/pbc/{id}`
+   */
+  auditorRequest(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/compliance/pbc/{id}", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -11796,6 +12069,37 @@ export class Operations {
   }
 
   /**
+   * Carbon and green energy
+   *
+   * (v1.35.0) Six months of MWh charged, the green share from RECs retired and the emissions avoided; the RECs, those held, the carbon credits with what is sold and available, the sales. format=xlsx with from and to (YYYY-MM) for the report.
+   *
+   * `GET /v1/finance/carbon`
+   */
+  carbonAndGreenEnergy(params?: {
+    query?: {
+      from?: string;
+      to?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/carbon", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Carbon for a month
+   *
+   * (v1.35.0) Per site: MWh charged, REC MWh retired, the green share and the tonnes avoided.
+   *
+   * `GET /v1/finance/carbon/months/{month}`
+   */
+  carbonForMonth(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/carbon/months/{month}", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
    * Card holds and post-pay e-wallet charges
    *
    * Card payments taken as holds (Integrations → Payments → "hold, then charge only what is used"): held while charging, captured for the rated total when the session ends (the rest released at once), or released when unused. Post-pay sessions with linked e-wallets are listed too (kind postpay): nothing held at the start, the rated total charged to the e-wallet at the end, the same retries. Failed captures and releases come first, with the acquirer's error and the next automatic retry; captured and released holds of the last 14 days follow. At most 200 rows.
@@ -11947,6 +12251,21 @@ export class Operations {
     body: ChangeCashAccountBody;
   }, options?: RequestOptions): Promise<ChangeCashAccountResponse> {
     return this.transport.request<ChangeCashAccountResponse>({ method: "PUT", path: "/v1/finance/cash/accounts/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a compliance task
+   *
+   * (v1.35.0) As adding; open tasks only. Audited.
+   *
+   * `PUT /v1/finance/compliance/tasks/{id}`
+   */
+  changeComplianceTask(params: {
+    /** The id. */
+    id: string;
+    body: ChangeComplianceTaskBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/compliance/tasks/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12108,6 +12427,21 @@ export class Operations {
     body: ChangePayrollLineBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/payroll/runs/{id}/lines/{lid}", pathParams: { id: params.id, lid: params.lid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a policy
+   *
+   * (v1.35.0) As adding; status cancelled. Audited.
+   *
+   * `PUT /v1/finance/insurance/policies/{id}`
+   */
+  changePolicy(params: {
+    /** The id. */
+    id: string;
+    body: ChangePolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/insurance/policies/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12291,7 +12625,7 @@ export class Operations {
   /**
    * Claim a warranty
    *
-   * (v1.34.0) supplierId, amount (default the orderAPOSs cost), reference, note, submittedOn. Audited.
+   * (v1.34.0) supplierId, amount (default the order's cost), reference, note, submittedOn. Audited.
    *
    * `POST /v1/finance/maintenance/{id}/claims`
    */
@@ -12389,6 +12723,52 @@ export class Operations {
     body: CompleteCapexProjectBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/projects/{id}/complete", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Complete a compliance task
+   *
+   * (v1.35.0) status done (doneOn; a recurring task gets its next one), waived (a note) or open again. Audited.
+   *
+   * `POST /v1/finance/compliance/tasks/{id}/status`
+   */
+  completeComplianceTask(params: {
+    /** The id. */
+    id: string;
+    body: CompleteComplianceTaskBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/tasks/{id}/status", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Compliance calendar
+   *
+   * (v1.35.0) Tasks due from–to (default this year) and those overdue, with owner, status and files; the counts open, overdue, due within 30 days, done on time; the auditor's requests. format=xlsx.
+   *
+   * `GET /v1/finance/compliance`
+   */
+  complianceCalendar(params?: {
+    query?: {
+      from?: string;
+      to?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/compliance", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Compliance task
+   *
+   * (v1.35.0) With its files.
+   *
+   * `GET /v1/finance/compliance/tasks/{id}`
+   */
+  complianceTask(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/compliance/tasks/{id}", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -12981,6 +13361,20 @@ export class Operations {
   }
 
   /**
+   * Download evidence
+   *
+   * (v1.35.0) The file as uploaded.
+   *
+   * `GET /v1/finance/compliance/evidence/{id}` · needs `payment:write`
+   */
+  downloadEvidence(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/compliance/evidence/{id}", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
    * Download a fleet invoice as PDF
    *
    * The invoice as an A4 PDF: seller and buyer, the lines per site with DPP and PPN, partner networks and memberships, credits and the amount due, how to pay, and an appendix with every card and session.
@@ -13347,6 +13741,19 @@ export class Operations {
     body: EscalateRejectedDisputeToPlatformEMSPSideBody;
   }, options?: RequestOptions): Promise<EscalateRejectedDisputeToPlatformEMSPSideResponse> {
     return this.transport.request<EscalateRejectedDisputeToPlatformEMSPSideResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/escalate", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Estimate carbon credits
+   *
+   * (v1.35.0) From the emissions avoided over from–to (YYYY-MM). Audited.
+   *
+   * `POST /v1/finance/carbon/credits`
+   */
+  estimateCarbonCredits(params: {
+    body: EstimateCarbonCreditsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/carbon/credits", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14437,6 +14844,21 @@ export class Operations {
   }
 
   /**
+   * Insurance
+   *
+   * (v1.35.0) Policies with their term, cover, premium, prepaid left, claims and recoveries; claims; per currency the premium and cover in force, losses, settled and the recovery rate; policies to renew. format=xlsx for the register.
+   *
+   * `GET /v1/finance/insurance`
+   */
+  insurance(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/insurance", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Integration activity
    *
    * Payments created (create_qris; create_checkout for e-wallets and cards, with the channel) and notified, codes sent (numbers masked, codes never), tests.
@@ -14759,7 +15181,7 @@ export class Operations {
   /**
    * Lender pack
    *
-   * (v1.34.0) The monthAPOSs (default last month) twelve-month results, covenant tests and loan schedules; format=pdf or xlsx (audited).
+   * (v1.34.0) The month's (default last month) twelve-month results, covenant tests and loan schedules; format=pdf or xlsx (audited).
    *
    * `GET /v1/finance/lenders/pack`
    */
@@ -16314,6 +16736,36 @@ export class Operations {
   }
 
   /**
+   * Price what-if
+   *
+   * (v1.35.0) A price change (changePct) on one row (dimension totals, tariff, connector, band or site; key; currency) with an elasticity (default the observed one): the volume, revenue, cost and margin after.
+   *
+   * `POST /v1/finance/pricing/what-if`
+   */
+  priceWhatIf(params: {
+    body: PriceWhatIfBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/pricing/what-if", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Pricing profitability
+   *
+   * (v1.35.0) Over the last n months (months, default 3; siteId): sessions, kWh, revenue, energy cost, margin, price and cost per kWh by tariff, connector type, time band and site; the price elasticity observed. format=xlsx.
+   *
+   * `GET /v1/finance/pricing`
+   */
+  pricingProfitability(params?: {
+    query?: {
+      months?: number;
+      siteId?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/pricing", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Print a fleet invoice
    *
    * A4 printable invoice with an appendix of sessions by card (print to PDF from the browser).
@@ -16932,6 +17384,19 @@ export class Operations {
   }
 
   /**
+   * Record RECs bought
+   *
+   * (v1.35.0) registry, reference, vintage, mwh, price, currency, boughtOn, siteId (none: the portfolio), cashAccountId. Audited.
+   *
+   * `POST /v1/finance/carbon/recs`
+   */
+  recordRECsBought(params: {
+    body: RecordRECsBoughtBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/carbon/recs", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a refund paid by bank transfer
    *
    * Marks an outstanding refund (due, failed or processing) as refunded manually with the bank transfer reference, and resolves the related "refund due" alert. Audited.
@@ -17459,6 +17924,21 @@ export class Operations {
   }
 
   /**
+   * Renew a policy
+   *
+   * (v1.35.0) The next term from the old end (endOn, policyNo, premium, cover, excess, paidOn, cashAccountId to change). Audited.
+   *
+   * `POST /v1/finance/insurance/policies/{id}/renew`
+   */
+  renewPolicy(params: {
+    /** The id. */
+    id: string;
+    body: RenewPolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/insurance/policies/{id}/renew", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Reopen a locked month
    *
    * (v1.22.0) Needs finance:approve (403 otherwise) and a reason. Audited as finance.period_reopened.
@@ -17560,6 +18040,21 @@ export class Operations {
     body: ReplyToWhatsAppCustomerBody;
   }, options?: RequestOptions): Promise<ReplyToWhatsAppCustomerResponse> {
     return this.transport.request<ReplyToWhatsAppCustomerResponse>({ method: "POST", path: "/v1/whatsapp/conversations/{id}/reply", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Report a claim
+   *
+   * (v1.35.0) kind, incidentOn (inside the term), description, loss, workOrderId. Numbered CL-00001…. Audited.
+   *
+   * `POST /v1/finance/insurance/policies/{id}/claims`
+   */
+  reportClaim(params: {
+    /** The id. */
+    id: string;
+    body: ReportClaimBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/insurance/policies/{id}/claims", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17775,6 +18270,21 @@ export class Operations {
   }
 
   /**
+   * Retire RECs
+   *
+   * (v1.35.0) Against the month (YYYY-MM) of charging they cover; once. Audited.
+   *
+   * `POST /v1/finance/carbon/recs/{id}/retire`
+   */
+  retireRECs(params: {
+    /** The id. */
+    id: string;
+    body: RetireRECsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/carbon/recs/{id}/retire", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Retry a card hold capture or release now
    *
    * Runs a failed (or pending) capture or release again at the acquirer, without waiting for the automatic retry. 409 with `error` and `state` when the acquirer refuses again. Audited.
@@ -17819,7 +18329,7 @@ export class Operations {
   /**
    * Revenue assurance
    *
-   * (v1.34.0) A monthAPOSs (default last month) findings: sessions not billed, billed at zero, with energy, meter or price out of line, signed values not verified, roaming without a charge record; billed, expected, gap and status; the leakage, recovered and written off per currency. format=xlsx.
+   * (v1.34.0) A month's (default last month) findings: sessions not billed, billed at zero, with energy, meter or price out of line, signed values not verified, roaming without a charge record; billed, expected, gap and status; the leakage, recovered and written off per currency. format=xlsx.
    *
    * `GET /v1/finance/assurance`
    */
@@ -18037,7 +18547,7 @@ export class Operations {
   /**
    * Run revenue assurance
    *
-   * (v1.34.0) Check a monthAPOSs sessions now (month, default last month); findings found again keep their review. Audited.
+   * (v1.34.0) Check a month's sessions now (month, default last month); findings found again keep their review. Audited.
    *
    * `POST /v1/finance/assurance/run`
    */
@@ -18148,6 +18658,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<SessionSearchResult> {
     return this.transport.request<SessionSearchResult>({ method: "GET", path: "/v1/sessions/search", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Sell carbon credits
+   *
+   * (v1.35.0) Issued credits only, up to what is available: buyer, tonnes, amount, currency, soldOn, cashAccountId, reference. Audited.
+   *
+   * `POST /v1/finance/carbon/credits/{id}/sales`
+   */
+  sellCarbonCredits(params: {
+    /** The id. */
+    id: string;
+    body: SellCarbonCreditsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/carbon/credits/{id}/sales", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18416,16 +18941,16 @@ export class Operations {
   }
 
   /**
-   * Set a billAPOSs stock and work order
+   * Set a bill's stock and work order
    *
-   * (v1.34.0) stock (the bill is for stock received: posted against goods received not invoiced), workOrderId (a contractorAPOSs bill for a work order; null to unlink). Audited.
+   * (v1.34.0) stock (the bill is for stock received: posted against goods received not invoiced), workOrderId (a contractor's bill for a work order; null to unlink). Audited.
    *
    * `POST /v1/finance/bills/{id}/links`
    */
-  setBillAPOSsStockAndWorkOrder(params: {
+  setBillStockAndWorkOrder(params: {
     /** The id. */
     id: string;
-    body: SetBillAPOSsStockAndWorkOrderBody;
+    body: SetBillStockAndWorkOrderBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/bills/{id}/links", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
@@ -18534,6 +19059,19 @@ export class Operations {
     body: SetDriverRefundPolicyBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/driver-refunds/policy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the emission factors
+   *
+   * (v1.35.0) gridKgPerKwh (the grid's kg CO2e per kWh) and iceKgPerKwh (a petrol car's kg CO2e for the distance of one kWh). Audited.
+   *
+   * `PUT /v1/finance/carbon/settings`
+   */
+  setEmissionFactors(params: {
+    body: SetEmissionFactorsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/carbon/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -19811,6 +20349,36 @@ export class Operations {
   }
 
   /**
+   * Update an auditor request
+   *
+   * (v1.35.0) status requested → in_progress → provided (a file needed) → accepted; ownerId, dueOn, note. Audited.
+   *
+   * `PUT /v1/finance/compliance/pbc/{id}`
+   */
+  updateAuditorRequest(params: {
+    /** The id. */
+    id: string;
+    body: UpdateAuditorRequestBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/compliance/pbc/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Update carbon credits
+   *
+   * (v1.35.0) status estimated → verified → issued (serial needed) or void (if none sold); tonnes, standard, note. Audited.
+   *
+   * `PUT /v1/finance/carbon/credits/{id}`
+   */
+  updateCarbonCredits(params: {
+    /** The id. */
+    id: string;
+    body: UpdateCarbonCreditsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/carbon/credits/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Update a charge point profile
    *
    * Changes only the fields sent (text fields are cut to 200 characters). Moving to another site needs charge_point:write at the target site and is limited to sites of the same organisation. Audited as charge_point.updated.
@@ -19823,6 +20391,21 @@ export class Operations {
     body: CpDetailProfileInput;
   }, options?: RequestOptions): Promise<UpdateChargePointProfileResponse> {
     return this.transport.request<UpdateChargePointProfileResponse>({ method: "PUT", path: "/v1/charge-points/{identity}", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Update a claim
+   *
+   * (v1.35.0) status submitted, accepted, rejected, paid (settled up to the loss less the excess, paidOn) or closed; insurerRef, note. Audited.
+   *
+   * `POST /v1/finance/insurance/claims/{id}`
+   */
+  updateClaim(params: {
+    /** The id. */
+    id: string;
+    body: UpdateClaimBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/insurance/claims/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
