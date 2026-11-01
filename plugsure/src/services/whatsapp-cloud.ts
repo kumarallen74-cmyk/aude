@@ -14,7 +14,7 @@ import { inbound } from './whatsapp-support.js';
 /**
  * WhatsApp Business (Meta Cloud API) — PlugSure's own WhatsApp Business Account (v1.10.0).
  *
- * The connection is the platform's sign-in code integration on the WhatsApp Cloud API (Govern → Integrations →
+ * The connection is the platform's sign-in code integration on the WhatsApp Cloud API (Governance → Integrations →
  * Driver sign-in codes, provider whatsapp_cloud; the fallback's when the main channel is something else): the
  * sending phone number id, a System User token, and — optional, for this dashboard — the WABA id and the app secret.
  * This module is everything that talks to it:
@@ -37,8 +37,8 @@ import { inbound } from './whatsapp-support.js';
 
 export type Purpose = 'otp' | 'alert' | 'test' | 'other' | 'support';
 export type Status = 'accepted' | 'sent' | 'delivered' | 'read' | 'failed';
-export const NOT_CONFIGURED = 'WhatsApp is not configured: choose "WhatsApp (Meta Cloud API)" under Govern → Integrations → Driver sign-in codes.';
-export const NO_WABA = 'Add the WhatsApp Business Account ID to the sign-in codes integration (Govern → Integrations → Driver sign-in codes) to see templates and account status.';
+export const NOT_CONFIGURED = 'WhatsApp is not configured: choose "WhatsApp (Meta Cloud API)" under Governance → Integrations → Driver sign-in codes.';
+export const NO_WABA = 'Add the WhatsApp Business Account ID to the sign-in codes integration (Governance → Integrations → Driver sign-in codes) to see templates and account status.';
 
 export class WhatsAppError extends Error {
   constructor(message: string, public code: string | null = null) { super(message); this.name = 'WhatsAppError'; }

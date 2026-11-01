@@ -222,7 +222,7 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 - **Monthly close e-mail** (Finance → Settings). On the 1st of each month
   (platform time zone), the previous month's finance export (Excel and PDF)
   and the journal go to up to 10 recipients, through your e-mail channel
-  (Govern → Alert routing → Channels). Each month is sent once; a failure is
+  (Governance → Alert routing → Channels). Each month is sent once; a failure is
   shown in Settings and retried hourly. **Send last month now** sends it at
   once.
 - **Xendit payouts.** On the Xendit integration (Payments → advanced), *Send
@@ -263,7 +263,7 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   Uploads and matches are audited.
 - **Approval alerts.** A refund or owner payout waiting for a second person
   raises the alert *finance.transfer_awaiting_approval*; route it to the
-  people who approve (Govern → Alert routing: e-mail, WhatsApp, SMS). Waiting
+  people who approve (Governance → Alert routing: e-mail, WhatsApp, SMS). Waiting
   more than 24 hours, a critical alert follows
   (*finance.transfer_approval_overdue*). Both resolve when the transfer is
   approved or rejected. Refunds and Finance show the number waiting as a
@@ -381,7 +381,7 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   rates*. A currency without a rate is listed beside the consolidated
   total, never counted at 1.
 - **Approvals** (Settings). Give your finance lead the **Finance Manager**
-  role (Govern → Users); it carries `finance:approve`. Then choose, for
+  role (Governance → Users); it carries `finance:approve`. Then choose, for
   refunds, owner payouts, write-offs and owner bank-detail changes:
   - *A Finance Manager* above an amount: the approver must hold
     `finance:approve`.
@@ -421,7 +421,7 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 - **Revenue drop alerts** (Settings). Each morning, each site's revenue
   yesterday is compared with the same weekday over the 4 weeks before. A
   drop by the threshold (default 50%) raises `finance.revenue_drop` on the
-  site: route it in Govern → Alert routing. Sites with too little history,
+  site: route it in Governance → Alert routing. Sites with too little history,
   or a baseline under the minimum, aren't compared.
 - **Statements of account** (Fleet billing). Open an account's drawer →
   **Statement**. Pick a month to see:
@@ -527,7 +527,7 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 
 ## Fee invoices, roaming settlement and controls (v1.25.0)
 
-- **Fee invoices** (Govern → Fee invoices; platform administrators). Each
+- **Fee invoices** (Governance → Fee invoices; platform administrators). Each
   finalised fee statement (Platform billing) is PlugSure's invoice to the
   operator, due 14 days after finalising:
   - **E-mail:** the invoice PDF, to the operator's billing e-mail (set it in

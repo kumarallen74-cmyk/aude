@@ -298,6 +298,31 @@ const inPortal = (v) => (portalMode() ? !!v.portal : fleetMode() ? !!v.fleetPort
 /** (v1.41.0) A view may be named differently in the Site Owner portal (`portalTitle`). */
 const titleOf = (v) => (portalMode() && v.portalTitle ? v.portalTitle : v.title);
 
+/** (v1.41.1) Whether this principal may open a view: a listed one, or a hidden one (e.g. Add charge point) it has the permission for. */
+const permitted = (v) => !v.perm || [].concat(v.perm).some((p) => state.can(p));
+const canOpen = (v) => !!v && (v.hidden ? inPortal(v) && permitted(v) && (!v.when || v.when()) : visibleViews().includes(v));
+
+/**
+ * (v1.41.1) A link to a page this role cannot open would silently land on its first page instead.
+ * Such links become plain text (a button-styled one is hidden), in pages, drawers and dialogs alike.
+ */
+function pruneLinks(scope = document.body) {
+  if (!state.me) return;
+  for (const a of scope.querySelectorAll('a[href^="#/"]')) {
+    const id = a.getAttribute('href').slice(2).split(/[/?]/)[0];
+    const v = views.get(id);
+    if (!v || canOpen(v)) continue;
+    if (a.classList.contains('btn')) a.hidden = true;
+    else { a.removeAttribute('href'); a.classList.add('nolink'); }
+  }
+}
+let pruneQueued = false;
+new MutationObserver(() => {
+  if (pruneQueued) return;
+  pruneQueued = true;
+  queueMicrotask(() => { pruneQueued = false; pruneLinks(); });
+}).observe(document.body, { childList: true, subtree: true });
+
 function visibleViews() {
   return [...views.values()]
     // `when`: a view that exists only with a server feature (e.g. Hub, with HUB_ENABLED).
@@ -501,7 +526,7 @@ async function route() {
   const { view, params } = parseHash();
   const allowed = visibleViews();
   const want = views.get(view);
-  const def = want && ((want.hidden && inPortal(want)) || allowed.includes(want)) ? want : allowed[0];
+  const def = want && canOpen(want) ? want : allowed[0];
   if (!def) {
     $('#view').innerHTML = '<div class="empty-state"><h3>No modules available</h3><p>Your role does not grant access to any console module. Ask an administrator.</p></div>';
     return;

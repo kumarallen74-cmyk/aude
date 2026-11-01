@@ -945,7 +945,7 @@ export async function sendInvoice(orgId: string, id: string, overrideTo?: string
   const to = String(overrideTo ?? st.buyer.email ?? '').trim();
   if (!to || !to.split(/[,;]\s*/).every((x) => EMAIL_RE.test(x))) throw new FleetBillingError(422, 'No valid billing e-mail address for this fleet account.');
   const ch = await one<{ enabled: boolean; config: any; secret: string | null }>(`SELECT enabled, config, secret FROM notification_channel WHERE org_id = $1 AND kind = 'email'`, [orgId]);
-  if (!ch?.enabled || !ch.config?.host) throw new FleetBillingError(409, 'Set up the e-mail channel first (Govern → Alert routing → Channels).');
+  if (!ch?.enabled || !ch.config?.host) throw new FleetBillingError(409, 'Set up the e-mail channel first (Governance → Alert routing → Channels).');
   let secret: string | null = null;
   try { secret = ch.secret ? unseal(ch.secret) : null; } catch { secret = null; }
   // (v1.27.0) The open Xendit payment link, if Fleet automation made one.

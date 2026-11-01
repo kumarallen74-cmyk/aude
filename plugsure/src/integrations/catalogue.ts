@@ -204,7 +204,7 @@ export const CATALOGUE: KindDef[] = [
       {
         // (v1.10.0) webhook: Meta's delivery-status webhook (/hooks/whatsapp-cloud/<key>) for the WhatsApp dashboard.
         id: 'whatsapp_cloud', label: 'WhatsApp (Meta Cloud API)', webhook: true, docs: 'https://developers.facebook.com/docs/whatsapp/business-management-api/authentication-templates',
-        description: 'An approved Authentication template with a copy-code button. Cheapest per message in Indonesia; most drivers have WhatsApp. Delivery, templates and number quality on Operate → WhatsApp (deploy/WHATSAPP.md).',
+        description: 'An approved Authentication template with a copy-code button. Cheapest per message in Indonesia; most drivers have WhatsApp. Delivery, templates and number quality on Governance → WhatsApp (deploy/WHATSAPP.md).',
         fields: [
           { key: 'phoneNumberId', label: 'Phone number ID', type: 'text', required: true },
           { key: 'accessToken', label: 'Access token (System User)', type: 'secret', required: true },
@@ -316,7 +316,7 @@ export const CATALOGUE: KindDef[] = [
     // (v1.11.0) Customers' WhatsApp messages to PlugSure's number, answered by Claude (src/services/whatsapp-support.ts).
     kind: 'ai_support',
     label: 'WhatsApp AI support',
-    description: 'Answers drivers who write to PlugSure\'s WhatsApp number (the sign-in codes number), with Claude: charging help, station availability, the driver\'s own recent sessions, payments and refunds as your knowledge text describes them. It hands the conversation to your staff when it cannot help or the customer asks for a person. Conversations are in Operate → WhatsApp → Inbox.',
+    description: 'Answers drivers who write to PlugSure\'s WhatsApp number (the sign-in codes number), with Claude: charging help, station availability, the driver\'s own recent sessions, payments and refunds as your knowledge text describes them. It hands the conversation to your staff when it cannot help or the customer asks for a person. Conversations are in Governance → WhatsApp → Inbox.',
     scope: 'platform',
     providers: [
       {

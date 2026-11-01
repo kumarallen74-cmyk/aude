@@ -1,7 +1,7 @@
 import { type Op, type Schema, ref, arrayOf, nullable } from '../types.js';
 
 /**
- * Operate → WhatsApp (v1.10.0): src/api/whatsapp-routes.ts. The platform's WhatsApp Business Account — the one the
+ * Governance → WhatsApp (v1.10.0): src/api/whatsapp-routes.ts. The platform's WhatsApp Business Account — the one the
  * sign-in codes integration (WhatsApp Cloud API) sends from — so every route needs platform:admin. The public Meta webhook (/hooks/whatsapp-cloud/<key>) is not a /v1 route.
  * (v1.11.0) The support inbox: customers' messages to that number, answered by the AI assistant (Claude) or by staff.
  */

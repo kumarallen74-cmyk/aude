@@ -43,7 +43,7 @@ Malaysia and Singapore must be enabled on the deployment (`MULTI_COUNTRY=true`).
      is not documented: a session costing less than S$0.50 on a held card may fail to capture, and then shows under
      *Refunds → Card holds* with Stripe's message and a critical alert like any failed capture. Confirm with Stripe.
 4. **Webhook endpoint** (Workbench → Webhooks → *Create an event destination* → *Your account*):
-   - **Endpoint URL**: the URL PlugSure shows for this integration under *Govern → Integrations*
+   - **Endpoint URL**: the URL PlugSure shows for this integration under *Governance → Integrations*
      (`https://<PUBLIC_BASE_URL>/pay/notify/<key>`; one per account; `/pay/*` must be public — deploy/Caddyfile does
      that already).
    - **API version**: the version PlugSure pins, **`2026-09-30.endive`** (the integration's *Stripe API version* field
@@ -59,7 +59,7 @@ Malaysia and Singapore must be enabled on the deployment (`MULTI_COUNTRY=true`).
 
 ## 3. In PlugSure
 
-*Govern → Integrations → Payments*, the country's account (API: `PUT /v1/integrations/payments` with
+*Governance → Integrations → Payments*, the country's account (API: `PUT /v1/integrations/payments` with
 `"provider": "stripe", "countryCode": "SG"`):
 
 | Field | Value |

@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.41.0";
+export const API_VERSION = "1.41.1";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -13522,9 +13522,9 @@ export class Operations {
   /**
    * Close automation
    *
-   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.
+   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend. (v1.41.1) To a caller with payment:write, also people: the organisation's active console users (id, name), who can own a step.
    *
-   * `GET /v1/finance/close-automation`
+   * `GET /v1/finance/close-automation` · needs `payment:write`
    */
   closeAutomation(params?: {
     query?: {
@@ -13698,9 +13698,9 @@ export class Operations {
   /**
    * Corporate cards
    *
-   * (v1.39.0) Each card with the month's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.
+   * (v1.39.0) Each card with the month's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy. (v1.41.1) To a caller with payment:write, also people: the organisation's active console users (id, name), who can hold a card.
    *
-   * `GET /v1/finance/cards`
+   * `GET /v1/finance/cards` · needs `payment:write`
    */
   corporateCards(params?: {
     query?: {
@@ -14614,7 +14614,7 @@ export class Operations {
   /**
    * E-mail a fleet invoice
    *
-   * Sends the invoice to the account's billing e-mail (or `to`) through the organisation's e-mail channel (Govern → Alert routing), with the invoice (PDF) and the session list (CSV) attached.
+   * Sends the invoice to the account's billing e-mail (or `to`) through the organisation's e-mail channel (Governance → Alert routing), with the invoice (PDF) and the session list (CSV) attached.
    *
    * `POST /v1/fleet-invoices/{id}/send` · needs `invoice:write`
    */

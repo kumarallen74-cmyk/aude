@@ -6,7 +6,7 @@ import * as wa from '../services/whatsapp-cloud.js';
 /**
  * Driver sign-in codes: WhatsApp (Meta Cloud API authentication template),
  * SMS (Twilio, Zenziva), or your own HTTP gateway — with an optional fallback
- * channel when the main one fails. Configured in Govern → Integrations.
+ * channel when the main one fails. Configured in Governance → Integrations.
  *
  * The code itself is never logged; the activity list shows the masked number,
  * the channel and the provider's message id.

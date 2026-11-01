@@ -154,7 +154,7 @@ export async function send(orgId: string, userId: string, o: { automatic?: boole
   for (const c of sub.channels) {
     let ok = false, error: string | null = null;
     if (c === 'email') {
-      if (!ch.email?.config?.host) error = 'No e-mail channel (Govern → Alert routing → Channels).';
+      if (!ch.email?.config?.host) error = 'No e-mail channel (Governance → Alert routing → Channels).';
       else if (!user.email) error = 'Your account has no e-mail address.';
       else {
         const esc = (x: string) => x.replace(/[&<>"]/g, (k) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[k]!);

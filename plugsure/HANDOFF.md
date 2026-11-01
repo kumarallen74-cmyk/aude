@@ -1,6 +1,6 @@
-# PlugSure v1.41.0 — Deployment Handoff
+# PlugSure v1.41.1 — Deployment Handoff
 
-**Current release: v1.41.0** (see `VERSION`, `RELEASE-NOTES-v1.41.0.md`, `RELEASE-NOTES-v1.40.0.md`, `RELEASE-NOTES-v1.39.0.md`, `RELEASE-NOTES-v1.38.0.md`, `RELEASE-NOTES-v1.37.0.md`, `RELEASE-NOTES-v1.36.0.md`, `RELEASE-NOTES-v1.35.0.md`, `RELEASE-NOTES-v1.34.0.md`, `RELEASE-NOTES-v1.33.0.md`, `RELEASE-NOTES-v1.32.0.md`, `RELEASE-NOTES-v1.31.0.md`, `RELEASE-NOTES-v1.30.0.md`, `RELEASE-NOTES-v1.29.0.md`, `RELEASE-NOTES-v1.28.0.md`, `RELEASE-NOTES-v1.27.0.md`, `RELEASE-NOTES-v1.26.0.md`, `RELEASE-NOTES-v1.25.0.md`, `RELEASE-NOTES-v1.24.0.md`, `RELEASE-NOTES-v1.23.0.md`, `RELEASE-NOTES-v1.22.0.md`, `RELEASE-NOTES-v1.21.0.md`, `RELEASE-NOTES-v1.20.0.md`, `RELEASE-NOTES-v1.19.0.md`, `RELEASE-NOTES-v1.18.0.md`, `RELEASE-NOTES-v1.17.0.md`, `RELEASE-NOTES-v1.16.0.md`, `RELEASE-NOTES-v1.15.0.md`, `RELEASE-NOTES-v1.14.0.md`, `RELEASE-NOTES-v1.13.0.md`, `RELEASE-NOTES-v1.12.0.md`, `RELEASE-NOTES-v1.11.0.md`, `RELEASE-NOTES-v1.10.0.md`, `RELEASE-NOTES-v1.9.2.md`, `RELEASE-NOTES-v1.9.1.md` and `RELEASE-NOTES-v1.9.0.md`; earlier releases in their own release
+**Current release: v1.41.1** (see `VERSION`, `RELEASE-NOTES-v1.41.1.md`, `RELEASE-NOTES-v1.41.0.md`, `RELEASE-NOTES-v1.40.0.md`, `RELEASE-NOTES-v1.39.0.md`, `RELEASE-NOTES-v1.38.0.md`, `RELEASE-NOTES-v1.37.0.md`, `RELEASE-NOTES-v1.36.0.md`, `RELEASE-NOTES-v1.35.0.md`, `RELEASE-NOTES-v1.34.0.md`, `RELEASE-NOTES-v1.33.0.md`, `RELEASE-NOTES-v1.32.0.md`, `RELEASE-NOTES-v1.31.0.md`, `RELEASE-NOTES-v1.30.0.md`, `RELEASE-NOTES-v1.29.0.md`, `RELEASE-NOTES-v1.28.0.md`, `RELEASE-NOTES-v1.27.0.md`, `RELEASE-NOTES-v1.26.0.md`, `RELEASE-NOTES-v1.25.0.md`, `RELEASE-NOTES-v1.24.0.md`, `RELEASE-NOTES-v1.23.0.md`, `RELEASE-NOTES-v1.22.0.md`, `RELEASE-NOTES-v1.21.0.md`, `RELEASE-NOTES-v1.20.0.md`, `RELEASE-NOTES-v1.19.0.md`, `RELEASE-NOTES-v1.18.0.md`, `RELEASE-NOTES-v1.17.0.md`, `RELEASE-NOTES-v1.16.0.md`, `RELEASE-NOTES-v1.15.0.md`, `RELEASE-NOTES-v1.14.0.md`, `RELEASE-NOTES-v1.13.0.md`, `RELEASE-NOTES-v1.12.0.md`, `RELEASE-NOTES-v1.11.0.md`, `RELEASE-NOTES-v1.10.0.md`, `RELEASE-NOTES-v1.9.2.md`, `RELEASE-NOTES-v1.9.1.md` and `RELEASE-NOTES-v1.9.0.md`; earlier releases in their own release
 notes). **Upgrading the pilot from v1.5.0: follow `docs/UPGRADE-v1.5-to-v1.9.md`**, one runbook for every step from
 v1.5.1 to v1.9.0, and `deploy/README.md` §7 for the rollback. This handoff was first written for v1.3.0, the
 enterprise operator console; the sections below describe that release and are kept
@@ -30,15 +30,15 @@ token and the 2.0.1 prepaid/DLM transaction id:
 Cloud API, approved template, with delivery status from Meta's signed webhook) and SMS
 (Twilio, Zenziva or your gateway; also as a fallback when WhatsApp fails), with rules,
 on-call rotas and overrides, quiet hours, escalation, acknowledge and a delivery log.
-Sites can have their own offline-alert threshold. It is set up in the console (Govern → Alert routing); see the deployment
+Sites can have their own offline-alert threshold. It is set up in the console (Governance → Alert routing); see the deployment
 guide, "Alert notifications".
 **Platform statements** turn the published pricing into a monthly statement per customer:
 - commission on the session subtotal, excluding PBJT and PPN, at 8 / 6.5 / 5% per site
 - a minimum per charger (AC Rp 150,000, DC Rp 350,000)
 - private-charger fees
 
-Customers see them under Commercial → Statements. PlugSure's platform administrator sets plans and billing models and finalises months under Govern → Platform billing. Create that account with `create-admin --platform-admin`.
-**Site owners** get a read-only owner portal. They sign in with e-mail and password and see only their own chargers, sessions and statement with their share. **Billing** shows every owner's charging units and amounts, and the owner and operator shares with totals (Commercial → Owners / Billing). The portal has been reviewed on phone and tablet, in light and dark mode (WCAG AA contrast).
+Customers see them under Finance → Platform statements. PlugSure's platform administrator sets plans and billing models and finalises months under Governance → Platform billing. Create that account with `create-admin --platform-admin`.
+**Site owners** get a read-only owner portal. They sign in with e-mail and password and see only their own chargers, sessions and statement with their share. **Billing** shows every owner's charging units and amounts, and the owner and operator shares with totals (Finance → Owners / Billing). The portal has been reviewed on phone and tablet, in light and dark mode (WCAG AA contrast).
 **Roaming (OCPI 2.2.1)** lets other networks' drivers charge on your chargers; their provider is billed with a charge record per session. Connect a provider or a hub under Commercial → Roaming (they register with a one-time token, or you register with theirs), then choose which sites to share. Partners get locations with live availability, tariffs, sessions and CDRs, push their drivers' tokens, and can start, stop, unlock and reserve. The other way round, connect a charge point operator and share your RFID/fleet cards (Cards abroad): they charge on its network, you receive its charge records and export them to bill your fleets; card limits count roaming charges. Fleet drivers with a roaming card see partner chargers in the driver app, start and stop charges there, and get the operator's charge record. Expose `/ocpi/*` on its own hostname (`deploy/Caddyfile`) and set `OCPI_PUBLIC_URL`.
 **Driver app** additions:
 - a station map (Daftar | Peta)
@@ -49,12 +49,12 @@ Customers see them under Commercial → Statements. PlugSure's platform administ
 
 Nothing to set up: the push key is generated and stored on first use. Busy deployments should point `MAP_TILE_URL` at their own tile service. The gateway needs outbound HTTPS to the push services.
 **Published API and developer sandbox:**
-- The operator API is documented as OpenAPI 3.1 at `/openapi.json`, with a readable reference with "Try it" at `/api-docs.html`. It covers 266 operations and the 11 webhook events. A generated TypeScript SDK (no dependencies) is downloadable from Govern → Developers (`/sdk/plugsure-csms-sdk.tgz`; rebuild with `npm run openapi && npm run sdk`). Each API key has its own rate limit (default 600 a minute, `API_KEY_RATE_LIMIT_PER_MIN`; per key under Users & roles → API keys), with RateLimit headers and usage by hour.
-- Under **Govern → Developers** an operator creates sandbox tenants. Each has two virtual chargers that speak real OCPP inside the gateway (register more as OCPP 1.6, 2.0.1 or 2.1), plus its own API key. Integrators can then build and test with no hardware and no risk to live data.
+- The operator API is documented as OpenAPI 3.1 at `/openapi.json`, with a readable reference with "Try it" at `/api-docs.html`. It covers 266 operations and the 11 webhook events. A generated TypeScript SDK (no dependencies) is downloadable from Governance → Developers (`/sdk/plugsure-csms-sdk.tgz`; rebuild with `npm run openapi && npm run sdk`). Each API key has its own rate limit (default 600 a minute, `API_KEY_RATE_LIMIT_PER_MIN`; per key under Users & roles → API keys), with RateLimit headers and usage by hour.
+- Under **Governance → Developers** an operator creates sandbox tenants. Each has two virtual chargers that speak real OCPP inside the gateway (register more as OCPP 1.6, 2.0.1 or 2.1), plus its own API key. Integrators can then build and test with no hardware and no risk to live data.
 - An optional `api.` host in `deploy/Caddyfile` serves the API to integrators with API keys only.
 - Keep the document current with `npm run openapi` after changing a route; a unit test fails otherwise.
 
-**Fleet billing (Commercial → Fleet billing):**
+**Fleet billing (Finance → Fleet billing):**
 - Companies whose drivers use fleet cards get one invoice a month. It covers charging at your stations per site (PBJT-TL, and PPN 12% on DPP nilai lain per line) and partner-network charging re-billed at cost.
 - Invoices are numbered and frozen, and generated as PDF. You can e-mail them (PDF and session list), record payments, void and re-issue, and correct them with **credit notes** (reducing what is owed, refunded, or deducted from the next invoice).
 - The **fleet customer portal**: the customer's own staff (role Fleet customer) see what they owe, their invoices and credit notes as PDF, this month so far and their cards, and can block a lost card. They must be able to reach the console address.
@@ -83,7 +83,7 @@ Nothing to set up: the push key is generated and stored on first use. Busy deplo
   - put the CA on the TLS terminator (Onboarding → Certificate authority; uncomment the `client_auth` block in deploy/Caddyfile);
   - update Caddy from deploy/Caddyfile, whose new `header_up X-Client-Cert-Fingerprint` line closes a spoofing hole.
 
-**Integrations (Govern → Integrations):**
+**Integrations (Governance → Integrations):**
 - The QRIS acquirer, driver sign-in codes, the Plug & Charge PKI and map tiles are connected from the console, with secrets encrypted and write-only, connection tests and an activity log.
 - **QRIS:** Midtrans, Xendit or a bank over BI-SNAP. Each operator can use its own merchant account, and the platform account is the default. Payments are confirmed only by signed notifications to `/pay/notify/<key>` (expose `/pay/*`), and refunds go through the acquirer where it offers them.
 - **Sign-in codes:** WhatsApp (Meta Cloud API), Twilio, Zenziva or your own gateway, with a fallback channel.
@@ -91,7 +91,7 @@ Nothing to set up: the push key is generated and stored on first use. Busy deplo
 
 **E-wallet and card payments:**
 - Drivers can pay a charge or a 30-day pass with GoPay, ShopeePay, OVO, DANA, LinkAja or a card as well as QRIS, as a pre-purchase exactly like QRIS.
-- **Operators** tick the methods in Govern → Integrations → Payments (default: QRIS only).
+- **Operators** tick the methods in Governance → Integrations → Payments (default: QRIS only).
 - **Acquirers:** Midtrans offers GoPay, ShopeePay and cards on the Snap page; Xendit offers OVO (push to the phone), DANA, ShopeePay, LinkAja and cards on the invoice page.
 - **Cards** are paid on the acquirer's hosted 3-D Secure page, so card numbers never reach PlugSure.
 - The acquirer returns the driver to `/app/paid.html`, and the signed notification confirms the payment.
@@ -157,7 +157,7 @@ Nothing to set up: the push key is generated and stored on first use. Busy deplo
 
 **Sandbox chargers on OCPP 2.0.1 and 2.1:** a virtual charger speaks the protocol it is registered with. Each has a signing meter registered automatically. On 2.1 the virtual car can give energy back (DC_BPT / AC_BPT), so integrators can try V2G with no hardware. The gateway must have `ocpp2.0.1` and `ocpp2.1` in `OCPP_VERSIONS`.
 
-**White-label driver apps (Commercial → Driver app):**
+**White-label driver apps (Governance → Driver app):**
 - An operator gives its drivers its own app: PlugSure's app with the operator's name, tagline, colours, icon, support contacts and legal pages, showing only its stations. The accent is contrast-checked in both themes. Every icon size is made from one square PNG.
 - **Draft:** previewed live in the console and at `/app/?brand=<name>`.
 - **Live:** on the operator's own web address (a DNS CNAME to this server). Caddy issues its certificate on demand, after asking the API.
@@ -240,7 +240,7 @@ bootstrap the first admin with `create-admin`. See `RELEASE-NOTES-v1.3.0.md` and
 - a 19-check linked e-wallets e2e (`npm run e2e:linked-wallets`): GoPay, OVO, DANA, ShopeePay and LinkAja linked once and paid in one tap, unused balance refunded automatically through Midtrans and Xendit, links bound to the driver and the account
 - a 40-check post-pay e2e (`npm run e2e:postpay`): sessions started with nothing charged and charged the rated total afterwards, the limit, the GoPay / OVO / DANA / ShopeePay balance guards and the checked-balance-only switch, a refused charge paid by the driver from the receipt, a PIN-confirmed charge settled by Midtrans' notification, a GoPay upgraded to Tabungan (its balance checked, the refreshed token charged), and a GoPay link ended in GoPay (the driver told to link again, at the start and on the receipt; "pay now" charging the new link)
 
-Still to do: the acceptance demo on real hardware, and the two P0 items in the gap analysis. The adapters for a live QRIS acquirer and an SMS/WhatsApp OTP provider are built; what remains is to sign the contracts, enter the credentials under Govern → Integrations, and test each provider in its sandbox. For alerts, you also need your own SMTP account and WhatsApp Business sender, with an approved template. For roaming, each partner or hub runs a connection test against its test environment before going live. For Plug & Charge, the PKI provider's onboarding (and the PKI gateway) and a test on each charger model.
+Still to do: the acceptance demo on real hardware, and the two P0 items in the gap analysis. The adapters for a live QRIS acquirer and an SMS/WhatsApp OTP provider are built; what remains is to sign the contracts, enter the credentials under Governance → Integrations, and test each provider in its sandbox. For alerts, you also need your own SMTP account and WhatsApp Business sender, with an approved template. For roaming, each partner or hub runs a connection test against its test environment before going live. For Plug & Charge, the PKI provider's onboarding (and the PKI gateway) and a test on each charger model.
 
 ## Earlier releases
 

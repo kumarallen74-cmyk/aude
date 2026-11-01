@@ -129,6 +129,9 @@ const MESSAGES = [
   'Token Live Activity', 'Kode masuk yang belum dipakai', 'Riwayat pengisian dan struk (hukum pajak: ID 10 tahun, MY 7, SG 5)', 'Pembayaran dan pengembalian dana',
   'Faktur', 'Catatan tagihan jaringan mitra', 'Catatan poin', 'Akun belum dapat dihapus', 'Ada sesi yang belum dibayar', 'Ada pengisian yang sedang berlangsung',
   'Ada penahanan kartu yang belum selesai', 'Ada reservasi aktif', 'Anda masih dalam antrean', 'Selesaikan hal di atas, lalu hapus akun lagi.', 'Masukkan kode 6 angka.',
+  // the app's own sheet for the charger code and questions (v1.41.1)
+  'Kode charger', 'Buka charger', 'Ketik kode yang tertera di charger, mis. AUTEL-DC60-SMB-002:1.', 'Masukkan kode charger.',
+  'Hentikan pengisian sekarang?', 'Hentikan pengisian', 'Putuskan e-wallet ini?', 'Hapus kartu ini?', 'Batalkan',
 ];
 
 test('driver app English: each message is fully translated through DICT and PATTERNS in order', () => {

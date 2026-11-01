@@ -90,7 +90,7 @@ export async function registerSandboxRoutes(app: FastifyInstance): Promise<void>
   async function mySandbox(req: FastifyRequest, reply: FastifyReply) {
     const s = await sandboxInfo(req.principal.orgId);
     if (!s) {
-      bad(reply, 404, 'This is not a sandbox. Use a sandbox API key (create one under Govern → Developers).');
+      bad(reply, 404, 'This is not a sandbox. Use a sandbox API key (create one under Governance → Developers).');
       return null;
     }
     return s;

@@ -11,7 +11,7 @@ import * as wa from '../services/whatsapp-cloud.js';
 import * as support from '../services/whatsapp-support.js';
 
 /**
- * Operate → WhatsApp (v1.10.0): the dashboard of PlugSure's WhatsApp Business Account.
+ * Governance → WhatsApp (v1.10.0): the dashboard of PlugSure's WhatsApp Business Account.
  *
  *   GET  /v1/whatsapp/overview    connection health (number, quality, tier), webhook, required templates, stats
  *   GET  /v1/whatsapp/templates   the WABA's templates, the ones PlugSure needs marked

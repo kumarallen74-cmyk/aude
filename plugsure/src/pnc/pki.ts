@@ -53,7 +53,7 @@ export interface PncConfig {
   source: 'console' | 'environment' | 'default';
 }
 
-/** The PKI in force: Govern → Integrations → Plug & Charge PKI, else PNC_* environment variables. */
+/** The PKI in force: Governance → Integrations → Plug & Charge PKI, else PNC_* environment variables. */
 export async function pncConfig(): Promise<PncConfig> {
   const r = await resolve('pnc_pki');
   return {
@@ -76,10 +76,10 @@ export async function pkiProblem(): Promise<string | null> {
   const c = await pncConfig();
   if (c.mode === 'none') {
     return !isRelaxedEnv() && config.pnc.pki === 'mock'
-      ? 'The test PKI is refused in production. Connect your PKI gateway under Govern → Integrations → Plug & Charge PKI.'
-      : 'No V2G PKI is connected (Govern → Integrations → Plug & Charge PKI). Plug & Charge certificate requests are answered Failed.';
+      ? 'The test PKI is refused in production. Connect your PKI gateway under Governance → Integrations → Plug & Charge PKI.'
+      : 'No V2G PKI is connected (Governance → Integrations → Plug & Charge PKI). Plug & Charge certificate requests are answered Failed.';
   }
-  if (c.mode === 'http' && (!c.url || !c.token)) return 'The PKI gateway needs its URL and token (Govern → Integrations → Plug & Charge PKI).';
+  if (c.mode === 'http' && (!c.url || !c.token)) return 'The PKI gateway needs its URL and token (Governance → Integrations → Plug & Charge PKI).';
   if (c.signer === 'vault' && !(config.vault.addr && config.vault.token)) return 'Signing chargers\' V2G certificates with Vault needs VAULT_ADDR and VAULT_TOKEN.';
   return null;
 }
@@ -343,7 +343,7 @@ export interface TestContract {
 
 /** Issue a contract certificate from the test PKI (sandboxes and tests only). */
 export async function issueTestContract(emaid: string): Promise<TestContract> {
-  if ((await pkiMode()) !== 'mock') throw new PkiError('Test contract certificates exist only with the test PKI (Govern → Integrations → Plug & Charge PKI → Test PKI).');
+  if ((await pkiMode()) !== 'mock') throw new PkiError('Test contract certificates exist only with the test PKI (Governance → Integrations → Plug & Charge PKI → Test PKI).');
   const ca = await mockCa();
   const k = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const der = buildCertificate({

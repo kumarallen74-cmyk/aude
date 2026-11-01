@@ -314,7 +314,7 @@ export async function checkLink(platformOrgId: string, linkId: string): Promise<
 
 async function emailChannel(orgId: string) {
   const ch = await outsideRequestScope(() => one<{ enabled: boolean; config: any; secret: string | null }>(`SELECT enabled, config, secret FROM notification_channel WHERE org_id = $1 AND kind = 'email'`, [orgId]));
-  if (!ch?.enabled || !ch.config?.host) throw new InvoicingError(409, 'Set up the e-mail channel first (Govern → Alert routing → Channels).');
+  if (!ch?.enabled || !ch.config?.host) throw new InvoicingError(409, 'Set up the e-mail channel first (Governance → Alert routing → Channels).');
   let secret: string | null = null;
   try { secret = ch.secret ? unseal(ch.secret) : null; } catch { secret = null; }
   return { config: ch.config, secret };

@@ -77,7 +77,7 @@
 > - Sandbox virtual chargers speak the protocol they are registered with, so the gateway needs `ocpp2.0.1` and `ocpp2.1` in `OCPP_VERSIONS` for sandboxes to use them. Their meter keys derive from `SECRETS_KEY`: rotating it changes the keys, and the new ones must be re-registered. To do that, clear `meter_public_key` on the sandbox connectors and restart the gateway, which registers them again as it starts the virtual chargers.
 >
 > **White-label driver apps** (migration 040).
-> - Operators set up their own driver app in Commercial → Driver app; nothing changes for those who do not.
+> - Operators set up their own driver app in Governance → Driver app; nothing changes for those who do not.
 > - A live app is served on the operator's own web address. Update Caddy from `deploy/Caddyfile`:
 >   - the global `on_demand_tls { ask http://127.0.0.1:9200/d/tls-ask }`;
 >   - the catch-all `https://` block, which must stay last;
@@ -450,7 +450,7 @@ docker compose exec postgres psql -U postgres plugsure -c "select 1"
 
 ### Integrations: payments (QRIS, e-wallets, cards), sign-in codes, PKI, map tiles
 
-Connected in the console (Govern → Integrations); settings there override the
+Connected in the console (Governance → Integrations); settings there override the
 environment variables. Secrets are stored sealed with `SECRETS_KEY`.
 **Changing `SECRETS_KEY` makes them unreadable**, so enter them again.
 
@@ -522,7 +522,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      it), and route finance.driver_refund_request and fleet.credit_limit
      ([FINANCE.md](FINANCE.md)).
   18. (v1.25.0) Platform administrators: set each operator's billing e-mail
-     and automatic fee invoicing (Govern → Fee invoices; payment links need
+     and automatic fee invoicing (Governance → Fee invoices; payment links need
      PlugSure's own Xendit account under Integrations), and route
      finance.platform_invoice_link. Operators: roaming settlement is in
      Finance → Roaming settlement; Finance → Controls needs audit:read, and its
@@ -685,7 +685,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
     up front any e-wallet whose balance cannot be read.
   - Unpaid charges are retried, payable by the driver from the receipt (by the e-wallet again, or in the app with any other method, also while the e-wallet PIN is pending or after it expired, was denied or was cancelled); the app shows unpaid sessions on the home screen and sends Web Push reminders; an unpaid session's tax receipt is a nil transaction (Rp 0) until paid. With Xendit, point the payment method and payment token callbacks at the same URL as payments, and
     listed under **Refunds → Holds and post-pay**.
-- **Alert delivery status and SMS** (optional; Govern → Alert routing): the
+- **Alert delivery status and SMS** (optional; Governance → Alert routing): the
   WhatsApp channel shows a callback URL (`https://<public host>/hooks/whatsapp/<key>`)
   and a verify token for the Meta app's webhook (field `messages`); save the
   Meta **app secret** on the channel so callbacks can be verified. Like
@@ -700,7 +700,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
   WhatsApp Business Account ID and the Meta app secret (v1.10.0). Then paste the
   status webhook URL (`https://<OCPP host>/hooks/whatsapp-cloud/<key>`) and the
   verify token it shows into the Meta app. Delivery, templates and number
-  quality appear on **Operate → WhatsApp**. Step by step:
+  quality appear on **Governance → WhatsApp**. Step by step:
   [WHATSAPP.md](WHATSAPP.md). Customers who write to the number appear in its
   **Inbox**; to have Claude answer them, connect **WhatsApp AI support** with an
   Anthropic API key (v1.11.0, [WHATSAPP.md](WHATSAPP.md) §3).
@@ -1108,7 +1108,7 @@ psql -d plugsure_restore -c "select count(*), max(started_at) from charging_sess
 psql -d plugsure_restore -c "select has_table_privilege('plugsure_app','charging_session','SELECT')"
 
 # 4. Point a scratch API at it (DATABASE_URL as plugsure_app, the SAME AUDIT_HMAC_KEY
-#    and SECRETS_KEY) and verify the audit chain: Govern → Audit → Verify. A restore
+#    and SECRETS_KEY) and verify the audit chain: Governance → Audit → Verify. A restore
 #    without the original SECRETS_KEY loses every sealed provider credential.
 
 # 5. Restore the file storage and spot-check a firmware image.
@@ -1214,7 +1214,7 @@ it lasts (repeats fold into it, also across a gateway restart), resolved
 automatically by the worker's next successful pass. It goes to the platform
 operator's organisation: `OPS_ALERT_ORG_ID` if set, else every organisation with
 a platform administrator (`create-admin --platform-admin`), else the only
-organisation. Route it like any alert (Govern → Alert routing: a rule for kind
+organisation. Route it like any alert (Governance → Alert routing: a rule for kind
 "Background worker failing" or `platform.*`, to an on-call rota).
 
 Per-worker detail (failure streak, last success, last error, alert state, the

@@ -177,7 +177,7 @@ export async function send(orgId: string, monthRaw: unknown, now = new Date()) {
   const s = await settings(orgId);
   if (!s.recipients.length) throw new ScorecardError(422, 'No recipients: add them in the scorecard settings.');
   const ch = await channels(orgId);
-  if (!ch.email?.config?.host) throw new ScorecardError(422, 'No e-mail channel (Govern → Alert routing → Channels).');
+  if (!ch.email?.config?.host) throw new ScorecardError(422, 'No e-mail channel (Governance → Alert routing → Channels).');
   const sc = await scorecard(orgId, { month: monthRaw }, now);
   const org = await outsideRequestScope(() => one<{ name: string }>(`SELECT name FROM organisation WHERE id = $1`, [orgId]));
   const text = scorecardText(org?.name ?? 'PlugSure', sc);

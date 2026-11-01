@@ -314,7 +314,7 @@ export async function deliverOtp(
     return { ok: true };
   }
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-  // Sent by the provider configured in Govern → Integrations (WhatsApp / SMS, with
+  // Sent by the provider configured in Governance → Integrations (WhatsApp / SMS, with
   // a fallback). The development provider shows the code in the app instead, and
   // is never used in production.
   const sent = await sendCode(phone, code, appName);

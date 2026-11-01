@@ -3378,7 +3378,7 @@ export const ops: Op[] = [
   },
   {
     method: 'GET', path: '/v1/finance/close-automation', tag: T, summary: 'Close automation',
-    description: '(v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step\'s owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.',
+    description: '(v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step\'s owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend. (v1.41.1) To a caller with payment:write, also people: the organisation\'s active console users (id, name), who can own a step.',
     query: [{ name: 'month', schema: { type: 'string' } }],
     responses: { 200: { description: 'OK', schema: { type: 'object' } } },
     errors: [403, 422],
@@ -3560,7 +3560,7 @@ export const ops: Op[] = [
   },
   {
     method: 'GET', path: '/v1/finance/cards', tag: T, summary: 'Corporate cards',
-    description: '(v1.39.0) Each card with the month\'s spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.',
+    description: '(v1.39.0) Each card with the month\'s spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy. (v1.41.1) To a caller with payment:write, also people: the organisation\'s active console users (id, name), who can hold a card.',
     query: [{ name: 'month', schema: { type: 'string' } }],
     responses: { 200: { description: 'OK', schema: { type: 'object' } } },
     errors: [400, 403],
