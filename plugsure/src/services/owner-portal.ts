@@ -13,7 +13,7 @@ import { gate, ApprovalError } from './finance-approvals.js';
  *   payouts        each finalised statement's share, what the operator recorded as paid against it (date, amount,
  *                  reference) and what is still due
  *   bank details   the account on file (masked), and a request to change it: kept sealed until the operator approves
- *                  it in Finance → Payables (it then replaces the account on file) or rejects it with a reason; one
+ *                  it in Finance → Refunds & shares due (it then replaces the account on file) or rejects it with a reason; one
  *                  pending request at a time; the owner may withdraw it. The operator is alerted
  *                  (finance.owner_bank_change_requested).
  *
@@ -109,7 +109,7 @@ export async function requestChange(orgId: string, ownerId: string, b: Record<st
   }
   await outsideRequestScope(() => persistAlert({
     orgId, kind: BANK_CHANGE_ALERT, severity: 'warning', targetType: 'owner_bank_change_request', targetId: id,
-    message: `${owner.name} asked to change its bank details to ${bankName} ••••${number.slice(-4)} (${holder}). Check it with the owner before approving: Finance → Payables → Bank detail changes.`,
+    message: `${owner.name} asked to change its bank details to ${bankName} ••••${number.slice(-4)} (${holder}). Check it with the owner before approving: Finance → Refunds & shares due → Bank detail changes.`,
   })).catch((e: unknown) => logger.warn({ err: (e as Error).message }, 'bank change alert failed'));
   return { id, state: 'pending' };
 }
@@ -122,7 +122,7 @@ export async function withdraw(orgId: string, ownerId: string, id: string) {
   return { ok: true };
 }
 
-// ─────────────────────────────────────────── the operator's side (Finance → Payables)
+// ─────────────────────────────────────────── the operator's side (Finance → Refunds & shares due)
 
 export async function pendingRequests(orgId: string) {
   const rows = await outsideRequestScope(() => many<any>(

@@ -442,7 +442,7 @@ async function alertOpen(integrationId: string, orgId: string | null, open: numb
   for (const o of orgs) {
     if (open && fresh) {
       await persistAlert({ orgId: o, kind: 'finance.reconciliation', severity: 'warning', targetType: 'payments_account', targetId: integrationId,
-        message: `Payments reconciliation: ${open} difference${open === 1 ? '' : 's'} between the gateway and PlugSure need checking (Finance → Reconciliation).` });
+        message: `Payments reconciliation: ${open} difference${open === 1 ? '' : 's'} between the gateway and PlugSure need checking (Finance → Gateway reconciliation).` });
     } else if (!open) {
       await resolveAlertsFor(o, 'finance.reconciliation', 'payments_account', integrationId);
     }

@@ -110,7 +110,7 @@ registerView('console-brand', {
               <li>Buttons, links and highlights, in the light and dark themes.</li>
               <li>The sign-in page, on your own console web address.</li>
             </ul>
-            <p class="cell-sub" style="margin-top:10px">Your driver app has its own brand, under <a href="#/driver-app">Commercial → Driver app</a>.</p>
+            <p class="cell-sub" style="margin-top:10px">Your driver app has its own brand, under <a href="#/driver-app">Governance → Driver app</a>.</p>
           </div></div>
         </aside>
       </div>`;

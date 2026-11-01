@@ -301,7 +301,7 @@ export async function sweep(now = new Date()): Promise<number> {
     try {
       const left = days(t, r.due_s);
       await outsideRequestScope(() => persistAlert({ orgId: r.org_id, kind: DUE, severity: left < 0 ? 'critical' : 'warning', targetType: 'compliance_task', targetId: String(r.id),
-        message: `${r.title}: ${left < 0 ? `overdue since ${r.due_s}` : left === 0 ? 'due today' : `due on ${r.due_s} (${left} days)`}. Finance → Compliance.` }));
+        message: `${r.title}: ${left < 0 ? `overdue since ${r.due_s}` : left === 0 ? 'due today' : `due on ${r.due_s} (${left} days)`}. Finance → Audit calendar.` }));
       n++;
     } catch (e) { logger.warn({ task: r.id, err: (e as Error).message }, 'compliance reminder failed'); }
   }

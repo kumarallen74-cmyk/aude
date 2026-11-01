@@ -12,16 +12,16 @@ import { planForm, readPlan } from './platform-billing.js';
 const csvCell = (v) => { let s = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replace(/"/g, '""')}"`; };
 
 registerView('billing', {
-  title: 'Billing',
+  title: 'Owner billing',
   icon: 'chart',
-  group: 'commercial',
-  order: 25,
+  group: 'finance',
+  order: 4,
   perm: 'invoice:read',
   async render(root) {
     const canWrite = state.can('invoice:write');
     const opName = state.me?.org?.name ?? 'Operator';
     root.innerHTML = pageHead(
-      'Billing',
+      'Owner billing',
       `Charging units and amounts for every site owner, and how each month's commission base (what drivers paid, excluding PBJT-TL and PPN) is shared between the owner and ${esc(opName)}. Finalise a month after it ends to freeze and number each owner's statement.`,
       `<button class="btn" type="button" data-refresh>${icon('refresh')} Refresh</button><button class="btn" type="button" data-csv>${icon('download')} CSV</button>`,
     ) + `<div class="filters">${field('Month', '<select data-month></select>')}${field('Currency', '<select data-cur></select>', { attrs: 'data-cur-field hidden' })}</div>
@@ -71,7 +71,7 @@ registerView('billing', {
         ],
         rows,
         foot,
-        empty: 'No site owners yet. Add them under Commercial → Owners and assign their sites.',
+        empty: 'No site owners yet. Add them under Finance → Owners and assign their sites.',
         onRow: (o) => (o.own ? null : openOwner(o)),
       });
     };

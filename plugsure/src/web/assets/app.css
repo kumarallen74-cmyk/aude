@@ -319,6 +319,13 @@ pre.json { margin: 0; font: 11.5px/1.45 var(--mono); white-space: pre-wrap; word
 .tabs button { border: 0; background: none; padding: 9px 12px; font: 500 13px var(--sans); color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
 .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .tabs button:hover { color: var(--ink); }
+/* (v1.41.0) Finance: a row of sections, then the section's own tabs, smaller and without the rule. */
+.tabs.fin-sections { margin-bottom: 0; }
+.tabs.fin-sections button { font-weight: 600; color: var(--ink-2); }
+.tabs.subtabs { border-bottom: 0; margin: 6px 0 12px; gap: 4px; flex-wrap: wrap; }
+.tabs.subtabs button { padding: 5px 10px; font-size: 12.5px; border: 1px solid transparent; border-radius: var(--radius-sm); }
+.tabs.subtabs button[aria-selected="true"] { background: var(--accent-soft); border-color: transparent; }
+.fin-views { margin: -4px 0 12px; }
 
 /* ------------------------------------------------------------------ overlays */
 .backdrop { position: fixed; inset: 0; background: var(--scrim-strong); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; animation: fade .15s; }
@@ -582,6 +589,8 @@ dl.kv dd { margin: 0; min-width: 0; word-break: break-word; }
   .x { width: 40px; height: 40px; }
   .seg button { height: 38px; }
   .tabs button { padding: 11px 12px; }
+  .tabs.subtabs { flex-wrap: nowrap; }
+  .tabs.subtabs button { padding: 9px 12px; }
   .nav a { padding-top: 10px; padding-bottom: 10px; }
   /* A taller track so the slider can be dragged with a finger. */
   input[type="range"] { height: 36px; }

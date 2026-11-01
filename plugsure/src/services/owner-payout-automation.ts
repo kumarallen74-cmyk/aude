@@ -7,7 +7,7 @@ import { TransferError } from './refund-transfers.js';
 /**
  * Owner payout automation (v1.26.0). Once an owner statement is finalised, the worker requests the payout of the
  * owner's share through the operator's payout rail (Xendit payouts or Duitku Disbursement), as a person would from
- * Finance → Payables. The request is never sent by itself: it waits for the approvals as any other (two people, or a
+ * Finance → Refunds & shares due. The request is never sent by itself: it waits for the approvals as any other (two people, or a
  * Finance Manager above the approvals matrix's threshold), so automation only saves the first step.
  *
  *   settings      finance_org_settings.owner_payouts: enabled, the days to wait after finalising (0–60: time for

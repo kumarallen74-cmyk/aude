@@ -19,7 +19,7 @@ import { assertOpen, lockedAmong } from './finance-periods.js';
  *
  * The site P&L of a month: revenue − energy cost (Margin) − shared costs by category − depreciation of the site's
  * investments (Investments) = what the site contributed. A cost whose months include a locked month cannot be
- * recorded, ended earlier or voided across it (Finance → Close).
+ * recorded, ended earlier or voided across it (Finance → Month close).
  */
 
 export class SharedCostError extends Error {

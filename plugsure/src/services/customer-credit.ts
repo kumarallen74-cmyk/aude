@@ -278,7 +278,7 @@ export async function sweep(now = new Date()): Promise<number> {
     try {
       const r = await openReview(a.org_id, a.id, null, now);
       await outsideRequestScope(() => persistAlert({ orgId: a.org_id, kind: REVIEW_DUE, severity: r.grade === 'D' || r.grade === 'E' ? 'warning' : 'info', targetType: 'fleet_account', targetId: a.id,
-        message: `${a.name}: credit review due (score ${r.score}, grade ${r.grade}; suggested limit ${r.suggestedLimit}). Finance → Credit.` })).catch(() => null);
+        message: `${a.name}: credit review due (score ${r.score}, grade ${r.grade}; suggested limit ${r.suggestedLimit}). Finance → Customer credit.` })).catch(() => null);
       n++;
     } catch (e) { logger.warn({ account: a.id, err: (e as Error).message }, 'credit review sweep failed'); }
   }

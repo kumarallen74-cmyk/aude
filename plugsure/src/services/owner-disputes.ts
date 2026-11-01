@@ -5,7 +5,7 @@ import { moneyText, currencyOr } from '../domain/money.js';
 /**
  * Owner statement disputes (v1.23.0). A site owner queries a finalised statement from the owner portal (Payouts →
  * a statement → Query): a line of it (a site) or the whole statement, what is wrong, and optionally the amount it
- * believes it is owed. The operator is alerted (finance.owner_dispute) and answers it in Finance → Payables → Owner
+ * believes it is owed. The operator is alerted (finance.owner_dispute) and answers it in Finance → Refunds & shares due → Owner
  * queries:
  *
  *   reject    the statement stands (the answer says why)
@@ -71,7 +71,7 @@ export async function raise(orgId: string, ownerId: string, b: Record<string, un
     [orgId, ownerId, sid, b.line == null || b.line === '' ? null : String(b.line).slice(0, 200), message, claimed, userId]));
   const owner = await outsideRequestScope(() => one<{ name: string }>(`SELECT name FROM site_owner WHERE id = $1`, [ownerId]));
   await outsideRequestScope(() => persistAlert({ orgId, kind: KIND, severity: 'warning', targetType: 'owner_statement_dispute', targetId: String(r!.id),
-    message: `${owner?.name ?? 'A site owner'} queried statement ${st.number}${b.line ? ` (${String(b.line).slice(0, 80)})` : ''}${claimed != null ? `, claiming ${moneyText(claimed, currencyOr(st.currency))}` : ''}. Answer it in Finance → Payables → Owner queries.` })).catch(() => null);
+    message: `${owner?.name ?? 'A site owner'} queried statement ${st.number}${b.line ? ` (${String(b.line).slice(0, 80)})` : ''}${claimed != null ? `, claiming ${moneyText(claimed, currencyOr(st.currency))}` : ''}. Answer it in Finance → Refunds & shares due → Owner queries.` })).catch(() => null);
   return { id: String(r!.id), state: 'open' };
 }
 

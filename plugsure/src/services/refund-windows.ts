@@ -2,7 +2,7 @@
  * How long after a payment the gateway still refunds it to the payer's own method (v1.15.0; in Finance since v1.12.0).
  *
  * Past the window a refund can only go by bank transfer (or, at Duitku, Disbursement). The figures are the gateways'
- * published limits; the gateway decides, so PlugSure only WARNS (the Refunds page, Finance → Payables) and still lets a
+ * published limits; the gateway decides, so PlugSure only WARNS (the Refunds page, Finance → Refunds & shares due) and still lets a
  * refund be tried: a refusal leaves it 'failed', payable by bank transfer as before.
  *
  *   Xendit   e-wallets: OVO 90 days, DANA 30, ShopeePay 365, LinkAja 30, GoPay 30

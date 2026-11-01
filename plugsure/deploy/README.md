@@ -525,7 +525,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      and automatic fee invoicing (Govern → Fee invoices; payment links need
      PlugSure's own Xendit account under Integrations), and route
      finance.platform_invoice_link. Operators: roaming settlement is in
-     Finance → Roaming; Finance → Controls needs audit:read, and its
+     Finance → Roaming settlement; Finance → Controls needs audit:read, and its
      thresholds a Finance Manager ([FINANCE.md](FINANCE.md)).
   19. (v1.26.0) Optionally turn on automatic owner payouts (Finance → Auto
      payouts; they still wait for approval), set the subscription revenue
@@ -534,7 +534,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      phone page for approvals ([FINANCE.md](FINANCE.md)).
   20. (v1.27.0) Optionally: subscribe to a finance digest (Finance today;
      for WhatsApp, name an approved one-parameter template in Finance →
-     Settings), set each site's electricity tariff (Finance → Tariffs), turn
+     Settings), set each site's electricity tariff (Finance → Energy tariffs), turn
      on fleet invoicing automation (Finance → Fleet invoicing; payment links
      need your own Xendit account), and route finance.fleet_invoice_link
      ([FINANCE.md](FINANCE.md)).
@@ -552,9 +552,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      finance.supplier_bill_overdue and finance.cash_below_minimum
      ([FINANCE.md](FINANCE.md)).
   23. (v1.30.0) Optionally record the site leases (Finance → Leases) and
-     the time deposits (Finance → Treasury), set the purchase_order row of
+     the time deposits (Finance → Treasury & deposits), set the purchase_order row of
      the approvals matrix and the match tolerance, and review the anomaly
-     checks' first findings (Finance → Review). Route
+     checks' first findings (Finance → Anomaly review). Route
      finance.deposit_maturing and finance.anomaly_confirmed
      ([FINANCE.md](FINANCE.md)).
   24. (v1.31.0) Optionally post the opening balances as a manual journal
@@ -626,7 +626,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      Corporate tax). Add suppliers' bank accounts and pay bills in runs
      (Finance → Payment runs); check the bank file against your bank's bulk
      template first. Add company cards and import their transactions
-     (Finance → Cards) ([FINANCE.md](FINANCE.md)).
+     (Finance → Corporate cards) ([FINANCE.md](FINANCE.md)).
   33. (v1.40.0) Enter customer contracts beyond pay-per-charge with their
      obligations and billings (Finance → Contracts); sync the ledger's
      months. In a group, set the transfer-pricing policy at the parent and
@@ -635,6 +635,9 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      Data quality). Model tariff, energy and new-site scenarios (Finance →
      Scenarios). Route finance.contract_renewal_due and
      finance.data_quality_low ([FINANCE.md](FINANCE.md)).
+  34. (v1.41.0) Nothing to do: Finance is now in ten sections, each with its
+     own tabs, and the sidebar has a Finance group. Old links keep working.
+     Tell finance users where things moved (FINANCE.md, *Finding your way*).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

@@ -728,7 +728,7 @@ registerView('hub', {
   subtitle: 'PlugSure roaming hub',
   icon: 'link',
   group: 'govern',
-  order: 71,
+  order: 72,
   perm: 'platform:admin',
   when: () => state.me?.features?.hub === true,
   async render(root, [initial, param]) {

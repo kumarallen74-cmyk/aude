@@ -12,8 +12,8 @@ registerView('finance-today', {
   title: 'Finance today',
   subtitle: 'Figures and approvals, for the phone',
   icon: 'chart',
-  group: 'commercial',
-  order: 23,
+  group: 'finance',
+  order: 1,
   perm: 'payment:read',
   async render(root) {
     root.innerHTML = pageHead('Finance today', 'Today\'s takings, the month so far, and what is waiting for you to approve.', '') + '<div data-ft><div class="empty-state"><span class="spinner"></span></div></div>';

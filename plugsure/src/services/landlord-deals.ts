@@ -149,7 +149,7 @@ export async function save(orgId: string, id: string | null, b: Record<string, u
   const site = String(v('siteId', 'site_id') ?? '');
   if (!UUID_RE.test(site) || !(await outsideRequestScope(() => one(`SELECT 1 FROM site WHERE id = $1 AND org_id = $2`, [site, orgId])))) throw new LandlordError(422, 'No such site.');
   const sup = String(v('supplierId', 'supplier_id') ?? '');
-  if (!/^\d{1,18}$/.test(sup) || !(await outsideRequestScope(() => one(`SELECT 1 FROM supplier WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`, [sup, orgId])))) throw new LandlordError(422, 'The landlord is a supplier (Finance → Bills → Suppliers).');
+  if (!/^\d{1,18}$/.test(sup) || !(await outsideRequestScope(() => one(`SELECT 1 FROM supplier WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`, [sup, orgId])))) throw new LandlordError(422, 'The landlord is a supplier (Finance → Supplier bills → Suppliers).');
   const basis = String(v('basis', 'basis') ?? '');
   if (!(BASES as readonly string[]).includes(basis)) throw new LandlordError(422, `basis is one of ${BASES.join(', ')}.`);
   const currency = String(v('currency', 'currency') ?? '').toUpperCase();
@@ -247,7 +247,7 @@ export async function issue(orgId: string, id: string, userId: string | null) {
 export async function voidStatement(orgId: string, id: string) {
   const s = await stRow(orgId, id);
   if (s.status === 'void') throw new LandlordError(409, 'Already void.');
-  if (s.bill_id && !['draft', 'rejected', 'void'].includes(s.bill_status)) throw new LandlordError(409, `Its bill is ${String(s.bill_status).replace('_', ' ')}: void the bill (Finance → Bills) first.`);
+  if (s.bill_id && !['draft', 'rejected', 'void'].includes(s.bill_status)) throw new LandlordError(409, `Its bill is ${String(s.bill_status).replace('_', ' ')}: void the bill (Finance → Supplier bills) first.`);
   await outsideRequestScope(() => query(`UPDATE landlord_statement SET status = 'void' WHERE id = $1`, [s.id]));
   return statement(orgId, String(s.id));
 }

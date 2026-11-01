@@ -143,7 +143,7 @@ export async function copyForward(orgId: string, fromRaw: unknown, monthsRaw: un
   const targets: string[] = [];
   { let [ty, tm] = from.split('-').map(Number) as [number, number]; for (let i = 0; i < n; i++) { tm++; if (tm === 13) { tm = 1; ty++; } targets.push(`${ty}-${String(tm).padStart(2, '0')}`); } }
   const locked = await lockedAmong(orgId, targets);
-  if (locked.length) throw new BudgetError(409, `${locked.join(', ')} ${locked.length === 1 ? 'is' : 'are'} locked (Finance → Close): nothing was copied.`);
+  if (locked.length) throw new BudgetError(409, `${locked.join(', ')} ${locked.length === 1 ? 'is' : 'are'} locked (Finance → Month close): nothing was copied.`);
   let [y, m] = from.split('-').map(Number) as [number, number];
   let copied = 0;
   for (let i = 0; i < n; i++) {

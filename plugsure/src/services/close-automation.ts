@@ -6,7 +6,7 @@ import { isLocked } from './finance-periods.js';
 import { LABEL, STEPS, type Step } from './period-close.js';
 
 /**
- * Finance close automation (v1.38.0). The month close (Finance → Close) has nine steps, each with a check and a
+ * Finance close automation (v1.38.0). The month close (Finance → Month close) has nine steps, each with a check and a
  * sign-off. This does the mechanical work and keeps the close on time:
  *
  *   run          for a month not locked: sync the ledger (every module's journal), record depreciation and the lease
@@ -231,7 +231,7 @@ export async function sweep(now = new Date()): Promise<number> {
       for (const s of cal.steps) {
         if (s.overdue) {
           await outsideRequestScope(() => persistAlert({ orgId: o.org_id, kind: OVERDUE, severity: 'warning', targetType: 'close_step', targetId: `${month}:${s.step}`,
-            message: `Close ${month}: ${s.label} was due ${s.dueOn}${s.owner ? ` (${s.owner})` : ''} and is not signed off. ${s.detail}. Finance → Close automation.` }));
+            message: `Close ${month}: ${s.label} was due ${s.dueOn}${s.owner ? ` (${s.owner})` : ''} and is not signed off. ${s.detail}. Finance → Month close → Automation.` }));
           n++;
         } else if (s.done) await outsideRequestScope(() => resolveAlertsFor(o.org_id, OVERDUE, 'close_step', `${month}:${s.step}`)).catch(() => 0);
       }

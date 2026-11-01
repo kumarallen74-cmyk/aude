@@ -262,7 +262,7 @@ export async function sweep(): Promise<number> {
       for (const p of (await list(org_id)).projects.filter((x) => x.status === 'planned' || x.status === 'active')) {
         if (p.overBudget) {
           await outsideRequestScope(() => persistAlert({ orgId: org_id, kind: OVER, severity: 'warning', targetType: 'capex_project', targetId: p.id,
-            message: `${p.number} ${p.name}: forecast ${p.forecast} is ${p.variancePct}% over the budget of ${p.budget} ${p.currency}. Finance → Projects.` })).catch(() => null);
+            message: `${p.number} ${p.name}: forecast ${p.forecast} is ${p.variancePct}% over the budget of ${p.budget} ${p.currency}. Finance → Capex projects.` })).catch(() => null);
           n++;
         } else await outsideRequestScope(() => resolveAlertsFor(org_id, OVER, 'capex_project', p.id)).catch(() => 0);
       }

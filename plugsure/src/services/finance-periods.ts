@@ -3,13 +3,13 @@ import { config } from '../config.js';
 import { reportingCurrency, currencies } from './fx.js';
 
 /**
- * Month lock (v1.22.0). Once the accountant has closed a month (Finance → Close), Finance locks it: the finance
+ * Month lock (v1.22.0). Once the accountant has closed a month (Finance → Month close), Finance locks it: the finance
  * entries dated in it can no longer be added, changed or voided —
  *
- *   energy bills          (Finance → Margin)        for the month
+ *   energy bills          (Finance → Energy margin)        for the month
  *   exchange rates        (Settings → Currencies)   for the month, typed or fetched
  *   budgets               (Finance → Budgets)       for the month, saved or copied into
- *   site investments      (Finance → Investments)   dated in the month, recorded or voided
+ *   site investments      (Finance → Site investments)   dated in the month, recorded or voided
  *
  * so the figures the accountant booked stay the ones Finance shows. Only a month that has ended can be locked.
  * Reopening it takes `finance:approve` (a Finance Manager or the owner) and a reason; the lock row keeps who closed
@@ -41,7 +41,7 @@ export async function isLocked(orgId: string, month: string): Promise<boolean> {
  * `what` names the entry ("An energy bill", "A budget").
  */
 export async function assertOpen<E extends Error>(orgId: string, month: string, what: string, err: (status: number, msg: string) => E): Promise<void> {
-  if (await isLocked(orgId, month)) throw err(409, `${what} for ${month} cannot be changed: the month is locked (Finance → Close). A Finance Manager can reopen it.`);
+  if (await isLocked(orgId, month)) throw err(409, `${what} for ${month} cannot be changed: the month is locked (Finance → Month close). A Finance Manager can reopen it.`);
 }
 
 /** The locked months among a list. */

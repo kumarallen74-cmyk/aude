@@ -22,7 +22,7 @@ export async function notifyAwaiting(k: TransferKind, t: { id: string | number; 
   const amount = Number(t.amount_minor ?? t.amount ?? 0);
   await persistAlert({
     orgId, kind: AWAITING, severity: 'warning', targetType: targetType(k), targetId: String(t.id),
-    message: `${k === 'refund' ? 'A refund' : 'An owner payout'} of ${fmt(amount, t.currency)} (${what}) is waiting for approval by someone other than ${who ?? 'the requester'}: ${k === 'refund' ? 'Refunds → Transfers' : 'Finance → Payables → Payouts'}.`,
+    message: `${k === 'refund' ? 'A refund' : 'An owner payout'} of ${fmt(amount, t.currency)} (${what}) is waiting for approval by someone other than ${who ?? 'the requester'}: ${k === 'refund' ? 'Refunds → Transfers' : 'Finance → Refunds & shares due → Payouts'}.`,
   }).catch((e: unknown) => logger.warn({ err: (e as Error).message }, 'approval alert failed'));
 }
 
@@ -44,7 +44,7 @@ export async function escalateWaiting(): Promise<number> {
     if (open) continue;
     await outsideRequestScope(() => persistAlert({
       orgId: r.org_id, kind: OVERDUE, severity: 'critical', targetType: targetType(r.k), targetId: String(r.id),
-      message: `${r.k === 'refund' ? 'A refund' : 'An owner payout'} of ${fmt(Number(r.amount_minor), r.currency)} has waited more than 24 hours for approval. Approve or reject it (${r.k === 'refund' ? 'Refunds → Transfers' : 'Finance → Payables → Payouts'}).`,
+      message: `${r.k === 'refund' ? 'A refund' : 'An owner payout'} of ${fmt(Number(r.amount_minor), r.currency)} has waited more than 24 hours for approval. Approve or reject it (${r.k === 'refund' ? 'Refunds → Transfers' : 'Finance → Refunds & shares due → Payouts'}).`,
     }));
     n++;
   }

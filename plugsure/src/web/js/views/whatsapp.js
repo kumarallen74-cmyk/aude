@@ -125,9 +125,9 @@ registerView('whatsapp', {
   title: 'WhatsApp',
   subtitle: 'WhatsApp Business (Cloud API)',
   icon: 'phone',
-  group: 'operate',
-  // Directly under the Dashboard (order 1).
-  order: 1.5,
+  group: 'govern',
+  // Governance, with the other channels and integrations.
+  order: 56,
   perm: 'platform:admin',
   async render(root, [initial]) {
     const tabs = [

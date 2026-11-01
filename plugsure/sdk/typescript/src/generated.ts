@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.40.0";
+export const API_VERSION = "1.41.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -13567,7 +13567,7 @@ export class Operations {
   /**
    * Close a year
    *
-   * (v1.24.0) Lock every month of an ended year (Finance → Close; reopening a month needs finance:approve). Audited as finance.year_closed.
+   * (v1.24.0) Lock every month of an ended year (Finance → Month close; reopening a month needs finance:approve). Audited as finance.year_closed.
    *
    * `POST /v1/finance/year-end/{year}/close` · needs `payment:write`
    */
