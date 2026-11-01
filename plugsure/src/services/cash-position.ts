@@ -6,6 +6,8 @@ import { accountsFor } from './finance.js';
 import { forecast as gatewayForecast } from './finance-forecast.js';
 import { dueBills } from './supplier-bills.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
+import { cashMoves as depositMoves, maturities as depositMaturities } from './treasury.js';
+import { paymentsDue as leasePayments } from './leases.js';
 
 /**
  * Cash position and bank balances (v1.29.0).
@@ -20,8 +22,8 @@ import { persistAlert, resolveAlertsFor } from './alerts.js';
  *   transfers  money moved between two of the operator's accounts (same currency), voidable with a reason
  *   daily      the last 30 days' position per currency
  *   13 weeks   from today's position: what the gateway forecast (v1.19.0) expects in and out (settlements, fleet invoices,
- *              Hub positions, refunds, owner shares, PlugSure's statements; the next 90 days) and supplier bills by due
- *              date (approved or awaiting approval), week by week, with the closing position and the first week below the
+ *              Hub positions, refunds, owner shares, PlugSure's statements; the next 90 days), supplier bills by due
+ *              date (approved or awaiting approval), and (v1.30.0) deposits maturing and lease payments, week by week, with the closing position and the first week below the
  *              accounts' minimums
  *
  * An account below its minimum raises finance.cash_below_minimum (checked daily), resolved when it recovers.
@@ -173,7 +175,7 @@ interface Book {
 }
 
 async function book(orgId: string, upTo: string): Promise<Book> {
-  const [accounts, manual, statement, xfers, pays] = await Promise.all([
+  const [accounts, manual, statement, xfers, pays, deps] = await Promise.all([
     outsideRequestScope(() => many<any>(`${ACCOUNT_SELECT} WHERE a.org_id = $1 AND a.archived_at IS NULL ORDER BY a.currency, a.name`, [orgId])),
     outsideRequestScope(() => many<any>(`SELECT account_id::text, to_char(on_date, 'YYYY-MM-DD') AS d, balance_minor FROM cash_balance WHERE org_id = $1 AND on_date <= $2::date`, [orgId, upTo])),
     // The last balance of each day on a statement of the account (linked, or the same last digits when not linked).
@@ -185,6 +187,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
         ORDER BY a.id, l.line_date, l.line_no DESC, l.id DESC`, [orgId, upTo])),
     outsideRequestScope(() => many<any>(`SELECT from_account_id::text AS f, to_account_id::text AS t, to_char(on_date, 'YYYY-MM-DD') AS d, amount_minor FROM cash_transfer WHERE org_id = $1 AND voided_at IS NULL AND on_date <= $2::date`, [orgId, upTo])),
     outsideRequestScope(() => many<any>(`SELECT cash_account_id::text AS a, to_char(paid_on, 'YYYY-MM-DD') AS d, amount_minor FROM supplier_payment WHERE org_id = $1 AND voided_at IS NULL AND cash_account_id IS NOT NULL AND paid_on <= $2::date`, [orgId, upTo])),
+    // (v1.30.0) deposits: placed out of the account, matured back into it.
+    depositMoves(orgId, upTo),
   ]);
   return {
     accounts,
@@ -193,6 +197,7 @@ async function book(orgId: string, upTo: string): Promise<Book> {
     moves: [
       ...xfers.flatMap((x) => [{ account_id: x.f, d: x.d, amount: -Number(x.amount_minor) }, { account_id: x.t, d: x.d, amount: Number(x.amount_minor) }]),
       ...pays.map((p) => ({ account_id: p.a, d: p.d, amount: -Number(p.amount_minor) })),
+      ...deps,
     ],
   };
 }
@@ -234,8 +239,8 @@ export async function position(orgId: string, q: Record<string, unknown> = {}, n
       belowMinimum: b != null && minimum != null && b.balance < minimum };
   });
   const gateways = await gatewayBalances(orgId, day);
-  const totals: Record<string, { bank: number; cash: number; gateway: number; total: number; minimum: number }> = {};
-  const T = (c: string) => (totals[c] ??= { bank: 0, cash: 0, gateway: 0, total: 0, minimum: 0 });
+  const totals: Record<string, { bank: number; cash: number; gateway: number; total: number; minimum: number; deposits: number }> = {};
+  const T = (c: string) => (totals[c] ??= { bank: 0, cash: 0, gateway: 0, total: 0, minimum: 0, deposits: 0 });
   for (const a of accounts) {
     if (a.balance == null) continue;
     const t = T(a.currency);
@@ -243,6 +248,8 @@ export async function position(orgId: string, q: Record<string, unknown> = {}, n
     t.total += a.balance; t.minimum += a.minimum ?? 0;
   }
   for (const g of gateways) { const t = T(g.currency); t.gateway += g.balance; t.total += g.balance; }
+  // (v1.30.0) Time deposits placed and not yet back, beside the total (not available until they mature).
+  for (const d of await outsideRequestScope(() => many<any>(`SELECT currency, sum(principal_minor)::bigint AS p FROM deposit WHERE org_id = $1 AND placed_on <= $2::date AND (status = 'active' OR closed_on > $2::date) GROUP BY 1`, [orgId, day]))) T(d.currency).deposits += Number(d.p);
   // The last 30 days, per currency (bank and cash accounts; gateway snapshots at each day's end).
   const days = Array.from({ length: 30 }, (_, k) => addDays(day, k - 29));
   const daily: Record<string, Array<{ day: string; balance: number }>> = {};
@@ -275,6 +282,8 @@ export async function weeks(orgId: string, now = new Date()) {
       flows.push({ day: x.day, currency: cur, kind: x.kind, label: x.label, amount: x.amount });
     }
   }
+  for (const m of await depositMaturities(orgId, t, end)) flows.push({ day: m.day, currency: m.currency, kind: 'deposit_maturity', label: m.label, amount: m.amount });
+  for (const l of await leasePayments(orgId, t, end)) flows.push({ day: l.day, currency: l.currency, kind: 'lease', label: l.label, amount: -l.amount });
   for (const b of await dueBills(orgId, t, end)) flows.push({ day: b.due, currency: b.currency, kind: 'supplier_bill', label: `Bill ${b.number} · ${b.supplier}${b.overdue ? ' (overdue)' : ''}`, amount: -b.amount });
   const currencies = [...new Set([...Object.keys(pos.totals), ...flows.map((f) => f.currency)])].sort();
   const out = currencies.map((currency) => {

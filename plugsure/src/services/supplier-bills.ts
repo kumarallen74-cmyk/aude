@@ -7,6 +7,7 @@ import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { reportingCurrency, currencies } from './fx.js';
 import { insert as insertAsset, AssetError } from './fixed-assets.js';
 import { xlsx } from './xlsx.js';
+import { assertBillable, match as orderMatch, OrderError } from './purchase-orders.js';
 
 /**
  * Supplier bills and payables (v1.29.0). What the operator owes its suppliers — installers, maintenance contractors,
@@ -128,8 +129,8 @@ export async function updateSupplier(orgId: string, id: string, b: Record<string
 const BILL_SELECT = `SELECT b.*, to_char(b.bill_date, 'YYYY-MM-DD') AS bill_date_s, to_char(b.due_date, 'YYYY-MM-DD') AS due_date_s, to_char(b.paid_at, 'YYYY-MM-DD') AS paid_at_s,
          s.name AS supplier_name, st.name AS site_name, su.name AS submitted_by_name, fa.name AS first_approved_by_name, ap.name AS approved_by_name,
          COALESCE((SELECT sum(p.amount_minor) FROM supplier_payment p WHERE p.bill_id = b.id AND p.voided_at IS NULL), 0)::bigint AS paid_minor,
-         (SELECT a.id FROM fixed_asset a WHERE a.supplier_bill_id = b.id AND a.voided_at IS NULL LIMIT 1) AS asset_id
-    FROM supplier_bill b JOIN supplier s ON s.id = b.supplier_id LEFT JOIN site st ON st.id = b.site_id
+         (SELECT a.id FROM fixed_asset a WHERE a.supplier_bill_id = b.id AND a.voided_at IS NULL LIMIT 1) AS asset_id, po.number AS po_number
+    FROM supplier_bill b JOIN supplier s ON s.id = b.supplier_id LEFT JOIN site st ON st.id = b.site_id LEFT JOIN purchase_order po ON po.id = b.purchase_order_id
     LEFT JOIN app_user su ON su.id = b.submitted_by LEFT JOIN app_user fa ON fa.id = b.first_approved_by LEFT JOIN app_user ap ON ap.id = b.approved_by`;
 
 function billView(r: any, now = new Date()) {
@@ -146,6 +147,7 @@ function billView(r: any, now = new Date()) {
     submittedBy: r.submitted_by_name ?? null, firstApprovedBy: r.first_approved_by_name ?? null, approvedBy: r.approved_by_name ?? null,
     approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : null, rejectedReason: r.rejected_reason ?? null, voidReason: r.void_reason ?? null,
     paidAt: r.paid_at_s ?? null,
+    purchaseOrderId: r.purchase_order_id == null ? null : String(r.purchase_order_id), purchaseOrder: r.po_number ?? null,
   };
 }
 export type BillView = ReturnType<typeof billView>;
@@ -172,7 +174,8 @@ export async function get(orgId: string, id: string, now = new Date()) {
   const pays = await outsideRequestScope(() => many<any>(
     `SELECT p.*, to_char(p.paid_on, 'YYYY-MM-DD') AS paid_on_s, c.name AS account_name, u.name AS by_name FROM supplier_payment p
        LEFT JOIN cash_account c ON c.id = p.cash_account_id LEFT JOIN app_user u ON u.id = p.recorded_by WHERE p.bill_id = $1 ORDER BY p.paid_on, p.id`, [id]));
-  return { ...billView(r, now), payments: pays.map((p) => ({ id: String(p.id), paidOn: p.paid_on_s, amount: Number(p.amount_minor), method: p.method, reference: p.reference ?? null,
+  const match = r.purchase_order_id ? await orderMatch(orgId, String(r.purchase_order_id)).catch(() => null) : null;
+  return { ...billView(r, now), match, payments: pays.map((p) => ({ id: String(p.id), paidOn: p.paid_on_s, amount: Number(p.amount_minor), method: p.method, reference: p.reference ?? null,
     cashAccountId: p.cash_account_id == null ? null : String(p.cash_account_id), cashAccount: p.account_name ?? null, recordedBy: p.by_name ?? null, voided: !!p.voided_at, voidReason: p.void_reason ?? null })) };
 }
 
@@ -219,12 +222,17 @@ export async function create(orgId: string, b: Record<string, unknown>, userId: 
   if (life != null && (!Number.isInteger(life) || life < 1 || life > 360)) throw new BillError(422, 'lifeMonths is 1 to 360.');
   if (capitalise && !['installation', 'equipment', 'other'].includes(category)) throw new BillError(422, 'Only installation, equipment or other bills are capitalised as assets.');
   const draft = b.draft === true || b.draft === 'true';
+  // (v1.30.0) The purchase order the bill is for: same supplier and currency, approved.
+  const orderId = b.purchaseOrderId == null || b.purchaseOrderId === '' ? null : String(b.purchaseOrderId);
+  if (orderId) {
+    try { await assertBillable(orgId, orderId, String(sup.id), currency); } catch (e) { if (e instanceof OrderError) throw new BillError(e.statusCode, e.message); throw e; }
+  }
   await assertOpen(orgId, billDate.slice(0, 7), 'A bill', ERR);
   try {
     const r = await outsideRequestScope(() => one<any>(
-      `INSERT INTO supplier_bill (org_id, supplier_id, number, category, site_id, description, currency, subtotal_minor, vat_minor, wht_minor, bill_date, due_date, capitalise, life_months, status, submitted_by, submitted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CASE WHEN $15 = 'draft' THEN NULL ELSE now() END) RETURNING id`,
-      [orgId, sup.id, number, category, siteId, description, currency, subtotal, vat, wht, billDate, dueDate, capitalise, life, draft ? 'draft' : 'awaiting_approval', userId]));
+      `INSERT INTO supplier_bill (org_id, supplier_id, number, category, site_id, description, currency, subtotal_minor, vat_minor, wht_minor, bill_date, due_date, capitalise, life_months, status, submitted_by, submitted_at, purchase_order_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CASE WHEN $15 = 'draft' THEN NULL ELSE now() END, $17) RETURNING id`,
+      [orgId, sup.id, number, category, siteId, description, currency, subtotal, vat, wht, billDate, dueDate, capitalise, life, draft ? 'draft' : 'awaiting_approval', userId, orderId]));
     return get(orgId, String(r.id), now);
   } catch (e) {
     if ((e as any).code === '23505') throw new BillError(409, `There is already a bill ${number} from ${sup.name}.`);
@@ -245,6 +253,16 @@ export async function approve(orgId: string, id: string, who: Approver, now = ne
   const r = await billRow(orgId, id);
   if (r.status !== 'awaiting_approval') throw new BillError(409, `The bill is ${r.status.replace('_', ' ')}.`);
   const payable = Number(r.subtotal_minor) + Number(r.vat_minor) - Number(r.wht_minor);
+  // (v1.30.0) A bill on a purchase order that does not match (ordered, received, billed) needs a Finance Manager.
+  let matchOverridden: string | null = null;
+  if (r.purchase_order_id) {
+    const m = await orderMatch(orgId, String(r.purchase_order_id));
+    if (m.status !== 'matched') {
+      const why = m.status === 'not_received' ? `nothing has been received on ${m.number}` : m.status === 'over_ordered' ? `${m.number}'s bills (${m.billed}) are above what was ordered (${m.ordered})` : `${m.number}'s bills (${m.billed}) are above what was received (${m.received})`;
+      if (!who.canApprove) throw new BillError(403, `The three-way match fails: ${why}. A Finance Manager (finance:approve) can approve it anyway.`);
+      matchOverridden = m.status;
+    }
+  }
   const step = await gate('supplier_bill', orgId, { id: r.id, amount: payable, requested_by: r.submitted_by, first_approved_by: r.first_approved_by }, who);
   if (step === 'first') return { ...(await get(orgId, id, now)), waitingForSecondApprover: true };
   const won = await outsideRequestScope(() => one(
@@ -261,7 +279,7 @@ export async function approve(orgId: string, id: string, who: Approver, now = ne
     }
   }
   await resolveAlertsFor(orgId, OVERDUE_ALERT, 'supplier_bill', String(r.id)).catch(() => 0);
-  return { ...(await get(orgId, id, now)), ...(assetError ? { assetError } : {}) };
+  return { ...(await get(orgId, id, now)), ...(assetError ? { assetError } : {}), ...(matchOverridden ? { matchOverridden } : {}) };
 }
 
 export async function reject(orgId: string, id: string, reasonRaw: unknown, userId: string | null, now = new Date()) {

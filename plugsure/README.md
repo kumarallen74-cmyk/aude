@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.29.0 (1 November 2026), the current release:** finance phase 18: a fixed asset register with the depreciation journal, supplier bills and payables (approved by a second person), the cash position across bank accounts and gateways with a 13-week view, and KPI benchmarking of sites and owners. Notes: [`RELEASE-NOTES-v1.29.0.md`](RELEASE-NOTES-v1.29.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.30.0 (1 November 2026), the current release:** finance phase 19: purchase orders with goods received and the three-way match, lease accounting under PSAK 73, treasury with time deposits and idle-cash suggestions, and a finance anomaly review. Notes: [`RELEASE-NOTES-v1.30.0.md`](RELEASE-NOTES-v1.30.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.29.0 (1 November 2026):** finance phase 18: a fixed asset register with the depreciation journal, supplier bills and payables (approved by a second person), the cash position across bank accounts and gateways with a 13-week view, and KPI benchmarking of sites and owners. Notes: [`RELEASE-NOTES-v1.29.0.md`](RELEASE-NOTES-v1.29.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.28.0 (1 November 2026):** finance phase 17: driver funds and breakage, group consolidation, a rolling revenue forecast, and payment plans with the bad-debt provision. Notes: [`RELEASE-NOTES-v1.28.0.md`](RELEASE-NOTES-v1.28.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

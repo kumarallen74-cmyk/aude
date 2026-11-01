@@ -691,6 +691,53 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
     or bad;
   - **the score:** the average rank.
 
+## Orders, leases, treasury and review (v1.30.0)
+
+- **Orders** (tab). Purchase orders to suppliers:
+  - **raising:** lines (description, quantity, unit price), site, expected
+    date; numbered PO-00001…;
+  - **approval:** by a second person, never the submitter; the approvals
+    matrix's *Purchase orders* row can require a Finance Manager or two
+    approvers above an amount;
+  - **receiving:** goods or work received per line, never more than
+    ordered;
+  - **the three-way match:** a bill names its order (Bills → the order).
+    Ordered, received (quantity × unit price) and billed are compared with
+    a tolerance (default 2%). A bill above what was received, or with
+    nothing received, is approved only by a Finance Manager;
+  - **commitments:** approved orders not yet billed in full.
+- **Leases** (tab). PSAK 73:
+  - **recognising:** the payments (monthly, quarterly or yearly; in advance
+    or arrears) discounted at the borrowing rate are the lease liability;
+    the right-of-use asset is the liability plus initial direct costs;
+  - **each month:** interest on the liability, the payment, and
+    straight-line depreciation of the asset; the liability is split into
+    current (the next 12 months) and non-current;
+  - **exempt:** leases of 12 months or less (and low-value ones) are
+    expensed straight-line;
+  - **ending early:** the liability and the asset's net book value are
+    derecognised with the gain or loss;
+  - **the journal:** *Record the month* once it has ended. Lease payments
+    also appear in Cash → the next 13 weeks.
+- **Treasury** (tab). Time deposits:
+  - **placing:** from a bank account (the money leaves it), with the rate,
+    the term and the final tax on the interest (default 20%);
+  - **interest:** accrued actual/365, gross, tax and net, to today and at
+    maturity;
+  - **closing:** at maturity (back into the account with the interest, or
+    rolled over), or broken early with any penalty;
+  - **idle cash:** what could be placed: the lowest point of the next 13
+    weeks above the accounts' minimums and a buffer, with the interest it
+    would earn at an indicative rate;
+  - **alerts:** `finance.deposit_maturing` within 7 days or past maturity.
+- **Review** (tab). Anomaly checks over the last 90 days, daily and on
+  demand: duplicate bills, duplicate payments, round-amount payments,
+  large bills from new suppliers, bills split below the approval amount,
+  and entries made at weekends or at night. *Dismiss* (it is fine) or
+  *Confirm* (it needs action: `finance.anomaly_confirmed`), with a note. A
+  finding whose condition is gone clears itself; a reviewed one keeps its
+  review. Checks can be turned off one by one, and the thresholds set.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

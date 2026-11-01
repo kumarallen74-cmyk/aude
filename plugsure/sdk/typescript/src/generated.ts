@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.29.0";
+export const API_VERSION = "1.30.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5191,6 +5191,18 @@ export type ApproveOrRejectWriteOffResponse = {
   state?: string;
 };
 
+export type ApprovePurchaseOrderResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
+};
+
 export type ApproveSupplierBillResponse = {
   id?: string;
   supplier?: string;
@@ -5342,6 +5354,22 @@ export type CancelFirmwareCampaignResponse = {
 
 export type CancelPaymentPlanBody = {
   reason: string;
+};
+
+export type CancelPurchaseOrderBody = {
+  reason: string;
+};
+
+export type CancelPurchaseOrderResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
 };
 
 export type CardHoldsAndPostPayEWalletChargesResponse = {
@@ -5566,6 +5594,50 @@ export type CheckSiteOwnerBankAccountByNameResponse = {
 export type ClearReviewAndBillSessionBody = {
   /** Bill despite a rating violation. */
   force?: boolean;
+};
+
+export type CloseDepositBody = {
+  closedOn?: string;
+  interestReceived?: number;
+  penalty?: number;
+  note?: string;
+  rollover?: {
+    termMonths?: number;
+    termDays?: number;
+    maturityOn?: string;
+    ratePct?: number;
+    withInterest?: boolean;
+    reference?: string;
+  };
+};
+
+export type CloseDepositResponse = {
+  id?: string;
+  bankName?: string;
+  currency?: string;
+  principal?: number;
+  ratePct?: number;
+  placedOn?: string;
+  maturityOn?: string;
+  status?: "active" | "matured" | "broken";
+  accrued?: Record<string, unknown>;
+  atMaturity?: Record<string, unknown>;
+};
+
+export type ClosePurchaseOrderBody = {
+  reason: string;
+};
+
+export type ClosePurchaseOrderResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
 };
 
 export type CloseYearResponse = {
@@ -5830,6 +5902,19 @@ export type DeleteWebhookEndpointResponse = {
   ok: true;
 };
 
+export type DepositResponse = {
+  id?: string;
+  bankName?: string;
+  currency?: string;
+  principal?: number;
+  ratePct?: number;
+  placedOn?: string;
+  maturityOn?: string;
+  status?: "active" | "matured" | "broken";
+  accrued?: Record<string, unknown>;
+  atMaturity?: Record<string, unknown>;
+};
+
 export type DescribeThisSandboxResponse = {
   sandbox: {
     id: string;
@@ -5980,6 +6065,22 @@ export type EMailStatementOfAccountResponse = {
   reference?: string | null;
 };
 
+export type EndLeaseEarlyBody = {
+  month: string;
+  note: string;
+};
+
+export type EndLeaseEarlyResponse = {
+  id?: string;
+  description?: string;
+  currency?: string;
+  startMonth?: string;
+  termMonths?: number;
+  initialLiability?: number;
+  position?: Record<string, unknown>;
+  status?: string;
+};
+
 export type EndSharedCostBody = {
   monthTo: string;
 };
@@ -6101,6 +6202,19 @@ export type FinaliseRoamingSettlementResponse = {
   net?: number;
   direction?: string;
   outstanding?: number;
+};
+
+export type FinanceAnomalyReviewResponse = {
+  status?: string;
+  findings?: {
+    id?: string;
+    kind?: string;
+    severity?: string;
+    message?: string;
+    status?: "open" | "dismissed" | "confirmed" | "cleared";
+  }[];
+  summary?: Record<string, unknown>[];
+  settings?: Record<string, unknown>;
 };
 
 export type FinanceChangeLogResponse = {
@@ -6638,6 +6752,27 @@ export type KpiBenchmarkingResponse = {
   rows?: Record<string, unknown>[];
 };
 
+export type LeaseResponse = {
+  id?: string;
+  schedule?: Record<string, unknown>[];
+};
+
+export type LeasesResponse = {
+  asOf?: string;
+  leases?: {
+    id?: string;
+    description?: string;
+    currency?: string;
+    startMonth?: string;
+    termMonths?: number;
+    initialLiability?: number;
+    position?: Record<string, unknown>;
+    status?: string;
+  }[];
+  totals?: Record<string, unknown>;
+  accounts?: Record<string, unknown>;
+};
+
 export type LedgerRowWholeTrailResponse = {
   transaction: GatewayTransaction;
   related: GatewayTransaction[];
@@ -6821,6 +6956,11 @@ export type MonthCloseChecklistResponse = {
 export type MonthDepreciationJournalResponse = {
   month?: string;
   accounts?: Record<string, unknown>;
+  currencies?: Record<string, unknown>[];
+};
+
+export type MonthLeaseJournalResponse = {
+  month?: string;
   currencies?: Record<string, unknown>[];
 };
 
@@ -7270,6 +7410,33 @@ export type PeriodByOperatorAndSiteResponse = {
   }[];
 };
 
+export type PlaceTimeDepositBody = {
+  cashAccountId: string;
+  bankName?: string;
+  reference?: string;
+  principal: number;
+  ratePct: number;
+  taxPct?: number;
+  placedOn?: string;
+  maturityOn?: string;
+  termMonths?: number;
+  termDays?: number;
+  note?: string;
+};
+
+export type PlaceTimeDepositResponse = {
+  id?: string;
+  bankName?: string;
+  currency?: string;
+  principal?: number;
+  ratePct?: number;
+  placedOn?: string;
+  maturityOn?: string;
+  status?: "active" | "matured" | "broken";
+  accrued?: Record<string, unknown>;
+  atMaturity?: Record<string, unknown>;
+};
+
 export type PlugChargeExchangeLogResponse = {
   events: PncEvent[];
 };
@@ -7327,6 +7494,56 @@ export type ProvisionDefaultChargingProfilesResponse = {
 
 export type PullHubClientListResponse = {
   clients: number;
+};
+
+export type PurchaseOrderResponse = {
+  id?: string;
+  lines?: Record<string, unknown>[];
+  receipts?: Record<string, unknown>[];
+  billsOnOrder?: Record<string, unknown>[];
+  match?: Record<string, unknown>;
+};
+
+export type PurchaseOrdersResponse = {
+  orders?: {
+    id?: string;
+    number?: string;
+    supplier?: string;
+    currency?: string;
+    status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+    ordered?: number;
+    received?: number;
+    billed?: number;
+    toBill?: number;
+  }[];
+  commitments?: Record<string, unknown>[];
+  settings?: Record<string, unknown>;
+};
+
+export type RaisePurchaseOrderBody = {
+  supplierId: string;
+  description: string;
+  siteId?: string;
+  currency?: string;
+  expectedOn?: string;
+  draft?: boolean;
+  lines: {
+    description: string;
+    quantity: number;
+    unitPrice: number;
+  }[];
+};
+
+export type RaisePurchaseOrderResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
 };
 
 export type ReadCertificatesInstalledOnChargerResponse = {
@@ -7501,6 +7718,27 @@ export type RecordFakturPajakNumberBody = {
   number?: string | null;
 };
 
+export type RecordGoodsReceivedBody = {
+  receivedOn?: string;
+  note?: string;
+  lines: {
+    lineId: string;
+    quantity: number;
+  }[];
+};
+
+export type RecordGoodsReceivedResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
+};
+
 export type RecordIntercompanyEliminationBody = {
   month: string;
   kind: "revenue" | "cost";
@@ -7509,7 +7747,38 @@ export type RecordIntercompanyEliminationBody = {
   currency: string;
 };
 
+export type RecordLeaseBody = {
+  description: string;
+  siteId?: string;
+  supplierId?: string;
+  currency?: string;
+  startMonth: string;
+  termMonths: number;
+  payment: number;
+  frequency?: "monthly" | "quarterly" | "yearly";
+  timing?: "advance" | "arrears";
+  ratePct: number;
+  directCosts?: number;
+  exempt?: string | boolean;
+};
+
+export type RecordLeaseResponse = {
+  id?: string;
+  description?: string;
+  currency?: string;
+  startMonth?: string;
+  termMonths?: number;
+  initialLiability?: number;
+  position?: Record<string, unknown>;
+  status?: string;
+};
+
 export type RecordMonthDepreciationResponse = {
+  month?: string;
+  recorded?: Record<string, unknown>[];
+};
+
+export type RecordMonthLeaseJournalResponse = {
   month?: string;
   recorded?: Record<string, unknown>[];
 };
@@ -7728,6 +7997,7 @@ export type RecordSupplierBillBody = {
   capitalise?: boolean;
   lifeMonths?: number;
   draft?: boolean;
+  purchaseOrderId?: string;
 };
 
 export type RecordSupplierBillResponse = {
@@ -7837,6 +8107,22 @@ export type RejectOwnerPayoutBeforeItIsSentBody = {
 
 export type RejectOwnerPayoutBeforeItIsSentResponse = {
   transfer: PayoutTransfer;
+};
+
+export type RejectPurchaseOrderBody = {
+  reason: string;
+};
+
+export type RejectPurchaseOrderResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
 };
 
 export type RejectRefundTransferBeforeItIsSentBody = {
@@ -8064,6 +8350,19 @@ export type RevenueDropAlertsResponse = {
   anomalies?: Record<string, unknown>[];
 };
 
+export type ReviewFindingBody = {
+  decision: "dismiss" | "confirm";
+  note: string;
+};
+
+export type ReviewFindingResponse = {
+  id?: string;
+  kind?: string;
+  severity?: string;
+  message?: string;
+  status?: "open" | "dismissed" | "confirmed" | "cleared";
+};
+
 export type RevokeApiKeyResponse = {
   ok: true;
 };
@@ -8093,6 +8392,12 @@ export type RotateSandboxApiKeyResponse = {
 export type RotateWebhookSigningSecretResponse = {
   /** Signing secret, shown only once. */
   secret: string;
+};
+
+export type RunAnomalyChecksResponse = {
+  found?: number;
+  added?: number;
+  cleared?: number;
 };
 
 export type RunFleetInvoicingAutomationNowResponse = {
@@ -8338,6 +8643,13 @@ export type SetAllowedEMailDomainsResponse = {
   tenant: MicrosoftTenant;
 };
 
+export type SetAnomalyChecksBody = {
+  roundAmount?: number;
+  newSupplierAmount?: number;
+  newSupplierDays?: number;
+  disabled?: string[];
+};
+
 export type SetApprovalsMatrixBody = {
   rules: Record<string, unknown>;
 };
@@ -8430,6 +8742,10 @@ export type SetFleetInvoicingAutomationBody = {
   requireEfaktur?: boolean;
   paymentLinks?: boolean;
   linkDays?: number;
+};
+
+export type SetMatchToleranceBody = {
+  tolerancePct: number;
 };
 
 export type SetMonthBudgetBody = {
@@ -8619,6 +8935,11 @@ export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody = {
 
 export type SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse = {
   transfer: RefundTransfer;
+};
+
+export type SetTreasurySettingsBody = {
+  indicativeRatePct?: number;
+  buffer?: number;
 };
 
 export type SetVariableSetVariablesBody = {
@@ -8836,6 +9157,18 @@ export type SubmitBillForApprovalResponse = {
   dueDate?: string;
 };
 
+export type SubmitPurchaseOrderResponse = {
+  id?: string;
+  number?: string;
+  supplier?: string;
+  currency?: string;
+  status?: "draft" | "awaiting_approval" | "approved" | "closed" | "cancelled" | "rejected";
+  ordered?: number;
+  received?: number;
+  billed?: number;
+  toBill?: number;
+};
+
 export type SubscribeToFinanceDigestBody = {
   frequency?: "off" | "daily" | "weekly";
   channels?: ("email" | "whatsapp")[];
@@ -8973,6 +9306,26 @@ export type TransfersWaitingForSecondPersonResponse = {
   payouts: number;
   total: number;
   forMe: number;
+};
+
+export type TreasuryResponse = {
+  asOf?: string;
+  deposits?: {
+    id?: string;
+    bankName?: string;
+    currency?: string;
+    principal?: number;
+    ratePct?: number;
+    placedOn?: string;
+    maturityOn?: string;
+    status?: "active" | "matured" | "broken";
+    accrued?: Record<string, unknown>;
+    atMaturity?: Record<string, unknown>;
+  }[];
+  totals?: Record<string, unknown>;
+  incomeThisYear?: Record<string, unknown>;
+  settings?: Record<string, unknown>;
+  idleCash?: Record<string, unknown>[];
 };
 
 export type TriggerMessageFromChargePointBody = {
@@ -9132,6 +9485,15 @@ export type VoidFleetInvoiceBody = {
 export type VoidFleetInvoiceResponse = {
   invoice: FleetStatement;
   fakturWarning?: string | null;
+};
+
+export type VoidLeaseBody = {
+  reason: string;
+};
+
+export type VoidLeaseResponse = {
+  id?: string;
+  voided?: boolean;
 };
 
 export type VoidPaymentToSupplierBody = {
@@ -9836,9 +10198,23 @@ export class Operations {
   }
 
   /**
+   * Approve a purchase order
+   *
+   * (v1.30.0) By someone other than the submitter, under the approvals matrix (kind purchase_order). With two approvers the first approval is recorded and waitingForSecondApprover is true. Audited.
+   *
+   * `POST /v1/finance/purchase-orders/{id}/approve`
+   */
+  approvePurchaseOrder(params: {
+    /** The purchase order id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ApprovePurchaseOrderResponse> {
+    return this.transport.request<ApprovePurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Approve a supplier bill
    *
-   * (v1.29.0) By someone other than the person who submitted it, under the approvals matrix (kind supplier_bill: a Finance Manager, or two approvers, above an amount). With two approvers the first approval is recorded and waitingForSecondApprover is true. A bill to capitalise becomes an asset (assetError says why if it could not). Audited.
+   * (v1.29.0) By someone other than the person who submitted it, under the approvals matrix (kind supplier_bill: a Finance Manager, or two approvers, above an amount). With two approvers the first approval is recorded and waitingForSecondApprover is true. A bill to capitalise becomes an asset (assetError says why if it could not). (v1.30.0) A bill on a purchase order whose three-way match fails is approved only by a Finance Manager (matchOverridden says so). Audited.
    *
    * `POST /v1/finance/bills/{id}/approve` · needs `payment:write`
    */
@@ -10195,6 +10571,21 @@ export class Operations {
   }
 
   /**
+   * Cancel a purchase order
+   *
+   * (v1.30.0) With a reason, while nothing is received or billed. Audited.
+   *
+   * `POST /v1/finance/purchase-orders/{id}/cancel`
+   */
+  cancelPurchaseOrder(params: {
+    /** The purchase order id. */
+    id: string;
+    body: CancelPurchaseOrderBody;
+  }, options?: RequestOptions): Promise<CancelPurchaseOrderResponse> {
+    return this.transport.request<CancelPurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/cancel", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Card holds and post-pay e-wallet charges
    *
    * Card payments taken as holds (Integrations → Payments → "hold, then charge only what is used"): held while charging, captured for the rated total when the session ends (the rest released at once), or released when unused. Post-pay sessions with linked e-wallets are listed too (kind postpay): nothing held at the start, the rated total charged to the e-wallet at the end, the same retries. Failed captures and releases come first, with the acquirer's error and the next automatic retry; captured and released holds of the last 14 days follow. At most 200 rows.
@@ -10533,6 +10924,36 @@ export class Operations {
     body: ClearReviewAndBillSessionBody;
   }, options?: RequestOptions): Promise<SessionRerateResult> {
     return this.transport.request<SessionRerateResult>({ method: "POST", path: "/v1/sessions/{id}/rerate", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Close a deposit
+   *
+   * (v1.30.0) Matured (on or after maturity) or broken (before): closedOn (default today or the maturity), interestReceived (net; default the expected net at maturity, 0 when broken), penalty (broken only), rollover (termMonths, termDays or maturityOn, ratePct, withInterest) to place a new deposit. Audited.
+   *
+   * `POST /v1/finance/treasury/deposits/{id}/close`
+   */
+  closeDeposit(params: {
+    /** The deposit id. */
+    id: string;
+    body: CloseDepositBody;
+  }, options?: RequestOptions): Promise<CloseDepositResponse> {
+    return this.transport.request<CloseDepositResponse>({ method: "POST", path: "/v1/finance/treasury/deposits/{id}/close", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Close a purchase order
+   *
+   * (v1.30.0) An approved order is done, or nothing more is coming; with a reason. Audited.
+   *
+   * `POST /v1/finance/purchase-orders/{id}/close`
+   */
+  closePurchaseOrder(params: {
+    /** The purchase order id. */
+    id: string;
+    body: ClosePurchaseOrderBody;
+  }, options?: RequestOptions): Promise<ClosePurchaseOrderResponse> {
+    return this.transport.request<ClosePurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/close", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10942,6 +11363,20 @@ export class Operations {
   }
 
   /**
+   * A deposit
+   *
+   * (v1.30.0) The deposit with its interest to date and at maturity.
+   *
+   * `GET /v1/finance/treasury/deposits/{id}`
+   */
+  deposit(params: {
+    /** The deposit id. */
+    id: string;
+  }, options?: RequestOptions): Promise<DepositResponse> {
+    return this.transport.request<DepositResponse>({ method: "GET", path: "/v1/finance/treasury/deposits/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Describe this sandbox
    *
    * Called with a sandbox key: the sandbox, its virtual chargers with what each simulator reports right now, its RFID cards, the events that can be simulated, and the time scale (energy accrues 30× faster than the wall clock). 404 with a production key.
@@ -11299,6 +11734,21 @@ export class Operations {
   }
 
   /**
+   * End a lease early
+   *
+   * (v1.30.0) month (the first month it no longer runs, within its term), note. The liability left and the asset's net book value are derecognised with the gain or loss. Audited.
+   *
+   * `POST /v1/finance/leases/{id}/end`
+   */
+  endLeaseEarly(params: {
+    /** The lease id. */
+    id: string;
+    body: EndLeaseEarlyBody;
+  }, options?: RequestOptions): Promise<EndLeaseEarlyResponse> {
+    return this.transport.request<EndLeaseEarlyResponse>({ method: "POST", path: "/v1/finance/leases/{id}/end", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * End a shared cost
    *
    * (v1.23.0) The last month it counts in; the months it leaves must not be locked. Audited.
@@ -11570,6 +12020,21 @@ export class Operations {
     body: BillingFinaliseInput;
   }, options?: RequestOptions): Promise<BillingFinalised> {
     return this.transport.request<BillingFinalised>({ method: "POST", path: "/v1/billing/owners/{id}/finalise", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Finance anomaly review
+   *
+   * (v1.30.0) Findings of the anomaly checks (duplicate_bill, duplicate_payment, round_amount, new_supplier_large, split_bills, out_of_hours) by status (default open; all for every one), most severe first; per check the open and confirmed counts and whether it is on; the settings.
+   *
+   * `GET /v1/finance/checks`
+   */
+  financeAnomalyReview(params?: {
+    query?: {
+      status?: "open" | "dismissed" | "confirmed" | "cleared" | "all";
+    };
+  }, options?: RequestOptions): Promise<FinanceAnomalyReviewResponse> {
+    return this.transport.request<FinanceAnomalyReviewResponse>({ method: "GET", path: "/v1/finance/checks", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -12550,6 +13015,36 @@ export class Operations {
   }
 
   /**
+   * A lease
+   *
+   * (v1.30.0) The lease with its schedule: each month's opening liability, payment, interest, closing liability, ROU depreciation and net book value (or the straight-line expense of an exempt lease).
+   *
+   * `GET /v1/finance/leases/{id}`
+   */
+  lease(params: {
+    /** The lease id. */
+    id: string;
+  }, options?: RequestOptions): Promise<LeaseResponse> {
+    return this.transport.request<LeaseResponse>({ method: "GET", path: "/v1/finance/leases/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Leases
+   *
+   * (v1.30.0) Leases (PSAK 73) as of a month (default this month): terms, the liability and right-of-use asset at commencement, the liability now (current: the next 12 months' reduction, and non-current), the asset's net book value, the month's interest, depreciation and payment, status; totals per currency; the journal's accounts. format=xlsx for the leases and the month's journal.
+   *
+   * `GET /v1/finance/leases`
+   */
+  leases(params?: {
+    query?: {
+      month?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<LeasesResponse> {
+    return this.transport.request<LeasesResponse>({ method: "GET", path: "/v1/finance/leases", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * A ledger row's whole trail
    *
    * (v1.16.0) The gateway transaction with its raw record (payer details masked), the other ledger rows of the same payment, PlugSure's payment with its state history and refund, the charging session (site, charger, energy, driver masked) and its charge record, Disbursement refund transfers, the membership pass it paid, and reconciliation exceptions.
@@ -13289,6 +13784,21 @@ export class Operations {
   }
 
   /**
+   * A month's lease journal
+   *
+   * (v1.30.0) Per currency (default last month): recognition at commencement, ROU depreciation, interest, payments, exempt leases' expense, early ends with the gain or loss; the lines (debit = credit) and whether the month is recorded.
+   *
+   * `GET /v1/finance/leases/journal`
+   */
+  monthLeaseJournal(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<MonthLeaseJournalResponse> {
+    return this.transport.request<MonthLeaseJournalResponse>({ method: "GET", path: "/v1/finance/leases/journal", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Month locks
    *
    * (v1.22.0) The last 24 months: locked or open, whether they can be locked (ended), who locked them, and each lock's history (reopened by whom and why).
@@ -13772,6 +14282,19 @@ export class Operations {
   }
 
   /**
+   * Place a time deposit
+   *
+   * (v1.30.0) cashAccountId (a bank account: the money leaves it), bankName, reference, principal, ratePct (a year), taxPct (final tax on the interest, default 20), placedOn (default today), and maturityOn, termMonths or termDays. Audited.
+   *
+   * `POST /v1/finance/treasury/deposits`
+   */
+  placeTimeDeposit(params: {
+    body: PlaceTimeDepositBody;
+  }, options?: RequestOptions): Promise<PlaceTimeDepositResponse> {
+    return this.transport.request<PlaceTimeDepositResponse>({ method: "POST", path: "/v1/finance/treasury/deposits", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Plug & Charge exchange log
    *
    * Every Authorize with a contract, certificate request, OCSP check and certificate command, newest first.
@@ -13940,6 +14463,36 @@ export class Operations {
   }
 
   /**
+   * A purchase order
+   *
+   * (v1.30.0) The order with its lines (ordered, received, outstanding), receipts, the bills on it and the three-way match (ordered, received, billed, status matched, not_received, over_billed or over_ordered).
+   *
+   * `GET /v1/finance/purchase-orders/{id}`
+   */
+  purchaseOrder(params: {
+    /** The purchase order id. */
+    id: string;
+  }, options?: RequestOptions): Promise<PurchaseOrderResponse> {
+    return this.transport.request<PurchaseOrderResponse>({ method: "GET", path: "/v1/finance/purchase-orders/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Purchase orders
+   *
+   * (v1.30.0) Orders (awaiting approval first), filtered by status: supplier, site, currency, ordered, received (quantity received × unit price), billed, still to bill; the commitments (approved orders not billed in full) per currency and supplier; the match tolerance. format=xlsx for a workbook.
+   *
+   * `GET /v1/finance/purchase-orders`
+   */
+  purchaseOrders(params?: {
+    query?: {
+      status?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<PurchaseOrdersResponse> {
+    return this.transport.request<PurchaseOrdersResponse>({ method: "GET", path: "/v1/finance/purchase-orders", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Push the local authorisation list to a charger
    *
    * Sends the organisation's offline-allowed cards (up to 1000) to the charger as a full SendLocalList update, so they keep working through a network outage. Refused with 400 when the charger is offline. A charger rejection is reported as ok false with a 200. Audited as token.local_list_synced.
@@ -13965,6 +14518,19 @@ export class Operations {
     siteId: string;
   }, options?: RequestOptions): Promise<LocalListSiteSyncResult> {
     return this.transport.request<LocalListSiteSyncResult>({ method: "POST", path: "/v1/sites/{siteId}/local-list/sync", pathParams: { siteId: params.siteId }, accept: "json" }, options);
+  }
+
+  /**
+   * Raise a purchase order
+   *
+   * (v1.30.0) supplierId, description, siteId (or currency), expectedOn, lines (1–50: description, quantity, unitPrice in the minor unit), draft (true to keep it as a draft; otherwise it is submitted for approval). Numbered PO-00001…. Audited.
+   *
+   * `POST /v1/finance/purchase-orders`
+   */
+  raisePurchaseOrder(params: {
+    body: RaisePurchaseOrderBody;
+  }, options?: RequestOptions): Promise<RaisePurchaseOrderResponse> {
+    return this.transport.request<RaisePurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14167,6 +14733,21 @@ export class Operations {
   }
 
   /**
+   * Record goods received
+   *
+   * (v1.30.0) Against an approved order: lines (lineId, quantity; never more than is outstanding), receivedOn (default today), note. Audited.
+   *
+   * `POST /v1/finance/purchase-orders/{id}/receipts`
+   */
+  recordGoodsReceived(params: {
+    /** The purchase order id. */
+    id: string;
+    body: RecordGoodsReceivedBody;
+  }, options?: RequestOptions): Promise<RecordGoodsReceivedResponse> {
+    return this.transport.request<RecordGoodsReceivedResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/receipts", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record an intercompany elimination
    *
    * (v1.28.0) month, kind (revenue or cost), description, amount, currency: taken out of the group's figures. Audited.
@@ -14177,6 +14758,19 @@ export class Operations {
     body: RecordIntercompanyEliminationBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/group/eliminations", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a lease
+   *
+   * (v1.30.0) description, siteId (or currency), supplierId, startMonth, termMonths, payment (each period), frequency (monthly, quarterly, yearly), timing (advance or arrears), ratePct (the discount rate a year), directCosts, exempt (short_term or low_value; a term of 12 months or less is short-term unless exempt is false). Not in a locked month. Audited.
+   *
+   * `POST /v1/finance/leases`
+   */
+  recordLease(params: {
+    body: RecordLeaseBody;
+  }, options?: RequestOptions): Promise<RecordLeaseResponse> {
+    return this.transport.request<RecordLeaseResponse>({ method: "POST", path: "/v1/finance/leases", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14191,6 +14785,20 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<RecordMonthDepreciationResponse> {
     return this.transport.request<RecordMonthDepreciationResponse>({ method: "POST", path: "/v1/finance/assets/journal/{month}/record", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Record a month's lease journal
+   *
+   * (v1.30.0) Keeps the month's lease entries per currency (again replaces them). The month has ended and is not locked. Audited.
+   *
+   * `POST /v1/finance/leases/journal/{month}/record`
+   */
+  recordMonthLeaseJournal(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<RecordMonthLeaseJournalResponse> {
+    return this.transport.request<RecordMonthLeaseJournalResponse>({ method: "POST", path: "/v1/finance/leases/journal/{month}/record", pathParams: { month: params.month }, accept: "json" }, options);
   }
 
   /**
@@ -14382,7 +14990,7 @@ export class Operations {
   /**
    * Record a supplier bill
    *
-   * (v1.29.0) supplierId, number (the supplier's), category (energy, maintenance, rent, installation, equipment, connectivity, services, other), siteId, description, currency (default the site's, else the reporting currency), subtotal, vat (PPN), wht (PPh 23; default the supplier's rate × the subtotal), billDate, dueDate (default the date + the supplier's terms), capitalise with lifeMonths (installation, equipment or other: an asset on approval), draft (true to keep it as a draft; otherwise it is submitted for approval). Not in a locked month. Audited.
+   * (v1.29.0) supplierId, number (the supplier's), category (energy, maintenance, rent, installation, equipment, connectivity, services, other), siteId, description, currency (default the site's, else the reporting currency), subtotal, vat (PPN), wht (PPh 23; default the supplier's rate × the subtotal), billDate, dueDate (default the date + the supplier's terms), capitalise with lifeMonths (installation, equipment or other: an asset on approval), draft (true to keep it as a draft; otherwise it is submitted for approval), purchaseOrderId ((v1.30.0) the approved order it is for: same supplier and currency). Not in a locked month. Audited.
    *
    * `POST /v1/finance/bills` · needs `payment:write`
    */
@@ -14530,6 +15138,21 @@ export class Operations {
     body: RejectOwnerPayoutBeforeItIsSentBody;
   }, options?: RequestOptions): Promise<RejectOwnerPayoutBeforeItIsSentResponse> {
     return this.transport.request<RejectOwnerPayoutBeforeItIsSentResponse>({ method: "POST", path: "/v1/finance/payout-transfers/{tid}/reject", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Reject a purchase order
+   *
+   * (v1.30.0) With a reason, by someone other than the submitter. Audited.
+   *
+   * `POST /v1/finance/purchase-orders/{id}/reject`
+   */
+  rejectPurchaseOrder(params: {
+    /** The purchase order id. */
+    id: string;
+    body: RejectPurchaseOrderBody;
+  }, options?: RequestOptions): Promise<RejectPurchaseOrderResponse> {
+    return this.transport.request<RejectPurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/reject", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15099,6 +15722,21 @@ export class Operations {
   }
 
   /**
+   * Review a finding
+   *
+   * (v1.30.0) decision dismiss (it is fine) or confirm (it needs action: raises finance.anomaly_confirmed), with a note of what was checked. Audited.
+   *
+   * `POST /v1/finance/checks/{id}/review`
+   */
+  reviewFinding(params: {
+    /** The finding id. */
+    id: string;
+    body: ReviewFindingBody;
+  }, options?: RequestOptions): Promise<ReviewFindingResponse> {
+    return this.transport.request<ReviewFindingResponse>({ method: "POST", path: "/v1/finance/checks/{id}/review", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Revoke an API key
    *
    * Revokes a key immediately. The row stays in the list with `revoked_at` set.
@@ -15205,6 +15843,17 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<RotateWebhookSigningSecretResponse> {
     return this.transport.request<RotateWebhookSigningSecretResponse>({ method: "POST", path: "/v1/webhooks/{id}/rotate-secret", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Run the anomaly checks
+   *
+   * (v1.30.0) Runs every check now over the last 90 days (they also run daily): new findings are added, a reviewed finding keeps its review, an open finding whose condition is gone is cleared.
+   *
+   * `POST /v1/finance/checks/run`
+   */
+  runAnomalyChecks(options?: RequestOptions): Promise<RunAnomalyChecksResponse> {
+    return this.transport.request<RunAnomalyChecksResponse>({ method: "POST", path: "/v1/finance/checks/run", accept: "json" }, options);
   }
 
   /**
@@ -15480,6 +16129,19 @@ export class Operations {
   }
 
   /**
+   * Set the anomaly checks
+   *
+   * (v1.30.0) roundAmount (default 10 000 000), newSupplierAmount (default 50 000 000), newSupplierDays (default 30), disabled (the checks turned off). Needs finance:approve. Audited.
+   *
+   * `PUT /v1/finance/checks/settings` · needs `finance:approve`
+   */
+  setAnomalyChecks(params: {
+    body: SetAnomalyChecksBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/checks/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the approvals matrix
    *
    * (v1.21.0) Needs finance:approve (403 otherwise). Replaces the rules; a kind left out keeps only the second-person rule. Audited as finance.approval_rules_saved.
@@ -15665,6 +16327,19 @@ export class Operations {
     body: SetFleetInvoicingAutomationBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/fleet-automation", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the match tolerance
+   *
+   * (v1.30.0) tolerancePct (0–25, default 2): how far bills may exceed what was received before the three-way match fails. Needs finance:approve. Audited.
+   *
+   * `PUT /v1/finance/purchase-orders/settings` · needs `finance:approve`
+   */
+  setMatchTolerance(params: {
+    body: SetMatchToleranceBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/purchase-orders/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15974,6 +16649,19 @@ export class Operations {
     body: SettleRefundTransferWhoseResultDuitkuNeverConfirmedBody;
   }, options?: RequestOptions): Promise<SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse> {
     return this.transport.request<SettleRefundTransferWhoseResultDuitkuNeverConfirmedResponse>({ method: "POST", path: "/v1/refund-transfers/{tid}/resolve", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the treasury settings
+   *
+   * (v1.30.0) indicativeRatePct (0–30, default 4: for the idle-cash estimate), buffer (kept above the minimums before suggesting a deposit). Audited.
+   *
+   * `PUT /v1/finance/treasury/settings`
+   */
+  setTreasurySettings(params: {
+    body: SetTreasurySettingsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/treasury/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16300,6 +16988,20 @@ export class Operations {
   }
 
   /**
+   * Submit a purchase order
+   *
+   * (v1.30.0) A draft or rejected order goes to approval. Audited.
+   *
+   * `POST /v1/finance/purchase-orders/{id}/submit`
+   */
+  submitPurchaseOrder(params: {
+    /** The purchase order id. */
+    id: string;
+  }, options?: RequestOptions): Promise<SubmitPurchaseOrderResponse> {
+    return this.transport.request<SubmitPurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Subscribe to the finance digest
    *
    * (v1.27.0) frequency (off, daily, weekly), channels (email, whatsapp), sections (figures, approvals, overdue, cash, anomalies), hour (0–23, billing time zone), weekday (1 Monday – 7 Sunday), phone (for WhatsApp).
@@ -16550,6 +17252,21 @@ export class Operations {
    */
   transfersWaitingForSecondPerson(options?: RequestOptions): Promise<TransfersWaitingForSecondPersonResponse> {
     return this.transport.request<TransfersWaitingForSecondPersonResponse>({ method: "GET", path: "/v1/finance/approvals", accept: "json" }, options);
+  }
+
+  /**
+   * Treasury
+   *
+   * (v1.30.0) Time deposits: principal, rate, dates, interest accrued to today and at maturity (gross, final tax, net), status; totals per currency; interest received this year; the settings; idle cash per currency (the 13-week view's lowest point above the minimums and the buffer, with the net interest it would earn). format=xlsx for the deposits.
+   *
+   * `GET /v1/finance/treasury`
+   */
+  treasury(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<TreasuryResponse> {
+    return this.transport.request<TreasuryResponse>({ method: "GET", path: "/v1/finance/treasury", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -16965,6 +17682,21 @@ export class Operations {
     body: VoidFleetInvoiceBody;
   }, options?: RequestOptions): Promise<VoidFleetInvoiceResponse> {
     return this.transport.request<VoidFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a lease
+   *
+   * (v1.30.0) For a lease recorded in error, with a reason; not once it is in a recorded month (end it instead). Audited.
+   *
+   * `POST /v1/finance/leases/{id}/void`
+   */
+  voidLease(params: {
+    /** The lease id. */
+    id: string;
+    body: VoidLeaseBody;
+  }, options?: RequestOptions): Promise<VoidLeaseResponse> {
+    return this.transport.request<VoidLeaseResponse>({ method: "POST", path: "/v1/finance/leases/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

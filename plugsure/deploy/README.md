@@ -551,6 +551,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      an amount need a Finance Manager or two approvers. Route
      finance.supplier_bill_overdue and finance.cash_below_minimum
      ([FINANCE.md](FINANCE.md)).
+  23. (v1.30.0) Optionally record the site leases (Finance → Leases) and
+     the time deposits (Finance → Treasury), set the purchase_order row of
+     the approvals matrix and the match tolerance, and review the anomaly
+     checks' first findings (Finance → Review). Route
+     finance.deposit_maturing and finance.anomaly_confirmed
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

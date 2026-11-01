@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.29.0",
+    "version": "1.30.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -45044,7 +45044,7 @@
         ],
         "summary": "Record a supplier bill",
         "operationId": "recordSupplierBill",
-        "description": "(v1.29.0) supplierId, number (the supplier's), category (energy, maintenance, rent, installation, equipment, connectivity, services, other), siteId, description, currency (default the site's, else the reporting currency), subtotal, vat (PPN), wht (PPh 23; default the supplier's rate × the subtotal), billDate, dueDate (default the date + the supplier's terms), capitalise with lifeMonths (installation, equipment or other: an asset on approval), draft (true to keep it as a draft; otherwise it is submitted for approval). Not in a locked month. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "description": "(v1.29.0) supplierId, number (the supplier's), category (energy, maintenance, rent, installation, equipment, connectivity, services, other), siteId, description, currency (default the site's, else the reporting currency), subtotal, vat (PPN), wht (PPh 23; default the supplier's rate × the subtotal), billDate, dueDate (default the date + the supplier's terms), capitalise with lifeMonths (installation, equipment or other: an asset on approval), draft (true to keep it as a draft; otherwise it is submitted for approval), purchaseOrderId ((v1.30.0) the approved order it is for: same supplier and currency). Not in a locked month. Audited.\n\n**Permissions checked:** `payment:write`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -45107,6 +45107,9 @@
                   },
                   "draft": {
                     "type": "boolean"
+                  },
+                  "purchaseOrderId": {
+                    "type": "string"
                   }
                 }
               }
@@ -45360,7 +45363,7 @@
         ],
         "summary": "Approve a supplier bill",
         "operationId": "approveSupplierBill",
-        "description": "(v1.29.0) By someone other than the person who submitted it, under the approvals matrix (kind supplier_bill: a Finance Manager, or two approvers, above an amount). With two approvers the first approval is recorded and waitingForSecondApprover is true. A bill to capitalise becomes an asset (assetError says why if it could not). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "description": "(v1.29.0) By someone other than the person who submitted it, under the approvals matrix (kind supplier_bill: a Finance Manager, or two approvers, above an amount). With two approvers the first approval is recorded and waitingForSecondApprover is true. A bill to capitalise becomes an asset (assetError says why if it could not). (v1.30.0) A bill on a purchase order whose three-way match fails is approved only by a Finance Manager (matchOverridden says so). Audited.\n\n**Permissions checked:** `payment:write`.",
         "parameters": [
           {
             "name": "id",
@@ -46954,6 +46957,2467 @@
         "x-permissions": [
           "payment:read"
         ]
+      }
+    },
+    "/v1/finance/purchase-orders": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Purchase orders",
+        "operationId": "purchaseOrders",
+        "description": "(v1.30.0) Orders (awaiting approval first), filtered by status: supplier, site, currency, ordered, received (quantity received × unit price), billed, still to bill; the commitments (approved orders not billed in full) per currency and supplier; the match tolerance. format=xlsx for a workbook.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "number": {
+                            "type": "string"
+                          },
+                          "supplier": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "draft",
+                              "awaiting_approval",
+                              "approved",
+                              "closed",
+                              "cancelled",
+                              "rejected"
+                            ]
+                          },
+                          "ordered": {
+                            "type": "integer"
+                          },
+                          "received": {
+                            "type": "integer"
+                          },
+                          "billed": {
+                            "type": "integer"
+                          },
+                          "toBill": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "commitments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "settings": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Raise a purchase order",
+        "operationId": "raisePurchaseOrder",
+        "description": "(v1.30.0) supplierId, description, siteId (or currency), expectedOn, lines (1–50: description, quantity, unitPrice in the minor unit), draft (true to keep it as a draft; otherwise it is submitted for approval). Numbered PO-00001…. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "supplierId",
+                  "description",
+                  "lines"
+                ],
+                "properties": {
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "expectedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "draft": {
+                    "type": "boolean"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "description",
+                        "quantity",
+                        "unitPrice"
+                      ],
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "unitPrice": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/settings": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set the match tolerance",
+        "operationId": "setMatchTolerance",
+        "description": "(v1.30.0) tolerancePct (0–25, default 2): how far bills may exceed what was received before the three-way match fails. Needs finance:approve. Audited.\n\n**Permissions checked:** `finance:approve`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "tolerancePct"
+                ],
+                "properties": {
+                  "tolerancePct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 25
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "finance:approve"
+        ]
+      }
+    },
+    "/v1/finance/purchase-orders/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A purchase order",
+        "operationId": "purchaseOrder",
+        "description": "(v1.30.0) The order with its lines (ordered, received, outstanding), receipts, the bills on it and the three-way match (ordered, received, billed, status matched, not_received, over_billed or over_ordered).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "receipts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "billsOnOrder": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "match": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/{id}/submit": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Submit a purchase order",
+        "operationId": "submitPurchaseOrder",
+        "description": "(v1.30.0) A draft or rejected order goes to approval. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/{id}/approve": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Approve a purchase order",
+        "operationId": "approvePurchaseOrder",
+        "description": "(v1.30.0) By someone other than the submitter, under the approvals matrix (kind purchase_order). With two approvers the first approval is recorded and waitingForSecondApprover is true. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/{id}/reject": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Reject a purchase order",
+        "operationId": "rejectPurchaseOrder",
+        "description": "(v1.30.0) With a reason, by someone other than the submitter. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Cancel a purchase order",
+        "operationId": "cancelPurchaseOrder",
+        "description": "(v1.30.0) With a reason, while nothing is received or billed. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/{id}/close": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Close a purchase order",
+        "operationId": "closePurchaseOrder",
+        "description": "(v1.30.0) An approved order is done, or nothing more is coming; with a reason. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/purchase-orders/{id}/receipts": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record goods received",
+        "operationId": "recordGoodsReceived",
+        "description": "(v1.30.0) Against an approved order: lines (lineId, quantity; never more than is outstanding), receivedOn (default today), note. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The purchase order id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "lines"
+                ],
+                "properties": {
+                  "receivedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "lineId",
+                        "quantity"
+                      ],
+                      "properties": {
+                        "lineId": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "supplier": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "awaiting_approval",
+                        "approved",
+                        "closed",
+                        "cancelled",
+                        "rejected"
+                      ]
+                    },
+                    "ordered": {
+                      "type": "integer"
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "billed": {
+                      "type": "integer"
+                    },
+                    "toBill": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/leases": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Leases",
+        "operationId": "leases",
+        "description": "(v1.30.0) Leases (PSAK 73) as of a month (default this month): terms, the liability and right-of-use asset at commencement, the liability now (current: the next 12 months' reduction, and non-current), the asset's net book value, the month's interest, depreciation and payment, status; totals per currency; the journal's accounts. format=xlsx for the leases and the month's journal.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "asOf": {
+                      "type": "string"
+                    },
+                    "leases": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "startMonth": {
+                            "type": "string"
+                          },
+                          "termMonths": {
+                            "type": "integer"
+                          },
+                          "initialLiability": {
+                            "type": "integer"
+                          },
+                          "position": {
+                            "type": "object"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "totals": {
+                      "type": "object"
+                    },
+                    "accounts": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a lease",
+        "operationId": "recordLease",
+        "description": "(v1.30.0) description, siteId (or currency), supplierId, startMonth, termMonths, payment (each period), frequency (monthly, quarterly, yearly), timing (advance or arrears), ratePct (the discount rate a year), directCosts, exempt (short_term or low_value; a term of 12 months or less is short-term unless exempt is false). Not in a locked month. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "description",
+                  "startMonth",
+                  "termMonths",
+                  "payment",
+                  "ratePct"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "startMonth": {
+                    "type": "string"
+                  },
+                  "termMonths": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 600
+                  },
+                  "payment": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "frequency": {
+                    "type": "string",
+                    "enum": [
+                      "monthly",
+                      "quarterly",
+                      "yearly"
+                    ]
+                  },
+                  "timing": {
+                    "type": "string",
+                    "enum": [
+                      "advance",
+                      "arrears"
+                    ]
+                  },
+                  "ratePct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 50
+                  },
+                  "directCosts": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "exempt": {
+                    "type": [
+                      "string",
+                      "boolean"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "startMonth": {
+                      "type": "string"
+                    },
+                    "termMonths": {
+                      "type": "integer"
+                    },
+                    "initialLiability": {
+                      "type": "integer"
+                    },
+                    "position": {
+                      "type": "object"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/leases/journal": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A month's lease journal",
+        "operationId": "monthLeaseJournal",
+        "description": "(v1.30.0) Per currency (default last month): recognition at commencement, ROU depreciation, interest, payments, exempt leases' expense, early ends with the gain or loss; the lines (debit = credit) and whether the month is recorded.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string"
+                    },
+                    "currencies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/leases/journal/{month}/record": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a month's lease journal",
+        "operationId": "recordMonthLeaseJournal",
+        "description": "(v1.30.0) Keeps the month's lease entries per currency (again replaces them). The month has ended and is not locked. Audited.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "path",
+            "required": true,
+            "description": "YYYY-MM.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string"
+                    },
+                    "recorded": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/leases/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A lease",
+        "operationId": "lease",
+        "description": "(v1.30.0) The lease with its schedule: each month's opening liability, payment, interest, closing liability, ROU depreciation and net book value (or the straight-line expense of an exempt lease).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The lease id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "schedule": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/leases/{id}/end": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "End a lease early",
+        "operationId": "endLeaseEarly",
+        "description": "(v1.30.0) month (the first month it no longer runs, within its term), note. The liability left and the asset's net book value are derecognised with the gain or loss. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The lease id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "month",
+                  "note"
+                ],
+                "properties": {
+                  "month": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "startMonth": {
+                      "type": "string"
+                    },
+                    "termMonths": {
+                      "type": "integer"
+                    },
+                    "initialLiability": {
+                      "type": "integer"
+                    },
+                    "position": {
+                      "type": "object"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/leases/{id}/void": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Void a lease",
+        "operationId": "voidLease",
+        "description": "(v1.30.0) For a lease recorded in error, with a reason; not once it is in a recorded month (end it instead). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The lease id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "voided": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/treasury": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Treasury",
+        "operationId": "treasury",
+        "description": "(v1.30.0) Time deposits: principal, rate, dates, interest accrued to today and at maturity (gross, final tax, net), status; totals per currency; interest received this year; the settings; idle cash per currency (the 13-week view's lowest point above the minimums and the buffer, with the net interest it would earn). format=xlsx for the deposits.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "asOf": {
+                      "type": "string"
+                    },
+                    "deposits": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "bankName": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "principal": {
+                            "type": "integer"
+                          },
+                          "ratePct": {
+                            "type": "number"
+                          },
+                          "placedOn": {
+                            "type": "string"
+                          },
+                          "maturityOn": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "matured",
+                              "broken"
+                            ]
+                          },
+                          "accrued": {
+                            "type": "object"
+                          },
+                          "atMaturity": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    },
+                    "totals": {
+                      "type": "object"
+                    },
+                    "incomeThisYear": {
+                      "type": "object"
+                    },
+                    "settings": {
+                      "type": "object"
+                    },
+                    "idleCash": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/treasury/settings": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set the treasury settings",
+        "operationId": "setTreasurySettings",
+        "description": "(v1.30.0) indicativeRatePct (0–30, default 4: for the idle-cash estimate), buffer (kept above the minimums before suggesting a deposit). Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "indicativeRatePct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "buffer": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/treasury/deposits": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Place a time deposit",
+        "operationId": "placeTimeDeposit",
+        "description": "(v1.30.0) cashAccountId (a bank account: the money leaves it), bankName, reference, principal, ratePct (a year), taxPct (final tax on the interest, default 20), placedOn (default today), and maturityOn, termMonths or termDays. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "cashAccountId",
+                  "principal",
+                  "ratePct"
+                ],
+                "properties": {
+                  "cashAccountId": {
+                    "type": "string"
+                  },
+                  "bankName": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "principal": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "ratePct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "taxPct": {
+                    "type": "number"
+                  },
+                  "placedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "maturityOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "termMonths": {
+                    "type": "integer"
+                  },
+                  "termDays": {
+                    "type": "integer"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "bankName": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "principal": {
+                      "type": "integer"
+                    },
+                    "ratePct": {
+                      "type": "number"
+                    },
+                    "placedOn": {
+                      "type": "string"
+                    },
+                    "maturityOn": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "matured",
+                        "broken"
+                      ]
+                    },
+                    "accrued": {
+                      "type": "object"
+                    },
+                    "atMaturity": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/treasury/deposits/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A deposit",
+        "operationId": "deposit",
+        "description": "(v1.30.0) The deposit with its interest to date and at maturity.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The deposit id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "bankName": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "principal": {
+                      "type": "integer"
+                    },
+                    "ratePct": {
+                      "type": "number"
+                    },
+                    "placedOn": {
+                      "type": "string"
+                    },
+                    "maturityOn": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "matured",
+                        "broken"
+                      ]
+                    },
+                    "accrued": {
+                      "type": "object"
+                    },
+                    "atMaturity": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/treasury/deposits/{id}/close": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Close a deposit",
+        "operationId": "closeDeposit",
+        "description": "(v1.30.0) Matured (on or after maturity) or broken (before): closedOn (default today or the maturity), interestReceived (net; default the expected net at maturity, 0 when broken), penalty (broken only), rollover (termMonths, termDays or maturityOn, ratePct, withInterest) to place a new deposit. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The deposit id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "closedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "interestReceived": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "penalty": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "rollover": {
+                    "type": "object",
+                    "properties": {
+                      "termMonths": {
+                        "type": "integer"
+                      },
+                      "termDays": {
+                        "type": "integer"
+                      },
+                      "maturityOn": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "ratePct": {
+                        "type": "number"
+                      },
+                      "withInterest": {
+                        "type": "boolean"
+                      },
+                      "reference": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "bankName": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "principal": {
+                      "type": "integer"
+                    },
+                    "ratePct": {
+                      "type": "number"
+                    },
+                    "placedOn": {
+                      "type": "string"
+                    },
+                    "maturityOn": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "matured",
+                        "broken"
+                      ]
+                    },
+                    "accrued": {
+                      "type": "object"
+                    },
+                    "atMaturity": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/checks": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Finance anomaly review",
+        "operationId": "financeAnomalyReview",
+        "description": "(v1.30.0) Findings of the anomaly checks (duplicate_bill, duplicate_payment, round_amount, new_supplier_large, split_bills, out_of_hours) by status (default open; all for every one), most severe first; per check the open and confirmed counts and whether it is on; the settings.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "dismissed",
+                "confirmed",
+                "cleared",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "severity": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "dismissed",
+                              "confirmed",
+                              "cleared"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "summary": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "settings": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/checks/run": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Run the anomaly checks",
+        "operationId": "runAnomalyChecks",
+        "description": "(v1.30.0) Runs every check now over the last 90 days (they also run daily): new findings are added, a reviewed finding keeps its review, an open finding whose condition is gone is cleared.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "found": {
+                      "type": "integer"
+                    },
+                    "added": {
+                      "type": "integer"
+                    },
+                    "cleared": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/checks/settings": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set the anomaly checks",
+        "operationId": "setAnomalyChecks",
+        "description": "(v1.30.0) roundAmount (default 10 000 000), newSupplierAmount (default 50 000 000), newSupplierDays (default 30), disabled (the checks turned off). Needs finance:approve. Audited.\n\n**Permissions checked:** `finance:approve`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "roundAmount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "newSupplierAmount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "newSupplierDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365
+                  },
+                  "disabled": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "finance:approve"
+        ]
+      }
+    },
+    "/v1/finance/checks/{id}/review": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Review a finding",
+        "operationId": "reviewFinding",
+        "description": "(v1.30.0) decision dismiss (it is fine) or confirm (it needs action: raises finance.anomaly_confirmed), with a note of what was checked. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The finding id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "decision",
+                  "note"
+                ],
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "dismiss",
+                      "confirm"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "severity": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "dismissed",
+                        "confirmed",
+                        "cleared"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
       }
     }
   },
