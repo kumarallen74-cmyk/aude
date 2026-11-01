@@ -40,7 +40,7 @@ export class LedgerError extends Error {
 
 export const TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense', 'other'] as const;
 type AccountType = typeof TYPES[number];
-export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks'] as const;
+export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks', 'loyalty'] as const;
 type Source = typeof SOURCES[number];
 
 export const SEED: Array<[string, string, AccountType]> = [
@@ -67,6 +67,7 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['6600', 'Insurance', 'expense'], ['6605', 'Insurance recoveries', 'expense'],
   ['1190', 'Disputed funds (chargebacks)', 'asset'], ['1350', 'Grants receivable', 'asset'], ['2420', 'Accrued rent', 'liability'], ['2600', 'Deferred grant income', 'liability'], ['2610', 'Grants repayable', 'liability'],
   ['4400', 'Grant income', 'revenue'], ['6520', 'Chargeback losses', 'expense'], ['6700', 'Grant clawbacks', 'expense'],
+  ['2250', 'Loyalty points liability', 'liability'], ['4150', 'Loyalty points deferred', 'revenue'],
 ];
 export const BILL_ACCOUNT: Record<string, string> = { energy: '5100', maintenance: '6200', rent: '6210', installation: '6220', equipment: '6230', connectivity: '6240', services: '6250', other: '6290' };
 /** (v1.32.0) The payable a bill's withholding is posted to, by kind. */
@@ -393,7 +394,7 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
   }
   for (const [c, L] of Object.entries(inLines)) add('insurance', c, `Insurance, ${month}`, L);
   // (v1.36.0) Grants, landlord rent accruals and chargebacks, each module's own journal (imported here: no cycles).
-  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks']] as const) {
+  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks'], ['loyalty', './loyalty-accounting.js', 'Loyalty points']] as const) {
     const j: Record<string, Line[]> = await (await import(mod)).journal(orgId, month);
     for (const [c, L] of Object.entries(j)) if (L.length) add(src, c, `${label}, ${month}`, L);
   }

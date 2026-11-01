@@ -3310,6 +3310,156 @@ async function chargebacksSection(host, canWrite) {
   });
 }
 
+// ─────────────────────────────────────────── (v1.37.0) loyalty and promotion costs
+
+async function loyaltyCostSection(host, canWrite, months = 6) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api(`/v1/finance/loyalty?months=${months}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (n = months) => loyaltyCostSection(host, canWrite, n);
+  const last = (cur) => d.liability.filter((l) => l.currency === cur).at(-1);
+  const curs = [...new Set(d.liability.map((l) => l.currency))];
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Months', `<select data-lcm>${[3, 6, 12].map((n) => `<option value="${n}"${n === months ? ' selected' : ''}>Last ${n} whole months</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px">${canWrite ? '<button class="btn" type="button" data-lcset>Breakage…</button>' : ''}<button class="btn" type="button" data-lcx>${icon('download')} Excel</button></div></div>
+    ${callout('info', `Points not yet used are revenue deferred (PSAK 72): points × what a point is worth (${esc(String(d.program.pointValue))}), less the share that will never be used (breakage, ${d.settings.breakagePct == null ? 'learned from expired against redeemed points' : `set at ${d.settings.breakagePct}%`}). The ledger books the month's change. ${d.program.enabled ? '' : 'Loyalty is switched off (Commercial → Promotions & plans).'}`)}
+    <div class="grid k4 section">${curs.map((c) => { const l = last(c); return kpi(`Points liability · ${c}`, esc(fmt.money(l.net, c)), `${fmt.num(l.points)} points · ${l.breakagePct}% breakage`); }).join('') || kpi('Points liability', '—', 'no points yet')}${Object.entries(d.totals).map(([c, t]) => kpi(`Promotion cost · ${c}`, esc(fmt.money(t.cost, c)), `${esc(fmt.money(t.discount, c))} discounts · ${esc(fmt.money(t.pointsRedeemed, c))} points`)).join('')}</div>
+    <div class="card section"><header><h3>Liability by month</h3></header><div data-lcl></div></div>
+    <div class="grid k2 section"><div class="card"><header><h3>Promotions</h3></header><div data-lcp></div></div><div class="card"><header><h3>Cost by site</h3></header><div data-lcs></div></div></div>`;
+  table($('[data-lcl]', el), { columns: [{ label: 'Month', render: (l) => `${esc(l.month)} <span class="cell-sub">${esc(l.currency)}</span>` }, { label: 'Points', num: true, render: (l) => fmt.num(l.points) }, { label: 'Earned', num: true, render: (l) => fmt.num(l.earned) }, { label: 'Redeemed', num: true, render: (l) => fmt.num(l.redeemed) }, { label: 'Expired', num: true, render: (l) => fmt.num(l.expired) },
+    { label: 'Breakage', num: true, render: (l) => `${l.breakagePct}%` }, { label: 'Liability', num: true, render: (l) => `<b>${esc(fmt.money(l.net, l.currency))}</b>` }, { label: 'Change', num: true, render: (l) => esc(fmt.money(l.change, l.currency)) }], rows: d.liability, empty: 'No points earned.' });
+  table($('[data-lcp]', el), { columns: [{ label: 'Promotion', render: (p) => `<b>${esc(p.name)}</b><div class="cell-sub">${p.redemptions} uses · ${p.customers} customers</div>` }, { label: 'Discount', num: true, render: (p) => `${esc(fmt.money(p.discount, p.currency))}${p.discountPct != null ? `<div class="cell-sub">${p.discountPct}% of the price</div>` : ''}` }, { label: 'Revenue', num: true, render: (p) => esc(fmt.money(p.revenue, p.currency)) }], rows: d.promotions, empty: 'No promotions used.' });
+  table($('[data-lcs]', el), { columns: [{ label: 'Site', render: (s) => esc(s.site ?? '') }, { label: 'Discounts', num: true, render: (s) => esc(fmt.money(s.discount, s.currency)) }, { label: 'Points', num: true, render: (s) => esc(fmt.money(s.pointsRedeemed, s.currency)) }, { label: 'Cost', num: true, render: (s) => `<b>${esc(fmt.money(s.cost, s.currency))}</b>${s.costPct != null ? `<div class="cell-sub">${s.costPct}% of revenue</div>` : ''}` }], rows: d.sites, empty: 'Nothing given away.' });
+  $('[data-lcm]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  $('[data-lcx]', el).addEventListener('click', () => fetchFile(`/v1/finance/loyalty?months=${months}&format=xlsx`, 'plugsure-loyalty-costs.xlsx'));
+  $('[data-lcset]', el)?.addEventListener('click', () => modal({ title: 'Breakage', body: `<div class="form one">${field('Breakage % (empty: learn it)', `<input name="b" type="number" min="0" max="90" step="0.1" value="${d.settings.breakagePct ?? ''}" placeholder="learned: ${d.liability.at(-1)?.learnedPct ?? 0}%">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { try { await api('/v1/finance/loyalty/settings', { method: 'PUT', body: { breakagePct: $('[name="b"]', mc.el).value } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.37.0) tax audit readiness
+
+const TA_KIND = { sp2dk: 'SP2DK', office_audit: 'Office audit', field_audit: 'Field audit', other: 'Other' };
+const TA_ST = { open: ['t-warn', 'open'], responded: ['t-info', 'responded'], closed_no_change: ['t-ok', 'closed, no change'], assessed: ['t-crit', 'assessed'], objected: ['t-warn', 'objected'], paid: ['t-mute', 'paid'] };
+const TA_NEXT = { open: ['responded', 'closed_no_change', 'assessed'], responded: ['closed_no_change', 'assessed'], assessed: ['objected', 'paid'], objected: ['paid', 'closed_no_change'], closed_no_change: [], paid: [] };
+const GAP_L = { not_filed: 'Not filed', filed_differs: 'Filed ≠ today', revenue_vs_dpp: 'Revenue ≠ DPP', input_vat: 'Input PPN', no_slip: 'No bukti potong', no_efaktur: 'No e-Faktur' };
+
+async function taxAuditSection(host, canWrite, year = new Date().getFullYear()) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api(`/v1/finance/tax-audit?year=${year}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (y = year) => taxAuditSection(host, canWrite, y);
+  const rp = (v) => fmt.money(v, LEGACY_CURRENCY);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Year', `<select data-tay>${[0, 1, 2, 3].map((k) => new Date().getFullYear() - k).map((y) => `<option${y === year ? ' selected' : ''}>${y}</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px">${canWrite ? `<button class="btn primary" type="button" data-tanew>${icon('plus')} Tax office letter</button>` : ''}<button class="btn" type="button" data-tax>${icon('download')} Excel</button><button class="btn" type="button" data-tapack>${icon('download')} Audit pack (ZIP)</button></div></div>
+    ${callout('info', 'Ready when the tax office asks: each month the PPN return as filed against today\'s figures, charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against bukti potong. Each open item is listed with its reference.')}
+    <div class="grid k4 section">${kpi('Readiness', d.readinessPct == null ? '—' : `${d.readinessPct}%`, `${d.months.length} month(s) ended`, d.readinessPct === 100 ? 'ok' : d.readinessPct != null && d.readinessPct < 75 ? 'warn' : '')}${kpi('Open items', String(d.gaps.length), Object.entries(d.counts).map(([k, n]) => `${n} ${GAP_L[k] ?? k}`).join(' · ') || 'none', d.gaps.length ? 'warn' : '')}${kpi('Output PPN', esc(rp(d.totals.outputPpn)), `input ${esc(rp(d.totals.inputPpn))}`)}${kpi('PPh withheld', esc(rp(d.totals.withheld)), `${esc(rp(d.totals.slips))} on slips`, d.totals.withheld > d.totals.slips ? 'warn' : '')}</div>
+    <div class="card section"><header><h3>Tax office letters</h3></header><div data-tac></div></div>
+    <div class="card section"><header><h3>Equalisation · ${year}</h3></header><div data-tae></div></div>
+    <div class="card section"><header><h3>Open items</h3></header><div data-tag></div></div>`;
+  table($('[data-tac]', el), { columns: [{ label: 'Letter', render: (c) => `<b>${esc(TA_KIND[c.kind])}</b> ${esc(c.letterNo)}<div class="cell-sub">${c.taxYear} · ${esc(c.taxes.join(', ').toUpperCase())}</div>` }, { label: 'Received', render: (c) => esc(c.receivedOn) },
+    { label: 'Respond by', render: (c) => `${esc(c.respondBy ?? '—')}${c.status === 'open' && c.daysLeft != null ? `<div>${c.overdue ? tag('t-crit', 'passed') : tag(c.daysLeft <= 7 ? 't-warn' : 't-info', `${c.daysLeft} days`)}</div>` : ''}` },
+    { label: 'Status', render: (c) => `${tag(...TA_ST[c.status])}${c.assessed != null ? `<div class="cell-sub">${esc(rp(c.assessed))}</div>` : ''}` }, { label: '', render: (c) => (canWrite && TA_NEXT[c.status].length ? `<button ${BTN} data-tau="${c.id}">Update…</button>` : '') }], rows: d.cases, empty: 'No letters from the tax office.' });
+  table($('[data-tae]', el), { columns: [{ label: 'Month', render: (m) => esc(m.month) }, { label: 'Revenue', num: true, render: (m) => esc(rp(m.revenue)) }, { label: 'Retail DPP', num: true, render: (m) => `${esc(rp(m.retailDpp))}${m.otherDpp ? `<div class="cell-sub">+${esc(rp(m.otherDpp))} other</div>` : ''}` },
+    { label: 'PPN out / in', num: true, render: (m) => `${esc(rp(m.outputPpn))}<div class="cell-sub">${esc(rp(m.inputPpn))} in</div>` }, { label: 'Filed', render: (m) => (m.filed ? (m.filedDiffers ? tag('t-crit', 'differs') : tag('t-ok', 'filed')) : tag('t-mute', 'not filed')) },
+    { label: 'PPh', num: true, render: (m) => `${esc(rp(m.withheld))}<div class="cell-sub">${esc(rp(m.slips))} on slips</div>` }, { label: 'Issues', num: true, render: (m) => (m.issues ? tag('t-warn', String(m.issues)) : '') }], rows: d.months, empty: 'No month of the year has ended.' });
+  table($('[data-tag]', el), { columns: [{ label: 'Month', render: (g) => esc(g.month) }, { label: 'Item', render: (g) => `<b>${esc(GAP_L[g.kind] ?? g.kind)}</b> · ${esc(g.reference)}<div class="cell-sub">${esc(g.detail)}</div>` }, { label: 'Amount', num: true, render: (g) => (g.amount == null ? '' : esc(rp(g.amount))) }], rows: d.gaps, empty: 'Nothing open.' });
+  $('[data-tay]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  $('[data-tax]', el).addEventListener('click', () => fetchFile(`/v1/finance/tax-audit?year=${year}&format=xlsx`, `plugsure-tax-equalisation-${year}.xlsx`));
+  $('[data-tapack]', el).addEventListener('click', () => fetchFile(`/v1/finance/tax-audit/pack?year=${year}`, `plugsure-tax-audit-${year}.zip`));
+  const send = async (url, b, method) => { try { await api(url, { method, body: b }); toast('Saved.', 'ok'); reload(); return true; } catch (err) { toast(err.message, 'crit'); return false; } };
+  $('[data-tanew]', el)?.addEventListener('click', () => modal({ title: 'Record a tax office letter', body: `<div class="form">${field('Kind', `<select name="k">${Object.entries(TA_KIND).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`)}${field('Letter number', '<input name="n">')}${field('Tax year', `<input name="y" type="number" value="${year - 1}">`)}${field('Taxes', '<input name="t" placeholder="ppn, pph23">')}${field('Received on', `<input name="r" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Respond by (SP2DK: 14 days)', '<input name="b" type="date">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value.trim(); return send('/v1/finance/tax-audit/cases', { kind: v('k'), letterNo: v('n'), taxYear: Number(v('y')), taxes: v('t'), receivedOn: v('r'), respondBy: v('b') || undefined }, 'POST'); } }] }));
+  el.addEventListener('click', (e) => {
+    const u = e.target.closest('[data-tau]');
+    if (!u) return;
+    const c = d.cases.find((x) => x.id === u.dataset.tau);
+    modal({ title: `${TA_KIND[c.kind]} ${c.letterNo}`, body: `<div class="form">${field('Move to', `<select name="s">${TA_NEXT[c.status].map((x) => `<option value="${x}">${TA_ST[x][1]}</option>`).join('')}</select>`)}${field('Amount assessed (SKP)', `<input name="a" type="number" min="0" value="${c.assessed ?? ''}">`, { opt: true })}${field('On', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Note', '<input name="n">', { opt: true })}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value.trim(); return send(`/v1/finance/tax-audit/cases/${c.id}`, { status: v('s'), assessed: v('a') || undefined, on: v('on'), note: v('n') || undefined }, 'PUT'); } }] });
+  });
+}
+
+// ─────────────────────────────────────────── (v1.37.0) site portfolio review
+
+const SIG = { close_review: ['t-crit', 'review for closure'], fix: ['t-warn', 'fix'], grow: ['t-ok', 'grow'], keep: ['t-info', 'keep'] };
+
+async function portfolioSection(host, canWrite, months = 6) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api(`/v1/finance/portfolio?months=${months}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (n = months) => portfolioSection(host, canWrite, n);
+  const m = (v, c) => esc(fmt.money(v, c));
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Months', `<select data-pfm>${[3, 6, 12].map((n) => `<option value="${n}"${n === months ? ' selected' : ''}>Last ${n} whole months</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px"><button class="btn" type="button" data-pfx>${icon('download')} Excel</button><button class="btn" type="button" data-pfp>${icon('download')} Review (PDF)</button></div></div>
+    ${callout('info', `Each site's full result, ${esc(d.months[0])} to ${esc(d.months.at(-1))}: revenue less energy, shared costs, rent (Landlords), maintenance (work orders) and insurance gives the operating result; less depreciation, plus grants released, the contribution.`)}
+    <div class="grid k4 section">${Object.entries(d.totals).map(([c, t]) => kpi(`Contribution · ${c}`, m(t.contribution, c), `operating ${m(t.operating, c)} · ${t.sites} sites`, t.contribution < 0 ? 'crit' : '')).join('') || kpi('Contribution', '—', 'no sites with activity')}${Object.entries(d.totals).map(([c, t]) => kpi('Signals', `${t.signals.close_review ?? 0} / ${t.signals.fix ?? 0}`, `to review / to fix · ${t.signals.grow ?? 0} to grow`, t.signals.close_review ? 'warn' : '')).join('')}</div>
+    <div class="card section"><header><h3>Sites</h3></header><div data-pfl></div></div>`;
+  table($('[data-pfl]', el), { columns: [
+    { label: '#', num: true, render: (s) => String(s.rank) },
+    { label: 'Site', render: (s) => `<b>${esc(s.site)}</b><div class="cell-sub">${fmt.num(Math.round(s.kwh))} kWh · ${s.sessions} sessions</div>` },
+    { label: 'Revenue', num: true, render: (s) => m(s.revenue, s.currency) },
+    { label: 'Costs', num: true, render: (s) => `${m(s.energyCost + s.shared + s.rent + s.maintenance + s.insurance, s.currency)}<div class="cell-sub">energy ${m(s.energyCost, s.currency)} · rent ${m(s.rent, s.currency)}</div>` },
+    { label: 'Operating', num: true, render: (s) => m(s.operating, s.currency) },
+    { label: 'Contribution', num: true, render: (s) => `<b>${m(s.contribution, s.currency)}</b>${s.marginPct != null ? `<div class="cell-sub">${s.marginPct}%</div>` : ''}` },
+    { label: 'Signal', render: (s) => `${tag(...SIG[s.signal])}${s.reasons.length ? `<div class="cell-sub">${esc(s.reasons.join('; '))}</div>` : ''}` },
+  ], rows: d.sites, empty: 'No site had activity in the period.' });
+  $('[data-pfm]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  $('[data-pfx]', el).addEventListener('click', () => fetchFile(`/v1/finance/portfolio?months=${months}&format=xlsx`, 'plugsure-site-portfolio.xlsx'));
+  $('[data-pfp]', el).addEventListener('click', () => fetchFile(`/v1/finance/portfolio?months=${months}&format=pdf`, 'plugsure-portfolio-review.pdf'));
+}
+
+// ─────────────────────────────────────────── (v1.37.0) budget planning
+
+const BP_ST = { draft: ['t-mute', 'draft'], submitted: ['t-warn', 'submitted'], approved: ['t-ok', 'approved'], rejected: ['t-crit', 'rejected'], superseded: ['t-mute', 'superseded'] };
+const BP_CAT = { revenue: 'Revenue', energy_cost: 'Energy cost', rent: 'Rent', maintenance: 'Maintenance', insurance: 'Insurance', staff: 'Staff', marketing: 'Marketing', it: 'IT', other_opex: 'Other opex', capex: 'Capex' };
+
+async function planningSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/budget-plans'); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => planningSection(host, canWrite);
+  const canApprove = state.can('finance:approve');
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-bpnew>${icon('plus')} New budget version</button>` : ''}</div>
+    ${callout('info', 'Next year\'s budget, built before it is used: seeded from the rolling forecast and each site\'s last twelve months, edited per site and department, submitted, and approved by a second Finance Manager. Approval publishes each site\'s revenue and energy cost to Budgets.')}
+    <div class="card section"><header><h3>Budget versions</h3></header><div data-bpl></div></div>`;
+  table($('[data-bpl]', el), { columns: [
+    { label: 'Budget', render: (p) => `<b>${esc(p.name)}</b> <span class="cell-sub">${p.year} · v${p.version} · ${esc(p.currency)}</span><div class="cell-sub">${esc(p.seededFrom ?? '')}</div>` },
+    { label: 'Revenue', num: true, render: (p) => esc(fmt.money(p.revenue, p.currency)) },
+    { label: 'Costs', num: true, render: (p) => `${esc(fmt.money(p.costs, p.currency))}${p.capex ? `<div class="cell-sub">capex ${esc(fmt.money(p.capex, p.currency))}</div>` : ''}` },
+    { label: 'Status', render: (p) => `${tag(...BP_ST[p.status])}<div class="cell-sub">${esc([p.submittedBy && `by ${p.submittedBy}`, p.decidedBy && `decided by ${p.decidedBy}`].filter(Boolean).join(' · '))}</div>` },
+    { label: '', render: (p) => `<button ${BTN} data-bpo="${p.id}">Open</button>` },
+  ], rows: d.plans, empty: 'No budget versions yet.' });
+  $('[data-bpnew]', el)?.addEventListener('click', () => modal({ title: 'New budget version', body: `<div class="form">${field('Year', `<input name="y" type="number" value="${new Date().getFullYear() + 1}">`)}${field('Currency', `<input name="c" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Start from', `<select name="s"><option value="forecast">The rolling forecast</option>${d.plans.length ? `<option value="copy">A copy of a version</option>` : ''}<option value="empty">Empty</option></select>`)}${field('Version to copy', `<select name="f">${d.plans.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>`, { opt: true })}${field('Growth % a year', '<input name="g" type="number" step="0.5" value="0">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Create', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el)?.value.trim(); try { const p = await api('/v1/finance/budget-plans', { method: 'POST', body: { year: Number(v('y')), currency: v('c'), seed: v('s'), fromPlanId: v('s') === 'copy' ? v('f') : undefined, growthPct: Number(v('g') || 0) } }); reload(); open(p.id); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  const open = async (id) => {
+    let p;
+    try { p = await api(`/v1/finance/budget-plans/${id}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const mm = (v) => fmt.money(v, p.currency);
+    const act = async (fn, msg) => { try { const r = await fn(); toast(typeof msg === 'function' ? msg(r) : msg, 'ok'); reload(); return true; } catch (err) { toast(err.message, 'crit'); return false; } };
+    drawer({ title: p.name, subtitle: `${p.year} · v${p.version} · ${BP_ST[p.status][1]}`, tabs: [
+      { id: 's', label: 'Summary', render(body) {
+        body.innerHTML = `<div class="grid k4">${kpi('Revenue', esc(mm(p.totals.revenue)), p.previous ? `v${p.previous.version}: ${esc(mm(p.previous.revenue))}` : '')}${kpi('Opex', esc(mm(p.totals.opex)), '')}${kpi('Result', esc(mm(p.totals.result)), '', p.totals.result < 0 ? 'crit' : '')}${kpi('Capex', esc(mm(p.totals.capex)), '')}</div>
+          <h4 style="margin:14px 0 6px">By category</h4><div data-bpc></div><h4 style="margin:14px 0 6px">Sites</h4><div data-bps></div>
+          <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${canWrite && p.status === 'draft' ? `<button ${BTN} data-bpdept>Department lines…</button><button class="btn sm primary" type="button" data-bpsub>Submit for approval</button>` : ''}${canWrite && canApprove && p.status === 'submitted' ? `<button class="btn sm primary" type="button" data-bpok>Approve and publish</button><button ${BTN} data-bpno>Reject…</button>` : ''}<button ${BTN} data-bpx>${icon('download')} Excel</button></div>`;
+        table($('[data-bpc]', body), { columns: [{ label: 'Category', render: (c) => esc(BP_CAT[c]) }, { label: 'Q1', num: true, render: (c) => esc(mm(p.byCategory[c].slice(0, 3).reduce((a, x) => a + x, 0))) }, { label: 'Q2', num: true, render: (c) => esc(mm(p.byCategory[c].slice(3, 6).reduce((a, x) => a + x, 0))) },
+          { label: 'Q3', num: true, render: (c) => esc(mm(p.byCategory[c].slice(6, 9).reduce((a, x) => a + x, 0))) }, { label: 'Q4', num: true, render: (c) => esc(mm(p.byCategory[c].slice(9).reduce((a, x) => a + x, 0))) }, { label: 'Year', num: true, render: (c) => `<b>${esc(mm(p.byCategory[c].reduce((a, x) => a + x, 0)))}</b>` }],
+          rows: Object.keys(BP_CAT).filter((c) => p.byCategory[c].some((x) => x)) });
+        table($('[data-bps]', body), { columns: [{ label: 'Site', render: (s) => esc(s.site) }, { label: 'Revenue', num: true, render: (s) => esc(mm(s.revenue)) }, { label: 'Costs', num: true, render: (s) => esc(mm(s.energy_cost + s.rent + s.maintenance + s.insurance)) }, { label: 'Contribution', num: true, render: (s) => `<b>${esc(mm(s.contribution))}</b>` }], rows: p.sites, empty: 'No site lines.' });
+        $('[data-bpx]', body).addEventListener('click', () => fetchFile(`/v1/finance/budget-plans/${p.id}?format=xlsx`, `plugsure-budget-${p.year}-v${p.version}.xlsx`));
+        $('[data-bpsub]', body)?.addEventListener('click', () => act(() => api(`/v1/finance/budget-plans/${p.id}/submit`, { method: 'POST', body: {} }), 'Submitted for approval.'));
+        $('[data-bpok]', body)?.addEventListener('click', () => act(() => api(`/v1/finance/budget-plans/${p.id}/decide`, { method: 'POST', body: { approve: true } }), (r) => `Approved: ${r.published} site-month(s) published to Budgets${r.skipped.length ? `; locked months left as they were: ${r.skipped.join(', ')}` : ''}.`));
+        $('[data-bpno]', body)?.addEventListener('click', () => modal({ title: 'Reject the budget', body: `<div class="form one">${field('Why', '<input name="n">')}</div>`, actions: [{ label: 'Cancel' }, { label: 'Reject', kind: 'danger', onClick: (mc) => act(() => api(`/v1/finance/budget-plans/${p.id}/decide`, { method: 'POST', body: { approve: false, note: $('[name="n"]', mc.el).value.trim() } }), 'Rejected.') }] }));
+        $('[data-bpdept]', body)?.addEventListener('click', () => modal({ title: 'Department lines (a month each)', size: 'lg', body: `<div class="form">${['staff', 'marketing', 'it', 'other_opex', 'capex'].map((c) => field(`${BP_CAT[c]} a month`, `<input name="${c}" type="number" min="0" value="${p.organisation[c][0] || ''}">`, { opt: true })).join('')}</div><p class="cell-sub">Applied to every month of ${p.year}; Excel holds month by month.</p>`,
+          actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', onClick(mc) { const lines = []; for (const c of ['staff', 'marketing', 'it', 'other_opex', 'capex']) { const v = $(`[name="${c}"]`, mc.el).value; if (v !== '') for (const mo of p.months) lines.push({ month: mo, category: c, amount: Number(v) }); } return lines.length ? act(() => api(`/v1/finance/budget-plans/${p.id}/lines`, { method: 'PUT', body: { lines } }), 'Saved.') : false; } }] }));
+      } },
+    ] });
+  };
+  el.addEventListener('click', (e) => { const o = e.target.closest('[data-bpo]'); if (o) open(o.dataset.bpo); });
+}
+
 // ─────────────────────────────────────────── (v1.30.0) purchase orders
 
 const PO_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], closed: ['t-ok', 'closed'], cancelled: ['t-mute', 'cancelled'], rejected: ['t-crit', 'rejected'] };
@@ -3884,7 +4034,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'scorecard', label: 'Scorecard' }, { id: 'reports', label: 'Reports' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'feeds', label: 'Bank feeds' }, { id: 'tax', label: 'Tax' }, { id: 'slips', label: 'Withholding' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'leases', label: 'Leases' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'ledger', label: 'Ledger' }, { id: 'closesteps', label: 'Close steps' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'intercompany', label: 'Intercompany' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -4268,7 +4418,8 @@ registerView('finance', {
       payroll: () => payrollSection(body, canWrite), credit: () => creditSection(body, canWrite), projects: () => projectsSection(body, canWrite), cashforecast: () => cashForecastSection(body, canWrite),
       inventory: () => inventorySection(body, canWrite), maintenance: () => maintenanceSection(body, canWrite), assurance: () => assuranceSection(body, canWrite), lenders: () => lendersSection(body, canWrite),
       carbon: () => carbonSection(body, canWrite), insurance: () => insuranceSection(body, canWrite), pricing: () => pricingSection(body, canWrite), compliance: () => complianceSection(body, canWrite),
-      grants: () => grantsSection(body, canWrite), landlords: () => landlordsSection(body, canWrite), chargebacks: () => chargebacksSection(body, canWrite) };
+      grants: () => grantsSection(body, canWrite), landlords: () => landlordsSection(body, canWrite), chargebacks: () => chargebacksSection(body, canWrite),
+      loyaltycost: () => loyaltyCostSection(body, canWrite), taxaudit: () => taxAuditSection(body, canWrite), portfolio: () => portfolioSection(body, canWrite), planning: () => planningSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

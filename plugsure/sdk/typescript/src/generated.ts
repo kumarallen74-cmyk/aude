@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.36.0";
+export const API_VERSION = "1.37.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5426,6 +5426,11 @@ export type ApproveJournalEntryResponse = {
   lines?: Record<string, unknown>[];
 };
 
+export type ApproveOrRejectBudgetVersionBody = {
+  approve: boolean;
+  note?: string;
+};
+
 export type ApproveOrRejectDriverRefundRequestBody = {
   amount?: number;
   note?: string;
@@ -6292,6 +6297,16 @@ export type CreateAlertContactResponse = {
 
 export type CreateAlertRuleResponse = {
   rule: AlertRoutingRule;
+};
+
+export type CreateBudgetVersionBody = {
+  year?: number;
+  currency: string;
+  seed?: "forecast" | "copy" | "empty";
+  fromPlanId?: string;
+  growthPct?: number;
+  name?: string;
+  note?: string;
 };
 
 export type CreateDeveloperSandboxBody = {
@@ -8893,6 +8908,16 @@ export type RecordSupplierBillResponse = {
   dueDate?: string;
 };
 
+export type RecordTaxOfficeLetterBody = {
+  kind: "sp2dk" | "office_audit" | "field_audit" | "other";
+  letterNo: string;
+  taxYear: number;
+  taxes?: ("ppn" | "pph21" | "pph23" | "pph26" | "pph4_2" | "pph25" | "pph29" | "pbjt" | "other")[];
+  receivedOn?: string;
+  respondBy?: string;
+  note?: string;
+};
+
 export type RecordTaxRegistrationInCountryBody = {
   countryCode: "ID" | "MY" | "SG";
   /** Default true. */
@@ -9707,12 +9732,25 @@ export type SetBreakageDaysBody = {
   breakageDays: number;
 };
 
+export type SetBreakageRateBody = {
+  breakagePct?: number;
+};
+
 export type SetBudgetAlertThresholdBody = {
   budgetAlertPct: number;
 };
 
 export type SetBudgetAlertThresholdResponse = {
   budgetAlertPct?: number;
+};
+
+export type SetBudgetLinesBody = {
+  lines: {
+    siteId?: string;
+    month?: string;
+    category?: string;
+    amount?: number;
+  }[];
 };
 
 export type SetCashForecastBody = {
@@ -10539,6 +10577,14 @@ export type UpdateSiteOwnerBody = OwnerInput & {
 
 export type UpdateSiteOwnerResponse = {
   ok: true;
+};
+
+export type UpdateTaxOfficeLetterBody = {
+  status?: "responded" | "closed_no_change" | "assessed" | "objected" | "paid";
+  assessed?: number;
+  on?: string;
+  respondBy?: string;
+  note?: string;
 };
 
 export type UpdateWarrantyClaimBody = {
@@ -11676,6 +11722,21 @@ export class Operations {
   }
 
   /**
+   * Approve or reject a budget version
+   *
+   * (v1.37.0) approve (by a second person with finance:approve), note (needed to reject). Approved: each site's revenue and energy cost are published to Budgets for the months not locked, and the version approved before is superseded. Audited.
+   *
+   * `POST /v1/finance/budget-plans/{id}/decide`
+   */
+  approveOrRejectBudgetVersion(params: {
+    /** The id. */
+    id: string;
+    body: ApproveOrRejectBudgetVersionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/budget-plans/{id}/decide", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Approve or reject a driver's refund request
    *
    * (v1.24.0) decision approve (optionally a smaller amount: the payment's refund becomes due, paid from Refunds) or reject (a note the driver sees). Audited.
@@ -12143,6 +12204,17 @@ export class Operations {
   }
 
   /**
+   * Budget plans
+   *
+   * (v1.37.0) Every version per year and currency with its status and totals.
+   *
+   * `GET /v1/finance/budget-plans`
+   */
+  budgetPlans(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/budget-plans", accept: "json" }, options);
+  }
+
+  /**
    * Budgets vs actuals for a month
    *
    * (v1.20.0) The organisation's lines per currency (revenue, energy cost, gateway fees, owner share) and each site's (revenue, energy cost), budget beside actual with the variance (amount and %). alertPct: the off-track threshold.
@@ -12155,6 +12227,23 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<BudgetsVsActualsForMonthResponse> {
     return this.transport.request<BudgetsVsActualsForMonthResponse>({ method: "GET", path: "/v1/finance/budgets", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Budget version
+   *
+   * (v1.37.0) Its months by category, sites, the organisation 's lines, totals and the version it follows. format=xlsx.
+   *
+   * `GET /v1/finance/budget-plans/{id}`
+   */
+  budgetVersion(params: {
+    /** The id. */
+    id: string;
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/budget-plans/{id}", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -13160,6 +13249,19 @@ export class Operations {
     body: AlertRoutingRuleInput;
   }, options?: RequestOptions): Promise<CreateAlertRuleResponse> {
     return this.transport.request<CreateAlertRuleResponse>({ method: "POST", path: "/v1/alert-routing/rules", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Create a budget version
+   *
+   * (v1.37.0) year, currency, seed (forecast: the rolling forecast and the last twelve months ' site costs; copy: fromPlanId; empty), growthPct, name. Audited.
+   *
+   * `POST /v1/finance/budget-plans`
+   */
+  createBudgetVersion(params: {
+    body: CreateBudgetVersionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/budget-plans", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16296,6 +16398,22 @@ export class Operations {
   }
 
   /**
+   * Loyalty and promotion costs
+   *
+   * (v1.37.0) Over the last n whole months (months, default 6): the points liability at each month end (points × point value, less breakage learned or set), its change, earned, redeemed, expired; discounts and points redeemed per promotion and per site. format=xlsx.
+   *
+   * `GET /v1/finance/loyalty`
+   */
+  loyaltyAndPromotionCosts(params?: {
+    query?: {
+      months?: number;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/loyalty", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Maintenance costs
    *
    * (v1.34.0) Per charger (and site) over from–to (default the year to date): orders, labour, parts, contractors, accrued, recovered, net, kWh and the cost per kWh; by kind. format=xlsx.
@@ -17931,6 +18049,19 @@ export class Operations {
   }
 
   /**
+   * Record a tax office letter
+   *
+   * (v1.37.0) kind (sp2dk, office_audit, field_audit, other), letterNo, taxYear, taxes, receivedOn, respondBy (an SP2DK: 14 days by default). Open letters raise finance.tax_audit_due from 7 days ahead. Audited.
+   *
+   * `POST /v1/finance/tax-audit/cases`
+   */
+  recordTaxOfficeLetter(params: {
+    body: RecordTaxOfficeLetterBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/tax-audit/cases", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a tax registration in a country
    *
    * From the date given, sessions in that country are taxed by it; the registration in force there before ends that day (409 when the new date is not after its start). `registered: false` records that the organisation is not registered from that date. Malaysia: service tax is charged on EV charging only with `evChargingTaxable: true`. An Indonesian registration in force today also sets the organisation's PKP / NPWP. Audited.
@@ -19421,6 +19552,19 @@ export class Operations {
   }
 
   /**
+   * Set the breakage rate
+   *
+   * (v1.37.0) breakagePct (0 to 90) instead of the rate learned from expired and redeemed points; empty to learn it. Audited.
+   *
+   * `PUT /v1/finance/loyalty/settings`
+   */
+  setBreakageRate(params: {
+    body: SetBreakageRateBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/loyalty/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the budget alert threshold
    *
    * (v1.20.0) From the 7th of the month, revenue below or energy cost above the pro-rated budget by more than this % raises finance.budget_off_track. Audited.
@@ -19431,6 +19575,21 @@ export class Operations {
     body: SetBudgetAlertThresholdBody;
   }, options?: RequestOptions): Promise<SetBudgetAlertThresholdResponse> {
     return this.transport.request<SetBudgetAlertThresholdResponse>({ method: "PUT", path: "/v1/finance/budgets/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set budget lines
+   *
+   * (v1.37.0) A draft 's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.
+   *
+   * `PUT /v1/finance/budget-plans/{id}/lines`
+   */
+  setBudgetLines(params: {
+    /** The id. */
+    id: string;
+    body: SetBudgetLinesBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/budget-plans/{id}/lines", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20282,6 +20441,23 @@ export class Operations {
   }
 
   /**
+   * Site portfolio review
+   *
+   * (v1.37.0) Each site's P&L over n whole months to a month (months, default 6; to): revenue, energy, shared costs, rent, maintenance, insurance, operating result, depreciation, grants, contribution; ranked per currency with a signal (close_review, fix, grow, keep) and its reasons. format=xlsx or pdf.
+   *
+   * `GET /v1/finance/portfolio`
+   */
+  sitePortfolioReview(params?: {
+    query?: {
+      months?: number;
+      to?: string;
+      format?: "json" | "xlsx" | "pdf";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/portfolio", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Start a session remotely
    *
    * Sends RemoteStartTransaction for an RFID tag or driver account, optionally capped by energy, duration or amount. Refused with 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` (e.g. a field technician) may only start with a technician or VIP card (403 otherwise). Audited.
@@ -20391,6 +20567,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<SubmitBillForApprovalResponse> {
     return this.transport.request<SubmitBillForApprovalResponse>({ method: "POST", path: "/v1/finance/bills/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Submit a budget version
+   *
+   * (v1.37.0) For approval. Audited.
+   *
+   * `POST /v1/finance/budget-plans/{id}/submit`
+   */
+  submitBudgetVersion(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/budget-plans/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -20667,6 +20857,37 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<SyncMonthIntoLedgerResponse> {
     return this.transport.request<SyncMonthIntoLedgerResponse>({ method: "POST", path: "/v1/finance/ledger/sync/{month}", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Tax audit pack
+   *
+   * (v1.37.0) The year 's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.
+   *
+   * `GET /v1/finance/tax-audit/pack`
+   */
+  taxAuditPack(params?: {
+    query?: {
+      year?: number;
+    };
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/tax-audit/pack", query: params?.query, accept: "binary" }, options);
+  }
+
+  /**
+   * Tax audit readiness
+   *
+   * (v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office 's letters. format=xlsx.
+   *
+   * `GET /v1/finance/tax-audit`
+   */
+  taxAuditReadiness(params?: {
+    query?: {
+      year?: number;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/tax-audit", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -21021,6 +21242,21 @@ export class Operations {
     body: UpdateSiteOwnerBody;
   }, options?: RequestOptions): Promise<UpdateSiteOwnerResponse> {
     return this.transport.request<UpdateSiteOwnerResponse>({ method: "PUT", path: "/v1/owners/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Update a tax office letter
+   *
+   * (v1.37.0) status responded, closed_no_change, assessed (assessed: the amount), objected or paid; on; respondBy; note. Audited.
+   *
+   * `PUT /v1/finance/tax-audit/cases/{id}`
+   */
+  updateTaxOfficeLetter(params: {
+    /** The id. */
+    id: string;
+    body: UpdateTaxOfficeLetterBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/tax-audit/cases/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

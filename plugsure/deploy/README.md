@@ -604,6 +604,13 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      pack's new sections and the slides (Finance → Reports). Route
      finance.grant_condition_due, finance.chargeback_due and
      finance.chargeback_rate ([FINANCE.md](FINANCE.md)).
+  30. (v1.37.0) Check the loyalty points liability and set a breakage rate
+     if you have one (Finance → Loyalty costs); sync the ledger's months.
+     Review last year's equalisation and close its open items before the
+     tax office asks (Finance → Tax audit); record its letters there. Read
+     the portfolio review (Finance → Portfolio). Build next year's budget
+     (Finance → Budget planning) and have a second Finance Manager approve
+     it. Route finance.tax_audit_due ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

@@ -80,6 +80,10 @@ import * as comply from '../services/compliance-calendar.js';
 import * as grants from '../services/grants.js';
 import * as landlords from '../services/landlord-deals.js';
 import * as cbacks from '../services/chargebacks.js';
+import * as loyaltyAcct from '../services/loyalty-accounting.js';
+import * as taxAudit from '../services/tax-audit.js';
+import * as sitePnl from '../services/site-pnl.js';
+import * as planning from '../services/budget-planning.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -3272,6 +3276,91 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.post('/v1/finance/chargebacks/tokens/:tid/block', async (req, reply) => {
     W(req);
     try { const r = await cbacks.blockToken(req.principal.orgId, prm(req, 'tid')); await audit21(req, 'finance.token_blocked_for_fraud', 'token', r.tokenId, { token: r.token, reason: body(req).reason ?? null }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.37.0) loyalty costs, tax audit, site P&L, budget planning
+
+  const p26Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof loyaltyAcct.LoyaltyAcctError || e instanceof taxAudit.TaxAuditError || e instanceof sitePnl.SitePnlError || e instanceof planning.PlanError) return reply.status(e.statusCode).send({ error: e.message });
+    return p25Failed(reply, e);
+  };
+
+  app.get('/v1/finance/loyalty', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-loyalty-costs', await loyaltyAcct.reportXlsx(req.principal.orgId, qs(req)));
+      return await loyaltyAcct.overview(req.principal.orgId, qs(req));
+    } catch (e) { return p26Failed(reply, e); }
+  });
+  app.put('/v1/finance/loyalty/settings', async (req, reply) => {
+    W(req);
+    try { const r = await loyaltyAcct.saveSettings(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.loyalty_accounting_saved', 'organisation', null, r); return r; } catch (e) { return p26Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/tax-audit', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-tax-equalisation-${qs(req).year ?? ''}`, await taxAudit.workbook(req.principal.orgId, qs(req).year));
+      return { ...(await taxAudit.equalisation(req.principal.orgId, qs(req).year)), cases: await taxAudit.cases(req.principal.orgId) };
+    } catch (e) { return p26Failed(reply, e); }
+  });
+  app.get('/v1/finance/tax-audit/pack', async (req, reply) => {
+    R(req);
+    try {
+      const r = await taxAudit.pack(req.principal.orgId, qs(req).year);
+      await audit21(req, 'finance.tax_audit_pack_exported', 'organisation', null, { year: r.year, manifestSha256: r.manifestSha256 });
+      return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="plugsure-tax-audit-${r.year}.zip"`).header('x-manifest-sha256', r.manifestSha256).send(r.body);
+    } catch (e) { return p26Failed(reply, e); }
+  });
+  app.post('/v1/finance/tax-audit/cases', async (req, reply) => {
+    W(req);
+    try { const r = await taxAudit.saveCase(req.principal.orgId, null, body(req), userUuid(req)); await audit21(req, 'finance.tax_audit_case_recorded', 'tax_audit_case', r.id, { kind: r.kind, letterNo: r.letterNo, taxYear: r.taxYear }); return created(reply, r); } catch (e) { return p26Failed(reply, e); }
+  });
+  app.put('/v1/finance/tax-audit/cases/:id', async (req, reply) => {
+    W(req);
+    try { const r = await taxAudit.saveCase(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.tax_audit_case_updated', 'tax_audit_case', r.id, { status: r.status, assessed: r.assessed }); return r; } catch (e) { return p26Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/portfolio', async (req, reply) => {
+    R(req);
+    try {
+      const f = qs(req).format;
+      if (f === 'xlsx') return xl(reply, 'plugsure-site-portfolio', await sitePnl.reviewXlsx(req.principal.orgId, qs(req)));
+      if (f === 'pdf') return reply.header('content-type', 'application/pdf').header('content-disposition', 'attachment; filename="plugsure-portfolio-review.pdf"').send(await sitePnl.reviewPdf(req.principal.orgId, qs(req)));
+      return await sitePnl.review(req.principal.orgId, qs(req));
+    } catch (e) { return p26Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/budget-plans', async (req, reply) => {
+    R(req);
+    try { return { plans: await planning.list(req.principal.orgId) }; } catch (e) { return p26Failed(reply, e); }
+  });
+  app.post('/v1/finance/budget-plans', async (req, reply) => {
+    W(req);
+    try { const r = await planning.create(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.budget_plan_created', 'budget_plan', r.id, { year: r.year, version: r.version, seededFrom: r.seededFrom }); return created(reply, r); } catch (e) { return p26Failed(reply, e); }
+  });
+  app.get('/v1/finance/budget-plans/:id', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') { const p = await planning.get(req.principal.orgId, prm(req, 'id')); return xl(reply, `plugsure-budget-${p.year}-v${p.version}`, await planning.planXlsx(req.principal.orgId, p.id)); }
+      return await planning.get(req.principal.orgId, prm(req, 'id'));
+    } catch (e) { return p26Failed(reply, e); }
+  });
+  app.put('/v1/finance/budget-plans/:id/lines', async (req, reply) => {
+    W(req);
+    try { const r = await planning.setLines(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.budget_plan_lines_set', 'budget_plan', r.id, { lines: Array.isArray(body(req).lines) ? (body(req).lines as unknown[]).length : 0 }); return r; } catch (e) { return p26Failed(reply, e); }
+  });
+  app.post('/v1/finance/budget-plans/:id/submit', async (req, reply) => {
+    W(req);
+    try { const r = await planning.submit(req.principal.orgId, prm(req, 'id'), userUuid(req)); await audit21(req, 'finance.budget_plan_submitted', 'budget_plan', r.id, { year: r.year, version: r.version }); return r; } catch (e) { return p26Failed(reply, e); }
+  });
+  app.post('/v1/finance/budget-plans/:id/decide', async (req, reply) => {
+    W(req);
+    try {
+      const r = await planning.decide(req.principal.orgId, prm(req, 'id'), body(req), { userId: userUuid(req), canApprove: canApprove(req) });
+      await audit21(req, r.status === 'approved' ? 'finance.budget_plan_approved' : 'finance.budget_plan_rejected', 'budget_plan', r.id, { year: r.year, version: r.version, published: r.published, skipped: r.skipped, note: r.decisionNote });
+      return r;
+    } catch (e) { return p26Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
