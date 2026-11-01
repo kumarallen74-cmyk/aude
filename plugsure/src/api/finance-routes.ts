@@ -73,6 +73,10 @@ import * as inv from '../services/inventory.js';
 import * as maint from '../services/maintenance.js';
 import * as assure from '../services/revenue-assurance.js';
 import * as lend from '../services/lenders.js';
+import * as carbon from '../services/carbon.js';
+import * as insure from '../services/insurance.js';
+import * as pricing from '../services/pricing-analysis.js';
+import * as comply from '../services/compliance-calendar.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -3000,6 +3004,144 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.post('/v1/finance/lenders/covenants/test', async (req, reply) => {
     W(req);
     try { const r = await lend.test(req.principal.orgId, body(req).month ?? lastMonth()); await audit21(req, 'finance.covenants_tested', 'organisation', null, { month: r.month, results: r.results.map((x) => ({ id: x.id, value: x.value, passed: x.passed })) }); return r; } catch (e) { return p23Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.35.0) carbon, insurance, pricing, compliance
+
+  const p24Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof carbon.CarbonError || e instanceof insure.InsuranceError || e instanceof pricing.PricingError || e instanceof comply.ComplianceError) return reply.status(e.statusCode).send({ error: e.message });
+    return p23Failed(reply, e);
+  };
+
+  app.get('/v1/finance/carbon', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-carbon-${qs(req).from ?? ''}-${qs(req).to ?? ''}`, await carbon.reportXlsx(req.principal.orgId, qs(req).from, qs(req).to));
+      return await carbon.overview(req.principal.orgId);
+    } catch (e) { return p24Failed(reply, e); }
+  });
+  app.get('/v1/finance/carbon/months/:month', async (req, reply) => {
+    R(req);
+    try { return await carbon.month(req.principal.orgId, prm(req, 'month')); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.put('/v1/finance/carbon/settings', async (req, reply) => {
+    W(req);
+    try { const r = await carbon.saveSettings(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.carbon_settings_saved', 'organisation', null, r); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/carbon/recs', async (req, reply) => {
+    W(req);
+    try { const r = await carbon.buyRec(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.rec_bought', 'rec_purchase', r.id, { registry: body(req).registry, mwh: body(req).mwh, price: body(req).price ?? 0 }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/carbon/recs/:id/retire', async (req, reply) => {
+    W(req);
+    try { const r = await carbon.retireRec(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.rec_retired', 'rec_purchase', prm(req, 'id'), { month: body(req).month }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/carbon/credits', async (req, reply) => {
+    W(req);
+    try { const r = await carbon.estimate(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.carbon_credit_estimated', 'carbon_credit', r.id, { from: body(req).from, to: body(req).to, tonnes: r.tonnes }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.put('/v1/finance/carbon/credits/:id', async (req, reply) => {
+    W(req);
+    try { const r = await carbon.updateCredit(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.carbon_credit_updated', 'carbon_credit', r.id, { status: r.status, tonnes: r.tonnes, serial: body(req).serial ?? null }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/carbon/credits/:id/sales', async (req, reply) => {
+    W(req);
+    try { const r = await carbon.sell(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.carbon_credit_sold', 'carbon_credit', r.creditId, { buyer: body(req).buyer, tonnes: body(req).tonnes, amount: body(req).amount }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/insurance', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-insurance', await insure.registerXlsx(req.principal.orgId));
+      return await insure.overview(req.principal.orgId);
+    } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/insurance/policies', async (req, reply) => {
+    W(req);
+    try { const r = await insure.savePolicy(req.principal.orgId, null, body(req), userUuid(req)); await audit21(req, 'finance.insurance_policy_saved', 'insurance_policy', r.id, { insurer: r.insurer, policyNo: r.policyNo, premium: r.premium }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.put('/v1/finance/insurance/policies/:id', async (req, reply) => {
+    W(req);
+    try { const r = await insure.savePolicy(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.insurance_policy_saved', 'insurance_policy', r.id, { insurer: r.insurer, policyNo: r.policyNo, status: r.status }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/insurance/policies/:id/renew', async (req, reply) => {
+    W(req);
+    try { const r = await insure.renew(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.insurance_policy_renewed', 'insurance_policy', prm(req, 'id'), { renewal: r.id, premium: r.premium, endOn: r.endOn }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/insurance/policies/:id/claims', async (req, reply) => {
+    W(req);
+    try { const r = await insure.claim(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.insurance_claim_reported', 'insurance_claim', r.id, { number: r.number, loss: r.loss }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/insurance/claims/:id', async (req, reply) => {
+    W(req);
+    try { const r = await insure.updateClaim(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.insurance_claim_updated', 'insurance_claim', r.id, { number: r.number, status: r.status, settled: r.settled }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/pricing', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-pricing', await pricing.analysisXlsx(req.principal.orgId, qs(req)));
+      return await pricing.analysis(req.principal.orgId, qs(req));
+    } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/pricing/what-if', async (req, reply) => {
+    R(req);
+    try { return await pricing.whatIf(req.principal.orgId, body(req)); } catch (e) { return p24Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/compliance', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-compliance', await comply.calendarXlsx(req.principal.orgId, qs(req)));
+      return await comply.overview(req.principal.orgId, qs(req));
+    } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/compliance/templates', async (req, reply) => {
+    W(req);
+    try { const r = await comply.applyTemplates(req.principal.orgId, body(req).year, userUuid(req)); await audit21(req, 'finance.compliance_templates_applied', 'organisation', null, r); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/compliance/tasks', async (req, reply) => {
+    W(req);
+    try { const r = await comply.saveTask(req.principal.orgId, null, body(req), userUuid(req)); await audit21(req, 'finance.compliance_task_saved', 'compliance_task', r.id, { title: r.title, dueOn: r.dueOn }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.get('/v1/finance/compliance/tasks/:id', async (req, reply) => {
+    R(req);
+    try { return await comply.getTask(req.principal.orgId, prm(req, 'id')); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.put('/v1/finance/compliance/tasks/:id', async (req, reply) => {
+    W(req);
+    try { const r = await comply.saveTask(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.compliance_task_saved', 'compliance_task', r.id, { title: r.title, dueOn: r.dueOn }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/compliance/tasks/:id/status', async (req, reply) => {
+    W(req);
+    try { const r = await comply.setStatus(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.compliance_task_status', 'compliance_task', r.id, { status: r.status, doneOn: r.doneOn, next: r.nextId }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/compliance/tasks/:id/evidence', { bodyLimit: 8 * 1024 * 1024 }, async (req, reply) => {
+    W(req);
+    try { const r = await comply.addEvidence(req.principal.orgId, { taskId: prm(req, 'id') }, body(req), userUuid(req)); await audit21(req, 'finance.compliance_evidence_added', 'compliance_task', prm(req, 'id'), { file: r.filename, sha256: r.sha256 }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/compliance/pbc', async (req, reply) => {
+    W(req);
+    try { const r = await comply.createPbc(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.pbc_request_created', 'pbc_request', r.id, { audit: r.audit, item: r.item }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.get('/v1/finance/compliance/pbc/:id', async (req, reply) => {
+    R(req);
+    try { return await comply.getPbc(req.principal.orgId, prm(req, 'id')); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.put('/v1/finance/compliance/pbc/:id', async (req, reply) => {
+    W(req);
+    try { const r = await comply.updatePbc(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.pbc_request_updated', 'pbc_request', r.id, { status: r.status }); return r; } catch (e) { return p24Failed(reply, e); }
+  });
+  app.post('/v1/finance/compliance/pbc/:id/evidence', { bodyLimit: 8 * 1024 * 1024 }, async (req, reply) => {
+    W(req);
+    try { const r = await comply.addEvidence(req.principal.orgId, { pbcId: prm(req, 'id') }, body(req), userUuid(req)); await audit21(req, 'finance.compliance_evidence_added', 'pbc_request', prm(req, 'id'), { file: r.filename, sha256: r.sha256 }); return created(reply, r); } catch (e) { return p24Failed(reply, e); }
+  });
+  app.get('/v1/finance/compliance/evidence/:id', async (req, reply) => {
+    R(req);
+    try {
+      const f = await comply.getEvidence(req.principal.orgId, prm(req, 'id'));
+      return reply.header('content-type', f.mime).header('content-disposition', `attachment; filename="${f.filename.replace(/"/g, '')}"`).header('x-content-type-options', 'nosniff').send(f.data);
+    } catch (e) { return p24Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

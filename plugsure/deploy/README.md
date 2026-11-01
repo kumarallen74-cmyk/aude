@@ -588,6 +588,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      the tests have figures. Route finance.stock_reorder,
      finance.revenue_findings and finance.covenant_breach
      ([FINANCE.md](FINANCE.md)).
+  28. (v1.35.0) Set the emission factors and record the RECs bought
+     (Finance → Carbon); retire them against the months they cover. Add the
+     insurance policies with their premiums (Finance → Insurance) and sync
+     the ledger's months for the amortisation. Check the sites' cost per kWh
+     or bills (Finance → Energy) so the pricing analysis has costs (Finance →
+     Pricing). Add the standard deadlines and the auditors' requests
+     (Finance → Compliance). Route finance.insurance_renewal and
+     finance.compliance_due ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

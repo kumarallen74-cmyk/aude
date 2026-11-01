@@ -42,7 +42,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'gl_account', 'gl_entry', 'gl_line', 'expense_claim', 'expense_claim_line', 'expense_receipt', 'cash_count', 'intercompany_recharge', 'intercompany_settlement', 'kpi_target', 'kpi_scorecard_send',
       'bank_feed', 'bank_match_rule', 'tax_slip', 'report_pack', 'close_signoff',
       'employee', 'payroll_run', 'payroll_line', 'credit_review', 'customer_deposit', 'capex_project', 'cash_forecast_run',
-      'stock_item', 'stock_location', 'stock_move', 'work_order', 'warranty_claim', 'revenue_finding', 'loan', 'loan_drawdown', 'loan_payment', 'covenant', 'covenant_test']]);
+      'stock_item', 'stock_location', 'stock_move', 'work_order', 'warranty_claim', 'revenue_finding', 'loan', 'loan_drawdown', 'loan_payment', 'covenant', 'covenant_test',
+      'rec_purchase', 'carbon_credit', 'carbon_credit_sale', 'insurance_policy', 'insurance_claim', 'compliance_task', 'pbc_request', 'compliance_evidence']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -142,5 +143,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     employee: 'INSERT,SELECT,UPDATE', payroll_run: 'INSERT,SELECT,UPDATE', payroll_line: 'INSERT,SELECT,UPDATE', credit_review: 'INSERT,SELECT,UPDATE', customer_deposit: 'INSERT,SELECT,UPDATE', capex_project: 'INSERT,SELECT,UPDATE', cash_forecast_run: 'INSERT,SELECT,UPDATE',
     stock_item: 'INSERT,SELECT,UPDATE', stock_location: 'INSERT,SELECT,UPDATE', stock_move: 'INSERT,SELECT,UPDATE', work_order: 'INSERT,SELECT,UPDATE', warranty_claim: 'INSERT,SELECT,UPDATE', revenue_finding: 'INSERT,SELECT,UPDATE',
     loan: 'INSERT,SELECT,UPDATE', loan_drawdown: 'INSERT,SELECT,UPDATE', loan_payment: 'INSERT,SELECT,UPDATE', covenant: 'INSERT,SELECT,UPDATE', covenant_test: 'INSERT,SELECT,UPDATE',
+    rec_purchase: 'INSERT,SELECT,UPDATE', carbon_credit: 'INSERT,SELECT,UPDATE', carbon_credit_sale: 'INSERT,SELECT,UPDATE', insurance_policy: 'INSERT,SELECT,UPDATE', insurance_claim: 'INSERT,SELECT,UPDATE',
+    compliance_task: 'INSERT,SELECT,UPDATE', pbc_request: 'INSERT,SELECT,UPDATE', compliance_evidence: 'INSERT,SELECT,UPDATE',
   });
 });

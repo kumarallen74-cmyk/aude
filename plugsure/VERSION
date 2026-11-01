@@ -1,11 +1,20 @@
 PlugSure CSMS
-Version:   1.34.0
-Package:   plugsure-v1.34.0
-Prepared:  2026-11-01  (v1.33.0 + finance phase 23 — see RELEASE-NOTES-v1.34.0.md)
+Version:   1.35.0
+Package:   plugsure-v1.35.0
+Prepared:  2026-11-01  (v1.34.0 + finance phase 24 — see RELEASE-NOTES-v1.35.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (696 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (724 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.34.0 = v1.33.0 + finance phase 23: inventory and spare parts (items, locations, receipts at the moving
+Status:    v1.35.0 = v1.34.0 + finance phase 24: carbon and green energy (RECs bought and retired against a month's
+           charging, the green share, the emissions avoided against petrol cars, carbon credits estimated, verified,
+           issued and sold, the report), insurance (policies per site or charger with the premium prepaid and spread over
+           the term, renewal alerts, claims with the excess and what was recovered), pricing profitability (margin by
+           tariff, connector type, time band and site, the price elasticity observed, a what-if) and the compliance
+           calendar (statutory and audit deadlines with owners, recurrence, reminders and evidence files, the standard
+           Indonesian deadlines, the auditor's PBC list). Migration 103 (additive).
+
+v1.34.0 (2026-11-01):
+           v1.34.0 = v1.33.0 + finance phase 23: inventory and spare parts (items, locations, receipts at the moving
            average cost, issues to work orders, transfers, counts, reorder alerts, the inventory journal through goods
            received not invoiced), maintenance costs (work orders with labour, parts and contractor bills, accruals until
            billed, warranty claims, cost per charger and per kWh), revenue assurance (sessions not billed, billed at zero,

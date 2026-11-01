@@ -6,6 +6,7 @@ import { gate, type Approver } from './finance-approvals.js';
 import { accountsFor, periodOf } from './finance.js';
 import { journal as gatewayJournal } from './finance-journal.js';
 import { xlsx } from './xlsx.js';
+import { monthShare } from './insurance.js';
 
 /**
  * The general ledger (v1.31.0). One ledger for the organisation, from every finance module's journal and manual
@@ -39,7 +40,7 @@ export class LedgerError extends Error {
 
 export const TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense', 'other'] as const;
 type AccountType = typeof TYPES[number];
-export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans'] as const;
+export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance'] as const;
 type Source = typeof SOURCES[number];
 
 export const SEED: Array<[string, string, AccountType]> = [
@@ -62,6 +63,8 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['6400', 'Depreciation expense', 'expense'], ['6410', 'Depreciation, right-of-use assets', 'expense'], ['6420', 'Lease expense (short-term and low-value)', 'expense'],
   ['6500', 'Bad-debt expense', 'expense'], ['6900', 'Intercompany recharge expense', 'expense'],
   ['7100', 'Gain on disposal', 'other'], ['7200', 'Interest on lease liabilities', 'other'], ['7300', 'Interest income', 'other'], ['8100', 'Loss on disposal', 'other'], ['8200', 'Deposit penalties', 'other'], ['8300', 'Capex written off', 'other'], ['7210', 'Interest on loans', 'other'], ['7215', 'Loan fees', 'other'],
+  ['1450', 'Prepaid insurance', 'asset'], ['1750', 'Renewable energy certificates', 'asset'], ['4300', 'Carbon credit sales', 'revenue'], ['5150', 'Renewable energy certificates retired', 'expense'],
+  ['6600', 'Insurance', 'expense'], ['6605', 'Insurance recoveries', 'expense'],
 ];
 export const BILL_ACCOUNT: Record<string, string> = { energy: '5100', maintenance: '6200', rent: '6210', installation: '6220', equipment: '6230', connectivity: '6240', services: '6250', other: '6290' };
 /** (v1.32.0) The payable a bill's withholding is posted to, by kind. */
@@ -357,6 +360,36 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
     L.push({ account: p.kind === 'cash' ? '1050' : '1100', debit: 0, credit: tot, description: d });
   }
   for (const [c, L] of Object.entries(lnLines)) add('loans', c, `Loans, ${month}`, L);
+  // (v1.35.0) Carbon: RECs bought (Dr 1750) and retired against the month (Dr 5150); carbon credits sold (Cr 4300).
+  const cbLines: Record<string, Line[]> = {};
+  const bank = (kind: string | null) => (kind === 'cash' ? '1050' : '1100');
+  for (const r of await Q(`SELECT r.*, to_char(r.bought_on, 'YYYY-MM') AS bm, a.kind FROM rec_purchase r LEFT JOIN cash_account a ON a.id = r.cash_account_id WHERE r.org_id = $1 AND r.voided_at IS NULL AND (to_char(r.bought_on, 'YYYY-MM') = $2 OR r.retired_month = $2)`, [orgId, month])) {
+    const L = (cbLines[r.currency] ??= []), v = Number(r.price_minor), d = `REC ${r.registry} ${r.vintage}${r.reference ? ` ${r.reference}` : ''}`;
+    if (!v) continue;
+    if (r.bm === month)
+      L.push({ account: '1750', debit: v, credit: 0, description: `${d} bought` }, { account: bank(r.kind), debit: 0, credit: v, description: `${d} bought` });
+    if (r.retired_month === month) L.push({ account: '5150', debit: v, credit: 0, description: `${d} retired` }, { account: '1750', debit: 0, credit: v, description: `${d} retired` });
+  }
+  for (const x of await Q(`SELECT x.*, a.kind FROM carbon_credit_sale x LEFT JOIN cash_account a ON a.id = x.cash_account_id WHERE x.org_id = $1 AND x.voided_at IS NULL AND to_char(x.sold_on, 'YYYY-MM') = $2`, [orgId, month])) {
+    const L = (cbLines[x.currency] ??= []), v = Number(x.amount_minor), d = `Carbon credits ${Number(x.tonnes)} t to ${x.buyer}`;
+    if (v) L.push({ account: bank(x.kind), debit: v, credit: 0, description: d }, { account: '4300', debit: 0, credit: v, description: d });
+  }
+  for (const [c, L] of Object.entries(cbLines)) add('carbon', c, `Carbon, ${month}`, L);
+  // (v1.35.0) Insurance: premiums paid (Dr 1450 prepaid), the month's share of each paid premium (Dr 6600), claims paid (Cr 6605).
+  const inLines: Record<string, Line[]> = {};
+  for (const p of await Q(`SELECT p.*, to_char(p.start_on, 'YYYY-MM-DD') AS s, to_char(p.end_on, 'YYYY-MM-DD') AS e, to_char(p.paid_on, 'YYYY-MM') AS pm, a.kind FROM insurance_policy p LEFT JOIN cash_account a ON a.id = p.cash_account_id
+      WHERE p.org_id = $1 AND p.status = 'active' AND p.paid_on IS NOT NULL AND p.premium_minor > 0 AND (to_char(p.paid_on, 'YYYY-MM') = $2 OR (to_char(p.start_on, 'YYYY-MM') <= $2 AND to_char(p.end_on - 1, 'YYYY-MM') >= $2))`, [orgId, month])) {
+    const L = (inLines[p.currency] ??= []), v = Number(p.premium_minor), d = `${p.insurer} ${p.policy_no}`;
+    if (p.pm === month) L.push({ account: '1450', debit: v, credit: 0, description: `${d} premium paid` }, { account: bank(p.kind), debit: 0, credit: v, description: `${d} premium paid` });
+    const share = monthShare(v, p.s, p.e, month);
+    if (share) L.push({ account: '6600', debit: share, credit: 0, description: `${d} ${month}` }, { account: '1450', debit: 0, credit: share, description: `${d} ${month}` });
+  }
+  for (const c of await Q(`SELECT c.number, c.settled_minor, p.currency, p.insurer, a.kind FROM insurance_claim c JOIN insurance_policy p ON p.id = c.policy_id LEFT JOIN cash_account a ON a.id = p.cash_account_id
+      WHERE c.org_id = $1 AND c.status IN ('paid', 'closed') AND c.settled_minor > 0 AND to_char(c.paid_on, 'YYYY-MM') = $2`, [orgId, month])) {
+    const L = (inLines[c.currency] ??= []), v = Number(c.settled_minor), d = `Claim ${c.number} ${c.insurer}`;
+    L.push({ account: bank(c.kind), debit: v, credit: 0, description: d }, { account: '6605', debit: 0, credit: v, description: d });
+  }
+  for (const [c, L] of Object.entries(inLines)) add('insurance', c, `Insurance, ${month}`, L);
   return out.filter((d) => balanced(d.lines));
 }
 

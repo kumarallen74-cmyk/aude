@@ -917,6 +917,52 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   (critical), less than 10% headroom a warning. The lender pack (PDF and
   Excel) has the results, the covenant tests and the schedules.
 
+## Carbon, insurance, pricing and compliance (v1.35.0)
+
+- **Carbon** (tab). RECs (renewable energy certificates, 1 MWh each) bought
+  for a site or the portfolio are retired against the month of charging
+  they cover; the green share is the MWh retired over the MWh charged (the
+  portfolio's RECs shared by the sites' energy). The emissions avoided are
+  what petrol cars would have emitted for the same distance (iceKgPerKwh,
+  default 0.7 kg CO2e per kWh) less the grid's emissions for the energy not
+  covered (gridKgPerKwh, default 0.8); set both for your grid. Carbon
+  credits are estimated from a period's avoided emissions, then verified
+  and issued (with the registry serial) and sold up to what is left. The
+  ledger: RECs bought Dr 1750 / Cr bank, retired Dr 5150 / Cr 1750; credits
+  sold Dr bank / Cr 4300. The report (Excel) has the months, RECs, credits
+  and sales.
+- **Insurance** (tab). Policies per site, charger or the organisation with
+  cover, premium, excess and term. A paid premium is prepaid (Dr 1450 / Cr
+  bank) and spread over the term by days (Dr 6600 / Cr 1450 each month);
+  sync the months. A policy ending within 30 days and not renewed raises
+  finance.insurance_renewal (critical once ended); renewing copies it to
+  the next term. Claims (CL-00001…) move reported → submitted → accepted
+  or rejected → paid → closed; the settlement is at most the loss less the
+  excess and posts Dr bank / Cr 6605. The recovery rate is settled over
+  loss.
+- **Pricing** (tab). The last 1 to 12 whole months by tariff (the name on
+  the charge record), connector type, time band (night 22–06, day 06–17,
+  peak 17–22, the PLN peak hours) and site: revenue before tax, energy cost
+  (the site's bill spread over the kWh delivered, else its cost per kWh),
+  margin and the price and cost per kWh. kWh without a known cost are shown
+  as not costed. Where a site's price per kWh moved by 5% or more from one
+  month to the next, the change in kWh per day over the change in price is
+  an elasticity observation; the median is used for the what-if once there
+  are three or more (kept within −3 and 0; −0.3 until then), which gives the volume, revenue, cost and margin after a
+  price change on any row.
+- **Compliance** (tab). Deadlines other than tax: financial statements,
+  regulators, licences, corporate, audit. Each has an owner, a due date,
+  a recurrence and a reminder window: finance.compliance_due from that many
+  days ahead, critical once overdue, resolved when done or waived (a waiver
+  needs a note). Done on a recurring deadline creates the next one, with the
+  quarter or year in the title moved on. *Add the standard deadlines*
+  adds a year's LKPM (BKPM), WLKP (Kemnaker), charging-station report
+  (ESDM), audited financial statements and annual GMS once each: check the
+  dates with your advisers. Evidence files (PDF, PNG, JPEG, XLSX, DOCX or
+  CSV, up to 5 MB, the type checked against the file's first bytes, a
+  SHA-256 kept) attach to a deadline or to an auditor's request. The PBC
+  list: requested → in progress → provided (a file needed) → accepted.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of
