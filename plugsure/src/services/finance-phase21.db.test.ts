@@ -139,7 +139,7 @@ dbDescribe('Bank feeds and match rules', () => {
     assert.equal(seen.at(-1)!.from, `${m}-01`, 'from the start date');
     const r2 = (await call('POST', `/v1/finance/bank-feeds/${feed.id}/run`)).json();
     assert.deepEqual({ a: r2.added, d: r2.duplicates }, { a: 0, d: 3 }, 'nothing new');
-    assert.equal(seen.at(-1)!.from < `${m}-30`, true, 'from a few days before the last line');
+    assert.equal((seen.at(-1)!.from ?? '') < `${m}-30`, true, 'from a few days before the last line');
 
     const lines = await many<any>(`SELECT description, matched_kind, matched_ref, note FROM bank_statement_line WHERE org_id = $1 ORDER BY id`, [org]);
     assert.deepEqual(lines.map((l) => l.matched_kind), ['ignored', 'gl_entry', null]);
