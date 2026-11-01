@@ -92,6 +92,10 @@ import * as statutory from '../services/statutory.js';
 import * as corpTax from '../services/corporate-tax.js';
 import * as payRuns from '../services/payment-runs.js';
 import * as cards from '../services/corporate-cards.js';
+import * as contracts from '../services/revenue-contracts.js';
+import * as icNet from '../services/ic-netting.js';
+import * as dq from '../services/data-quality.js';
+import * as scenarios from '../services/scenarios.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -3589,6 +3593,112 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.put('/v1/finance/cards/:id/statements', async (req, reply) => {
     W(req);
     try { const r = await cards.saveStatement(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.card_statement_saved', 'corp_card', prm(req, 'id'), { month: r.month, total: r.total, difference: r.difference, paidOn: r.paidOn }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.40.0) contracts, intercompany netting and TP, data quality, scenarios
+
+  const p29Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof contracts.ContractError || e instanceof icNet.NettingError || e instanceof dq.DataQualityError || e instanceof scenarios.ScenarioError) return reply.status(e.statusCode).send({ error: e.message });
+    return p28Failed(reply, e);
+  };
+
+  app.get('/v1/finance/contracts', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-contracts', await contracts.reportXlsx(req.principal.orgId));
+      return await contracts.list(req.principal.orgId);
+    } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/contracts', async (req, reply) => {
+    W(req);
+    try { const r = await contracts.create(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.contract_created', 'customer_contract', r.id, { number: r.number, customer: r.customer, value: r.value }); return created(reply, r); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.get('/v1/finance/contracts/:id', async (req, reply) => {
+    R(req);
+    try { return await contracts.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.put('/v1/finance/contracts/:id', async (req, reply) => {
+    W(req);
+    try { const r = await contracts.update(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.contract_updated', 'customer_contract', r.id, { status: r.status, endOn: r.endOn }); return r; } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/contracts/:id/obligations', async (req, reply) => {
+    W(req);
+    try { const o = await contracts.addObligation(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.contract_obligation_added', 'customer_contract', prm(req, 'id'), { obligation: o.id, amount: body(req).amount, recognition: body(req).recognition }); return created(reply, await contracts.get(req.principal.orgId, prm(req, 'id'))); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.put('/v1/finance/contracts/:id/obligations/:oid', async (req, reply) => {
+    W(req);
+    try { const r = await contracts.updateObligation(req.principal.orgId, prm(req, 'id'), prm(req, 'oid'), body(req)); await audit21(req, 'finance.contract_obligation_updated', 'customer_contract', r.id, { obligation: prm(req, 'oid'), ...body(req) }); return r; } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/contracts/:id/billings', async (req, reply) => {
+    W(req);
+    try { const b = await contracts.addBilling(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.contract_billed', 'customer_contract', prm(req, 'id'), { billing: b.id, amount: body(req).amount }); return created(reply, await contracts.get(req.principal.orgId, prm(req, 'id'))); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/contracts/:id/billings/:bid/paid', async (req, reply) => {
+    W(req);
+    try { const r = await contracts.payBilling(req.principal.orgId, prm(req, 'id'), prm(req, 'bid'), body(req)); await audit21(req, 'finance.contract_billing_paid', 'customer_contract', r.id, { billing: prm(req, 'bid'), paidOn: body(req).paidOn }); return r; } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/contracts/:id/billings/:bid/void', async (req, reply) => {
+    W(req);
+    try { const r = await contracts.voidBilling(req.principal.orgId, prm(req, 'id'), prm(req, 'bid')); await audit21(req, 'finance.contract_billing_voided', 'customer_contract', r.id, { billing: prm(req, 'bid') }); return r; } catch (e) { return p29Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/intercompany/netting', async (req, reply) => {
+    R(req);
+    try { return await icNet.netting(req.principal.orgId, qs(req)); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/intercompany/netting/settle', async (req, reply) => {
+    W(req);
+    try {
+      if (!canApprove(req)) return reply.status(403).send({ error: 'A Finance Manager (finance:approve) runs the group netting.' });
+      const r = await icNet.settleAll(req.principal.orgId, body(req), userUuid(req));
+      await audit21(req, 'finance.intercompany_netting_settled', 'organisation', null, { currency: r.currency, settlements: r.settlements.length, transfers: r.transfers });
+      return r;
+    } catch (e) { return p29Failed(reply, e); }
+  });
+  app.get('/v1/finance/intercompany/transfer-pricing', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-transfer-pricing-${qs(req).year ?? ''}`, await icNet.workpaper(req.principal.orgId, qs(req).year));
+      const [p, c] = await Promise.all([icNet.policies(req.principal.orgId), icNet.tpCheck(req.principal.orgId, qs(req).year)]);
+      return { ...p, ...c };
+    } catch (e) { return p29Failed(reply, e); }
+  });
+  app.put('/v1/finance/intercompany/transfer-pricing/policies', async (req, reply) => {
+    W(req);
+    try { const r = await icNet.savePolicy(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.tp_policy_saved', 'organisation', null, body(req)); return r; } catch (e) { return p29Failed(reply, e); }
+  });
+  app.put('/v1/finance/intercompany/recharges/:id/tp', async (req, reply) => {
+    W(req);
+    try { const r = await icNet.setRechargeTp(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.recharge_tp_set', 'intercompany_recharge', r.id, r); return r; } catch (e) { return p29Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/data-quality', async (req, reply) => {
+    R(req);
+    try { return await dq.overview(req.principal.orgId); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/data-quality/run', async (req, reply) => {
+    W(req);
+    try { return created(reply, await dq.run(req.principal.orgId, userUuid(req))); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.get('/v1/finance/history', async (req, reply) => {
+    R(req);
+    try { return await dq.history(req.principal.orgId, qs(req).targetType, qs(req).targetId); } catch (e) { return p29Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/scenarios', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-scenarios', await scenarios.compareXlsx(req.principal.orgId, qs(req)));
+      return await scenarios.compare(req.principal.orgId, qs(req));
+    } catch (e) { return p29Failed(reply, e); }
+  });
+  app.post('/v1/finance/scenarios', async (req, reply) => {
+    W(req);
+    try { const r = await scenarios.create(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.scenario_created', 'finance_scenario', r.id, { name: r.name, assumptions: r.assumptions }); return created(reply, r); } catch (e) { return p29Failed(reply, e); }
+  });
+  app.put('/v1/finance/scenarios/:id', async (req, reply) => {
+    W(req);
+    try { const r = await scenarios.update(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.scenario_updated', 'finance_scenario', prm(req, 'id'), body(req)); return r; } catch (e) { return p29Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

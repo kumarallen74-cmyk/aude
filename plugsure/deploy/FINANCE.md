@@ -1152,6 +1152,52 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   transactions, and its payment. The cards journal books each month's
   spending by category against 2165 corporate cards payable.
 
+## Contracts, netting and transfer pricing, data quality and scenarios (v1.40.0)
+
+- **Contracts** (tab). Contracts beyond pay-per-charge (a fleet's
+  charging-as-a-service, a B2B site with hardware and a service plan), PSAK
+  72 / IFRS 15: the price allocated to each performance obligation by the
+  operator; a subscription or service recognised ratably over its months
+  (the last month takes the rounding), hardware or installation when
+  delivered. Billings and their payments. Billed ahead of recognition is a
+  contract liability (deferred revenue), recognised ahead is a contract
+  asset; the remaining performance obligations are what is not yet
+  recognised. The ledger's contracts journal: billed Dr 1370 / Cr 2280;
+  recognised Dr 2280 / Cr 4500; paid Dr bank / Cr 1370.
+  finance.contract_renewal_due within each contract's notice (60 days by
+  default; critical from 14), resolved when renewed or ended.
+- **Netting & TP** (tab). For a group: every issued, unsettled recharge
+  between any two entities, per currency; each pair's net and each
+  entity's position; with the parent as the netting centre, one transfer
+  per entity instead of one per pair. A Finance Manager at the parent
+  settles the netting (every pair's recharges, as the bilateral
+  settlement). Transfer pricing: the parent's policy per kind (management
+  fee, shared services, IT services, energy resale, equipment rental,
+  other): cost plus with a mark-up range, pass-through at cost, or a
+  comparable uncontrolled price. The charging entity gives each recharge
+  its kind and the cost underneath; the check shows its mark-up in or out
+  of range. The workpaper (Excel) supports the transfer-pricing
+  documentation.
+- **Data quality** (tab). Daily and on demand: posted entries that do not
+  balance, accounts outside the chart, entries posted after the month was
+  locked, drafts waiting over 30 days; suppliers that look like duplicates
+  (the name without PT/CV/Tbk, the NPWP, or the bank account) or bill
+  without an NPWP or bank account; fleet accounts invoiced without a tax
+  id; energy, maintenance and rent bills without a site; bank accounts
+  without a balance in 35 days. The score is 100 less a weight per finding
+  (each check capped); finance.data_quality_low under 70. Each finding
+  opens the record's change history from the audit trail.
+- **Scenarios** (tab). Twelve months from the rolling forecast held flat,
+  the last twelve months' running costs (expenses other than energy and
+  depreciation), today's cash and the debt service. A scenario changes the
+  tariff (with an optional elasticity of volume), utilisation, the energy
+  price and running costs, and adds sites (from a month: count, capex
+  each, revenue and running costs a month at maturity, a ramp). Per month:
+  revenue, energy, running costs, EBITDA, capex, debt service, net cash
+  and cash; the lowest cash and the runway; each covenant tested on the
+  scenario's EBITDA and lowest cash. The sensitivity shows the twelve-month
+  EBITDA when each driver moves ±10 points.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.39.0 (1 November 2026), the current release:** finance phase 28: statutory financial statements with a reconciled cash flow, corporate income tax and deferred tax from the books, supplier payment runs with a bank file and two-person approval, and corporate cards with a spend policy. Notes: [`RELEASE-NOTES-v1.39.0.md`](RELEASE-NOTES-v1.39.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.40.0 (1 November 2026), the current release:** finance phase 29: customer contracts with PSAK 72 revenue recognition, group netting and transfer pricing, finance data quality with a score and record history, and scenario planning with cash runway, covenants and sensitivity. Notes: [`RELEASE-NOTES-v1.40.0.md`](RELEASE-NOTES-v1.40.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.39.0 (1 November 2026):** finance phase 28: statutory financial statements with a reconciled cash flow, corporate income tax and deferred tax from the books, supplier payment runs with a bank file and two-person approval, and corporate cards with a spend policy. Notes: [`RELEASE-NOTES-v1.39.0.md`](RELEASE-NOTES-v1.39.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.38.0 (1 November 2026):** finance phase 27: owner and partner finance in the owner portal and across owners, treasury FX exposure and hedges settled to the ledger, procurement analytics with supplier scorecards and a savings register, and close automation with step owners, due days and the days-to-close trend. Notes: [`RELEASE-NOTES-v1.38.0.md`](RELEASE-NOTES-v1.38.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

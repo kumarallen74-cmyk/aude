@@ -3858,6 +3858,193 @@ async function cardsSection(host, canWrite, month) {
     actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; try { const s = await api(`/v1/finance/cards/${c.id}/statements`, { method: 'PUT', body: { month: v('m'), total: Number(v('t')), paidOn: v('p') || undefined } }); toast(s.difference ? `Differs from the transactions by ${fmt.money(s.difference, c.currency)}` : 'Matches the transactions', s.difference ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }); }));
 }
 
+// ─────────────────────────────────────────── (v1.40.0) customer contracts
+
+const CT_ST = { draft: ['t-mute', 'draft'], active: ['t-ok', 'active'], ended: ['t-mute', 'ended'], cancelled: ['t-crit', 'cancelled'] };
+
+async function contractsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, accts;
+  try { [d, accts] = await Promise.all([api('/v1/finance/contracts'), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => contractsSection(host, canWrite);
+  const t0 = Object.entries(d.totals)[0];
+  const m = (v, c) => esc(fmt.money(v, c));
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-ctn>${icon('plus')} New contract</button>` : ''}<button class="btn" type="button" data-ctxl>${icon('download')} Excel</button></div>
+    ${callout('info', 'Contracts beyond pay-per-charge (a fleet\'s charging-as-a-service, a site with hardware and a service plan), recognised under PSAK 72: each obligation ratably over its months or when delivered. Billed ahead is a contract liability (deferred revenue); recognised ahead, a contract asset. The ledger\'s contracts journal books both.')}
+    <div class="grid k4 section">${t0 ? `${kpi(`Contract value · ${esc(t0[0])}`, m(t0[1].value, t0[0]), `${t0[1].active} active`)}${kpi('Recognised', m(t0[1].recognised, t0[0]), `remaining ${m(t0[1].remaining, t0[0])}`)}${kpi('Contract liability', m(t0[1].contractLiability, t0[0]), `asset ${m(t0[1].contractAsset, t0[0])}`)}${kpi('Renewals due', String(d.renewalsDue), 'within their notice', d.renewalsDue ? 'warn' : '')}` : kpi('Contracts', '0', 'none yet')}</div>
+    <div class="card section"><header><h3>Contracts</h3></header><div data-ctl></div></div>`;
+  table($('[data-ctl]', el), { columns: [
+    { label: 'Contract', render: (c) => `<b class="mono">${esc(c.number)}</b> ${esc(c.customer)}<div class="cell-sub">${esc(c.startOn)} – ${esc(c.endOn)}${c.renewalDue ? ` · ${tag('t-warn', `renewal: ${c.daysToEnd} days`)}` : ''}</div>` },
+    { label: 'Value', num: true, render: (c) => m(c.value, c.currency) },
+    { label: 'Recognised', num: true, render: (c) => `${m(c.recognised, c.currency)}<div class="cell-sub">${c.value ? Math.round((c.recognised / c.value) * 100) : 0}%</div>` },
+    { label: 'Billed / paid', num: true, render: (c) => `${m(c.billed, c.currency)}<div class="cell-sub">paid ${m(c.paid, c.currency)}</div>` },
+    { label: 'Deferred / accrued', num: true, render: (c) => (c.contractLiability ? `${m(c.contractLiability, c.currency)}<div class="cell-sub">liability</div>` : c.contractAsset ? `${m(c.contractAsset, c.currency)}<div class="cell-sub">asset</div>` : '—') },
+    { label: 'Status', render: (c) => tag(...CT_ST[c.status]) },
+    { label: '', render: (c) => `<button ${BTN} data-cto="${c.id}">Open</button>` },
+  ], rows: d.contracts, empty: 'No contracts yet.' });
+  $('[data-ctxl]', el).addEventListener('click', () => fetchFile('/v1/finance/contracts?format=xlsx', 'plugsure-contracts.xlsx'));
+  $('[data-ctn]', el)?.addEventListener('click', () => modal({ title: 'New contract', body: `<div class="form">${field('Customer', '<input name="c" maxlength="160">')}${field('Currency', `<input name="cu" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Start', `<input name="s" type="date" value="${zonedYmd()}">`)}${field('End', '<input name="e" type="date">')}${field('Subscription or service (ratably)', '<input name="sub" type="number" min="0" placeholder="its share of the price">', { opt: true })}${field('Hardware or installation (when delivered)', '<input name="hw" type="number" min="0">', { opt: true })}${field('Renewal notice (days)', '<input name="n" type="number" min="0" max="365" value="60">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Create', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value.trim(); const obligations = [v('sub') && { description: 'Charging service', kind: 'subscription', amount: Number(v('sub')), recognition: 'ratably' }, v('hw') && { description: 'Hardware', kind: 'hardware', amount: Number(v('hw')), recognition: 'point_in_time' }].filter(Boolean); try { const c = await api('/v1/finance/contracts', { method: 'POST', body: { customer: v('c'), currency: v('cu').toUpperCase(), startOn: v('s'), endOn: v('e'), renewalNoticeDays: Number(v('n')), obligations } }); reload(); open(c.id); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  const banks = (accts.accounts ?? []).filter((a) => !a.archived);
+  const open = async (id) => {
+    let c;
+    try { c = await api(`/v1/finance/contracts/${id}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const mm = (v) => esc(fmt.money(v, c.currency));
+    drawer({ title: `${c.number} · ${c.customer}`, subtitle: esc(`${c.startOn} – ${c.endOn} · ${c.status}`), tabs: [
+      { id: 'o', label: 'Obligations', render(body, ctx) {
+        const act = async (fn) => { try { await fn(); ctx.close(); reload(); open(id); } catch (err) { toast(err.message, 'crit'); } };
+        body.innerHTML = `<div class="grid k3">${kpi('Value', mm(c.value), `${c.obligations.length} obligation${c.obligations.length === 1 ? '' : 's'}`)}${kpi('Recognised', mm(c.recognised), `remaining ${mm(c.remaining)}`)}${kpi(c.contractAsset ? 'Contract asset' : 'Contract liability', mm(c.contractAsset || c.contractLiability), `billed ${mm(c.billed)}`)}</div><div data-ob></div>
+          <div class="card section"><header><h3>Billings</h3></header><div data-bl></div></div>
+          ${canWrite ? `<div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap"><button ${BTN} data-a="ob">Add obligation</button><button ${BTN} data-a="bill">Record billing</button>${c.status === 'active' ? `<button ${BTN} data-a="renew">Renew (extend)</button><button ${BTN} data-a="end">End</button>` : ''}</div>` : ''}`;
+        table($('[data-ob]', body), { columns: [
+          { label: 'Obligation', render: (o) => `<b>${esc(o.description)}</b> <span class="cell-sub">${esc(o.kind)}</span><div class="cell-sub">${o.recognition === 'ratably' ? `ratably ${esc(o.startMonth)} – ${esc(o.endMonth)}` : o.deliveredOn ? `delivered ${esc(o.deliveredOn)}` : 'when delivered'}</div>` },
+          { label: 'Amount', num: true, render: (o) => mm(o.amount) },
+          { label: '', render: (o) => (canWrite && o.recognition === 'point_in_time' && !o.deliveredOn ? `<button ${BTN} data-dl="${o.id}">Delivered</button>` : '') },
+        ], rows: c.obligations, empty: 'No obligations: allocate the price to what is promised.' });
+        table($('[data-bl]', body), { columns: [
+          { label: 'Billed', render: (b) => `${esc(b.billedOn)}<div class="cell-sub">${esc(b.reference ?? '')}</div>` }, { label: 'Amount', num: true, render: (b) => mm(b.amount) },
+          { label: 'Paid', render: (b) => (b.paidOn ? esc(b.paidOn) : canWrite ? `<button ${BTN} data-pd="${b.id}">Paid</button> <button ${BTN} data-bv="${b.id}">Void</button>` : '—') },
+        ], rows: c.billings, empty: 'Nothing billed.' });
+        $$('[data-dl]', body).forEach((b) => b.addEventListener('click', () => act(() => api(`/v1/finance/contracts/${id}/obligations/${b.dataset.dl}`, { method: 'PUT', body: { deliveredOn: zonedYmd() } }))));
+        $$('[data-bv]', body).forEach((b) => b.addEventListener('click', () => act(() => api(`/v1/finance/contracts/${id}/billings/${b.dataset.bv}/void`, { method: 'POST' }))));
+        $$('[data-pd]', body).forEach((b) => b.addEventListener('click', () => modal({ title: 'Billing paid', body: `<div class="form">${field('Paid on', `<input name="p" type="date" value="${zonedYmd()}">`)}${field('Into', `<select name="a">${banks.filter((a) => a.currency === c.currency).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>`)}</div>`, actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { await act(() => api(`/v1/finance/contracts/${id}/billings/${b.dataset.pd}/paid`, { method: 'POST', body: { paidOn: $('[name="p"]', mc.el).value, cashAccountId: $('[name="a"]', mc.el).value } })); } }] })));
+        $$('[data-a]', body).forEach((b) => b.addEventListener('click', () => {
+          const a = b.dataset.a;
+          if (a === 'end') return act(() => api(`/v1/finance/contracts/${id}`, { method: 'PUT', body: { status: 'ended' } }));
+          if (a === 'renew') return modal({ title: 'Renew the contract', body: `<div class="form">${field('New end', '<input name="e" type="date">')}</div>`, actions: [{ label: 'Cancel' }, { label: 'Renew', kind: 'primary', async onClick(mc) { await act(() => api(`/v1/finance/contracts/${id}`, { method: 'PUT', body: { endOn: $('[name="e"]', mc.el).value } })); } }] });
+          if (a === 'bill') return modal({ title: 'Record a billing', body: `<div class="form">${field('Billed on', `<input name="d" type="date" value="${zonedYmd()}">`)}${field('Amount', '<input name="a" type="number" min="1">')}${field('Invoice number', '<input name="r" maxlength="80">', { opt: true })}</div>`, actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; await act(() => api(`/v1/finance/contracts/${id}/billings`, { method: 'POST', body: { billedOn: v('d'), amount: Number(v('a')), reference: v('r') || undefined } })); } }] });
+          modal({ title: 'Add an obligation', body: `<div class="form">${field('Description', '<input name="d" maxlength="300">')}${field('Kind', `<select name="k">${['subscription', 'service', 'hardware', 'installation', 'other'].map((x) => `<option>${x}</option>`).join('')}</select>`)}${field('Share of the price', '<input name="a" type="number" min="0">')}${field('Recognised', '<select name="r"><option value="ratably">Ratably over months</option><option value="point_in_time">When delivered</option></select>')}${field('From month', `<input name="s" type="month" value="${esc(c.startOn.slice(0, 7))}">`, { opt: true })}${field('To month', `<input name="e" type="month" value="${esc(c.endOn.slice(0, 7))}">`, { opt: true })}</div>`,
+            actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; await act(() => api(`/v1/finance/contracts/${id}/obligations`, { method: 'POST', body: { description: v('d'), kind: v('k'), amount: Number(v('a')), recognition: v('r'), startMonth: v('r') === 'ratably' ? v('s') : undefined, endMonth: v('r') === 'ratably' ? v('e') : undefined } })); } }] });
+        }));
+      } },
+      { id: 's', label: 'Schedule', render(body) { table(body, { columns: [
+        { label: 'Month', render: (x) => esc(x.month) }, { label: 'Recognised', num: true, render: (x) => mm(x.recognised) }, { label: 'Billed', num: true, render: (x) => (x.billed ? mm(x.billed) : '—') },
+        { label: 'Liability', num: true, render: (x) => (x.contractLiability ? mm(x.contractLiability) : '—') }, { label: 'Asset', num: true, render: (x) => (x.contractAsset ? mm(x.contractAsset) : '—') },
+      ], rows: c.schedule, empty: '' }); } },
+    ] });
+  };
+  el.querySelectorAll('[data-cto]').forEach((b) => b.addEventListener('click', () => open(b.dataset.cto)));
+}
+
+// ─────────────────────────────────────────── (v1.40.0) intercompany netting and transfer pricing
+
+const TP_ST = { ok: ['t-ok', 'in range'], below: ['t-warn', 'below range'], above: ['t-warn', 'above range'], no_cost: ['t-warn', 'no cost'], unclassified: ['t-mute', 'unclassified'] };
+const TP_KIND = ['management_fee', 'shared_services', 'it_services', 'energy_resale', 'equipment_rental', 'other'];
+
+async function nettingSection(host, canWrite, year) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  const y = year ?? new Date().getFullYear();
+  let n, tp;
+  try { [n, tp] = await Promise.all([api('/v1/finance/intercompany/netting'), api(`/v1/finance/intercompany/transfer-pricing?year=${y}`)]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => nettingSection(host, canWrite, y);
+  const canNet = state.can('finance:approve') && n.group.find((g) => g.me)?.parent;
+  el.innerHTML = `${n.group.length < 2 ? callout('info', 'This organisation has no group entities: netting and transfer pricing apply to a parent and its subsidiaries (Finance → Group).') : callout('info', `Recharges between ${esc(n.group.map((g) => g.name).join(', '))}, netted through ${esc(n.parent)} as the netting centre: each entity pays or receives its net once, instead of every pair settling.`)}
+    <div data-nc></div>
+    <div class="filters" style="margin-top:12px">${field('Transfer pricing · year', `<select data-tpy>${[0, 1, 2].map((k) => `<option${y === new Date().getFullYear() - k ? ' selected' : ''}>${new Date().getFullYear() - k}</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px">${tp.canEdit && canWrite ? `<button class="btn" type="button" data-tpp>Policy</button>` : ''}<button class="btn" type="button" data-tpx>${icon('download')} Workpaper</button></div></div>
+    <div class="grid k4 section">${kpi('Recharges', String(tp.summary.total), `${y}`)}${kpi('In range', String(tp.summary.ok), 'of the policy')}${kpi('Out of range', String(tp.summary.below + tp.summary.above), `${tp.summary.noCost} without a cost`, tp.summary.below + tp.summary.above ? 'warn' : '')}${kpi('Unclassified', String(tp.summary.unclassified), 'no kind or no policy', tp.summary.unclassified ? 'warn' : '')}</div>
+    <div class="card section"><header><h3>Policy</h3></header><div data-tpl></div></div>
+    <div class="card section"><header><h3>Recharges against the policy</h3></header><div data-tpi></div></div>`;
+  const nc = $('[data-nc]', el);
+  nc.innerHTML = n.currencies.map((c, i) => `<div class="card section"><header><h3>Open recharges · ${esc(c.currency)}</h3>${canNet && canWrite ? `<button class="btn sm right" type="button" data-nset="${esc(c.currency)}">Settle the netting</button>` : ''}</header><div class="body"><div class="grid k3">${kpi('Gross', esc(fmt.money(c.gross, c.currency)), `${c.bilateral.reduce((a, b) => a + b.recharges, 0)} recharges`)}${kpi('Transfers', `${c.transfers.length}`, `instead of ${c.bilateralTransfers} between pairs`)}${kpi('Settled by netting', esc(fmt.money(c.settledByNetting, c.currency)), 'no cash moves')}</div></div><div data-np="${i}"></div><div data-nt="${i}"></div></div>`).join('') || '<p class="cell-sub">Nothing issued and open between the group\'s entities.</p>';
+  n.currencies.forEach((c, i) => {
+    table($(`[data-np="${i}"]`, nc), { columns: [{ label: 'Entity', render: (p) => esc(p.name) }, { label: 'Net position', num: true, render: (p) => `${esc(fmt.money(p.net, c.currency))}<div class="cell-sub">${p.net > 0 ? 'receives' : p.net < 0 ? 'pays' : 'even'}</div>` }], rows: c.positions, empty: '' });
+    table($(`[data-nt="${i}"]`, nc), { columns: [{ label: 'Transfer', render: (t) => `${esc(t.fromName)} → ${esc(t.toName)}` }, { label: 'Amount', num: true, render: (t) => esc(fmt.money(t.amount, c.currency)) }], rows: c.transfers, empty: 'Nets to zero.' });
+  });
+  table($('[data-tpl]', el), { columns: [
+    { label: 'Kind', render: (p) => esc(p.kind.replace(/_/g, ' ')) }, { label: 'Method', render: (p) => esc(p.method.replace('_', ' ')) },
+    { label: 'Mark-up', num: true, render: (p) => (p.method === 'cost_plus' ? `${p.markupPct}%<div class="cell-sub">${p.minPct}–${p.maxPct}%</div>` : '—') }, { label: 'Note', render: (p) => esc(p.note ?? '') },
+  ], rows: tp.policies, empty: 'No policy yet.' });
+  table($('[data-tpi]', el), { columns: [
+    { label: 'Recharge', render: (i) => `<span class="mono">${esc(i.number)}</span> ${esc(i.from)} → ${esc(i.to)}<div class="cell-sub">${esc(i.month)} · ${esc(i.description)}</div>` },
+    { label: 'Amount', num: true, render: (i) => `${esc(fmt.money(i.amount, i.currency))}${i.cost != null ? `<div class="cell-sub">cost ${esc(fmt.money(i.cost, i.currency))}</div>` : ''}` },
+    { label: 'Kind', render: (i) => `${esc((i.tpKind ?? '—').replace(/_/g, ' '))}${i.markupPct != null ? `<div class="cell-sub">${i.markupPct}%${i.range ? ` (${i.range[0]}–${i.range[1]}%)` : ''}</div>` : ''}` },
+    { label: 'Check', render: (i) => tag(...TP_ST[i.status]) },
+    { label: '', render: (i) => (i.mine && canWrite ? `<button ${BTN} data-tpc="${i.id}">Classify</button>` : '') },
+  ], rows: tp.items, empty: 'No recharges this year.' });
+  $('[data-tpy]', el).addEventListener('change', (e) => nettingSection(host, canWrite, Number(e.target.value)));
+  $('[data-tpx]', el).addEventListener('click', () => fetchFile(`/v1/finance/intercompany/transfer-pricing?year=${y}&format=xlsx`, `plugsure-transfer-pricing-${y}.xlsx`));
+  el.querySelectorAll('[data-nset]').forEach((b) => b.addEventListener('click', async () => { try { const r = await api('/v1/finance/intercompany/netting/settle', { method: 'POST', body: { currency: b.dataset.nset } }); toast(`${r.settlements.length} pair(s) settled`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+  $('[data-tpp]', el)?.addEventListener('click', () => modal({ title: 'Transfer-pricing policy', body: `<div class="form">${field('Kind', `<select name="k">${TP_KIND.map((k) => `<option value="${k}">${k.replace(/_/g, ' ')}</option>`).join('')}</select>`)}${field('Method', '<select name="m"><option value="cost_plus">Cost plus</option><option value="pass_through">Pass-through at cost</option><option value="cup">Comparable uncontrolled price</option></select>')}${field('Mark-up %', '<input name="p" type="number" step="0.1" value="5">')}${field('Range from %', '<input name="lo" type="number" step="0.1" value="3">')}${field('Range to %', '<input name="hi" type="number" step="0.1" value="8">')}${field('Note (benchmark)', '<input name="n" maxlength="500">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { const v = (x) => $(`[name="${x}"]`, mc.el).value; try { await api('/v1/finance/intercompany/transfer-pricing/policies', { method: 'PUT', body: { kind: v('k'), method: v('m'), markupPct: Number(v('p')), minPct: Number(v('lo')), maxPct: Number(v('hi')), note: v('n') || undefined } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  el.querySelectorAll('[data-tpc]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Classify the recharge', body: `<div class="form">${field('Kind', `<select name="k">${TP_KIND.map((k) => `<option value="${k}">${k.replace(/_/g, ' ')}</option>`).join('')}</select>`)}${field('Cost underneath', '<input name="c" type="number" min="0">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { try { await api(`/v1/finance/intercompany/recharges/${b.dataset.tpc}/tp`, { method: 'PUT', body: { tpKind: $('[name="k"]', mc.el).value, cost: $('[name="c"]', mc.el).value || null } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] })));
+}
+
+// ─────────────────────────────────────────── (v1.40.0) data quality
+
+const DQ_SEV = { critical: 't-crit', warning: 't-warn', info: 't-info' };
+
+async function dataQualitySection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/data-quality'); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => dataQualitySection(host, canWrite);
+  const l = d.last;
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-dqr>${icon('refresh')} Run the checks</button>` : ''}</div>
+    ${callout('info', `Checks on the ledger (entries that do not balance, accounts outside the chart, postings after a lock, old drafts), the masters (duplicate or incomplete suppliers, fleet accounts without a tax id), site costs without a site and stale bank balances. Run daily; under ${d.threshold} raises an alert. Every record's change history is in the audit trail (open a finding).`)}
+    <div class="grid k3 section">${kpi('Data quality', l ? `${l.score} / 100` : '—', l ? esc(fmt.time(l.runAt)) : 'not run yet', l && l.score < d.threshold ? 'crit' : l && l.score < 90 ? 'warn' : 'ok')}${kpi('Findings', l ? String(l.findings.length) : '—', l ? `${l.findings.filter((f) => f.severity === 'critical').length} critical` : '')}${kpi('Trend', d.trend.length > 1 ? `${d.trend.at(-1).score - d.trend.at(-2).score >= 0 ? '+' : ''}${d.trend.at(-1).score - d.trend.at(-2).score}` : '—', 'since the run before')}</div>
+    <div class="card section"><header><h3>By check</h3></header><div data-dqc></div></div>
+    <div class="card section"><header><h3>Findings</h3></header><div data-dqf></div></div>`;
+  table($('[data-dqc]', el), { columns: [
+    { label: 'Check', render: (k) => `<b>${esc(k.label)}</b>` }, { label: 'Found', num: true, render: (k) => String(k.n) },
+    { label: 'Points lost', num: true, render: (k) => (k.n ? `−${Math.min(k.cap, k.each * k.n)}` : '—') + `<div class="cell-sub">${k.each} each, at most ${k.cap}</div>` },
+  ], rows: Object.entries(d.weights).map(([k, w]) => ({ ...w, n: l?.counts?.[k] ?? 0 })), empty: '' });
+  table($('[data-dqf]', el), { columns: [
+    { label: 'Finding', render: (f) => `${tag(DQ_SEV[f.severity], f.label)}<div>${esc(f.message)}</div>` },
+    { label: 'Record', render: (f) => `<span class="cell-sub">${esc(f.targetType)}</span> <span class="mono">${esc(f.targetId)}</span>` },
+    { label: '', render: (f) => `<button ${BTN} data-dqh="${esc(f.targetType)}|${esc(f.targetId)}">History</button>` },
+  ], rows: l?.findings ?? [], empty: l ? 'Nothing found.' : 'Run the checks.' });
+  $('[data-dqr]', el)?.addEventListener('click', async (e) => { e.target.disabled = true; try { const r = await api('/v1/finance/data-quality/run', { method: 'POST' }); toast(`Score ${r.score}/100`, r.score < d.threshold ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.target.disabled = false; } });
+  el.querySelectorAll('[data-dqh]').forEach((b) => b.addEventListener('click', async () => {
+    const [t, i] = b.dataset.dqh.split('|');
+    let h; try { h = await api(`/v1/finance/history?targetType=${encodeURIComponent(t)}&targetId=${encodeURIComponent(i)}`); } catch (err) { toast(err.message, 'crit'); return; }
+    drawer({ title: `History · ${t} ${i}`, subtitle: `${h.changes.length} change(s) in the audit trail`, tabs: [{ id: 'h', label: 'Changes', render(body) { table(body, { columns: [
+      { label: 'When', render: (c) => esc(fmt.time(c.at)) }, { label: 'What', render: (c) => `<b>${esc(c.action)}</b><div class="cell-sub">${esc(c.by)}</div>` },
+      { label: 'Change', render: (c) => `<div class="cell-sub mono" style="white-space:pre-wrap;max-width:420px">${esc(JSON.stringify(c.after ?? c.before ?? {}).slice(0, 400))}</div>` },
+    ], rows: h.changes, empty: 'No changes recorded for this record.' }); } }] });
+  }));
+}
+
+// ─────────────────────────────────────────── (v1.40.0) scenarios
+
+async function scenariosSection(host, canWrite, focus) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api(`/v1/finance/scenarios${focus ? `?sensitivityOf=${focus}` : ''}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (f = focus) => scenariosSection(host, canWrite, f);
+  const c = d.currency, m = (v) => esc(fmt.money(v, c));
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-scn>${icon('plus')} New scenario</button>` : ''}<button class="btn" type="button" data-scx>${icon('download')} Excel</button></div>
+    ${callout('info', `What-if on the next twelve months, from the rolling forecast held flat, running costs at ${m(d.base.opexPerMonth)} a month, cash today ${m(d.base.cash)} and debt service ${m(d.base.debtServicePerMonth)} a month. Each scenario changes the tariff, utilisation, energy price or running costs, or adds sites with their capex and ramp; covenants (Lenders) are tested on its EBITDA and lowest cash.`)}
+    <div class="card section"><header><h3>Side by side</h3></header><div data-scc></div></div>
+    <div class="card section"><header><h3>Sensitivity · ${esc(d.sensitivity.of)}</h3></header><div class="body cell-sub">Twelve-month EBITDA when each driver moves ${d.sensitivity.drivers[0]?.step ?? 10} points.</div><div data-scs></div></div>`;
+  table($('[data-scc]', el), { columns: [
+    { label: 'Scenario', render: (s) => `<b>${esc(s.name)}</b><div class="cell-sub">${s.id ? esc([s.assumptions.tariffPct && `tariff ${s.assumptions.tariffPct > 0 ? '+' : ''}${s.assumptions.tariffPct}%`, s.assumptions.utilisationPct && `use ${s.assumptions.utilisationPct > 0 ? '+' : ''}${s.assumptions.utilisationPct}%`, s.assumptions.energyPricePct && `energy ${s.assumptions.energyPricePct > 0 ? '+' : ''}${s.assumptions.energyPricePct}%`, s.assumptions.opexPct && `costs ${s.assumptions.opexPct > 0 ? '+' : ''}${s.assumptions.opexPct}%`, s.assumptions.newSites.length && `${s.assumptions.newSites.reduce((a, x) => a + x.count, 0)} new sites`].filter(Boolean).join(' · ')) : 'the forecast as it stands'}</div>` },
+    { label: 'Revenue', num: true, render: (s) => m(s.totals.revenue) },
+    { label: 'EBITDA', num: true, render: (s) => `${m(s.totals.ebitda)}${s.totals.marginPct != null ? `<div class="cell-sub">${s.totals.marginPct}%</div>` : ''}` },
+    { label: 'Capex', num: true, render: (s) => (s.totals.capex ? m(s.totals.capex) : '—') },
+    { label: 'Lowest cash', num: true, render: (s) => `${s.minCash < 0 ? `<b style="color:var(--crit)">${m(s.minCash)}</b>` : m(s.minCash)}<div class="cell-sub">${esc(s.minCashMonth ?? '')}${s.runwayMonths != null ? ` · runs out in month ${s.runwayMonths + 1}` : ''}</div>` },
+    { label: 'Covenants', render: (s) => (s.covenants.length ? s.covenants.map((x) => tag(x.passed === false ? 't-crit' : x.passed ? 't-ok' : 't-mute', `${x.kind.replace('_', ' ')}${x.passed === false ? ' fails' : ''}`)).join(' ') : '<span class="cell-sub">none</span>') },
+    { label: '', render: (s) => (s.id ? `<button ${BTN} data-scf="${s.id}">Sensitivity</button>${canWrite ? ` <button ${BTN} data-sca="${s.id}">Archive</button>` : ''}` : '') },
+  ], rows: d.scenarios, empty: '' });
+  table($('[data-scs]', el), { columns: [
+    { label: 'Driver', render: (x) => esc(x.label) }, { label: `−${x0(d)} points`, num: true, render: (x) => m(x.down) }, { label: `+${x0(d)} points`, num: true, render: (x) => m(x.up) },
+  ], rows: d.sensitivity.drivers, empty: '' });
+  $('[data-scx]', el).addEventListener('click', () => fetchFile('/v1/finance/scenarios?format=xlsx', 'plugsure-scenarios.xlsx'));
+  el.querySelectorAll('[data-scf]').forEach((b) => b.addEventListener('click', () => reload(b.dataset.scf)));
+  el.querySelectorAll('[data-sca]').forEach((b) => b.addEventListener('click', async () => { try { await api(`/v1/finance/scenarios/${b.dataset.sca}`, { method: 'PUT', body: { archive: true } }); reload(null); } catch (err) { toast(err.message, 'crit'); } }));
+  $('[data-scn]', el)?.addEventListener('click', () => modal({ title: 'New scenario', body: `<div class="form">${field('Name', '<input name="n" maxlength="80">')}${field('Tariff %', '<input name="t" type="number" step="0.5" value="0">')}${field('Utilisation %', '<input name="u" type="number" step="0.5" value="0">')}${field('Energy price %', '<input name="e" type="number" step="0.5" value="0">')}${field('Running costs %', '<input name="o" type="number" step="0.5" value="0">')}${field('New sites from', `<input name="sm" type="month" value="${esc(zonedYmd().slice(0, 7))}">`, { opt: true })}${field('How many', '<input name="sc" type="number" min="0" value="0">', { opt: true })}${field('Capex per site', '<input name="sx" type="number" min="0">', { opt: true })}${field('Revenue per site a month (mature)', '<input name="sr" type="number" min="0">', { opt: true })}${field('Running costs per site a month', '<input name="so" type="number" min="0">', { opt: true })}${field('Months to mature', '<input name="sp" type="number" min="1" max="36" value="6">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { const v = (x) => $(`[name="${x}"]`, mc.el).value; const count = Number(v('sc') || 0); try { const s = await api('/v1/finance/scenarios', { method: 'POST', body: { name: v('n'), assumptions: { tariffPct: Number(v('t')), utilisationPct: Number(v('u')), energyPricePct: Number(v('e')), opexPct: Number(v('o')), newSites: count ? [{ fromMonth: v('sm'), count, capexPerSite: Number(v('sx') || 0), revenuePerSiteMonth: Number(v('sr') || 0), opexPerSiteMonth: Number(v('so') || 0), rampMonths: Number(v('sp') || 6) }] : [] } } }); reload(s.id); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+}
+const x0 = (d) => d.sensitivity.drivers[0]?.step ?? 10;
+
 // ─────────────────────────────────────────── (v1.30.0) purchase orders
 
 const PO_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], closed: ['t-ok', 'closed'], cancelled: ['t-mute', 'cancelled'], rejected: ['t-crit', 'rejected'] };
@@ -4432,7 +4619,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'scorecard', label: 'Scorecard' }, { id: 'reports', label: 'Reports' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'fxtreasury', label: 'FX & hedges' }, { id: 'procurement', label: 'Procurement' }, { id: 'closeauto', label: 'Close automation' }, { id: 'ownerfinance', label: 'Owner finance' }, { id: 'statutory', label: 'Financial statements' }, { id: 'corptax', label: 'Corporate tax' }, { id: 'payruns', label: 'Payment runs' }, { id: 'cards', label: 'Cards' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'fxtreasury', label: 'FX & hedges' }, { id: 'procurement', label: 'Procurement' }, { id: 'closeauto', label: 'Close automation' }, { id: 'ownerfinance', label: 'Owner finance' }, { id: 'statutory', label: 'Financial statements' }, { id: 'corptax', label: 'Corporate tax' }, { id: 'payruns', label: 'Payment runs' }, { id: 'cards', label: 'Cards' }, { id: 'contracts', label: 'Contracts' }, { id: 'netting', label: 'Netting & TP' }, { id: 'dataquality', label: 'Data quality' }, { id: 'scenarios', label: 'Scenarios' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'feeds', label: 'Bank feeds' }, { id: 'tax', label: 'Tax' }, { id: 'slips', label: 'Withholding' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'leases', label: 'Leases' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'ledger', label: 'Ledger' }, { id: 'closesteps', label: 'Close steps' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'intercompany', label: 'Intercompany' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -4819,7 +5006,8 @@ registerView('finance', {
       grants: () => grantsSection(body, canWrite), landlords: () => landlordsSection(body, canWrite), chargebacks: () => chargebacksSection(body, canWrite),
       loyaltycost: () => loyaltyCostSection(body, canWrite), taxaudit: () => taxAuditSection(body, canWrite), portfolio: () => portfolioSection(body, canWrite), planning: () => planningSection(body, canWrite),
       fxtreasury: () => fxTreasurySection(body, canWrite), procurement: () => procurementSection(body, canWrite), closeauto: () => closeAutoSection(body, canWrite), ownerfinance: () => ownerFinanceSection(body, canWrite),
-      statutory: () => statutorySection(body, canWrite), corptax: () => corpTaxSection(body, canWrite), payruns: () => payRunsSection(body, canWrite), cards: () => cardsSection(body, canWrite) };
+      statutory: () => statutorySection(body, canWrite), corptax: () => corpTaxSection(body, canWrite), payruns: () => payRunsSection(body, canWrite), cards: () => cardsSection(body, canWrite),
+      contracts: () => contractsSection(body, canWrite), netting: () => nettingSection(body, canWrite), dataquality: () => dataQualitySection(body, canWrite), scenarios: () => scenariosSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

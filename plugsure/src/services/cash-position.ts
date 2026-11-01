@@ -206,6 +206,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
   // (v1.38.0) FX hedges settled net into the account.
   const hedgeMoves = await (await import('./fx-treasury.js')).cashMoves(orgId, upTo);
   // (v1.39.0) Corporate income tax paid, and card statements paid.
+  // (v1.40.0) Contract billings paid into the account.
+  const contractMoves = await (await import('./revenue-contracts.js')).cashMoves(orgId, upTo);
   const [taxMoves, cardMoves] = await Promise.all([(await import('./corporate-tax.js')).cashMoves(orgId, upTo), (await import('./corporate-cards.js')).cashMoves(orgId, upTo)]);
   return {
     accounts,
@@ -225,6 +227,7 @@ async function book(orgId: string, upTo: string): Promise<Book> {
       ...hedgeMoves,
       ...taxMoves,
       ...cardMoves,
+      ...contractMoves,
     ],
   };
 }

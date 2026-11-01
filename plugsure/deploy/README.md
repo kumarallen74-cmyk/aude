@@ -627,6 +627,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      (Finance → Payment runs); check the bank file against your bank's bulk
      template first. Add company cards and import their transactions
      (Finance → Cards) ([FINANCE.md](FINANCE.md)).
+  33. (v1.40.0) Enter customer contracts beyond pay-per-charge with their
+     obligations and billings (Finance → Contracts); sync the ledger's
+     months. In a group, set the transfer-pricing policy at the parent and
+     classify recharges; net them through the parent (Finance → Netting &
+     TP). Run the data-quality checks and clear the findings (Finance →
+     Data quality). Model tariff, energy and new-site scenarios (Finance →
+     Scenarios). Route finance.contract_renewal_due and
+     finance.data_quality_low ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The
