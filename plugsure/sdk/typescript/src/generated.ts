@@ -12825,17 +12825,17 @@ export class Operations {
   /**
    * Carbon per site
    *
-   * (v1.44.0) from, to (at most 92 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.
+   * (v1.44.0) from, to (at most 92 days; both optional, by default the last 30 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.
    *
    * `GET /v1/finance/carbon/sites` · needs `payment:read`
    */
-  carbonPerSite(params: {
-    query: {
-      from: string;
-      to: string;
+  carbonPerSite(params?: {
+    query?: {
+      from?: string;
+      to?: string;
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
-    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/carbon/sites", query: params.query, accept: "json" }, options);
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/carbon/sites", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -15041,13 +15041,13 @@ export class Operations {
    *
    * `GET /v1/finance/carbon/esg` · needs `payment:read`
    */
-  esgWorkbook(params: {
-    query: {
-      from: string;
-      to: string;
+  esgWorkbook(params?: {
+    query?: {
+      from?: string;
+      to?: string;
     };
   }, options?: RequestOptions): Promise<void> {
-    return this.transport.request<void>({ method: "GET", path: "/v1/finance/carbon/esg", query: params.query, accept: "none" }, options);
+    return this.transport.request<void>({ method: "GET", path: "/v1/finance/carbon/esg", query: params?.query, accept: "none" }, options);
   }
 
   /**

@@ -303,9 +303,11 @@ export async function sessionCarbon(orgId: string, sessionId: string) {
   };
 }
 
-/** Per site over a period (at most 92 days): sessions, energy, the factor, solar and REC shares, emitted and avoided. */
+/** Per site over a period (at most 92 days; without one, the last 30 days): sessions, energy, the factor, solar and REC shares, emitted and avoided. */
 export async function siteReport(orgId: string, fromRaw: unknown, toRaw: unknown) {
-  const from = String(fromRaw ?? ''), to = String(toRaw ?? '');
+  const empty = (v: unknown) => v === undefined || v === null || v === '';
+  const to = empty(toRaw) ? today() : String(toRaw);
+  const from = empty(fromRaw) ? (DATE_RE.test(to) ? new Date(Date.parse(`${to}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10) : '') : String(fromRaw);
   if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from) throw ERR(422, 'from and to are dates (YYYY-MM-DD), to on or after from.');
   const fromT = new Date(`${from}T00:00:00Z`), toT = new Date(new Date(`${to}T00:00:00Z`).getTime() + 86_400_000);
   if ((toT.getTime() - fromT.getTime()) / 86_400_000 > 92) throw ERR(422, 'At most 92 days at a time.');

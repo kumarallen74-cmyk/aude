@@ -40,12 +40,12 @@ export const ops: Op[] = [
 
   // ------------------------------------------------------------------ carbon
   { method: 'GET', path: '/v1/finance/carbon/sites', tag: 'Finance', summary: 'Carbon per site',
-    description: '(v1.44.0) from, to (at most 92 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.',
-    query: [{ name: 'from', required: true, schema: { type: 'string', format: 'date' } }, { name: 'to', required: true, schema: { type: 'string', format: 'date' } }],
+    description: '(v1.44.0) from, to (at most 92 days; both optional, by default the last 30 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.',
+    query: [{ name: 'from', schema: { type: 'string', format: 'date' } }, { name: 'to', schema: { type: 'string', format: 'date' } }],
     responses: { 200: { description: 'The report.', schema: obj } }, errors: [422] },
   { method: 'GET', path: '/v1/finance/carbon/esg', tag: 'Finance', summary: 'The ESG workbook',
     description: '(v1.44.0) The per-site report in Excel, with a summary and the methodology (factors, solar share, REC share).',
-    query: [{ name: 'from', required: true, schema: { type: 'string', format: 'date' } }, { name: 'to', required: true, schema: { type: 'string', format: 'date' } }],
+    query: [{ name: 'from', schema: { type: 'string', format: 'date' } }, { name: 'to', schema: { type: 'string', format: 'date' } }],
     responses: { 200: { description: 'An .xlsx file.', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' } }, errors: [422] },
   { method: 'GET', path: '/v1/sessions/:id/carbon', tag: 'Sessions', summary: 'A session\'s carbon',
     description: '(v1.44.0) kWh, the grid factor and its source, the solar share measured during the session, the REC share, emitted and avoided kg CO2e (against petrol). Also on the driver\'s receipt.',

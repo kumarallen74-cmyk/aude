@@ -71605,12 +71605,12 @@
         ],
         "summary": "Carbon per site",
         "operationId": "carbonPerSite",
-        "description": "(v1.44.0) from, to (at most 92 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.\n\n**Permissions checked:** `payment:read`.",
+        "description": "(v1.44.0) from, to (at most 92 days; both optional, by default the last 30 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.\n\n**Permissions checked:** `payment:read`.",
         "parameters": [
           {
             "name": "from",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
               "format": "date"
@@ -71619,7 +71619,7 @@
           {
             "name": "to",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
               "format": "date"
@@ -71670,7 +71670,7 @@
           {
             "name": "from",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
               "format": "date"
@@ -71679,7 +71679,7 @@
           {
             "name": "to",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
               "format": "date"

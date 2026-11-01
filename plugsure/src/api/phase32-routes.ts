@@ -74,7 +74,7 @@ export async function registerPhase32Routes(app: FastifyInstance): Promise<void>
     try {
       const file = await carbon.esgWorkbook(req.principal.orgId, Q(req).from, Q(req).to);
       return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        .header('content-disposition', `attachment; filename="plugsure-esg-${String(Q(req).from ?? '').replace(/[^0-9-]/g, '')}-${String(Q(req).to ?? '').replace(/[^0-9-]/g, '')}.xlsx"`).send(file);
+        .header('content-disposition', `attachment; filename="plugsure-esg${[Q(req).from, Q(req).to].map((d) => String(d ?? '').replace(/[^0-9-]/g, '')).filter(Boolean).map((d) => `-${d}`).join('')}.xlsx"`).send(file);
     } catch (e) { return failed(reply, e); }
   });
   app.get('/v1/sessions/:id/carbon', async (req, reply) => {

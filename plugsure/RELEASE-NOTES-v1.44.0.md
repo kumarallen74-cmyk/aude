@@ -68,7 +68,7 @@ This extends the v1.35.0 carbon module.
   session, counts as zero emissions.
 - **Per site, measured** (Finance → Carbon): kWh, factor and source, solar share, and CO₂e emitted and avoided, over up
   to 92 days.
-- **ESG report:** an Excel workbook with Summary, Sites and Methodology sheets.
+- **ESG report:** an Excel workbook with Summary, Sites and Methodology sheets. Without dates, both cover the last 30 days.
 - **Receipt:** the driver's receipt shows the CO₂ avoided against petrol.
 - **API:** `GET /v1/sessions/{id}/carbon`.
 
