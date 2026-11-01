@@ -1622,6 +1622,157 @@ async function controlsSection(host, month = zonedYmd(new Date()).slice(0, 7)) {
     } }] }));
 }
 
+// ─────────────────────────────────────────── (v1.26.0) subscription revenue
+
+async function subscriptionsSection(host, canWrite, month = zonedYmd(new Date()).slice(0, 7)) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let r;
+  try { r = await api(`/v1/finance/subscription-revenue?month=${month}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (m = month) => subscriptionsSection(host, canWrite, m);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-sm value="${esc(r.month)}">`)}
+      <div class="row" style="gap:6px;align-self:flex-end"><button class="btn" type="button" data-sx>${icon('download')} Excel</button>${canWrite ? `<button class="btn" type="button" data-sacc>${icon('gear')} Accounts</button>` : ''}</div></div>
+    ${callout('info', 'Memberships and passes are paid ahead for a period; their revenue is earned day by day over it. What is billed for days still to come is deferred revenue (a liability) until earned.')}
+    ${r.currencies.map((c) => `<div class="grid k4 section">${kpi('Recognised', esc(fmt.money(c.recognised, c.currency)), `billed ${fmt.money(c.billed, c.currency)}`)}${kpi('Deferred at month end', esc(fmt.money(c.deferredEnd, c.currency)), `start ${fmt.money(c.deferredStart, c.currency)}`)}${kpi('MRR', esc(fmt.money(c.mrr, c.currency)), `ARR ${fmt.money(c.arr, c.currency)}`)}${kpi('Subscribers', String(c.subscribers.atEnd), `+${c.subscribers.new} · −${c.subscribers.cancelled + c.subscribers.expired}${c.churnPct != null ? ` · churn ${c.churnPct}%` : ''}`, c.churnPct > 10 ? 'warn' : '')}</div>`).join('') || callout('info', 'No memberships or passes.')}
+    <div class="grid two section"><div class="card"><header><h3>By plan</h3></header><div data-sp></div></div><div class="card"><header><h3>Journal</h3></header><div data-sj></div></div></div>`;
+  table($('[data-sp]', el), { columns: [
+    { label: 'Plan', render: (p) => `${esc(p.plan)}<div class="cell-sub">${esc(p.currency)}</div>` },
+    { label: 'Billed', num: true, render: (p) => esc(fmt.money(p.billed, p.currency)) },
+    { label: 'Recognised', num: true, render: (p) => `<b>${esc(fmt.money(p.recognised, p.currency))}</b>` },
+    { label: 'Deferred', num: true, render: (p) => esc(fmt.money(p.deferredEnd, p.currency)) },
+  ], rows: r.currencies.flatMap((c) => c.plans.map((p) => ({ ...p, currency: c.currency }))), empty: 'No charges this month.' });
+  table($('[data-sj]', el), { columns: [
+    { label: 'Account', render: (j) => `<span class="mono">${esc(j.code)}</span> ${esc(j.account)}<div class="cell-sub">${esc(j.description)}</div>` },
+    { label: 'Debit', num: true, render: (j) => (j.debit ? esc(fmt.money(j.debit, j.currency)) : '') },
+    { label: 'Credit', num: true, render: (j) => (j.credit ? esc(fmt.money(j.credit, j.currency)) : '') },
+  ], rows: r.journal, empty: 'No entries.' });
+  $('[data-sm]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+  $('[data-sx]', el).addEventListener('click', async () => {
+    try { const res = await api(`/v1/finance/subscription-revenue?month=${r.month}&format=xlsx`, { raw: true }); download(`plugsure-subscription-revenue-${r.month}.xlsx`, await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+  });
+  $('[data-sacc]', el)?.addEventListener('click', () => modal({ title: 'Journal accounts', body: `<div class="form">${['deferred', 'revenue', 'receivable'].map((k) => `${field(`${k === 'deferred' ? 'Deferred revenue' : k === 'revenue' ? 'Subscription revenue' : 'Cash / receivable'}`, `<div class="row" style="gap:6px"><input name="${k}c" value="${esc(r.accounts[k].code)}" style="width:110px"><input name="${k}n" value="${esc(r.accounts[k].name)}" style="flex:1"></div>`)}`).join('')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/subscription-revenue/accounts', { method: 'PUT', body: Object.fromEntries(['deferred', 'revenue', 'receivable'].map((k) => [k, { code: v(`${k}c`), name: v(`${k}n`) }])) }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.26.0) PPN return
+
+async function ppnSection(host, canWrite, month = lastMonthYm()) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let p;
+  try { p = await api(`/v1/finance/ppn?month=${month}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (m = month) => ppnSection(host, canWrite, m);
+  const R = (n) => fmt.money(n, LEGACY_CURRENCY);
+  const dl = async (f, name) => { try { const res = await api(`/v1/finance/ppn?month=${p.month}&format=${f}`, { raw: true }); download(name, await res.blob()); } catch (e) { toast(e.message, 'crit'); } };
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Tax period', `<input type="month" data-pm value="${esc(p.month)}">`)}
+      <div class="row" style="gap:6px;align-self:flex-end;flex-wrap:wrap"><button class="btn" type="button" data-px>${icon('download')} Working papers</button><button class="btn" type="button" data-pi>Masukan CSV</button><button class="btn" type="button" data-po>Keluaran CSV</button>
+        ${canWrite && p.pkp && p.ended && !p.laterFiled ? `<button class="btn primary" type="button" data-pf>${p.filed ? 'Amend filing' : 'Record as filed'}</button>` : ''}</div></div>
+    ${!p.pkp ? callout('info', 'Your organisation is not marked PKP (Fleet billing → Settings): it charges no PPN and files no SPT Masa PPN.') : ''}
+    ${p.filed ? callout(p.filed.differs ? 'warn' : 'ok', `Filed ${esc(fmt.date(p.filed.at))}${p.filed.by ? ` by ${esc(p.filed.by)}` : ''}${p.filed.ntpn ? ` · NTPN <span class="mono">${esc(p.filed.ntpn)}</span>` : ''}.${p.filed.differs ? ' The records have changed since: amend the filing (pembetulan).' : ''}`) : p.ended ? callout('info', `Due by ${esc(p.filingDue)}: pay what is payable and file the SPT Masa PPN.`) : callout('info', 'The period has not ended: the figures are to date.')}
+    ${p.missingEfaktur ? callout('warn', `${p.missingEfaktur} fleet invoice(s) without an e-Faktur number (Fleet billing → e-Faktur).`) : ''}
+    <div class="grid k4 section">${kpi('Output (keluaran)', esc(R(p.output.ppn)), `DPP ${R(p.output.dpp)}`)}${kpi('Input (masukan)', esc(R(p.input.ppn)), `DPP ${R(p.input.dpp)}`)}${kpi('Brought forward', esc(R(p.broughtForward)), p.broughtFrom ? `from ${p.broughtFrom}` : 'none')}${p.payable ? kpi('Payable', esc(R(p.payable)), 'kurang bayar', 'warn') : kpi('Carried forward', esc(R(p.carriedForward)), 'lebih bayar')}</div>
+    <div class="grid two section"><div class="card"><header><h3>Output tax</h3></header><div data-pol></div></div>
+      <div class="card"><header><h3>Input tax</h3>${canWrite ? '<span class="right"><button class="btn sm" type="button" data-padd>Record faktur masukan</button></span>' : ''}</header><div data-pil></div>${p.input.suggestions.length ? '<div class="body" data-psug></div>' : ''}</div></div>
+    <div class="card section"><header><h3>Filed periods</h3></header><div data-pp></div></div>`;
+  table($('[data-pol]', el), { columns: [
+    { label: 'Source', render: (l) => `${esc(l.label)}<div class="cell-sub">${l.count} record(s)</div>` },
+    { label: 'DPP', num: true, render: (l) => esc(R(l.dpp)) }, { label: 'PPN', num: true, render: (l) => `<b>${esc(R(l.ppn))}</b>` },
+  ], rows: p.output.lines, empty: '' });
+  table($('[data-pil]', el), { columns: [
+    { label: 'Faktur', render: (i) => `<span class="mono">${esc(i.faktur)}</span><div class="cell-sub">${esc(i.supplier)} · ${esc(i.date)}${i.creditable ? '' : ' · not creditable'}</div>` },
+    { label: 'DPP', num: true, render: (i) => esc(R(i.dpp)) }, { label: 'PPN', num: true, render: (i) => esc(R(i.ppn)) },
+    { label: '', render: (i) => (canWrite ? `<button class="btn sm" type="button" data-pv="${esc(i.id)}">Void</button>` : '') },
+  ], rows: p.input.invoices, empty: 'No faktur masukan recorded for this period.' });
+  if (p.input.suggestions.length) $('[data-psug]', el).innerHTML = `<div class="cell-sub" style="margin-bottom:6px">Not counted until recorded with the supplier's faktur:</div>${p.input.suggestions.map((x, i) => `<div class="row" style="justify-content:space-between;gap:8px;padding:4px 0"><span>${esc(x.description)}<div class="cell-sub">${esc(x.note)}</div></span><span class="row" style="gap:6px"><b>${esc(R(x.ppn))}</b>${canWrite ? `<button class="btn sm" type="button" data-psg="${i}">Record</button>` : ''}</span></div>`).join('')}`;
+  table($('[data-pp]', el), { columns: [
+    { label: 'Period', render: (f) => `${esc(f.month)}<div class="cell-sub">${esc(f.filedBy ?? '')}</div>` },
+    { label: 'Output', num: true, render: (f) => esc(R(f.output)) }, { label: 'Input', num: true, render: (f) => esc(R(f.input)) },
+    { label: 'Payable', num: true, render: (f) => (f.payable ? `<b>${esc(R(f.payable))}</b>` : '') }, { label: 'Carried', num: true, render: (f) => (f.carriedForward ? esc(R(f.carriedForward)) : '') },
+    { label: 'NTPN', render: (f) => `<span class="mono">${esc(f.ntpn ?? '')}</span>` },
+  ], rows: p.periods, empty: 'Nothing filed yet.' });
+  $('[data-pm]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+  $('[data-px]', el).addEventListener('click', () => dl('xlsx', `plugsure-ppn-${p.month}.xlsx`));
+  $('[data-pi]', el).addEventListener('click', () => dl('input-csv', `plugsure-ppn-masukan-${p.month}.csv`));
+  $('[data-po]', el).addEventListener('click', () => dl('output-csv', `plugsure-ppn-keluaran-${p.month}.csv`));
+  const record = (pre = {}) => modal({ title: 'Faktur masukan', subtitle: `Tax period ${p.month}`, body: `<div class="form">
+      ${field('Supplier', `<input name="sup" value="${esc(pre.supplier ?? '')}">`)}${field('Supplier NPWP', '<input name="npwp">')}${field('Faktur number', '<input name="fk">')}
+      ${field('Faktur date', `<input name="dt" type="date" value="${p.month}-${p.month < zonedYmd(new Date()).slice(0, 7) ? '28' : '01'}">`)}${field('DPP (rupiah)', `<input name="dpp" type="number" min="0" value="${pre.dpp ?? ''}">`)}${field('PPN (rupiah)', `<input name="ppn" type="number" min="0" value="${pre.ppn ?? ''}">`)}
+      ${field('Description', `<input name="desc" value="${esc(pre.description ?? '')}">`)}<label class="check"><input type="checkbox" name="cr" checked><span>Creditable</span></label></div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el);
+      try {
+        await api('/v1/finance/ppn/input-invoices', { method: 'POST', body: { month: p.month, supplier: v('sup').value.trim(), supplierNpwp: v('npwp').value.trim() || undefined, faktur: v('fk').value.trim(), date: v('dt').value,
+          dpp: Number(v('dpp').value), ppn: Number(v('ppn').value), description: v('desc').value.trim() || undefined, creditable: v('cr').checked, amend: Boolean(p.filed) } });
+        toast('Recorded.', 'ok'); reload();
+      } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] });
+  $('[data-padd]', el)?.addEventListener('click', () => record());
+  el.querySelectorAll('[data-psg]').forEach((b) => b.addEventListener('click', () => record(p.input.suggestions[Number(b.dataset.psg)])));
+  el.querySelectorAll('[data-pv]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Void the faktur', body: field('Why', '<input name="why">'),
+    actions: [{ label: 'Cancel' }, { label: 'Void', kind: 'danger', async onClick(mc) {
+      try { await api(`/v1/finance/ppn/input-invoices/${b.dataset.pv}/void`, { method: 'POST', body: { reason: $('[name="why"]', mc.el).value.trim() } }); toast('Voided.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] })));
+  $('[data-pf]', el)?.addEventListener('click', () => modal({ title: p.filed ? `Amend ${p.month}` : `Record ${p.month} as filed`, body: `<p>${p.payable ? `Payable: <b>${esc(R(p.payable))}</b>. Give the NTPN of the payment.` : `Nothing payable; <b>${esc(R(p.carriedForward))}</b> is carried forward to the next period.`}</p>
+      <div class="form">${field('NTPN', '<input name="ntpn" maxlength="16" placeholder="16 letters and digits">')}${field('Reference (BPE)', '<input name="ref">')}${p.payable ? '<label class="check"><input type="checkbox" name="unpaid"><span>Filed, not paid yet</span></label>' : ''}</div>`,
+    actions: [{ label: 'Cancel' }, { label: p.filed ? 'Amend' : 'Record', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el);
+      try { await api(`/v1/finance/ppn/${p.month}/file`, { method: 'POST', body: { ntpn: v('ntpn').value.trim() || undefined, reference: v('ref').value.trim() || undefined, unpaid: v('unpaid')?.checked === true, amend: Boolean(p.filed) } }); toast('Recorded.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.26.0) automatic owner payouts
+
+async function autoPayoutsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let a;
+  try { a = await api('/v1/finance/owner-payouts/automation'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => autoPayoutsSection(host, canWrite);
+  const st = a.settings, dis = canWrite ? '' : ' disabled';
+  const ready = a.candidates.filter((c) => c.ready);
+  el.innerHTML = `${!a.rails.length ? callout('warn', 'Owner payouts need Xendit payouts or Duitku Disbursement on your own account (Integrations): until then, nothing is requested.') : ''}
+    <div class="card"><header><h3>Automatic payouts</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">Once an owner statement is finalised, the payout of the owner's share is requested for you, hourly. It is never sent by itself: it waits for the approvals as any payout (two people, or a Finance Manager above your threshold).</p>
+      <div class="form"><label class="check"><input type="checkbox" name="ap_on"${st.enabled ? ' checked' : ''}${dis}><span>Request owner payouts automatically</span></label>
+        ${field('Wait after finalising (days)', `<input name="ap_d" type="number" min="0" max="60" value="${st.delayDays}"${dis}>`)}${field('Minimum (rupiah)', `<input name="ap_m" type="number" min="0" value="${st.minAmount}"${dis}>`)}</div>
+      ${canWrite ? `<div class="row" style="gap:8px;margin-top:10px"><button class="btn primary" type="button" data-aps>Save</button><button class="btn" type="button" data-apr${ready.length ? '' : ' disabled'}>Request ${ready.length} ready now</button></div>` : ''}
+    </div></div>
+    <div class="card section"><header><h3>Owner statements to pay</h3></header><div data-apc></div></div>
+    <div class="card section"><header><h3>Per owner</h3></header><div data-apo></div></div>`;
+  table($('[data-apc]', el), { columns: [
+    { label: 'Statement', render: (c) => `<span class="mono">${esc(c.number)}</span><div class="cell-sub">${esc(c.owner)} · finalised ${esc(c.finalisedOn)}</div>` },
+    { label: 'To pay', num: true, render: (c) => `<b>${esc(fmt.money(c.outstanding, c.currency))}</b>` },
+    { label: '', render: (c) => (c.ready ? tag('t-ok', 'ready') : `<span class="cell-sub wrap">${esc(c.reason)}</span>`) },
+  ], rows: a.candidates, empty: 'Every finalised owner statement is paid.' });
+  table($('[data-apo]', el), { columns: [
+    { label: 'Owner', render: (r) => esc(r.owner) },
+    { label: 'Automatic', render: (r) => (r.automatic == null ? '<span class="cell-sub">default</span>' : r.automatic ? tag('t-ok', 'on') : tag('t-info', 'off')) },
+    { label: 'Minimum', num: true, render: (r) => (r.minAmount == null ? '<span class="cell-sub">default</span>' : esc(fmt.money(r.minAmount, LEGACY_CURRENCY))) },
+    { label: '', render: (r) => (r.hold ? `${tag('t-warn', 'held')}<div class="cell-sub wrap">${esc(r.holdReason)}</div>` : '') },
+  ], rows: a.rules, empty: 'No site owners.', onRow: canWrite ? (r) => modal({ title: r.owner, subtitle: 'Payout rule', body: `<div class="form">
+      ${field('Automatic', `<select name="au"><option value="default"${r.automatic == null ? ' selected' : ''}>Default</option><option value="on"${r.automatic === true ? ' selected' : ''}>On</option><option value="off"${r.automatic === false ? ' selected' : ''}>Off</option></select>`)}
+      ${field('Minimum (empty for the default)', `<input name="mn" type="number" min="0" value="${r.minAmount ?? ''}">`)}
+      <label class="check"><input type="checkbox" name="hd"${r.hold ? ' checked' : ''}><span>Hold this owner's payouts</span></label>${field('Why', `<input name="hr" value="${esc(r.holdReason ?? '')}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el);
+      const au = v('au').value;
+      try { await api(`/v1/finance/owner-payouts/automation/owners/${r.ownerId}`, { method: 'PUT', body: { automatic: au === 'default' ? null : au === 'on', minAmount: v('mn').value === '' ? null : Number(v('mn').value), hold: v('hd').checked, holdReason: v('hr').value.trim() } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] }) : undefined });
+  $('[data-aps]', el)?.addEventListener('click', async () => {
+    try { await api('/v1/finance/owner-payouts/automation', { method: 'PUT', body: { enabled: $('[name="ap_on"]', el).checked, delayDays: Number($('[name="ap_d"]', el).value), minAmount: Number($('[name="ap_m"]', el).value) } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); }
+  });
+  $('[data-apr]', el)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { const r = await api('/v1/finance/owner-payouts/automation/run', { method: 'POST' }); toast(`${r.requested.length} payout(s) requested; they wait for approval.${r.failed.length ? ` ${r.failed.length} failed: ${r.failed[0].error}` : ''}`, r.failed.length ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+  });
+}
+
 registerView('finance', {
   title: 'Finance',
   subtitle: 'Payments, receivables, payables, fees',
@@ -1634,8 +1785,8 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
+      { id: 'payables', label: 'Payables' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -2006,7 +2157,8 @@ registerView('finance', {
       investments: () => investmentsSection(body, canWrite), close: () => closeSection(body, canWrite),
       pnl: () => pnlSection(body, canWrite), settlements: () => settlementsSection(body, base(), canWrite),
       yearend: () => yearEndSection(body, canWrite),
-      roaming: () => roamingSection(body, canWrite), controls: () => controlsSection(body) };
+      roaming: () => roamingSection(body, canWrite), controls: () => controlsSection(body),
+      subscriptions: () => subscriptionsSection(body, canWrite), ppn: () => ppnSection(body, canWrite), autopay: () => autoPayoutsSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
