@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.31.0 (1 November 2026), the current release:** finance phase 20: a general ledger fed by every finance module (trial balance, profit and loss, balance sheet, approved manual journal entries), expense claims with receipts and petty cash counts, intercompany recharges netted and settled across a group, and a monthly KPI scorecard with targets. Notes: [`RELEASE-NOTES-v1.31.0.md`](RELEASE-NOTES-v1.31.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.32.0 (1 November 2026), the current release:** finance phase 21: bank feeds with match rules, PPh 21 and 26 withholding on supplier bills with e-Bupot slips, a management report pack approved by a second Finance Manager and e-mailed, and the month close as signed-off steps with an auditor's evidence pack. Notes: [`RELEASE-NOTES-v1.32.0.md`](RELEASE-NOTES-v1.32.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.31.0 (1 November 2026):** finance phase 20: a general ledger fed by every finance module (trial balance, profit and loss, balance sheet, approved manual journal entries), expense claims with receipts and petty cash counts, intercompany recharges netted and settled across a group, and a monthly KPI scorecard with targets. Notes: [`RELEASE-NOTES-v1.31.0.md`](RELEASE-NOTES-v1.31.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.30.0 (1 November 2026):** finance phase 19: purchase orders with goods received and the three-way match, lease accounting under PSAK 73, treasury with time deposits and idle-cash suggestions, and a finance anomaly review. Notes: [`RELEASE-NOTES-v1.30.0.md`](RELEASE-NOTES-v1.30.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

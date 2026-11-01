@@ -60,6 +60,11 @@ import * as ledger from '../services/general-ledger.js';
 import * as claims from '../services/expense-claims.js';
 import * as ic from '../services/intercompany.js';
 import * as scorecard from '../services/kpi-scorecard.js';
+import * as feeds from '../services/bank-feeds.js';
+import * as wtax from '../services/withholding-tax.js';
+import { config } from '../config.js';
+import * as pack from '../services/report-pack.js';
+import * as closeV2 from '../services/period-close.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -608,6 +613,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     assertCan(req.principal, { permission: 'payment:write' });
     try {
       const r = await bank.upload(req.principal.orgId, platform(req), (req.body ?? {}) as Record<string, unknown>, userUuid(req));
+      // (v1.32.0) The match rules take what the automatic match left.
+      Object.assign(r, { rules: await feeds.applyRules(req.principal.orgId, userUuid(req)) });
       await auditPay(req, 'finance.bank_statement_uploaded', 'bank_statement', r.statementId, { bank: r.bank, from: r.from, to: r.to, lines: r.lines, matched: r.matched });
       return reply.status(201).send(r);
     } catch (e) { return bankFailed(reply, e); }
@@ -962,7 +969,7 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
     assertCan(req.principal, { permission: 'payment:write' });
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const r = await periods.lock(req.principal.orgId, prm(req, 'month'), b.note, userUuid(req));
+      const r = await closeV2.lock(req.principal.orgId, prm(req, 'month'), b.note, userUuid(req));
       await auditPay(req, 'finance.period_locked', 'finance_period_lock', r.id, { month: r.month, note: b.note ?? null });
       return r;
     } catch (e) { return p11Failed(reply, e); }
@@ -2418,6 +2425,212 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, 'finance.scorecard_sent', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
       return r;
     } catch (e) { return p20Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.32.0) bank feeds and rules, withholding slips, report packs, close v2
+
+  const p21Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof feeds.FeedError || e instanceof wtax.WithholdingError || e instanceof pack.PackError || e instanceof closeV2.CloseError) return reply.status(e.statusCode).send({ error: e.message });
+    return p20Failed(reply, e);
+  };
+  const lastMonth = () => {
+    const [y, m] = new Intl.DateTimeFormat('en-CA', { timeZone: config.billing.timeZone }).format(new Date()).slice(0, 7).split('-').map(Number) as [number, number];
+    return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  };
+  const audit21 = (req: FastifyRequest, action: string, type: string, id: string | null, r: unknown) => auditPay(req, action, type, id ?? req.principal.orgId, r as Record<string, unknown>);
+
+  app.get('/v1/finance/bank-feeds', async (req, reply) => {
+    R(req);
+    try { return { feeds: await feeds.feeds(req.principal.orgId), rules: await feeds.rules(req.principal.orgId) }; } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/bank-feeds', async (req, reply) => {
+    W(req);
+    try {
+      const r = await feeds.saveFeed(req.principal.orgId, null, body(req), userUuid(req));
+      await audit21(req, 'finance.bank_feed_saved', 'bank_feed', r.id, { name: r.name, url: r.url, cashAccountId: r.cashAccountId, enabled: r.enabled });
+      return reply.status(201).send(r);
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.put('/v1/finance/bank-feeds/:id', async (req, reply) => {
+    W(req);
+    try {
+      const r = await feeds.saveFeed(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.bank_feed_saved', 'bank_feed', r.id, { name: r.name, url: r.url, cashAccountId: r.cashAccountId, enabled: r.enabled, tokenChanged: body(req).token !== undefined && body(req).token !== '' });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/bank-feeds/:id/run', async (req, reply) => {
+    W(req);
+    try {
+      const r = await feeds.run(req.principal.orgId, prm(req, 'id'));
+      await audit21(req, 'finance.bank_feed_run', 'bank_feed', r.feedId, r);
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/bank-rules', async (req, reply) => {
+    W(req);
+    try {
+      const r = await feeds.saveRule(req.principal.orgId, null, body(req), userUuid(req));
+      await audit21(req, 'finance.bank_rule_saved', 'bank_match_rule', r.id, r);
+      return reply.status(201).send(r);
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.put('/v1/finance/bank-rules/:id', async (req, reply) => {
+    W(req);
+    try {
+      const r = await feeds.saveRule(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.bank_rule_saved', 'bank_match_rule', r.id, r);
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.get('/v1/finance/bank-rules/preview', async (req, reply) => {
+    R(req);
+    try { return await feeds.preview(req.principal.orgId); } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/bank-rules/apply', async (req, reply) => {
+    W(req);
+    try {
+      const r = await feeds.applyRules(req.principal.orgId, userUuid(req));
+      await audit21(req, 'finance.bank_rules_applied', 'organisation', null, r);
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/tax/slips', async (req, reply) => {
+    R(req);
+    try { return await wtax.slips(req.principal.orgId, qs(req).month || lastMonth()); } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/tax/slips/:month/draft', async (req, reply) => {
+    W(req);
+    try {
+      const r = await wtax.draft(req.principal.orgId, prm(req, 'month'));
+      await audit21(req, 'finance.tax_slips_drafted', 'organisation', null, { month: r.month, created: r.created, updated: r.updated, dropped: r.dropped, issuedChanged: r.issuedChanged });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.get('/v1/finance/tax/slips/:month/ebupot', async (req, reply) => {
+    R(req);
+    try { return xl(reply, `plugsure-ebupot-${prm(req, 'month')}`, await wtax.ebupotXlsx(req.principal.orgId, prm(req, 'month'))); } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/tax/slips/:id/issue', async (req, reply) => {
+    W(req);
+    try {
+      const r = await wtax.issue(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.tax_slip_issued', 'tax_slip', r.id, { number: r.number, kind: r.kind, tax: r.tax, month: r.month });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/tax/slips/:id/void', async (req, reply) => {
+    W(req);
+    try {
+      const r = await wtax.voidSlip(req.principal.orgId, prm(req, 'id'), body(req).reason);
+      await audit21(req, 'finance.tax_slip_voided', 'tax_slip', r.id, { number: r.number, reason: r.voidReason });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/report-packs', async (req, reply) => {
+    R(req);
+    try { return await pack.list(req.principal.orgId); } catch (e) { return p21Failed(reply, e); }
+  });
+  app.put('/v1/finance/report-packs/settings', async (req, reply) => {
+    W(req);
+    try {
+      const r = await pack.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await audit21(req, 'finance.report_pack_settings_saved', 'organisation', null, r);
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-packs', async (req, reply) => {
+    W(req);
+    try {
+      const r = await pack.draft(req.principal.orgId, body(req), userUuid(req));
+      await audit21(req, 'finance.report_pack_drafted', 'report_pack', r.id, { month: r.month, currency: r.currency });
+      return reply.status(201).send(r);
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.get('/v1/finance/report-packs/:id', async (req, reply) => {
+    R(req);
+    try {
+      const f = qs(req).format;
+      if (f === 'pdf') { const p = await pack.get(req.principal.orgId, prm(req, 'id')); return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="management-report-${p.month}.pdf"`).send(await pack.pdf(req.principal.orgId, p.id)); }
+      if (f === 'xlsx') { const p = await pack.get(req.principal.orgId, prm(req, 'id')); return xl(reply, `management-report-${p.month}`, await pack.workbook(req.principal.orgId, p.id)); }
+      return await pack.get(req.principal.orgId, prm(req, 'id'));
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.put('/v1/finance/report-packs/:id/commentary', async (req, reply) => {
+    W(req);
+    try { return await pack.comment(req.principal.orgId, prm(req, 'id'), body(req)); } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-packs/:id/submit', async (req, reply) => {
+    W(req);
+    try {
+      const r = await pack.submit(req.principal.orgId, prm(req, 'id'), userUuid(req));
+      await audit21(req, 'finance.report_pack_submitted', 'report_pack', r.id, { month: r.month });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-packs/:id/send-back', async (req, reply) => {
+    W(req);
+    try {
+      const r = await pack.sendBack(req.principal.orgId, prm(req, 'id'), body(req), who(req));
+      await audit21(req, 'finance.report_pack_sent_back', 'report_pack', r.id, { month: r.month, reason: String(body(req).reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-packs/:id/approve', async (req, reply) => {
+    W(req);
+    try {
+      const r = await pack.approve(req.principal.orgId, prm(req, 'id'), who(req));
+      await audit21(req, 'finance.report_pack_approved', 'report_pack', r.id, { month: r.month });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/report-packs/:id/send', async (req, reply) => {
+    W(req);
+    try {
+      const r = await pack.send(req.principal.orgId, prm(req, 'id'));
+      await audit21(req, 'finance.report_pack_sent', 'report_pack', r.id, r);
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/close', async (req, reply) => {
+    R(req);
+    try { return await closeV2.status(req.principal.orgId, qs(req).month || lastMonth()); } catch (e) { return p21Failed(reply, e); }
+  });
+  app.put('/v1/finance/close/policy', async (req, reply) => {
+    W(req);
+    try {
+      const r = await closeV2.savePolicy(req.principal.orgId, body(req), userUuid(req), canApprove(req));
+      await audit21(req, 'finance.close_policy_saved', 'organisation', null, r);
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.get('/v1/finance/close/:month/evidence', async (req, reply) => {
+    R(req);
+    try {
+      const buf = await closeV2.evidence(req.principal.orgId, prm(req, 'month'));
+      await audit21(req, 'finance.close_evidence_exported', 'organisation', null, { month: prm(req, 'month') });
+      return xl(reply, `plugsure-close-evidence-${prm(req, 'month')}`, buf);
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/close/:month/steps/:step/sign-off', async (req, reply) => {
+    W(req);
+    try {
+      const r = await closeV2.signOff(req.principal.orgId, prm(req, 'month'), prm(req, 'step'), body(req), who(req));
+      const s = r.steps.find((x) => x.step === prm(req, 'step'));
+      await audit21(req, 'finance.close_step_signed_off', 'organisation', null, { month: r.month, step: prm(req, 'step'), accepted: s?.signoff?.accepted ?? false, note: s?.signoff?.note ?? null });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
+  });
+  app.post('/v1/finance/close/:month/steps/:step/revoke', async (req, reply) => {
+    W(req);
+    try {
+      const r = await closeV2.revoke(req.principal.orgId, prm(req, 'month'), prm(req, 'step'));
+      await audit21(req, 'finance.close_step_revoked', 'organisation', null, { month: r.month, step: prm(req, 'step') });
+      return r;
+    } catch (e) { return p21Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

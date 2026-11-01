@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { LEGACY_CURRENCY } from '../domain/money.js';
+import { periodTotals } from './withholding-tax.js';
 
 /**
  * Tax filing calendar (v1.23.0). The monthly Indonesian obligations an operator has from what PlugSure records, each
@@ -14,6 +15,8 @@ import { LEGACY_CURRENCY } from '../domain/money.js';
  *   ppn_pay        pay the PPN on fleet invoices less credit notes                       default the end of the month
  *   ppn_report     file the SPT Masa PPN                                                 default the end of the month
  *   efaktur        upload the period's fakturs to Coretax (fleet invoices with PPN)      default the 15th
+ *   pph21_pay      (v1.32.0) pay the PPh 21 and 26 withheld from suppliers (the slips)   default the 15th
+ *   pph21_report   (v1.32.0) file the SPT Masa PPh 21/26                                default the 20th
  *
  * The days are settings (Finance → Settings → Tax calendar): the rules change (PMK 81/2024) and an adviser may have
  * the operator file earlier. Each period's obligation is marked filed with the date, the reference (NTPN, BPE) and the
@@ -31,6 +34,8 @@ export const OBLIGATIONS = {
   ppn_pay: { label: 'Pay PPN', day: 31 },
   ppn_report: { label: 'File SPT Masa PPN', day: 31 },
   efaktur: { label: 'Upload e-Faktur to Coretax', day: 15 },
+  pph21_pay: { label: 'Pay PPh 21/26 withheld', day: 15 },
+  pph21_report: { label: 'File SPT Masa PPh 21/26', day: 20 },
 } as const;
 export type Obligation = keyof typeof OBLIGATIONS;
 const KEYS = Object.keys(OBLIGATIONS) as Obligation[];
@@ -93,7 +98,7 @@ export async function saveSettings(orgId: string, b: Record<string, unknown>, us
 /** What PlugSure knows of each obligation's amount for the periods: PPh 23 withheld, PPN out (fleet invoices − credit notes), fakturs to upload. */
 async function figures(orgId: string, periods: string[]) {
   const z = zone();
-  const [wht, ppnInv, ppnCn, ef] = await Promise.all([
+  const [wht, ppnInv, ppnCn, ef, sl] = await Promise.all([
     outsideRequestScope(() => many<{ period: string; amount: string; n: number }>(
       `SELECT period, COALESCE(sum(amount_minor), 0)::bigint AS amount, count(*)::int AS n FROM tax_withholding WHERE org_id = $1 AND voided_at IS NULL AND period = ANY($2::text[]) GROUP BY 1`, [orgId, periods])),
     outsideRequestScope(() => many<{ period: string; amount: string }>(
@@ -105,6 +110,7 @@ async function figures(orgId: string, periods: string[]) {
     outsideRequestScope(() => many<{ period: string; total: number; open: number }>(
       `SELECT to_char(issued_at AT TIME ZONE $3, 'YYYY-MM') AS period, count(*)::int AS total, count(*) FILTER (WHERE efaktur_exported_at IS NULL)::int AS open FROM fleet_invoice
         WHERE org_id = $1 AND status IN ('issued', 'paid') AND tax_minor > 0 AND to_char(issued_at AT TIME ZONE $3, 'YYYY-MM') = ANY($2::text[]) GROUP BY 1`, [orgId, periods, z])),
+    periodTotals(orgId, periods),
   ]);
   const out = new Map<string, { amount: number | null; detail: string }>();
   for (const p of periods) {
@@ -117,6 +123,19 @@ async function figures(orgId: string, periods: string[]) {
     out.set(`ppn_pay:${p}`, { amount: ppn, detail: 'PPN on fleet invoices less credit notes (input VAT not known here)' });
     out.set(`ppn_report:${p}`, { amount: ppn, detail: 'PPN on fleet invoices less credit notes' });
     out.set(`efaktur:${p}`, { amount: null, detail: e ? `${e.total} faktur(s), ${e.open} not exported yet` : 'no fleet invoice with PPN' });
+    // (v1.32.0) Supplier withholding slips: PPh 21 and 26 go on the SPT Masa PPh 21/26; PPh 23 slips add to the PPh 23 figures.
+    const s21 = sl.filter((x) => x.month === p && x.kind !== 'pph23');
+    const s23 = sl.find((x) => x.month === p && x.kind === 'pph23');
+    const a21 = s21.reduce((a, x) => a + x.amount, 0), n21 = s21.reduce((a, x) => a + x.count, 0), d21 = s21.reduce((a, x) => a + x.drafts, 0);
+    const d = `${n21} slip(s)${d21 ? `, ${d21} not issued` : ''} (Finance → Tax → Withholding slips)`;
+    out.set(`pph21_pay:${p}`, { amount: a21, detail: d });
+    out.set(`pph21_report:${p}`, { amount: a21, detail: d });
+    if (s23) {
+      for (const k of ['pph23_pay', 'pph23_report']) {
+        const g = out.get(`${k}:${p}`)!;
+        out.set(`${k}:${p}`, { amount: (g.amount ?? 0) + s23.amount, detail: `${g.detail}; ${s23.count} supplier slip(s)` });
+      }
+    }
   }
   return out;
 }

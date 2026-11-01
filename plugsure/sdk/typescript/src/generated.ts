@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.31.0";
+export const API_VERSION = "1.32.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -4966,6 +4966,28 @@ export type ActivateChargePointResponse = {
   activated: boolean;
 };
 
+export type AddBankFeedBody = {
+  name?: string;
+  cashAccountId?: string;
+  url?: string;
+  token?: string | null;
+  enabled?: boolean;
+  since?: string;
+};
+
+export type AddBankMatchRuleBody = {
+  name?: string;
+  priority?: number;
+  direction?: "any" | "credit" | "debit";
+  contains?: string;
+  amountMin?: number;
+  amountMax?: number;
+  action?: "ignore" | "suggest";
+  accountCode?: string;
+  note?: string;
+  enabled?: boolean;
+};
+
 export type AddBuktiPotongToWithholdingBody = {
   buktiNumber: string;
   buktiDate: string;
@@ -5555,6 +5577,28 @@ export type ChangeApiKeyNameOrRateLimitBody = {
   rateLimitPerMin?: number | null;
 };
 
+export type ChangeBankFeedBody = {
+  name?: string;
+  cashAccountId?: string;
+  url?: string;
+  token?: string | null;
+  enabled?: boolean;
+  since?: string;
+};
+
+export type ChangeBankMatchRuleBody = {
+  name?: string;
+  priority?: number;
+  direction?: "any" | "credit" | "debit";
+  contains?: string;
+  amountMin?: number;
+  amountMax?: number;
+  action?: "ignore" | "suggest";
+  accountCode?: string;
+  note?: string;
+  enabled?: boolean;
+};
+
 export type ChangeCashAccountBody = {
   name?: string;
   bankName?: string;
@@ -6134,6 +6178,11 @@ export type DisputeWithItsNotesResponse = {
     claimed_idr?: number | null;
   };
   notes: Record<string, unknown>[];
+};
+
+export type DraftReportPackBody = {
+  month: string;
+  currency?: string;
 };
 
 export type DriverFundsResponse = {
@@ -6928,6 +6977,11 @@ export type IssueTestContractCertificateResponse = {
     serialNumber: string;
     responderURL?: string;
   }[];
+};
+
+export type IssueWithholdingSlipBody = {
+  number?: string;
+  issuedOn?: string;
 };
 
 export type JournalEntriesResponse = {
@@ -8781,6 +8835,15 @@ export type RunAnomalyChecksResponse = {
   cleared?: number;
 };
 
+export type RunBankFeedNowResponse = {
+  fetched?: number;
+  added?: number;
+  duplicates?: number;
+  matched?: number;
+  ignored?: number;
+  suggested?: number;
+};
+
 export type RunFleetInvoicingAutomationNowResponse = {
   issued?: string[];
   sent?: string[];
@@ -8980,6 +9043,10 @@ export type SendReportEMailNowResponse = {
   reference?: string | null;
 };
 
+export type SendReportPackBackBody = {
+  reason: string;
+};
+
 export type SendScorecardNowBody = {
   month?: string;
 };
@@ -9075,6 +9142,10 @@ export type SetBudgetAlertThresholdBody = {
 
 export type SetBudgetAlertThresholdResponse = {
   budgetAlertPct?: number;
+};
+
+export type SetClosePolicyBody = {
+  enforce?: boolean;
 };
 
 export type SetConnectorLoadManagementPrioritiesResponse = {
@@ -9216,6 +9287,10 @@ export type SetReportingCurrencyBody = {
 
 export type SetReportingCurrencyResponse = {
   reportingCurrency?: string | null;
+};
+
+export type SetReportPackRecipientsBody = {
+  recipients?: string[];
 };
 
 export type SetRevenueDropAlertsBody = {
@@ -9422,6 +9497,10 @@ export type ShareOrWithdrawSiteBody = {
 
 export type ShareOrWithdrawSiteResponse = {
   ok: true;
+};
+
+export type SignOffCloseStepBody = {
+  note?: string;
 };
 
 export type SimulateEventAtVirtualChargerBody = {
@@ -10072,6 +10151,10 @@ export type VoidWithholdingRecordResponse = {
   ok: boolean;
 };
 
+export type VoidWithholdingSlipBody = {
+  reason: string;
+};
+
 export type WeeklyCashView13WeeksResponse = {
   from?: string;
   to?: string;
@@ -10250,6 +10333,10 @@ export type WithdrawMyDisputeEMSPSideResponse = {
   };
 };
 
+export type WriteReportPackCommentaryBody = {
+  commentary?: Record<string, unknown>;
+};
+
 export type XenditReportResponse = {
   report: GatewayReport;
 };
@@ -10380,6 +10467,32 @@ export class Operations {
     identity: string;
   }, options?: RequestOptions): Promise<ActivateChargePointResponse> {
     return this.transport.request<ActivateChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/activate", pathParams: { identity: params.identity }, accept: "json" }, options);
+  }
+
+  /**
+   * Add a bank feed
+   *
+   * (v1.32.0) name, cashAccountId (a bank account), url (https; GET url?from=YYYY-MM-DD answering JSON transactions), token (sent as a bearer, sealed), enabled, since. Audited.
+   *
+   * `POST /v1/finance/bank-feeds`
+   */
+  addBankFeed(params: {
+    body: AddBankFeedBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/bank-feeds", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a bank match rule
+   *
+   * (v1.32.0) For lines nothing matched: direction, a text the line contains and an amount range; action ignore (with a note) or suggest (a journal entry to accountCode, awaiting approval). Lower priority runs first. Audited.
+   *
+   * `POST /v1/finance/bank-rules`
+   */
+  addBankMatchRule(params: {
+    body: AddBankMatchRuleBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/bank-rules", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10628,6 +10741,17 @@ export class Operations {
   }
 
   /**
+   * Apply the bank match rules
+   *
+   * (v1.32.0) Apply the enabled rules to the open lines now. Audited.
+   *
+   * `POST /v1/finance/bank-rules/apply`
+   */
+  applyBankMatchRules(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/bank-rules/apply", accept: "json" }, options);
+  }
+
+  /**
    * Apply the load plan now
    *
    * Runs one load-management pass immediately, sending station ceilings and per-transaction charging profiles to the site’s online chargers.
@@ -10787,6 +10911,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<ApprovePurchaseOrderResponse> {
     return this.transport.request<ApprovePurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Approve a report pack
+   *
+   * (v1.32.0) By a Finance Manager (finance:approve) other than the person who submitted it. Audited.
+   *
+   * `POST /v1/finance/report-packs/{id}/approve`
+   */
+  approveReportPack(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-packs/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -11063,6 +11201,17 @@ export class Operations {
   }
 
   /**
+   * Bank feeds and match rules
+   *
+   * (v1.32.0) The bank feeds (account, endpoint, whether a token is set, last run and status, lines imported) and the match rules in priority order. The token is never returned.
+   *
+   * `GET /v1/finance/bank-feeds`
+   */
+  bankFeedsAndMatchRules(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/bank-feeds", accept: "json" }, options);
+  }
+
+  /**
    * Bank statement lines and their matches
    *
    * (v1.18.0) Up to 1000 lines, open first. statement: one upload; open=true: unmatched only. Amounts are signed (credits positive).
@@ -11254,6 +11403,36 @@ export class Operations {
     body: ChangeApiKeyNameOrRateLimitBody;
   }, options?: RequestOptions): Promise<ApiKey> {
     return this.transport.request<ApiKey>({ method: "PATCH", path: "/v1/api-keys/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a bank feed
+   *
+   * (v1.32.0) As adding; the token is replaced only when given (null clears it). Audited.
+   *
+   * `PUT /v1/finance/bank-feeds/{id}`
+   */
+  changeBankFeed(params: {
+    /** The id. */
+    id: string;
+    body: ChangeBankFeedBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/bank-feeds/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a bank match rule
+   *
+   * (v1.32.0) As adding. Audited.
+   *
+   * `PUT /v1/finance/bank-rules/{id}`
+   */
+  changeBankMatchRule(params: {
+    /** The id. */
+    id: string;
+    body: ChangeBankMatchRuleBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/bank-rules/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12269,6 +12448,33 @@ export class Operations {
     year: string;
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/year-end/{year}/pack", pathParams: { year: params.year }, accept: "binary" }, options);
+  }
+
+  /**
+   * Draft the month's withholding slips
+   *
+   * (v1.32.0) One slip per payee and kind from the month's approved bills; drafts follow the bills, issued slips stay as issued (the answer counts those whose bills changed). Audited.
+   *
+   * `POST /v1/finance/tax/slips/{month}/draft`
+   */
+  draftMonthWithholdingSlips(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/tax/slips/{month}/draft", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Draft a report pack
+   *
+   * (v1.32.0) month (ended), currency (default the main one): the figures (results against budget, cash and the 13-week low, scorecard, sites, payables) taken now. Again on a draft refreshes them. Audited.
+   *
+   * `POST /v1/finance/report-packs`
+   */
+  draftReportPack(params: {
+    body: DraftReportPackBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-packs", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13683,6 +13889,21 @@ export class Operations {
   }
 
   /**
+   * Issue a withholding slip
+   *
+   * (v1.32.0) number (default BP-<kind>-YYYYMM-NNNN; the Coretax number when known), issuedOn (default today). Audited.
+   *
+   * `POST /v1/finance/tax/slips/{id}/issue`
+   */
+  issueWithholdingSlip(params: {
+    /** The id. */
+    id: string;
+    body: IssueWithholdingSlipBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/tax/slips/{id}/issue", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Join PlugSure Hub (when HUB_SELF_JOIN)
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -14498,6 +14719,17 @@ export class Operations {
   }
 
   /**
+   * Management report packs
+   *
+   * (v1.32.0) The packs of the last 36 months (status, who drafted, submitted and approved them, the month's result) and the settings.
+   *
+   * `GET /v1/finance/report-packs`
+   */
+  managementReportPacks(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/report-packs", accept: "json" }, options);
+  }
+
+  /**
    * Mark a tax obligation filed
    *
    * (v1.23.0) The obligation and period, the date filed or paid, the reference (NTPN, BPE, receipt) and optionally the amount. 409 when already marked (void it first). Audited as finance.tax_filed.
@@ -14526,6 +14758,21 @@ export class Operations {
   }
 
   /**
+   * Month close
+   *
+   * (v1.32.0) A month's (default last month) close steps (ledger synced, journals approved, bank reconciled, anomalies reviewed, depreciation and leases recorded, withholding slips issued, energy bills, exchange rates), each with its check and sign-off; whether the month can be locked under the policy.
+   *
+   * `GET /v1/finance/close`
+   */
+  monthClose(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/close", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * A month's close checklist
    *
    * (v1.22.0) What is still open before locking: sites with sessions and no energy bill, currencies without a rate into the reporting currency, bank statement lines not matched.
@@ -14537,6 +14784,20 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<MonthCloseChecklistResponse> {
     return this.transport.request<MonthCloseChecklistResponse>({ method: "GET", path: "/v1/finance/periods/{month}/checklist", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Month close evidence pack
+   *
+   * (v1.32.0) For the auditor: the steps with checks and sign-offs, the sign-off and lock history, each currency's trial balance and the month's finance actions from the audit log. Audited.
+   *
+   * `GET /v1/finance/close/{month}/evidence`
+   */
+  monthCloseEvidencePack(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/close/{month}/evidence", pathParams: { month: params.month }, accept: "text" }, options);
   }
 
   /**
@@ -15152,6 +15413,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<PpnReturnSptMasaPpnResponse> {
     return this.transport.request<PpnReturnSptMasaPpnResponse>({ method: "GET", path: "/v1/finance/ppn", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Preview the bank match rules
+   *
+   * (v1.32.0) The open lines each enabled rule would take; nothing is changed.
+   *
+   * `GET /v1/finance/bank-rules/preview`
+   */
+  previewBankMatchRules(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/bank-rules/preview", accept: "json" }, options);
   }
 
   /**
@@ -16370,6 +16642,23 @@ export class Operations {
   }
 
   /**
+   * Report pack
+   *
+   * (v1.32.0) The pack with its figures and commentary; format=pdf or xlsx for the files.
+   *
+   * `GET /v1/finance/report-packs/{id}`
+   */
+  reportPack(params: {
+    /** The id. */
+    id: string;
+    query?: {
+      format?: "json" | "pdf" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/report-packs/{id}", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
    * Request diagnostic logs
    *
    * Sends GetDiagnostics so the charger uploads its logs, either to your location or to a one-time URL on this deployment for the built-in log viewer. Needs charge_point:config or charge_point:command. Returns 409 when the charger is offline, and 422 (with the request id) when the location is invalid or the charger refuses or does not answer.
@@ -16742,6 +17031,20 @@ export class Operations {
   }
 
   /**
+   * Run a bank feed now
+   *
+   * (v1.32.0) Fetch from a few days before the last line: new lines land on a statement of the account (an upload of the same days does not double them), are matched, then the rules run. Audited.
+   *
+   * `POST /v1/finance/bank-feeds/{id}/run`
+   */
+  runBankFeedNow(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<RunBankFeedNowResponse> {
+    return this.transport.request<RunBankFeedNowResponse>({ method: "POST", path: "/v1/finance/bank-feeds/{id}/run", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Run fleet invoicing automation now
    *
    * (v1.27.0) What the worker does hourly: issue the month on the day, then send what is ready (with a payment link). Audited.
@@ -16944,6 +17247,35 @@ export class Operations {
   }
 
   /**
+   * Send a report pack
+   *
+   * (v1.32.0) E-mail the approved pack (PDF and Excel attached) to the recipients by the organisation's e-mail channel. Audited.
+   *
+   * `POST /v1/finance/report-packs/{id}/send`
+   */
+  sendReportPack(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-packs/{id}/send", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Send a report pack back
+   *
+   * (v1.32.0) reason: back to draft (an approved pack takes finance:approve). Audited.
+   *
+   * `POST /v1/finance/report-packs/{id}/send-back`
+   */
+  sendReportPackBack(params: {
+    /** The id. */
+    id: string;
+    body: SendReportPackBackBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-packs/{id}/send-back", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Send the scorecard now
    *
    * (v1.31.0) month (default last month) to the recipients by the organisation's e-mail channel. Audited.
@@ -17115,6 +17447,19 @@ export class Operations {
     body: SetBudgetAlertThresholdBody;
   }, options?: RequestOptions): Promise<SetBudgetAlertThresholdResponse> {
     return this.transport.request<SetBudgetAlertThresholdResponse>({ method: "PUT", path: "/v1/finance/budgets/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the close policy
+   *
+   * (v1.32.0) enforce: a month is locked only when every close step is signed off. finance:approve. Audited.
+   *
+   * `PUT /v1/finance/close/policy`
+   */
+  setClosePolicy(params: {
+    body: SetClosePolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/close/policy", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17376,6 +17721,19 @@ export class Operations {
     body: SetReportingCurrencyBody;
   }, options?: RequestOptions): Promise<SetReportingCurrencyResponse> {
     return this.transport.request<SetReportingCurrencyResponse>({ method: "PUT", path: "/v1/finance/fx-rates/reporting-currency", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the report pack recipients
+   *
+   * (v1.32.0) recipients: up to 20 e-mail addresses the approved pack is sent to. Audited.
+   *
+   * `PUT /v1/finance/report-packs/settings`
+   */
+  setReportPackRecipients(params: {
+    body: SetReportPackRecipientsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/report-packs/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17683,6 +18041,23 @@ export class Operations {
     body: ShareOrWithdrawSiteBody;
   }, options?: RequestOptions): Promise<ShareOrWithdrawSiteResponse> {
     return this.transport.request<ShareOrWithdrawSiteResponse>({ method: "PUT", path: "/v1/roaming/sites/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Sign off a close step
+   *
+   * (v1.32.0) note; a step whose check fails is accepted as it is only with finance:approve and a note. Audited.
+   *
+   * `POST /v1/finance/close/{month}/steps/{step}/sign-off`
+   */
+  signOffCloseStep(params: {
+    /** YYYY-MM. */
+    month: string;
+    /** The step. */
+    step: string;
+    body: SignOffCloseStepBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/close/{month}/steps/{step}/sign-off", pathParams: { month: params.month, step: params.step }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17994,6 +18369,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<SubmitPurchaseOrderResponse> {
     return this.transport.request<SubmitPurchaseOrderResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Submit a report pack
+   *
+   * (v1.32.0) For review (the summary is needed). Audited.
+   *
+   * `POST /v1/finance/report-packs/{id}/submit`
+   */
+  submitReportPack(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-packs/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -18875,6 +19264,21 @@ export class Operations {
   }
 
   /**
+   * Void a withholding slip
+   *
+   * (v1.32.0) reason (at least 3 characters). Audited.
+   *
+   * `POST /v1/finance/tax/slips/{id}/void`
+   */
+  voidWithholdingSlip(params: {
+    /** The id. */
+    id: string;
+    body: VoidWithholdingSlipBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/tax/slips/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Weekly cash view (13 weeks)
    *
    * (v1.29.0) From today's position per currency: week by week what the gateway forecast expects in and out (settlements, fleet invoices, Hub positions, refunds, owner shares, PlugSure statements) and supplier bills by due date; the closing position, the lowest, the first week below the accounts' minimums, the largest flows.
@@ -19007,6 +19411,22 @@ export class Operations {
   }
 
   /**
+   * Withdraw a close sign-off
+   *
+   * (v1.32.0) While the month is open. Audited.
+   *
+   * `POST /v1/finance/close/{month}/steps/{step}/revoke`
+   */
+  withdrawCloseSignOff(params: {
+    /** YYYY-MM. */
+    month: string;
+    /** The step. */
+    step: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/close/{month}/steps/{step}/revoke", pathParams: { month: params.month, step: params.step }, accept: "json" }, options);
+  }
+
+  /**
    * Withdraw my dispute (eMSP side)
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -19018,6 +19438,50 @@ export class Operations {
     body: WithdrawMyDisputeEMSPSideBody;
   }, options?: RequestOptions): Promise<WithdrawMyDisputeEMSPSideResponse> {
     return this.transport.request<WithdrawMyDisputeEMSPSideResponse>({ method: "POST", path: "/v1/roaming/hub/clearing/disputes/{id}/withdraw", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Withholding slips
+   *
+   * (v1.32.0) A month's (default last month) withholding slips (bukti potong) for PPh 21, 23 and 26: payee, gross, DPP, rate, tax, status and number; totals by kind; how many withholding bills are on no slip.
+   *
+   * `GET /v1/finance/tax/slips`
+   */
+  withholdingSlips(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/tax/slips", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Withholding slips for e-Bupot
+   *
+   * (v1.32.0) The month's live slips as a workbook laid out for the e-Bupot import: PPh 21 and 26 on one sheet, PPh 23 on the other.
+   *
+   * `GET /v1/finance/tax/slips/{month}/ebupot`
+   */
+  withholdingSlipsForEBupot(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/tax/slips/{month}/ebupot", pathParams: { month: params.month }, accept: "text" }, options);
+  }
+
+  /**
+   * Write a report pack commentary
+   *
+   * (v1.32.0) commentary by section (summary, results, cash, scorecard, sites, payables), up to 4000 characters each; empty removes it. Draft or in review only.
+   *
+   * `PUT /v1/finance/report-packs/{id}/commentary`
+   */
+  writeReportPackCommentary(params: {
+    /** The id. */
+    id: string;
+    body: WriteReportPackCommentaryBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/report-packs/{id}/commentary", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

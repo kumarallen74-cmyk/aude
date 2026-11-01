@@ -563,6 +563,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      journal_entry and expense_claim rows of the approvals matrix; set the
      KPI targets and the scorecard e-mail (Finance → Scorecard)
      ([FINANCE.md](FINANCE.md)).
+  25. (v1.32.0) Set each supplier's withholding (company, individual with
+     the NIK, or abroad with the country and the treaty rate); optionally add
+     a bank feed per bank account (an HTTPS endpoint answering JSON, its
+     token sealed) and match rules (Finance → Bank feeds); set the report
+     pack recipients (Finance → Reports); decide whether the close policy is
+     enforced (Finance → Close steps). Give the external auditor the
+     Financial Auditor role: it reads the close and its evidence pack
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The
