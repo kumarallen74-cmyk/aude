@@ -17,6 +17,7 @@ import * as hubCat from './catalogue/hub.js';
 import * as hubClearingCat from './catalogue/hub-clearing.js';
 import * as whatsappCat from './catalogue/whatsapp.js';
 import * as financeCat from './catalogue/finance.js';
+import * as phase30Cat from './catalogue/phase30.js';
 
 /**
  * Builds the published OpenAPI 3.1 document from the catalogue.
@@ -25,7 +26,7 @@ import * as financeCat from './catalogue/finance.js';
  * when the committed file, the catalogue and the registered routes disagree.
  */
 
-const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat, financeCat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
+const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat, financeCat, phase30Cat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
 
 export function allOps(): Op[] {
   return CATALOGUES.flatMap((c) => c.ops);
@@ -44,6 +45,7 @@ const TAG_TEXT: Record<string, string> = {
   Tariffs: 'Tariffs, validated against the regulated ceilings, and their assignment; membership plans, members and promotions.',
   'Plug & Charge': 'ISO 15118 Plug & Charge: contracts (eMAIDs), trust anchors, the V2G certificates of chargers, and the certificate exchange log.',
   Integrations: 'Third-party services: the QRIS acquirer, driver sign-in codes (WhatsApp / SMS), the Plug & Charge PKI and map tiles. Secrets are write-only.',
+  Reports: '(v1.42.0) The custom report builder: datasets, columns, filters, grouping and charts; saved and e-mailed reports.',
   Finance: 'The payment gateway\'s side of the money per gateway account (Xendit): the synced ledger with fees, VAT, net amounts and settlement status, receivables, payables, fees, reconciliation against PlugSure\'s payments, and CSV / Excel / PDF exports. Reading needs payment:read; the platform\'s own account also platform:admin.',
   WhatsApp: 'The platform\'s WhatsApp Business Account (Meta Cloud API): connection health, templates, the message ledger with delivery statuses (numbers masked), account events and test sends. Platform administrators only.',
   'Payments and refunds': 'QRIS checkout and the refund queue.',

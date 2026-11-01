@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.41.1 (1 November 2026), the current release:** fixes from a whole-system review of every console page, tab and link for each role, every read API and every end-to-end suite. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.1.md`](RELEASE-NOTES-v1.41.1.md).
+**v1.42.0 (1 November 2026), the current release:** phase 30: solar and battery storage at a site (measured solar and battery discharge for the load manager, a battery set-point, peak shaving, savings), charger health and failure prediction, a custom report builder with saved and e-mailed reports, and SAML single sign-on for the console. Migration 109. Notes: [`RELEASE-NOTES-v1.42.0.md`](RELEASE-NOTES-v1.42.0.md); guides: [`deploy/ENERGY-STORAGE.md`](deploy/ENERGY-STORAGE.md), [`deploy/SAML-SIGN-IN.md`](deploy/SAML-SIGN-IN.md).
+
+**v1.41.1 (1 November 2026):** fixes from a whole-system review of every console page, tab and link for each role, every read API and every end-to-end suite. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.1.md`](RELEASE-NOTES-v1.41.1.md).
 
 **v1.41.0 (1 November 2026):** the console's menu restructure: Finance in ten sections, each with its own tabs; a Finance group in the sidebar; the gateway filters only where they apply; every earlier link still works. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.0.md`](RELEASE-NOTES-v1.41.0.md).
 

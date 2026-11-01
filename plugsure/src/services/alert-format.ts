@@ -16,6 +16,8 @@ const RANK: Record<string, number> = { info: 0, warning: 1, critical: 2 };
 export const ALERT_KINDS: Record<string, string> = {
   'charge_point.offline': 'Charger offline',
   'connector.faulted': 'Connector fault',
+  // (v1.42.0) Charger health (services/charger-health.ts): a charger likely to fail.
+  'charger.health_at_risk': 'Charger at risk of failing',
   'charge_point.device_event': 'Hardware monitor alarm',
   'session.stuck': 'Session stuck',
   'session.orphaned': 'Orphaned session',

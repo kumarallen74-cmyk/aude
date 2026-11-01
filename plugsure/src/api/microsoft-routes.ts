@@ -8,6 +8,7 @@ import { assertCan } from '../services/authz.js';
 import { adminHostAllowed, createSession } from '../services/auth.js';
 import { writeAudit } from '../services/audit.js';
 import { consoleBrandForHost } from '../services/console-brand.js';
+import { offeredOn as samlOfferedOn } from '../services/saml.js';
 import { TokenBuckets } from '../services/ratelimit.js';
 import { sandboxInfo } from '../sandbox/provision.js';
 import {
@@ -139,7 +140,9 @@ export async function registerMicrosoftRoutes(app: FastifyInstance): Promise<voi
     reply.header('cache-control', 'no-cache');
     // multiCountry: the sign-in page's copy names Malaysia and Singapore only on a deployment that
     // offers them (MULTI_COUNTRY); an Indonesian installation keeps v1.5's wording.
-    return { microsoft: microsoftEnabled() && redirectUriFor(req.headers.host, req.protocol) !== null, multiCountry: config.features.multiCountry };
+    // (v1.42.0) saml: the single sign-on button belongs on this address (saml.offeredOn); it asks for the work e-mail.
+    const saml = await samlOfferedOn(req.headers.host, req.protocol).catch(() => false);
+    return { microsoft: microsoftEnabled() && redirectUriFor(req.headers.host, req.protocol) !== null, multiCountry: config.features.multiCountry, saml };
   });
 
   app.get('/v1/auth/microsoft/start', async (req, reply) => {
