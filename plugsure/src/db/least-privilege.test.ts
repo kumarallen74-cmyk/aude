@@ -37,7 +37,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'owner_payout_rule', 'ppn_input_invoice', 'ppn_period',
       'finance_digest_subscription', 'finance_digest_send', 'site_tariff', 'fleet_invoice_link',
       'driver_funds_breakage', 'consolidation_elimination', 'payment_plan', 'payment_plan_instalment', 'bad_debt_provision',
-      'supplier', 'cash_account', 'cash_balance', 'cash_transfer', 'supplier_bill', 'supplier_payment', 'fixed_asset', 'fixed_asset_run']]);
+      'supplier', 'cash_account', 'cash_balance', 'cash_transfer', 'supplier_bill', 'supplier_payment', 'fixed_asset', 'fixed_asset_run',
+      'purchase_order', 'purchase_order_line', 'goods_receipt', 'lease', 'lease_run', 'deposit', 'finance_check_finding']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -115,5 +116,12 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     supplier_payment: 'INSERT,SELECT,UPDATE',
     fixed_asset: 'INSERT,SELECT,UPDATE',
     fixed_asset_run: 'INSERT,SELECT,UPDATE',
+    purchase_order: 'INSERT,SELECT,UPDATE',
+    purchase_order_line: 'INSERT,SELECT,UPDATE',
+    goods_receipt: 'INSERT,SELECT,UPDATE',
+    lease: 'INSERT,SELECT,UPDATE',
+    lease_run: 'INSERT,SELECT,UPDATE',
+    deposit: 'INSERT,SELECT,UPDATE',
+    finance_check_finding: 'INSERT,SELECT,UPDATE',
   });
 });

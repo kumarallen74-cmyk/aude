@@ -1,11 +1,20 @@
 PlugSure CSMS
-Version:   1.29.0
-Package:   plugsure-v1.29.0
-Prepared:  2026-11-01  (v1.28.0 + finance phase 18 — see RELEASE-NOTES-v1.29.0.md)
+Version:   1.30.0
+Package:   plugsure-v1.30.0
+Prepared:  2026-11-01  (v1.29.0 + finance phase 19 — see RELEASE-NOTES-v1.30.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (546 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (572 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.29.0 = v1.28.0 + finance phase 18: a fixed asset register (straight-line and declining-balance
+Status:    v1.30.0 = v1.29.0 + finance phase 19: purchase orders (approved by a second person under the approvals
+           matrix, goods received, the three-way match of ordered, received and billed, commitments), lease accounting
+           under PSAK 73 (the lease liability and right-of-use asset, the monthly schedule and journal, current and
+           non-current, early ends, short-term and low-value leases expensed), treasury (time deposits out of and back
+           into the bank accounts, interest with the final tax, rollovers, maturing alerts, idle-cash suggestions from
+           the 13-week view) and a finance anomaly review (duplicate bills and payments, round amounts, large bills from
+           new suppliers, split bills, out-of-hours entries; dismissed or confirmed). Migration 098 (additive).
+
+v1.29.0 (2026-11-01):
+           v1.29.0 = v1.28.0 + finance phase 18: a fixed asset register (straight-line and declining-balance
            depreciation, disposals with gain or loss, the monthly depreciation journal recorded per currency, site
            investments imported), supplier bills and payables (suppliers, PPh 23, approval by a second person under the
            approvals matrix, payments, AP ageing, overdue alerts, capitalised as assets, matched in bank
