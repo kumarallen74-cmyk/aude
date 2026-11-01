@@ -48,7 +48,7 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['1410', 'VAT input on gateway fees', 'asset'], ['1420', 'PPN input', 'asset'], ['1600', 'Fixed assets at cost', 'asset'], ['1690', 'Accumulated depreciation', 'asset'],
   ['1650', 'Right-of-use assets', 'asset'], ['1659', 'Accumulated depreciation, right-of-use assets', 'asset'],
   ['2100', 'Supplier payables', 'liability'], ['2120', 'Site owners\' shares payable', 'liability'], ['2140', 'Withholding tax payable', 'liability'],
-  ['2150', 'PPh 23 payable', 'liability'], ['2160', 'Expense claims payable', 'liability'], ['2300', 'Intercompany payables', 'liability'],
+  ['2150', 'PPh 23 payable', 'liability'], ['2151', 'PPh 21 payable', 'liability'], ['2152', 'PPh 26 payable', 'liability'], ['2160', 'Expense claims payable', 'liability'], ['2300', 'Intercompany payables', 'liability'],
   ['2400', 'Lease liabilities', 'liability'], ['2410', 'Accrued lease payments', 'liability'],
   ['3100', 'Share capital', 'equity'], ['3200', 'Retained earnings', 'equity'],
   ['4100', 'Charging revenue (collected)', 'revenue'], ['4190', 'Refunds to drivers', 'revenue'], ['4900', 'Intercompany recharge income', 'revenue'],
@@ -61,6 +61,8 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['7100', 'Gain on disposal', 'other'], ['7200', 'Interest on lease liabilities', 'other'], ['7300', 'Interest income', 'other'], ['8100', 'Loss on disposal', 'other'], ['8200', 'Deposit penalties', 'other'],
 ];
 export const BILL_ACCOUNT: Record<string, string> = { energy: '5100', maintenance: '6200', rent: '6210', installation: '6220', equipment: '6230', connectivity: '6240', services: '6250', other: '6290' };
+/** (v1.32.0) The payable a bill's withholding is posted to, by kind. */
+export const WHT_ACCOUNT: Record<string, string> = { pph23: '2150', pph21: '2151', pph26: '2152' };
 export const CLAIM_ACCOUNT: Record<string, string> = { fuel: '6310', travel: '6320', meals: '6330', parking: '6340', tools: '6350', supplies: '6360', phone: '6370', other: '6390' };
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -205,7 +207,7 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
     L.push({ account: b.capitalised ? '1600' : BILL_ACCOUNT[b.category] ?? '6290', debit: Number(b.subtotal_minor), credit: 0, description: d });
     if (Number(b.vat_minor)) L.push({ account: '1420', debit: Number(b.vat_minor), credit: 0, description: d });
     L.push({ account: '2100', debit: 0, credit: Number(b.subtotal_minor) + Number(b.vat_minor) - Number(b.wht_minor), description: d });
-    if (Number(b.wht_minor)) L.push({ account: '2150', debit: 0, credit: Number(b.wht_minor), description: d });
+    if (Number(b.wht_minor)) L.push({ account: WHT_ACCOUNT[b.wht_kind] ?? '2150', debit: 0, credit: Number(b.wht_minor), description: d });
   }
   for (const p of await Q(
     `SELECT p.amount_minor, b.currency, b.number, s.name AS supplier, a.kind FROM supplier_payment p JOIN supplier_bill b ON b.id = p.bill_id JOIN supplier s ON s.id = b.supplier_id LEFT JOIN cash_account a ON a.id = p.cash_account_id

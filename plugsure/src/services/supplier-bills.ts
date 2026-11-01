@@ -8,6 +8,7 @@ import { reportingCurrency, currencies } from './fx.js';
 import { insert as insertAsset, AssetError } from './fixed-assets.js';
 import { xlsx } from './xlsx.js';
 import { assertBillable, match as orderMatch, OrderError } from './purchase-orders.js';
+import { withholdingFor, TAX_KINDS } from './withholding-tax.js';
 
 /**
  * Supplier bills and payables (v1.29.0). What the operator owes its suppliers — installers, maintenance contractors,
@@ -54,6 +55,7 @@ const supplierView = (r: any) => ({
   id: String(r.id), name: r.name, taxId: r.tax_id ?? null, email: r.email ?? null, phone: r.phone ?? null,
   bank: r.bank_name ? { name: r.bank_name, accountNumber: r.account_number ?? null, accountName: r.account_name ?? null } : null,
   termsDays: Number(r.terms_days), whtPct: Number(r.wht_pct), note: r.note ?? null, archived: !!r.archived_at,
+  taxKind: r.tax_kind ?? 'company', idNumber: r.id_number ?? null, country: r.country ?? null, treatyRatePct: r.treaty_rate_pct == null ? null : Number(r.treaty_rate_pct),
   ...(r.open_minor != null ? { open: Number(r.open_minor), bills: Number(r.bills ?? 0) } : {}),
 });
 
@@ -83,16 +85,28 @@ function supplierFields(b: Record<string, unknown>, cur?: any) {
   const acct = b.bank === undefined && cur ? cur.account_number : text(bank.accountNumber, 40);
   if (acct && !/^[0-9\-\s]{4,40}$/.test(acct)) throw new BillError(422, 'The bank account number is digits.');
   const acctName = b.bank === undefined && cur ? cur.account_name : text(bank.accountName, 120);
-  return { name, taxId, email, phone: pick('phone', 'phone', 40), bankName, acct, acctName, terms, wht, note: pick('note', 'note', 500) };
+  // (v1.32.0) How the supplier is withheld: a company (PPh 23 at whtPct), an individual (PPh 21, not an employee) or
+  // abroad (PPh 26 at the treaty rate, else 20%).
+  const taxKind = b.taxKind === undefined || b.taxKind === '' ? (cur?.tax_kind ?? 'company') : String(b.taxKind);
+  if (!(TAX_KINDS as readonly string[]).includes(taxKind)) throw new BillError(422, `taxKind is ${TAX_KINDS.join(', ')}.`);
+  const idNumber = pick('idNumber', 'id_number', 20);
+  if (idNumber && !/^\d{16}$/.test(idNumber.replace(/\s/g, ''))) throw new BillError(422, 'idNumber (NIK) is 16 digits.');
+  const country = b.country === undefined && cur ? cur.country : b.country == null || b.country === '' ? null : String(b.country).toUpperCase();
+  if (country && !/^[A-Z]{2}$/.test(country)) throw new BillError(422, 'country is a two-letter code (SG, MY, US…).');
+  const treaty = b.treatyRatePct === undefined ? (cur?.treaty_rate_pct == null ? null : Number(cur.treaty_rate_pct)) : b.treatyRatePct == null || b.treatyRatePct === '' ? null : Number(b.treatyRatePct);
+  if (treaty != null && (!Number.isFinite(treaty) || treaty < 0 || treaty > 20)) throw new BillError(422, 'treatyRatePct (PPh 26 under a tax treaty) is 0 to 20.');
+  if (taxKind === 'foreign' && country === 'ID') throw new BillError(422, 'A supplier abroad has a country other than ID.');
+  return { name, taxId, email, phone: pick('phone', 'phone', 40), bankName, acct, acctName, terms, wht, note: pick('note', 'note', 500),
+    taxKind, idNumber: idNumber ? idNumber.replace(/\s/g, '') : null, country, treaty };
 }
 
 export async function createSupplier(orgId: string, b: Record<string, unknown>, userId: string | null) {
   const f = supplierFields(b);
   try {
     const r = await outsideRequestScope(() => one<any>(
-      `INSERT INTO supplier (org_id, name, tax_id, email, phone, bank_name, account_number, account_name, terms_days, wht_pct, note, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-      [orgId, f.name, f.taxId, f.email, f.phone, f.bankName, f.acct, f.acctName, f.terms, f.wht, f.note, userId]));
+      `INSERT INTO supplier (org_id, name, tax_id, email, phone, bank_name, account_number, account_name, terms_days, wht_pct, note, created_by, tax_kind, id_number, country, treaty_rate_pct)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+      [orgId, f.name, f.taxId, f.email, f.phone, f.bankName, f.acct, f.acctName, f.terms, f.wht, f.note, userId, f.taxKind, f.idNumber, f.country, f.treaty]));
     return supplierView(r);
   } catch (e) {
     if ((e as any).code === '23505') throw new BillError(409, 'There is already a supplier with that name.');
@@ -114,9 +128,10 @@ export async function updateSupplier(orgId: string, id: string, b: Record<string
   try {
     const r = await outsideRequestScope(() => one<any>(
       `UPDATE supplier SET name = $3, tax_id = $4, email = $5, phone = $6, bank_name = $7, account_number = $8, account_name = $9, terms_days = $10, wht_pct = $11, note = $12,
+              tax_kind = $14, id_number = $15, country = $16, treaty_rate_pct = $17,
               archived_at = CASE WHEN $13::boolean IS NULL THEN archived_at WHEN $13 THEN COALESCE(archived_at, now()) ELSE NULL END
         WHERE id = $1 AND org_id = $2 RETURNING *`,
-      [id, orgId, f.name, f.taxId, f.email, f.phone, f.bankName, f.acct, f.acctName, f.terms, f.wht, f.note, archive]));
+      [id, orgId, f.name, f.taxId, f.email, f.phone, f.bankName, f.acct, f.acctName, f.terms, f.wht, f.note, archive, f.taxKind, f.idNumber, f.country, f.treaty]));
     return supplierView(r);
   } catch (e) {
     if ((e as any).code === '23505') throw new BillError(409, 'There is already a supplier with that name.');
@@ -141,7 +156,7 @@ function billView(r: any, now = new Date()) {
   return {
     id: String(r.id), supplierId: String(r.supplier_id), supplier: r.supplier_name, number: r.number, category: r.category,
     siteId: r.site_id ?? null, site: r.site_name ?? null, description: r.description, currency: r.currency,
-    subtotal: Number(r.subtotal_minor), vat: Number(r.vat_minor), wht: Number(r.wht_minor), payable, paid, balance: payable - paid,
+    subtotal: Number(r.subtotal_minor), vat: Number(r.vat_minor), wht: Number(r.wht_minor), whtKind: r.wht_kind ?? 'pph23', payable, paid, balance: payable - paid,
     billDate: r.bill_date_s, dueDate: r.due_date_s, status: r.status, overdue: daysLate > 0, daysLate,
     capitalise: !!r.capitalise, lifeMonths: r.life_months == null ? null : Number(r.life_months), assetId: r.asset_id == null ? null : String(r.asset_id),
     submittedBy: r.submitted_by_name ?? null, firstApprovedBy: r.first_approved_by_name ?? null, approvedBy: r.approved_by_name ?? null,
@@ -211,8 +226,10 @@ export async function create(orgId: string, b: Record<string, unknown>, userId: 
   if (!Number.isInteger(subtotal) || subtotal <= 0) throw new BillError(422, 'subtotal is a whole number of the currency\'s minor unit, above 0.');
   const vat = b.vat == null || b.vat === '' ? 0 : Number(b.vat);
   if (!Number.isInteger(vat) || vat < 0) throw new BillError(422, 'vat (PPN) is a whole amount, 0 or more.');
-  const wht = b.wht == null || b.wht === '' ? Math.round((subtotal * Number(sup.wht_pct)) / 100) : Number(b.wht);
-  if (!Number.isInteger(wht) || wht < 0 || wht > subtotal) throw new BillError(422, 'wht (PPh 23 withheld) is 0 to the subtotal.');
+  // (v1.32.0) By the supplier's tax kind: PPh 23 (company), PPh 21 (an individual) or PPh 26 (abroad).
+  const w = withholdingFor(sup, subtotal);
+  const wht = b.wht == null || b.wht === '' ? w.tax : Number(b.wht);
+  if (!Number.isInteger(wht) || wht < 0 || wht > subtotal) throw new BillError(422, `wht (${w.label} withheld) is 0 to the subtotal.`);
   const billDate = String(b.billDate ?? '');
   if (!validDate(billDate)) throw new BillError(422, 'billDate is the bill\'s date (YYYY-MM-DD).');
   const dueDate = b.dueDate == null || b.dueDate === '' ? addDays(billDate, Number(sup.terms_days)) : String(b.dueDate);
@@ -230,9 +247,9 @@ export async function create(orgId: string, b: Record<string, unknown>, userId: 
   await assertOpen(orgId, billDate.slice(0, 7), 'A bill', ERR);
   try {
     const r = await outsideRequestScope(() => one<any>(
-      `INSERT INTO supplier_bill (org_id, supplier_id, number, category, site_id, description, currency, subtotal_minor, vat_minor, wht_minor, bill_date, due_date, capitalise, life_months, status, submitted_by, submitted_at, purchase_order_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CASE WHEN $15 = 'draft' THEN NULL ELSE now() END, $17) RETURNING id`,
-      [orgId, sup.id, number, category, siteId, description, currency, subtotal, vat, wht, billDate, dueDate, capitalise, life, draft ? 'draft' : 'awaiting_approval', userId, orderId]));
+      `INSERT INTO supplier_bill (org_id, supplier_id, number, category, site_id, description, currency, subtotal_minor, vat_minor, wht_minor, bill_date, due_date, capitalise, life_months, status, submitted_by, submitted_at, purchase_order_id, wht_kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CASE WHEN $15 = 'draft' THEN NULL ELSE now() END, $17, $18) RETURNING id`,
+      [orgId, sup.id, number, category, siteId, description, currency, subtotal, vat, wht, billDate, dueDate, capitalise, life, draft ? 'draft' : 'awaiting_approval', userId, orderId, w.kind]));
     return get(orgId, String(r.id), now);
   } catch (e) {
     if ((e as any).code === '23505') throw new BillError(409, `There is already a bill ${number} from ${sup.name}.`);

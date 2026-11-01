@@ -1,11 +1,21 @@
 PlugSure CSMS
-Version:   1.31.0
-Package:   plugsure-v1.31.0
-Prepared:  2026-11-01  (v1.30.0 + finance phase 20 — see RELEASE-NOTES-v1.31.0.md)
+Version:   1.32.0
+Package:   plugsure-v1.32.0
+Prepared:  2026-11-01  (v1.31.0 + finance phase 21 — see RELEASE-NOTES-v1.32.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (610 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (637 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.31.0 = v1.30.0 + finance phase 20: a general ledger (chart of accounts; each month synced from the
+Status:    v1.32.0 = v1.31.0 + finance phase 21: bank feeds (a bank account's mutations fetched hourly from an HTTPS
+           JSON endpoint with a sealed token, stored once beside uploads and matched) with match rules (ignore bank fees,
+           suggest a journal entry for approval), withholding on supplier bills by the supplier's kind (PPh 23, PPh 21
+           for individuals on half the gross at the Pasal 17 rates, PPh 26 at the treaty rate) with the month's slips
+           drafted, issued and exported for e-Bupot, a management report pack (results against budget, cash, scorecard,
+           sites, payables; commentary; approved by a second Finance Manager; PDF and Excel e-mailed), and the month close
+           as signed-off steps (a policy holds the lock until every step is signed off; an auditor's evidence pack).
+           Migration 100 (additive).
+
+v1.31.0 (2026-11-01):
+           v1.31.0 = v1.30.0 + finance phase 20: a general ledger (chart of accounts; each month synced from the
            gateway journals, depreciation, leases, the provision, supplier bills and payments, deposits, expense claims
            and intercompany; manual journal entries approved by a second person and reversed, never edited; trial
            balance, profit and loss, balance sheet), expense claims (receipts, limits, a second approver, reimbursed from

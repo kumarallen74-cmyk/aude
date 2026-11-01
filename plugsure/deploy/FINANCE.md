@@ -782,6 +782,57 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   on a day of the month to the recipients (the organisation's e-mail
   channel).
 
+## Bank feeds, withholding, report pack and close steps (v1.32.0)
+
+- **Bank feeds** (tab). A feed fetches a bank account's mutations every
+  hour: `GET <url>?from=YYYY-MM-DD` with the token as a bearer, answering
+  `{ "transactions": [ { "date", "description", "amount", "reference",
+  "balance", "type" } ] }` (or the list itself; the amount signed, or
+  `type` CR / DB). Put a small adapter in front of the bank's own API, or
+  use an aggregator. New lines land on a statement of the account,
+  exactly like an uploaded one: the same fingerprint, so an upload of the
+  same days does not double them. They are matched as usual, then go
+  through the **match rules** in priority order: by direction, a text the
+  line contains and an amount range, *ignore* (with a note: bank fees,
+  transfers between own accounts) or *suggest* a journal entry to an
+  account (Dr bank / Cr the account for money in, the other way for money
+  out), which waits for approval in the Ledger. The rules also run after
+  every upload. *Preview* shows what they would take. The token is sealed
+  and never shown again; production feeds must be https.
+- **Withholding** (tab), on supplier bills by the supplier's kind:
+  - **company:** PPh 23 at the supplier's rate;
+  - **individual** (not an employee): PPh 21, the Pasal 17 rates (5% to
+    60 million, 15% to 250 million, 25% to 500 million, 30% to 5 billion,
+    35% above) on 50% of the gross, per payment; 20% more without an NPWP
+    or NIK;
+  - **abroad:** PPh 26 at the treaty rate when recorded (keep the
+    certificate of domicile), else 20%.
+  The amount can still be typed on the bill. *Draft from the bills* makes
+  one slip per payee and kind for the month; *Issue* gives it its number
+  (the Coretax number when known) and date; an issued slip is not changed
+  by bills recorded later: void and reissue it. *e-Bupot (Excel)* lays the
+  month out for the import (PPh 21 and 26, and PPh 23). The ledger posts
+  PPh 21 to 2151 and PPh 26 to 2152; the tax calendar gains *Pay* and
+  *File SPT Masa PPh 21/26* with the slips' amounts.
+- **Reports** (tab). A month's management report pack: results against
+  budget (the ledger; sync the month first), cash at the month's end and
+  the 13-week low, the scorecard, the top sites and the lowest margins,
+  payables. The figures are a snapshot, refreshed on demand while it is a
+  draft. Commentary per section (the summary is needed). Submitted, then
+  approved by a Finance Manager other than the submitter; a reviewer can
+  send it back with a reason. Approved, it is e-mailed with the PDF and
+  Excel to the recipients (the organisation's e-mail channel).
+- **Close steps** (tab). The month close as steps checked from the data:
+  ledger synced, journal entries approved, bank reconciled, anomalies
+  reviewed, depreciation and leases recorded, withholding slips issued,
+  energy bills and exchange rates in. A step that checks out is signed
+  off; one that does not is *accepted as is* only by a Finance Manager,
+  with a note. With the **policy** enforced, a month is locked only once
+  every step is signed off. The **evidence pack** (Excel) has the steps
+  and sign-offs, the lock history, each currency's trial balance and the
+  month's finance actions from the audit log; the Financial Auditor role
+  can read it and nothing else.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of
