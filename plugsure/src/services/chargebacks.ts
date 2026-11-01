@@ -10,7 +10,8 @@ import { xlsx } from './xlsx.js';
  * Chargebacks and fraud (v1.36.0).
  *
  *   cases      a card or e-wallet chargeback on a payment: the provider's case, the reason (and its code), the amount
- *              (at most what was captured), the fee, when it came and the date to respond by (default 7 days).
+ *              (at most what was captured), the fee, when it came and the date to respond by: the date on the gateway's
+ *              notice when given, else 7 calendar days (Xendit's window from the first notice; others run 5 to 10).
  *              open → evidence submitted → won or lost; or accepted (not contested). The deadline raises
  *              finance.chargeback_due from 3 days ahead (critical once past) until answered.
  *   evidence   a PDF from the payment and its charging session: when and where it was authorised and captured, the
@@ -33,6 +34,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DUE = 'finance.chargeback_due';
 const RATE = 'finance.chargeback_rate';
+/** The response window when the notice gives none: Xendit's 7 calendar days from the first dispute notice. */
+export const DEFAULT_RESPOND_DAYS = 7;
 export const RATE_THRESHOLD_PCT = 0.9;
 const zone = () => config.billing.timeZone;
 const today = (now = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: zone() }).format(now);
@@ -108,7 +111,7 @@ export async function create(orgId: string, b: Record<string, unknown>, userId: 
   if (!Number.isInteger(fee) || fee < 0) throw new ChargebackError(422, 'fee is a whole amount, 0 or more.');
   const rec = String(b.receivedOn ?? today());
   if (!DATE_RE.test(rec)) throw new ChargebackError(422, 'receivedOn is YYYY-MM-DD.');
-  const by = String(b.respondBy ?? addDays(rec, 7));
+  const by = String(b.respondBy ?? addDays(rec, DEFAULT_RESPOND_DAYS));
   if (!DATE_RE.test(by) || by < rec) throw new ChargebackError(422, 'respondBy is YYYY-MM-DD, on or after receivedOn.');
   await assertOpen(orgId, rec.slice(0, 7), 'A chargeback', ERR);
   try {

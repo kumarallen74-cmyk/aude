@@ -3053,7 +3053,7 @@ export const ops: Op[] = [
   },
   {
     method: 'POST', path: '/v1/finance/grants', tag: T, summary: 'Add a grant',
-    description: '(v1.36.0) grantor, programme, kind (capital: releaseMonths; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.',
+    description: '(v1.36.0) grantor, programme, kind (capital: releaseMonths, by default the linked capex project\'s asset life, else 96 months; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.',
     body: { required: true, schema: { type: 'object', properties: { grantor: { type: 'string' }, programme: { type: 'string' }, reference: { type: 'string' }, kind: { type: 'string', enum: ['capital', 'revenue', 'per_kwh'] }, currency: { type: 'string' }, awarded: { type: 'integer' }, ratePerKwh: { type: 'number' }, releaseMonths: { type: 'integer' }, periodFrom: { type: 'string', format: 'date' }, periodTo: { type: 'string', format: 'date' }, awardedOn: { type: 'string', format: 'date' }, siteId: { type: 'string', format: 'uuid' }, capexProjectId: { type: 'string' }, status: { type: 'string', enum: ['applied', 'awarded', 'active', 'completed', 'rejected', 'clawed_back'] }, note: { type: 'string' } } } },
     responses: { 201: { description: 'Created', schema: { type: 'object' } } },
     errors: [403, 404, 409, 422],
@@ -3195,7 +3195,7 @@ export const ops: Op[] = [
   },
   {
     method: 'POST', path: '/v1/finance/chargebacks', tag: T, summary: 'Record a chargeback',
-    description: '(v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (default 7 days). Audited.',
+    description: '(v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (the date on the gateway\'s notice; default 7 calendar days, Xendit\'s window). Audited.',
     body: { required: true, schema: { type: 'object', required: ['provider', 'caseRef', 'reason'], properties: { paymentId: { type: 'string', format: 'uuid' }, paymentRef: { type: 'string' }, provider: { type: 'string' }, caseRef: { type: 'string' }, reason: { type: 'string', enum: ['fraud', 'not_received', 'not_as_described', 'duplicate', 'amount', 'cancelled', 'other'] }, reasonCode: { type: 'string' }, currency: { type: 'string' }, amount: { type: 'integer' }, fee: { type: 'integer' }, receivedOn: { type: 'string', format: 'date' }, respondBy: { type: 'string', format: 'date' }, note: { type: 'string' } } } },
     responses: { 201: { description: 'Created', schema: { type: 'object' } } },
     errors: [403, 404, 409, 422],

@@ -9,8 +9,8 @@ import { xlsx } from './xlsx.js';
  * Grants and incentives (v1.36.0): government, utility or development-bank money for charging infrastructure.
  *
  *   kinds       capital: towards assets (a site build, chargers); what is received is deferred (2600) and released to
- *               grant income (4400) straight-line over the release period (months, e.g. the assets' life), from the
- *               month it is received. revenue: towards running costs; per_kwh: a rate per kWh charged (at the grant's
+ *               grant income (4400) straight-line over the release period from the month it is received — by default
+ *               the assets' useful life (the linked capex project's, else 96 months, a charger's life). revenue: towards running costs; per_kwh: a rate per kWh charged (at the grant's
  *               site, or all sites) — both are income (4400) when the claim is approved (Dr 1350 grant receivable),
  *               and the receivable is cleared when paid.
  *   conditions  what the grantor requires (chargers live by a date, uptime, reports) with a due date; pending ones
@@ -30,6 +30,8 @@ export const KINDS = ['capital', 'revenue', 'per_kwh'] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DUE = 'finance.grant_condition_due';
+/** The standard release period of a capital grant without a linked project: a charger's useful life, 8 years. */
+export const DEFAULT_RELEASE_MONTHS = 96;
 const zone = () => config.billing.timeZone;
 const today = (now = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: zone() }).format(now);
 const ERR = (s: number, m: string) => new GrantError(s, m);
@@ -155,8 +157,15 @@ export async function save(orgId: string, id: string | null, b: Record<string, u
   if (!Number.isInteger(awarded) || awarded < 0) throw new GrantError(422, 'awarded is a whole amount, 0 or more.');
   const rate = v('ratePerKwh', 'rate_per_kwh') == null || v('ratePerKwh', 'rate_per_kwh') === '' ? null : Number(v('ratePerKwh', 'rate_per_kwh'));
   if (kind === 'per_kwh' && (rate == null || !Number.isFinite(rate) || rate <= 0)) throw new GrantError(422, 'A per-kWh grant has its ratePerKwh.');
-  const rel = v('releaseMonths', 'release_months') == null || v('releaseMonths', 'release_months') === '' ? null : Number(v('releaseMonths', 'release_months'));
-  if (kind === 'capital' && (rel == null || !Number.isInteger(rel) || rel < 1 || rel > 480)) throw new GrantError(422, 'A capital grant is released over releaseMonths (1 to 480), usually the assets\' life.');
+  let rel = v('releaseMonths', 'release_months') == null || v('releaseMonths', 'release_months') === '' ? null : Number(v('releaseMonths', 'release_months'));
+  const projForLife = v('capexProjectId', 'capex_project_id') == null || v('capexProjectId', 'capex_project_id') === '' ? null : String(v('capexProjectId', 'capex_project_id'));
+  // The standard: a capital grant is released over the useful life of the assets it pays for (PSAK 61 / IAS 20) — the
+  // capex project's asset life when linked, else the chargers' life used for the asset register (DEFAULT_RELEASE_MONTHS).
+  if (kind === 'capital' && rel == null) {
+    const life = projForLife && /^\d{1,18}$/.test(projForLife) ? await outsideRequestScope(() => one<{ life_months: number | null }>(`SELECT life_months FROM capex_project WHERE id = $1 AND org_id = $2`, [projForLife, orgId])) : null;
+    rel = life?.life_months ?? DEFAULT_RELEASE_MONTHS;
+  }
+  if (kind === 'capital' && (rel == null || !Number.isInteger(rel) || rel < 1 || rel > 480)) throw new GrantError(422, 'releaseMonths is 1 to 480 (the assets\' useful life).');
   const d = (k: string, col: string) => { const x = v(k, col); if (x == null || x === '') return null; if (!DATE_RE.test(String(x))) throw new GrantError(422, `${k} is YYYY-MM-DD.`); return String(x); };
   const pf = d('periodFrom', 'pf'), pt = d('periodTo', 'pt'), aw = d('awardedOn', 'aw');
   if (pf && pt && pt < pf) throw new GrantError(422, 'periodTo is on or after periodFrom.');

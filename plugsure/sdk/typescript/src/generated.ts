@@ -11274,7 +11274,7 @@ export class Operations {
   /**
    * Add a grant
    *
-   * (v1.36.0) grantor, programme, kind (capital: releaseMonths; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.
+   * (v1.36.0) grantor, programme, kind (capital: releaseMonths, by default the linked capex project's asset life, else 96 months; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.
    *
    * `POST /v1/finance/grants`
    */
@@ -17493,7 +17493,7 @@ export class Operations {
   /**
    * Record a chargeback
    *
-   * (v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (default 7 days). Audited.
+   * (v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (the date on the gateway's notice; default 7 calendar days, Xendit's window). Audited.
    *
    * `POST /v1/finance/chargebacks`
    */

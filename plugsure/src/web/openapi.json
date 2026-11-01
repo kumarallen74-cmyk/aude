@@ -61514,7 +61514,7 @@
         ],
         "summary": "Add a grant",
         "operationId": "addGrant",
-        "description": "(v1.36.0) grantor, programme, kind (capital: releaseMonths; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.",
+        "description": "(v1.36.0) grantor, programme, kind (capital: releaseMonths, by default the linked capex project's asset life, else 96 months; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.",
         "requestBody": {
           "required": true,
           "content": {
@@ -63010,7 +63010,7 @@
         ],
         "summary": "Record a chargeback",
         "operationId": "recordChargeback",
-        "description": "(v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (default 7 days). Audited.",
+        "description": "(v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (the date on the gateway's notice; default 7 calendar days, Xendit's window). Audited.",
         "requestBody": {
           "required": true,
           "content": {

@@ -21,7 +21,7 @@ The new Finance → **Grants** tab: government, utility or development-bank mone
 
 | Kind | What it pays for | Ledger |
 |---|---|---|
-| Capital | Assets (a site build, chargers) | Received: Dr bank / Cr 2600 deferred grant income. Released straight-line over the release period from the month received: Dr 2600 / Cr 4400 grant income. |
+| Capital | Assets (a site build, chargers) | Received: Dr bank / Cr 2600 deferred grant income. Released straight-line from the month received over the assets' useful life (the linked capex project's, else 96 months, a charger's life; PSAK 61 / IAS 20): Dr 2600 / Cr 4400 grant income. |
 | Revenue | Running costs | Approved: Dr 1350 grants receivable / Cr 4400. Paid: Dr bank / Cr 1350; a short payment reduces the income. |
 | Per kWh | A rate per kWh charged | As revenue; the claim takes the kWh charged in its period at the grant's site (or every site). |
 
@@ -73,7 +73,7 @@ The new Finance → **Chargebacks** tab.
 **Cases** on a payment (by its reference):
 - provider and case number (unique), reason and code;
 - amount (default and at most what was captured) and fee;
-- received and respond-by dates (default 7 days);
+- received and respond-by dates: the date on the gateway's notice, else 7 calendar days (Xendit's window from the first notice; other gateways give 5 to 10);
 - open → evidence submitted → won or lost; or accepted (not contested).
 
 `finance.chargeback_due` warns 3 days ahead of the deadline, critical once past.
@@ -196,7 +196,4 @@ The report pack (Finance → Reports) gains:
 - **Console:** the three new tabs and the board pack were checked in light and dark mode and at phone width, with no page errors.
 
 **To confirm before live use:**
-- **Grant accounting:** the release period for each capital grant (usually the assets' life) and when revenue grants are earned, with your auditors (PSAK 61).
 - **Landlord terms:** each deal against its contract, especially what "revenue" means (before tax, after refunds) and how part months are charged.
-- **Chargeback deadlines:** your gateway's response window (the default here is 7 days).
-- **Fraud thresholds:** the 0.9% rate and the five-failures burst against your payment mix.

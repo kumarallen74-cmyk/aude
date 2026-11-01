@@ -968,7 +968,8 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 - **Grants** (tab). Government, utility or development-bank money. A
   *capital* grant (towards assets) is deferred when received (2600) and
   released to grant income (4400) straight-line over its release period
-  from the month received. *Revenue* and *per-kWh* grants are income when a
+  from the month received: by default the assets' useful life (the linked
+  capex project's, else 96 months, a charger's life; PSAK 61 / IAS 20). *Revenue* and *per-kWh* grants are income when a
   claim is approved (Dr 1350 grant receivable), cleared when paid (a short
   payment reduces the income). A per-kWh claim takes the kWh charged in its
   period at the grant's site (or every site). Claims (GC-00001…) are at most
@@ -993,7 +994,8 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   under Owners and Statements.)
 - **Chargebacks** (tab). Record each case as the gateway reports it, on the
   payment (by its reference): reason, amount (default what was captured),
-  fee, the date to respond by (default 7 days). finance.chargeback_due warns
+  fee, the date to respond by: the one on the gateway's notice, else 7
+  calendar days (Xendit's window from the first notice; others give 5 to 10). finance.chargeback_due warns
   3 days ahead (critical once past). *Evidence* builds a PDF from the
   payment and its charging session (times, charger, connector, energy and
   meter readings, the receipt's lines, any refund; personal details masked)

@@ -134,7 +134,10 @@ dbDescribe('Grants and incentives (v1.36.0)', () => {
   test('a capital grant deferred, released and clawed back; a per-kWh grant claimed and paid short; conditions', async () => {
     const m2 = monthsBack(2), m1 = monthsBack(1);
     const bank = (await call('POST', '/v1/finance/cash/accounts', { name: `Grant account ${TAG}`, kind: 'bank', currency: 'IDR', openingBalance: 0, openingOn: `${monthsBack(4)}-01` })).json();
-    assert.equal((await call('POST', '/v1/finance/grants', { grantor: 'Kementerian ESDM', programme: 'SPKLU', kind: 'capital', currency: 'IDR', awarded: 120_000_000 })).statusCode, 422, 'no release period');
+    const std = (await call('POST', '/v1/finance/grants', { grantor: 'Kementerian ESDM', programme: `SPKLU standard ${TAG}`, kind: 'capital', currency: 'IDR', awarded: 120_000_000 })).json();
+    assert.equal(std.releaseMonths, grants.DEFAULT_RELEASE_MONTHS, 'released over a charger\'s useful life by default');
+    await call('PUT', `/v1/finance/grants/${std.id}`, { status: 'rejected' });
+    assert.equal((await call('POST', '/v1/finance/grants', { grantor: 'Kementerian ESDM', programme: 'SPKLU', kind: 'capital', currency: 'IDR', awarded: 1, releaseMonths: 999 })).statusCode, 422);
     const g = (await call('POST', '/v1/finance/grants', { grantor: 'Kementerian ESDM', programme: `SPKLU build ${TAG}`, kind: 'capital', currency: 'IDR', awarded: 120_000_000, releaseMonths: 12, siteId: site, awardedOn: `${m2}-01` })).json();
     const due = localDay(Date.now() + 5 * 86_400_000);
     const withCond = (await call('POST', `/v1/finance/grants/${g.id}/conditions`, { description: 'Four chargers live and reporting', dueOn: due })).json();
