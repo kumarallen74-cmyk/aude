@@ -562,6 +562,36 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   held or below the minimum, has a query open on the statement or a bank
   change waiting, or has no checked bank details.
 
+## Digests, tariffs, owner documents and fleet automation (v1.27.0)
+
+- **Finance digests** (Finance today → *Your digest*). Each person picks
+  daily or weekly, an hour, e-mail and/or WhatsApp. The digest has the
+  figures, the approvals waiting (and how many are theirs to decide),
+  overdue receivables, cash and revenue drops. WhatsApp needs an approved
+  template with one parameter, named in Finance → Settings.
+- **Tariffs** (tab). Set each site's tariff: the PLN class, kVA, peak (WBP)
+  and off-peak (LWBP) rates and the peak hours (17:00–22:00 by default).
+  *Simulate* shows:
+  - when the site's cars charge, by hour;
+  - the energy cost under the site's tariff and each class in the
+    catalogue (indicative rates), with losses from recorded bills;
+  - the margin against what drivers paid per kWh, and the price per kWh
+    that reaches a target margin;
+  - the saving from moving part of the peak load off-peak.
+- **Owner documents** (Auto payouts → *Documents* on an owner; and the
+  owner's own Site Owner portal → *Your payouts*):
+  - a payout advice (PDF) for each payment recorded;
+  - tax withheld from the owner's share (e.g. PPh 4(2) on rent), recorded
+    per statement with the bukti potong number;
+  - the annual statement (PDF): share, withheld, paid, due;
+  - the statements in automatic payouts and why each waits.
+- **Fleet invoicing** (tab). On a day of the month, last month is invoiced
+  for every fleet account with charges. Issued invoices are e-mailed with a
+  Xendit payment link (your own Xendit account); a paid link marks the
+  invoice paid. With *Hold for the e-Faktur number*, an invoice with PPN to
+  a buyer with an NPWP waits until its faktur number is set. Reminders stay
+  with Collections' dunning.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of
