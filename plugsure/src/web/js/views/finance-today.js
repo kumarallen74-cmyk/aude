@@ -1,4 +1,5 @@
 import { $, esc, api, state, registerView, pageHead, callout, fmt, toast, modal, field } from '../core.js';
+import { LEGACY_CURRENCY } from '../money.js';
 
 /**
  * (v1.26.0) Finance today: a phone-first page. Today's and the month's figures, and every approval waiting, decided
@@ -22,7 +23,7 @@ registerView('finance-today', {
       let t;
       try { t = await api('/v1/finance/today'); } catch (e) { host.innerHTML = callout('crit', esc(e.message)); return; }
       const tile = (label, value, foot = '', tone = '') => `<div class="card kpi"${tone ? ` style="border-color:var(--${tone})"` : ''}><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="foot">${esc(foot)}</div></div>`;
-      const today = t.today.length ? t.today : [{ currency: t.month[0]?.currency ?? 'IDR', revenue: 0, sessions: 0, kwh: 0 }];
+      const today = t.today.length ? t.today : [{ currency: t.month[0]?.currency ?? LEGACY_CURRENCY, revenue: 0, sessions: 0, kwh: 0 }];
       host.innerHTML = `
         <div class="ft-grid">${today.map((d) => tile(`Today${t.today.length > 1 ? ` · ${d.currency}` : ''}`, fmt.money(d.revenue, d.currency), `${d.sessions} sessions · ${fmt.num(d.kwh)} kWh`)).join('')}
           ${t.month.map((m) => tile(`Month to date${t.month.length > 1 ? ` · ${m.currency}` : ''}`, fmt.money(m.revenue, m.currency), m.vsLastMonthPct == null ? '' : `${m.vsLastMonthPct >= 0 ? '+' : ''}${m.vsLastMonthPct}% vs last month`)).join('')}
