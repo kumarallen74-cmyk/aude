@@ -71,14 +71,14 @@ const pickedSites = (root) => $$('[data-site]', root).filter((i) => i.checked).m
 const ownerPicker = (list, selected, disabled) => `<div class="field full hidden" data-ownerwrap style="margin-top:14px"><label>Site owner</label>
   ${list.length
     ? `<select name="ownerId"${disabled ? ' disabled' : ''}><option value="">Choose the owner…</option>${list.filter((o) => !o.archived_at).map((o) => `<option value="${esc(o.id)}"${o.id === selected ? ' selected' : ''}>${esc(o.name)} (${o.sites.length} site${o.sites.length === 1 ? '' : 's'})</option>`).join('')}</select>`
-    : callout('warn', 'There are no site owners yet. Add one under Commercial → Owners first.')}
+    : callout('warn', 'There are no site owners yet. Add one under Finance → Owners first.')}
   <div class="help">The user sees only this owner's sites — its chargers, sessions, availability and monthly statement — and follows the owner's sites automatically. Read-only.</div></div>`;
 
 /** The fleet account a Fleet customer (portal) user belongs to. */
 const fleetPicker = (list, selected, disabled) => `<div class="field full hidden" data-fleetwrap style="margin-top:14px"><label>Fleet account</label>
   ${list.length
     ? `<select name="fleetAccountId"${disabled ? ' disabled' : ''}><option value="">Choose the fleet account…</option>${list.filter((a) => !a.archived_at).map((a) => `<option value="${esc(a.id)}"${a.id === selected ? ' selected' : ''}>${esc(a.name)}${a.legal_name && a.legal_name !== a.name ? ` (${esc(a.legal_name)})` : ''}</option>`).join('')}</select>`
-    : callout('warn', 'There are no fleet accounts yet. They appear under Commercial → Fleet billing once cards have a fleet name.')}
+    : callout('warn', 'There are no fleet accounts yet. They appear under Finance → Fleet billing once cards have a fleet name.')}
   <div class="help">The user sees only this account's invoices, credit notes, this month's charging and its cards, and can block a lost card. Nothing else in the console.</div></div>`;
 
 /** Show the site / owner / fleet picker only while a role scoped that way is chosen. */

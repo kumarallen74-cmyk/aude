@@ -44,8 +44,8 @@ const gatewayLine = (r) => {
 registerView('refunds', {
   title: 'Refunds',
   icon: 'card',
-  group: 'commercial',
-  order: 24,
+  group: 'finance',
+  order: 3,
   perm: 'payment:read',
   async render(root) {
     const canPay = state.can('payment:write');

@@ -447,7 +447,7 @@ registerView('rfid', {
   title: 'RFID & Access',
   icon: 'card',
   group: 'commercial',
-  order: 22,
+  order: 23,
   perm: 'token:read',
   async render(root, [tokenId]) {
     const canWrite = state.can('token:write');

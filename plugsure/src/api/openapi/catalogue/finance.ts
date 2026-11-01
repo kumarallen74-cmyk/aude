@@ -1045,7 +1045,7 @@ export const ops: Op[] = [
   },
   {
     method: 'POST', path: '/v1/finance/year-end/:year/close', tag: T, summary: 'Close a year',
-    description: '(v1.24.0) Lock every month of an ended year (Finance → Close; reopening a month needs finance:approve). Audited as finance.year_closed.',
+    description: '(v1.24.0) Lock every month of an ended year (Finance → Month close; reopening a month needs finance:approve). Audited as finance.year_closed.',
     pathParams: { year: 'YYYY.' },
     responses: { 200: { description: 'Closed', schema: { type: 'object', properties: { year: { type: 'integer' }, locked: arrayOf({ type: 'string' }), alreadyLocked: arrayOf({ type: 'string' }) } } } },
     errors: [409, 422],

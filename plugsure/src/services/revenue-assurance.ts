@@ -161,7 +161,7 @@ export async function sweep(now = new Date()): Promise<number> {
       try {
         const r = await run(org_id, m, now);
         if (r.added) await outsideRequestScope(() => persistAlert({ orgId: org_id, kind: 'finance.revenue_findings', severity: 'warning', targetType: 'organisation', targetId: `${org_id}:${m}`,
-          message: `Revenue assurance ${m}: ${r.added} new finding(s) (sessions not billed, billed at zero or out of line). Finance → Assurance.` })).catch(() => null);
+          message: `Revenue assurance ${m}: ${r.added} new finding(s) (sessions not billed, billed at zero or out of line). Finance → Revenue assurance.` })).catch(() => null);
         n += r.added;
       } catch (e) { logger.warn({ org: org_id, err: (e as Error).message }, 'revenue assurance sweep failed'); }
     }

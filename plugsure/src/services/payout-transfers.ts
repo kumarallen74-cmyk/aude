@@ -14,7 +14,7 @@ import { notifyAwaiting, clearAwaiting } from './transfer-approvals.js';
  *
  * Since v1.14.0 an owner payout made by the operator's bank is RECORDED against the statement (services/payouts.ts).
  * With the Disbursement credentials saved on the operator's OWN Duitku account (Payments — fallback), a payout can also
- * be SENT from Finance → Payables, the same way refunds are (services/refund-transfers.ts):
+ * be SENT from Finance → Refunds & shares due, the same way refunds are (services/refund-transfers.ts):
  *
  *   1. request   someone with payment:write picks an owner share that is due or part-paid, and an amount up to what is
  *                outstanding (less any open payout). The owner's saved bank account (it needs the bank code) is checked
@@ -238,7 +238,7 @@ export async function sweepPayouts(): Promise<number> {
       if (Date.now() - new Date(t.approved_at ?? t.requested_at).getTime() > 86_400_000 && checks % 24 === 1) {
         await persistAlert({
           orgId: t.org_id, kind: 'payout.disbursement_unconfirmed', severity: 'warning',
-          message: `An owner payout (${t.id}, ${t.rail === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}) has had no confirmed result for over a day. Check it in the gateway's dashboard and settle it in Finance → Payables.`,
+          message: `An owner payout (${t.id}, ${t.rail === 'xendit' ? 'Xendit Payouts' : 'Duitku Disbursement'}) has had no confirmed result for over a day. Check it in the gateway's dashboard and settle it in Finance → Refunds & shares due.`,
           targetType: 'commission_statement', targetId: t.statement_id,
         }).catch((e: unknown) => logger.warn({ err: (e as Error).message }, 'payout transfer alert failed'));
       }

@@ -42,6 +42,41 @@ Nothing beyond the Xendit payments account itself.
 No migration step beyond `npm run migrate` (migration **080**), and no new
 settings.
 
+## Finding your way (v1.41.0)
+
+Finance has ten sections, each with its own row of tabs. A tab's old link
+(`#/finance/<tab>`) still opens it, in its section.
+
+| Section | Tabs |
+|---|---|
+| **Overview** | Summary (where Finance opens), Scorecard, Reports, Benchmark |
+| **Revenue** | Payments, Gateway, Gateway fees, Settlements, Gateway reconciliation, Subscriptions, Contracts, Loyalty costs, Pricing analysis, Roaming settlement, Driver funds, Chargebacks, Revenue assurance |
+| **Receivables** | Gateway receivables, Fleet invoicing, Collections, Plans & provision, Customer credit |
+| **Spend** | Refunds & shares due, Purchase orders, Supplier bills, Payment runs, Expenses, Corporate cards, Procurement, Payroll, Landlords, Insurance, Inventory, Maintenance |
+| **Cash & treasury** | Cash position, Cash forecast (*All accounts*, or *Gateway settlements*), Bank reconciliation, Bank feeds, Treasury & deposits, FX & hedges, Lenders, Auto payouts |
+| **Assets** | Fixed assets, Leases, Site investments, Capex projects, Grants, Carbon |
+| **Planning** | Budgets, Budget planning, Revenue forecast, Scenarios, Energy margin, Site P&L, Portfolio, Energy tariffs |
+| **Tax** | Tax calendar, PPN, Withholding, Corporate tax, Tax audit |
+| **Ledger & close** | Ledger, Month close (*Periods*, *Steps*, *Automation*), Year end, Financial statements |
+| **Group & governance** | Group, Intercompany, Netting & TP, Owner finance, Controls, Anomaly review, Data quality, Audit calendar, Settings |
+
+- **The account and period filters**, with Sync, the exports, Journal, Audit
+  pack and Xendit reports, show only on the views that read the payment
+  gateway: Payments, Gateway, Gateway fees, Settlements, Gateway
+  reconciliation, Gateway receivables, Refunds & shares due, the gateway
+  settlements forecast and Settings. Every other tab has its own controls.
+- **Without a gateway account**, those views say how to connect one, and
+  everything else works. Refunds & shares due still lists the site owners'
+  shares.
+- **The sidebar** has a Finance group: Finance today, Finance, Refunds, Owner
+  billing, Platform statements (*Statements* in the Site Owner portal), Fleet
+  billing, Owners and Payouts. WhatsApp and Driver app are under Governance.
+
+Below, the tabs keep the names they had when they were added. The
+gateway tabs of the next table are now: Overview → **Gateway**, Receivables →
+**Gateway receivables**, Payables → **Refunds & shares due**, Fees → **Gateway
+fees**, Reconciliation → **Gateway reconciliation**.
+
 ## The page
 
 | Tab | Shows |
@@ -288,7 +323,7 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
 - **Owner portal.** Site Owner users see **Payouts**: what was paid against
   each statement and what is still due, and the bank account on file
   (masked). They can ask for a new account. The request is sealed until
-  someone in **Finance → Payables → Bank detail changes** approves it (the
+  someone in **Finance → Refunds & shares due → Bank detail changes** approves it (the
   account on file is then replaced) or rejects it with a reason. Confirm
   every change with the owner by phone first: changed bank details are how
   payouts get stolen.

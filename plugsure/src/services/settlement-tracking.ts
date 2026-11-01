@@ -13,7 +13,7 @@ import { moneyText, currencyOr } from '../domain/money.js';
  *                 expected (after fees, VAT and withholding), what it has marked settled and what is still pending.
  *                 A day more than the grace days past (default 2) with something still pending is LATE.
  *   withdrawals   each payout from the gateway balance to the bank, and the bank statement line it was matched to
- *                 (Finance → Bank): in the bank; SHORT when the bank line is less than the payout; MISSING when bank
+ *                 (Finance → Bank reconciliation): in the bank; SHORT when the bank line is less than the payout; MISSING when bank
  *                 statements cover the days after it (the withdrawal days, default 3) and no line was matched;
  *                 otherwise waiting for the statement.
  *

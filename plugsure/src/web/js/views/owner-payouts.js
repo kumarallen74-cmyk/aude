@@ -12,8 +12,8 @@ const STATUS = { paid: ['t-ok', 'paid'], partial: ['t-info', 'part-paid'], due: 
 registerView('owner-payouts', {
   title: 'Payouts',
   icon: 'chart',
-  group: 'commercial',
-  order: 27,
+  group: 'finance',
+  order: 8,
   // Owner portal users only (the server resolves the owner from the sign-in); no operator permission is needed.
   portal: true,
   when: () => (state.me?.owners?.length ?? 0) > 0,

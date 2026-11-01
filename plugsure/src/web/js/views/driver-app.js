@@ -3,7 +3,7 @@ import {
 } from '../core.js';
 
 /**
- * Commercial → Driver app: the operator's own white-label driver app.
+ * Governance → Driver app: the operator's own white-label driver app.
  *
  * The same app as PlugSure's, with the operator's name, colours and icon, on the
  * operator's web address, showing only its stations; plus the build kit for the
@@ -27,8 +27,8 @@ function swatch(label, color, on, ratio) {
 registerView('driver-app', {
   title: 'Driver app',
   icon: 'phone',
-  group: 'commercial',
-  order: 58,
+  group: 'govern',
+  order: 57,
   perm: 'org:read',
   async render(root) {
     const canWrite = state.can('org:write');

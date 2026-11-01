@@ -85,7 +85,7 @@ export async function detect(orgId: string, dayRaw: unknown, s?: AlertSettings) 
          ON CONFLICT (org_id, site_id, day, currency) DO NOTHING RETURNING id`, [orgId, site.id, day, site.currency, revenue, baseline, drop, today?.sessions ?? 0]));
       if (ins) {
         await outsideRequestScope(() => persistAlert({ orgId, kind: KIND, severity: 'warning', targetType: 'site', targetId: site.id,
-          message: `${site.name}: revenue on ${day} was ${drop}% below the usual for that weekday (${moneyText(revenue, currencyOr(site.currency))} against ${moneyText(baseline, currencyOr(site.currency))}). Check the chargers and payments. Finance → Margin.` })).catch((e) => logger.warn({ err: (e as Error).message }, 'revenue drop alert failed'));
+          message: `${site.name}: revenue on ${day} was ${drop}% below the usual for that weekday (${moneyText(revenue, currencyOr(site.currency))} against ${moneyText(baseline, currencyOr(site.currency))}). Check the chargers and payments. Finance → Energy margin.` })).catch((e) => logger.warn({ err: (e as Error).message }, 'revenue drop alert failed'));
       }
     } else {
       await outsideRequestScope(() => resolveAlertsFor(orgId, KIND, 'site', site.id)).catch(() => 0);

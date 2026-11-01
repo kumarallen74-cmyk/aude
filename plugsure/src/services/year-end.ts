@@ -15,7 +15,7 @@ import { xlsx, zip, type Cell } from './xlsx.js';
  *   PPh 23     the year's withholding records with their bukti potong (those without one flagged), per month
  *   filings    the tax obligations marked filed per month (Tax calendar)
  *
- * Close the year: every month of it is locked (Finance → Close) once the year has ended. The year-end pack is one ZIP
+ * Close the year: every month of it is locked (Finance → Month close) once the year has ended. The year-end pack is one ZIP
  * for the accountant: the workbook, each table as CSV, a README and a manifest with each file's SHA-256.
  */
 

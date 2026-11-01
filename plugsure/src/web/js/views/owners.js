@@ -28,8 +28,8 @@ const readForm = (body) => {
 registerView('owners', {
   title: 'Owners',
   icon: 'users',
-  group: 'commercial',
-  order: 27,
+  group: 'finance',
+  order: 7,
   // Managing owners is an operator task (site-scoped Site Hosts also hold site:read).
   perm: 'site:write',
   async render(root) {

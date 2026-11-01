@@ -58,6 +58,7 @@ const GROUPS = [
   ['operate', 'Operate'],
   ['assets', 'Assets & Energy'],
   ['commercial', 'Commercial'],
+  ['finance', 'Finance'],
   ['maintain', 'Maintenance'],
   ['govern', 'Governance'],
 ];
@@ -294,6 +295,9 @@ const hubOnlyMode = () => state.me?.org?.hubOnly === true;
 /** In a portal, only views flagged for it are shown. */
 const inPortal = (v) => (portalMode() ? !!v.portal : fleetMode() ? !!v.fleetPortal : hubOnlyMode() ? !!v.hubOnly : !v.fleetPortal);
 
+/** (v1.41.0) A view may be named differently in the Site Owner portal (`portalTitle`). */
+const titleOf = (v) => (portalMode() && v.portalTitle ? v.portalTitle : v.title);
+
 function visibleViews() {
   return [...views.values()]
     // `when`: a view that exists only with a server feature (e.g. Hub, with HUB_ENABLED).
@@ -316,7 +320,7 @@ function renderShell() {
         const items = visibleViews().filter((v) => v.group === g);
         if (!items.length) return '';
         return `<div class="nav-group"><div class="label">${esc(label)}</div>${items
-          .map((v) => `<a href="#/${esc(v.id)}" data-view="${esc(v.id)}" title="${esc(v.title)}">${icon(v.icon)}<span>${esc(v.title)}</span>${v.id === 'dashboard' ? '<b class="count hidden" data-alerts></b>' : ''}${v.id === 'refunds' || v.id === 'finance' ? `<b class="count hidden" data-approvals="${v.id}" title="Transfers waiting for your approval"></b>` : ''}</a>`)
+          .map((v) => `<a href="#/${esc(v.id)}" data-view="${esc(v.id)}" title="${esc(titleOf(v))}">${icon(v.icon)}<span>${esc(titleOf(v))}</span>${v.id === 'dashboard' ? '<b class="count hidden" data-alerts></b>' : ''}${v.id === 'refunds' || v.id === 'finance' ? `<b class="count hidden" data-approvals="${v.id}" title="Transfers waiting for your approval"></b>` : ''}</a>`)
           .join('')}</div>`;
       }).join('')}</nav>
       <div class="sidebar-foot"><div>${esc(portalMode() ? `${me.owners[0].name} · operated by ${me.org?.name ?? ''}` : fleetMode() ? `${me.fleets[0].name} · billed by ${me.org?.name ?? ''}` : me.org?.name ?? '')}</div><div class="mono">${me.features?.version ? `v${esc(me.features.version)} · ` : ''}${esc(me.features?.env ?? '')}</div>${me.consoleBrand && me.consoleBrand.showPoweredBy !== false ? '<div class="powered-by">Powered by PlugSure</div>' : ''}</div>
@@ -503,8 +507,8 @@ async function route() {
     return;
   }
   $$('.nav a', root).forEach((a) => a.setAttribute('aria-current', a.dataset.view === (def.navAs ?? def.id) ? 'page' : 'false'));
-  $('[data-crumbs]', root).innerHTML = `${esc(def.title)}${def.subtitle ? ` <span class="sub">· ${esc(def.subtitle)}</span>` : ''}`;
-  document.title = `${def.title} — ${titleSuffix()}`;
+  $('[data-crumbs]', root).innerHTML = `${esc(titleOf(def))}${def.subtitle ? ` <span class="sub">· ${esc(def.subtitle)}</span>` : ''}`;
+  document.title = `${titleOf(def)} — ${titleSuffix()}`;
   try { cleanupView?.(); } catch {}
   cleanupView = null;
   const target = $('#view');

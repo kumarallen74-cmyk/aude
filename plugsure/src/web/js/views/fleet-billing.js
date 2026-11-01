@@ -28,8 +28,8 @@ const open = (url) => window.open(url, '_blank', 'noopener');
 registerView('fleet-billing', {
   title: 'Fleet billing',
   icon: 'file',
-  group: 'commercial',
-  order: 27,
+  group: 'finance',
+  order: 6,
   perm: 'invoice:read',
   async render(root, [tabParam]) {
     const canWrite = state.can('invoice:write');

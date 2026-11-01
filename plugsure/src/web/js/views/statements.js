@@ -9,10 +9,11 @@ import { renderStatement, recentMonths, monthLabel } from './statement-render.js
  */
 
 registerView('statements', {
-  title: 'Statements',
+  title: 'Platform statements',
+  portalTitle: 'Statements',
   icon: 'list',
-  group: 'commercial',
-  order: 26,
+  group: 'finance',
+  order: 5,
   perm: 'invoice:read',
   // Also shown in the Site Owner portal (read-only, the owner's own sites).
   portal: true,
