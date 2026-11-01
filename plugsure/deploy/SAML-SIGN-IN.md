@@ -6,22 +6,28 @@ organisation's administrator under **Users & Roles → Single sign-on (SAML)**. 
 
 ## What the platform needs
 
-- `PUBLIC_BASE_URL` must be set (for example `https://console.plugsure.id`). PlugSure's SAML addresses are built from it.
-  Without it, the SAML page says single sign-on is not available.
+- `CONSOLE_PUBLIC_URL` should be set to the shared console's address (for example `https://console.plugsure.id`).
+  PlugSure's entity ID is built from it. Without it, `PUBLIC_BASE_URL` is used, but the deployment guide keeps
+  `PUBLIC_BASE_URL` on the chargers' OCPP hostname, so set `CONSOLE_PUBLIC_URL`. With neither set, the SAML page says
+  single sign-on is not available.
+- A sign-in runs on the console address the person started on: the shared console, or the operator's own approved
+  white-label address (deploy/README.md §2). The single sign-on button only appears on those addresses. It never
+  appears on the chargers' host or any other name, because the sign-in cannot finish there.
 - PlugSure never calls the identity provider. The browser goes to the provider and comes back, so no outbound network rule
   is needed.
 - The clocks must be right: assertions are accepted with three minutes of clock skew at most.
 
 ## PlugSure's details for the identity provider
 
-The SAML page shows these, each with a copy button. `<org>` is the organisation's id.
+The SAML page shows these, each with a copy button. `<org>` is the organisation's id; `<console>` is
+`CONSOLE_PUBLIC_URL`.
 
 | Identity provider field | Value |
 |---|---|
-| Entity ID / Audience URI / Identifier | `PUBLIC_BASE_URL/v1/auth/saml/<org>/metadata` |
-| ACS URL / Reply URL / Single sign-on URL | `PUBLIC_BASE_URL/v1/auth/saml/<org>/acs` (HTTP-POST) |
+| Entity ID / Audience URI / Identifier | `<console>/v1/auth/saml/<org>/metadata` |
+| ACS URL / Reply URL / Single sign-on URL | `<console>/v1/auth/saml/<org>/acs` (HTTP-POST). An operator with an approved white-label address also enters `https://<its address>/v1/auth/saml/<org>/acs`; the page lists both. Okta calls the second one *Other requestable SSO URLs*; Entra ID accepts several reply URLs. |
 | Name ID format | e-mail address (`urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress`) |
-| Metadata | the entity ID URL serves PlugSure's metadata XML, if the provider can import it |
+| Metadata | the entity ID URL serves PlugSure's metadata XML, with every ACS URL, if the provider can import it |
 | Signing | sign the assertion (or the whole response) with **RSA-SHA256** or stronger. SHA-1 is refused. |
 | Encryption | off: encrypted assertions are refused |
 | Sign-on | started from PlugSure's sign-in page (SP-initiated). IdP-initiated sign-on from a provider's app tile is refused, because it cannot be bound to a browser. |
@@ -80,6 +86,7 @@ The sign-in page shows the reason; the audit log has the detail.
 | `no_transaction` | the sign-in was not started from PlugSure's sign-in page (IdP-initiated), was already used, or is older than ten minutes |
 | `expired` | the assertion is outside its validity: check the clocks |
 | `wrong_browser` | the sign-in was finished in a different browser, or with cookies blocked |
+| `wrong_host` | the sign-in was started on an address that is not the shared console or the operator's approved address |
 | `no_user` | there is no such console user and automatic set-up is off: invite the person, or turn it on |
 | `no_role` | none of the person's groups is mapped to a role |
 | `domain_not_allowed` | the e-mail is not on an allowed domain |

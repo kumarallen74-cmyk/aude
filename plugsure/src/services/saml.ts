@@ -4,6 +4,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
 import { many, one, outsideRequestScope, query } from '../db/pool.js';
 import { config, isRelaxedEnv } from '../config.js';
+import { consoleBrandForHost, consoleBrandForOrg } from './console-brand.js';
 
 /**
  * SAML 2.0 single sign-on for the operator console (v1.42.0): Okta, Microsoft Entra ID, Google Workspace, OneLogin,
@@ -64,11 +65,46 @@ const xmlEsc = (s: string) => s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': 
 
 // ------------------------------------------------------------------ addresses
 
-/** Our base URL: PUBLIC_BASE_URL; outside production also the request's own host (benches, tests). */
-export function baseUrl(host?: unknown, protocol = 'https'): string {
-  if (config.console.publicBaseUrl) return config.console.publicBaseUrl;
-  if (isRelaxedEnv() && typeof host === 'string' && /^[a-z0-9.-]+(:\d+)?$/i.test(host)) return `${protocol}://${host}`;
-  throw new SamlError('not_configured', 'PUBLIC_BASE_URL is not set', 503);
+/*
+ * Two kinds of address:
+ *   the entity ID   is built on the shared console's address (CONSOLE_PUBLIC_URL, else PUBLIC_BASE_URL), so it never
+ *                   changes with the address someone signs in on. (PUBLIC_BASE_URL is usually the chargers' OCPP host:
+ *                   deploy/README.md §2.)
+ *   the ACS URL     is on the address the sign-in started on: the shared console, or the organisation's approved
+ *                   white-label address. The browser must come back there, because the binding cookie and the new
+ *                   session belong to that address. Any other address does not offer single sign-on.
+ * Outside production, without those settings, the request's own host serves for both (benches, tests).
+ */
+const urlOrigin = (u: string | undefined) => { try { return u ? new URL(u).origin : null; } catch { return null; } };
+const relaxedOrigin = (host: unknown, protocol: string) =>
+  isRelaxedEnv() && typeof host === 'string' && /^[a-z0-9.-]+(:\d+)?$/i.test(host) ? `${protocol === 'https' ? 'https' : 'http'}://${host.toLowerCase()}` : null;
+const sharedConsole = () => urlOrigin(config.alerts.consoleUrl) ?? urlOrigin(config.console.publicBaseUrl);
+
+/** The base of the entity ID: the shared console's address. */
+export function entityBase(host?: unknown, protocol = 'https'): string {
+  const o = sharedConsole() ?? relaxedOrigin(host, protocol);
+  if (!o) throw new SamlError('not_configured', 'CONSOLE_PUBLIC_URL (or PUBLIC_BASE_URL) is not set', 503);
+  return o;
+}
+
+/** The addresses a sign-in can run on for this organisation: the shared console's and its approved white-label one. */
+export async function flowBases(orgId: string): Promise<string[]> {
+  const out = new Set<string>();
+  const shared = sharedConsole();
+  if (shared) out.add(shared);
+  const brand = await consoleBrandForOrg(orgId).catch(() => null);
+  if (brand?.hostname && brand.hostnameApproved) out.add(`https://${brand.hostname}`);
+  return [...out];
+}
+
+/** The base of the address this request came in on, when a sign-in for this organisation may run there. */
+export async function flowBase(orgId: string, host: unknown, protocol = 'https'): Promise<string> {
+  const h = String(host ?? '').trim().toLowerCase().replace(/\.$/, '');
+  const hit = (await flowBases(orgId)).find((b) => new URL(b).host === h);
+  if (hit) return hit;
+  const r = relaxedOrigin(host, protocol);
+  if (r) return r;
+  throw new SamlError('wrong_host', 'single sign-on for this organisation is not offered on this address', 400);
 }
 export const spEntityId = (orgId: string, base: string) => `${base}/v1/auth/saml/${orgId}/metadata`;
 export const acsUrl = (orgId: string, base: string) => `${base}/v1/auth/saml/${orgId}/acs`;
@@ -154,26 +190,43 @@ export async function saveProvider(orgId: string, b: Record<string, unknown>, us
 export async function describe(orgId: string, host?: unknown, protocol = 'https') {
   const p = await getProvider(orgId);
   let base: string | null = null;
-  try { base = baseUrl(host, protocol); } catch { base = null; }
+  try { base = entityBase(host, protocol); } catch { base = null; }
+  const acsList = (await flowBases(orgId)).map((b) => acsUrl(orgId, b));
+  if (!acsList.length && base) acsList.push(acsUrl(orgId, base));
   return {
     provider: p ? { ...p, certificates: p.certificates.map((c) => { try { const n = normaliseCert(c, 0); return { subject: n.subject, notAfter: n.notAfter, fingerprint: n.fingerprint }; } catch { return { subject: 'unreadable', notAfter: null, fingerprint: null }; } }) } : null,
-    serviceProvider: base ? { entityId: spEntityId(orgId, base), acsUrl: acsUrl(orgId, base), metadataUrl: spEntityId(orgId, base), nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress' } : null,
+    serviceProvider: base ? { entityId: spEntityId(orgId, base), acsUrl: acsList[0], acsUrls: acsList, metadataUrl: spEntityId(orgId, base), nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress' } : null,
     roles: (await mappableRoles()).map((r) => r.name),
   };
 }
 
-export function metadataXml(orgId: string, base: string): string {
+export function metadataXml(orgId: string, base: string, acsBases: string[] = [base]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${xmlEsc(spEntityId(orgId, base))}">
   <md:SPSSODescriptor AuthnRequestsSigned="false" WantAssertionsSigned="true" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
     <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>
-    <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlEsc(acsUrl(orgId, base))}" index="0" isDefault="true"/>
+${acsBases.map((b, i) => `    <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlEsc(acsUrl(orgId, b))}" index="${i}"${i === 0 ? ' isDefault="true"' : ''}/>`).join('\n')}
   </md:SPSSODescriptor>
 </md:EntityDescriptor>
 `;
 }
 
 // ------------------------------------------------------------------ start
+
+/**
+ * Whether the sign-in page on this address offers the single sign-on button: on an operator's approved white-label
+ * address, when that operator has it switched on; on the shared console (or outside production), when any
+ * organisation has. Anywhere else the browser could not complete it.
+ */
+export async function offeredOn(host: unknown, protocol = 'https'): Promise<boolean> {
+  const h = String(host ?? '').trim().toLowerCase().replace(/\.$/, '');
+  const brand = await consoleBrandForHost(h).catch(() => null);
+  if (brand) return (await getProvider(brand.orgId).catch(() => null))?.enabled === true;
+  const shared = sharedConsole();
+  if (!(shared && new URL(shared).host === h) && !relaxedOrigin(host, protocol)) return false;
+  const r = await outsideRequestScope(() => one<{ on: boolean }>(`SELECT EXISTS (SELECT 1 FROM org_saml_provider WHERE enabled) AS on`));
+  return r?.on === true;
+}
 
 /** The organisation whose single sign-on covers this e-mail's domain (enabled only). */
 export async function providerForEmail(email: unknown): Promise<Provider> {
@@ -186,9 +239,9 @@ export async function providerForEmail(email: unknown): Promise<Provider> {
   return providerOf(r);
 }
 
-export function authnRequestXml(id: string, p: Provider, base: string, now = new Date()): string {
+export function authnRequestXml(id: string, p: Provider, base: string, now = new Date(), acsBase = base): string {
   return `<samlp:AuthnRequest xmlns:samlp="${NS.p}" xmlns:saml="${NS.a}" ID="${id}" Version="2.0" IssueInstant="${now.toISOString()}" Destination="${xmlEsc(p.ssoUrl)}" `
-    + `ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" AssertionConsumerServiceURL="${xmlEsc(acsUrl(p.orgId, base))}">`
+    + `ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" AssertionConsumerServiceURL="${xmlEsc(acsUrl(p.orgId, acsBase))}">`
     + `<saml:Issuer>${xmlEsc(spEntityId(p.orgId, base))}</saml:Issuer>`
     + `<samlp:NameIDPolicy Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" AllowCreate="true"/></samlp:AuthnRequest>`;
 }
@@ -196,14 +249,15 @@ export function authnRequestXml(id: string, p: Provider, base: string, now = new
 /** Start a sign-in: the redirect to the identity provider and the binding value for the cookie. */
 export async function start(email: unknown, host: unknown, protocol: string, ip: string | undefined) {
   const p = await providerForEmail(email);
-  const base = baseUrl(host, protocol);
+  const base = entityBase(host, protocol);
+  const flow = await flowBase(p.orgId, host, protocol);
   const requestId = `_${randomBytes(20).toString('hex')}`;
   const handle = randomBytes(32).toString('base64url'), binding = randomBytes(32).toString('base64url');
   await outsideRequestScope(() => query(`DELETE FROM saml_login_tx WHERE expires_at < now()`));
   await outsideRequestScope(() => query(
     `INSERT INTO saml_login_tx (id_hash, org_id, request_id, browser_hash, host, ip, expires_at) VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(mins => $7))`,
     [sha(handle), p.orgId, requestId, sha(binding), String(host ?? '').slice(0, 200), ip ?? null, SAML_TX_TTL_MINUTES]));
-  const req = deflateRawSync(Buffer.from(authnRequestXml(requestId, p, base))).toString('base64');
+  const req = deflateRawSync(Buffer.from(authnRequestXml(requestId, p, base, new Date(), flow))).toString('base64');
   const url = new URL(p.ssoUrl);
   url.searchParams.set('SAMLRequest', req);
   url.searchParams.set('RelayState', handle);
@@ -234,7 +288,7 @@ function parse(xml: string): any {
  * Verify a base64 SAMLResponse for a sign-in in flight. Returns the identity, or throws SamlError. `expect` is what the
  * transaction knows: our request ID and the provider; `now` for the time checks.
  */
-export function verifyResponse(samlResponse: unknown, expect: { requestId: string; provider: Provider; base: string }, now = Date.now()): Identity {
+export function verifyResponse(samlResponse: unknown, expect: { requestId: string; provider: Provider; base: string; acsBase?: string }, now = Date.now()): Identity {
   if (typeof samlResponse !== 'string' || !samlResponse || samlResponse.length > MAX_RESPONSE_BYTES * 1.4) throw new SamlError('bad_response', 'no SAMLResponse, or too large');
   const xml = Buffer.from(samlResponse, 'base64').toString('utf8');
   if (xml.length > MAX_RESPONSE_BYTES) throw new SamlError('bad_response', 'too large');
@@ -242,7 +296,7 @@ export function verifyResponse(samlResponse: unknown, expect: { requestId: strin
   const root = doc.documentElement;
   if (root.namespaceURI !== NS.p || root.localName !== 'Response') throw new SamlError('bad_response', 'not a samlp:Response');
   if (allNS(doc, NS.a, 'EncryptedAssertion').length) throw new SamlError('unsupported', 'encrypted assertions are not supported: switch assertion encryption off at the identity provider');
-  const acs = acsUrl(expect.provider.orgId, expect.base), sp = spEntityId(expect.provider.orgId, expect.base);
+  const acs = acsUrl(expect.provider.orgId, expect.acsBase ?? expect.base), sp = spEntityId(expect.provider.orgId, expect.base);
   const dest = root.getAttribute('Destination');
   if (dest && dest !== acs) throw new SamlError('wrong_destination', 'the response is for another address');
   const status = allNS(root, NS.p, 'StatusCode')[0]?.getAttribute('Value');
@@ -330,7 +384,7 @@ export async function acs(orgId: string, body: Record<string, unknown>, host: un
   if (!tx) throw new SamlError('no_transaction', 'the sign-in expired or was already used: start again');
   const p = await getProvider(orgId);
   if (!p?.enabled) throw new SamlError('not_enabled', 'single sign-on is off for this organisation', 403);
-  const identity = verifyResponse(body.SAMLResponse, { requestId: tx.request_id, provider: p, base: baseUrl(host, protocol) }, now);
+  const identity = verifyResponse(body.SAMLResponse, { requestId: tx.request_id, provider: p, base: entityBase(host, protocol), acsBase: await flowBase(orgId, host, protocol) }, now);
   const r = await outsideRequestScope(() => query(`UPDATE saml_login_tx SET identity = $2, answered_at = now() WHERE id_hash = $1 AND answered_at IS NULL`, [tx.id_hash, JSON.stringify(identity)]));
   if (!r.rowCount) throw new SamlError('no_transaction', 'the sign-in was already used');
   return { handle, orgId };

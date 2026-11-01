@@ -12,6 +12,7 @@ v1.42.0 is phase 30. It adds four features:
 - **Migration:** one, 109. It adds eight tables and allows `saml` as a session's sign-in method. It is additive.
 - **When nothing changes:** a site with no solar or battery recorded charges exactly as before. Charger health is scored daily: it only reads, and it raises `charger.health_at_risk` alerts. No report is e-mailed until someone schedules one. SAML is off until an organisation's administrator connects an identity provider.
 - **New dependencies:** `xml-crypto` and `@xmldom/xmldom`, for verifying SAML signatures.
+- **Dependency updates (security, no breaking changes):** fastify 5.12.7 (header validation), nodemailer 10.3.1 (address parsing), zod 4.6.7 (memory exhaustion on oversized collections), fast-uri and fast-copy. `npm audit` still lists glob and minimatch under `@fastify/static`; neither is reachable here: the static files are served with `wildcard: true`, so glob only reads PlugSure's own `web/` folder once at start and never sees a request path. The suggested "fix" is a downgrade to `@fastify/static` 6, so it is not taken.
 - **Guides:**
   - [`deploy/ENERGY-STORAGE.md`](deploy/ENERGY-STORAGE.md), including the energy box API;
   - [`deploy/SAML-SIGN-IN.md`](deploy/SAML-SIGN-IN.md).
@@ -85,7 +86,7 @@ v1.42.0 is phase 30. It adds four features:
 ## Upgrade
 
 1. Deploy. Migration 109 runs on start.
-2. For SAML, `PUBLIC_BASE_URL` must be set.
+2. For SAML, set `CONSOLE_PUBLIC_URL` to the shared console's address (the entity ID is built on it). A sign-in runs on the address it started on: the shared console or an operator's approved white-label address.
 3. Route `charger.health_at_risk` under alert routing if you want it.
 
 ## Rollback

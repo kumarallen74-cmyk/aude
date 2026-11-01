@@ -643,7 +643,7 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      [ENERGY-STORAGE.md](ENERGY-STORAGE.md)). Read the charger health list
      and route charger.health_at_risk (Maintenance → Charger health). Build
      and schedule the reports people ask for (Operate → Report builder).
-     To offer single sign-on, keep `PUBLIC_BASE_URL` set and have each
+     To offer single sign-on, set `CONSOLE_PUBLIC_URL` and have each
      operator's administrator connect its identity provider (Users & Roles
      → Single sign-on (SAML), [SAML-SIGN-IN.md](SAML-SIGN-IN.md)).
 

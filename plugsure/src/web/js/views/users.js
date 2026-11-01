@@ -772,13 +772,13 @@ async function renderSaml(box) {
       <p class="hint" style="margin:0">Your staff sign in with your identity provider (Okta, Microsoft Entra ID, Google Workspace, OneLogin, ADFS…). On the sign-in page they enter their work email and choose <b>Sign in with single sign-on</b>. Password sign-in stays available.</p>
       ${sp ? `<div class="card pad" style="background:var(--panel-2)"><b>At your identity provider</b> — create a SAML application with:
           <dl class="kv" style="margin-top:8px">
-            <dt>ACS URL (reply URL)</dt><dd class="mono">${esc(sp.acsUrl)} <button class="btn ghost sm" type="button" data-copy="${esc(sp.acsUrl)}">Copy</button></dd>
+            <dt>ACS URL (reply URL)${(sp.acsUrls ?? []).length > 1 ? 's' : ''}</dt><dd class="mono">${(sp.acsUrls?.length ? sp.acsUrls : [sp.acsUrl]).map((u) => `<div>${esc(u)} <button class="btn ghost sm" type="button" data-copy="${esc(u)}">Copy</button></div>`).join('')}${(sp.acsUrls ?? []).length > 1 ? '<div class="cell-sub" style="font-family:inherit">Enter both: one for the shared console, one for your own console address. People sign in on either.</div>' : ''}</dd>
             <dt>Entity ID (audience)</dt><dd class="mono">${esc(sp.entityId)} <button class="btn ghost sm" type="button" data-copy="${esc(sp.entityId)}">Copy</button></dd>
             <dt>NameID</dt><dd>Email address <span class="muted">(${esc(sp.nameIdFormat)})</span></dd>
             <dt>Attributes</dt><dd>email, displayName, and the user's groups (for automatic accounts)</dd>
             <dt>Signing</dt><dd>Sign the assertion (or the response) with RSA-SHA256; no encryption</dd>
             <dt>Metadata</dt><dd><a href="${esc(sp.metadataUrl)}" target="_blank" rel="noopener">${esc(sp.metadataUrl)}</a></dd>
-          </dl></div>` : callout('warn', 'Set PUBLIC_BASE_URL on the server: single sign-on needs the console\'s public address.')}
+          </dl></div>` : callout('warn', 'Set CONSOLE_PUBLIC_URL (the shared console\'s address) on the server: single sign-on needs it.')}
       <form class="form stack" data-saml style="gap:12px">
         <label class="row full" style="gap:8px"><input type="checkbox" name="enabled"${p?.enabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}> <b>Single sign-on is on</b></label>
         ${field('Identity provider entity ID (issuer)', `<input name="idpEntityId" value="${esc(p?.idpEntityId ?? '')}" placeholder="http://www.okta.com/exk…"${canWrite ? '' : ' disabled'}>`)}

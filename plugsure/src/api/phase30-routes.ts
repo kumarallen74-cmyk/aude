@@ -277,6 +277,6 @@ export async function registerPhase30Routes(app: FastifyInstance): Promise<void>
   app.get('/v1/auth/saml/:orgId/metadata', async (req, reply) => {
     const orgId = P(req).orgId ?? '';
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)) return reply.status(404).send({ error: 'not found' });
-    try { return reply.type('application/samlmetadata+xml; charset=utf-8').send(saml.metadataXml(orgId, saml.baseUrl(req.headers.host, req.protocol))); } catch (e) { return failed(reply, e); }
+    try { return reply.type('application/samlmetadata+xml; charset=utf-8').send(saml.metadataXml(orgId, saml.entityBase(req.headers.host, req.protocol), await saml.flowBases(orgId).then((l) => (l.length ? l : [saml.entityBase(req.headers.host, req.protocol)])))); } catch (e) { return failed(reply, e); }
   });
 }

@@ -358,4 +358,44 @@ dbDescribe('Phase 30 through the routes', () => {
     assert.equal((await many(`SELECT 1 FROM app_user WHERE org_id = $1 AND email = $2`, [org, email])).length, 1);
     assert.equal((await many(`SELECT 1 FROM saml_user_link WHERE org_id = $1`, [org])).length, 1);
   });
+
+  test('SAML in production: the entity ID on the shared console, the sign-in on the address it started on', async () => {
+    const saml = await import('./saml.js');
+    const { forgetConsoleBrands } = await import('./console-brand.js');
+    const keep = { env: config.env, console: config.alerts.consoleUrl, base: config.console.publicBaseUrl };
+    const brandHost = `console-${TAG}.operator.example.test`;
+    // The deployment guide's layout: the console on its own address, PUBLIC_BASE_URL on the chargers' (OCPP) host.
+    (config as any).env = 'production';
+    (config.alerts as any).consoleUrl = 'https://console.plugsure.example.test';
+    (config.console as any).publicBaseUrl = 'https://ocpp.plugsure.example.test';
+    try {
+      assert.equal(saml.entityBase('ocpp.plugsure.example.test'), 'https://console.plugsure.example.test');
+      assert.equal(await saml.flowBase(org, 'console.plugsure.example.test'), 'https://console.plugsure.example.test');
+      await assert.rejects(saml.flowBase(org, 'ocpp.plugsure.example.test'), (e: any) => e.code === 'wrong_host', 'never the chargers\' host');
+      await assert.rejects(saml.flowBase(org, brandHost), (e: any) => e.code === 'wrong_host', 'an address not approved');
+      // The operator's own console address, once approved, is a second place to sign in (its own ACS URL).
+      await query(`INSERT INTO console_brand (org_id, product_name, hostname, hostname_approved_at) VALUES ($1, 'Op', $2, now())
+                   ON CONFLICT (org_id) DO UPDATE SET hostname = EXCLUDED.hostname, hostname_approved_at = now()`, [org, brandHost]);
+      forgetConsoleBrands();
+      assert.equal(await saml.flowBase(org, brandHost), `https://${brandHost}`);
+      await assert.rejects(saml.flowBase(org2, brandHost), (e: any) => e.code === 'wrong_host', 'another operator\'s address');
+      const d = await saml.describe(org, 'console.plugsure.example.test');
+      assert.equal(d.serviceProvider!.entityId, `https://console.plugsure.example.test/v1/auth/saml/${org}/metadata`);
+      assert.deepEqual(d.serviceProvider!.acsUrls, [`https://console.plugsure.example.test/v1/auth/saml/${org}/acs`, `https://${brandHost}/v1/auth/saml/${org}/acs`]);
+      assert.equal((saml.metadataXml(org, 'https://console.plugsure.example.test', ['https://console.plugsure.example.test', `https://${brandHost}`]).match(/AssertionConsumerService /g) ?? []).length, 2);
+      // A sign-in started on the operator's address asks the identity provider to answer there.
+      const st = await saml.start(`someone@${TAG}.example.co.id`, brandHost, 'https', '127.0.0.1');
+      const req = inflateRawSync(Buffer.from(new URL(st.url).searchParams.get('SAMLRequest')!, 'base64')).toString();
+      assert.match(req, new RegExp(`AssertionConsumerServiceURL="https://${brandHost.replace(/\./g, '\\.')}/v1/auth/saml/`));
+      assert.match(req, /<saml:Issuer>https:\/\/console\.plugsure\.example\.test\/v1\/auth\/saml\//);
+      // The button: on the shared console and the operator's address; never on the chargers' host.
+      assert.equal(await saml.offeredOn('console.plugsure.example.test'), true);
+      assert.equal(await saml.offeredOn(brandHost), true);
+      assert.equal(await saml.offeredOn('ocpp.plugsure.example.test'), false);
+    } finally {
+      (config as any).env = keep.env; (config.alerts as any).consoleUrl = keep.console; (config.console as any).publicBaseUrl = keep.base;
+      await query(`DELETE FROM console_brand WHERE org_id = $1`, [org]);
+      forgetConsoleBrands();
+    }
+  });
 });
