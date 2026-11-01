@@ -966,6 +966,20 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   ledger: RECs bought Dr 1750 / Cr bank, retired Dr 5150 / Cr 1750; credits
   sold Dr bank / Cr 4300. The report (Excel) has the months, RECs, credits
   and sales.
+- **Carbon per session and site** (v1.44.0). Each session's grid factor is
+  the first of:
+  - the site's own (Sites → Edit → Carbon);
+  - its province's (Emission factors → *Grid by province*, keyed by the BPS
+    province code, which is the first two digits of the site's
+    kabupaten/kota code);
+  - the default.
+
+  The share of the session's energy that came from the site's solar, as
+  measured by its energy box during the session, emits nothing. *Per site,
+  measured* totals the sessions in a period of up to 92 days: kWh, the
+  factor and where it came from, the solar share, and the CO2e emitted and
+  avoided. *ESG report* downloads the same as Excel, with a summary and the
+  methodology. The driver's receipt shows the CO2e avoided against petrol.
 - **Insurance** (tab). Policies per site, charger or the organisation with
   cover, premium, excess and term. A paid premium is prepaid (Dr 1450 / Cr
   bank) and spread over the term by days (Dr 6600 / Cr 1450 each month);

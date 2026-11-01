@@ -1314,6 +1314,8 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
     flags: row.regulatory_flags ?? [],
     // Signed meter data (OCMF), when the charger's meter signs: the full data is on the printable receipt.
     signedData: await signedSummary(row.session_id ?? dc.session_id),
+    // (v1.44.0) The charge's carbon: emitted and avoided against a petrol car (services/carbon.ts). Never blocks the receipt.
+    carbon: await (await import('../services/carbon.js')).sessionCarbon(row.org_id, row.session_id ?? dc.session_id).catch(() => null),
   };
 }
 

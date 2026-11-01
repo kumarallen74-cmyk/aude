@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.43.0";
+export const API_VERSION = "1.44.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11644,6 +11644,19 @@ export class Operations {
   }
 
   /**
+   * Add a fleet vehicle
+   *
+   * (v1.44.0) name, plate, fleetAccountId, batteryKwh, tokenId (the card it charges with; one vehicle per card), departureTime (HH:MM, the site's time), targetKwh or targetSocPct (with batteryKwh). A session started with the card gets the next departure at that time. Audited.
+   *
+   * `POST /v1/fleet-vehicles` · needs `smartcharging:write`
+   */
+  addFleetVehicle(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/fleet-vehicles", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a grant
    *
    * (v1.36.0) grantor, programme, kind (capital: releaseMonths, by default the linked capex project's asset life, else 96 months; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.
@@ -12810,6 +12823,22 @@ export class Operations {
   }
 
   /**
+   * Carbon per site
+   *
+   * (v1.44.0) from, to (at most 92 days; both optional, by default the last 30 days): per site the sessions, kWh, the grid factor and where it came from (site, province, default), the measured solar share, emitted and avoided kg CO2e; totals.
+   *
+   * `GET /v1/finance/carbon/sites` · needs `payment:read`
+   */
+  carbonPerSite(params?: {
+    query?: {
+      from?: string;
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/carbon/sites", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Card holds and post-pay e-wallet charges
    *
    * Card payments taken as holds (Integrations → Payments → "hold, then charge only what is used"): held while charging, captured for the rated total when the session ends (the rest released at once), or released when unused. Post-pay sessions with linked e-wallets are listed too (kind postpay): nothing held at the start, the rated total charged to the e-wallet at the end, the same retries. Failed captures and releases come first, with the acquirer's error and the next automatic retry; captured and released holds of the last 14 days follow. At most 200 rows.
@@ -13231,6 +13260,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a fleet vehicle
+   *
+   * (v1.44.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/fleet-vehicles/{id}` · needs `smartcharging:write`
+   */
+  changeOrArchiveFleetVehicle(params: {
+    /** The vehicle. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/fleet-vehicles/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a programme
    *
    * (v1.43.0) The fields above (the kind cannot change), or archive: true. Audited.
@@ -13465,6 +13509,20 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/chargebacks", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A charger's diagnostics runs
+   *
+   * (v1.44.0) The last 20 runs: steps, findings, verdict, summary, work order.
+   *
+   * `GET /v1/diagnostics-bot/charge-points/{cpId}` · needs `charge_point:read`
+   */
+  chargerDiagnosticsRuns(params: {
+    /** The charge point (id). */
+    cpId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/diagnostics-bot/charge-points/{cpId}", pathParams: { cpId: params.cpId }, accept: "json" }, options);
   }
 
   /**
@@ -14399,6 +14457,17 @@ export class Operations {
   }
 
   /**
+   * Depot charging: sites, departures and plans
+   *
+   * (v1.44.0) Each site and whether depot scheduling is on; every active session with a departure (when, the energy needed and delivered, the plan: on_track, deferred, at_risk, ready, missed; the estimated ready time); active sessions at depot sites without one; the fleet vehicles.
+   *
+   * `GET /v1/depot` · needs `smartcharging:read`
+   */
+  depotChargingSitesDeparturesAndPlans(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/depot", accept: "json" }, options);
+  }
+
+  /**
    * Describe this sandbox
    *
    * Called with a sandbox key: the sandbox, its virtual chargers with what each simulator reports right now, its RFID cards, the events that can be simulated, and the time scale (energy accrues 30× faster than the wall clock). 404 with a production key.
@@ -14407,6 +14476,20 @@ export class Operations {
    */
   describeThisSandbox(options?: RequestOptions): Promise<DescribeThisSandboxResponse> {
     return this.transport.request<DescribeThisSandboxResponse>({ method: "GET", path: "/v1/sandbox", accept: "json" }, options);
+  }
+
+  /**
+   * A diagnostics run
+   *
+   * (v1.44.0) Its status (running, done, failed), steps, findings, verdict (healthy, fixed, needs_attention, needs_visit, unreachable), summary and work order.
+   *
+   * `GET /v1/diagnostics-bot/runs/{id}` · needs `charge_point:read`
+   */
+  diagnosticsRun(params: {
+    /** The run. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/diagnostics-bot/runs/{id}", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -14952,6 +15035,22 @@ export class Operations {
   }
 
   /**
+   * The ESG workbook
+   *
+   * (v1.44.0) The per-site report in Excel, with a summary and the methodology (factors, solar share, REC share).
+   *
+   * `GET /v1/finance/carbon/esg` · needs `payment:read`
+   */
+  esgWorkbook(params?: {
+    query?: {
+      from?: string;
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/carbon/esg", query: params?.query, accept: "text" }, options);
+  }
+
+  /**
    * Estimate carbon credits
    *
    * (v1.35.0) From the emissions avoided over from–to (YYYY-MM). Audited.
@@ -14962,6 +15061,21 @@ export class Operations {
     body: EstimateCarbonCreditsBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/carbon/credits", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Every site's queue over time
+   *
+   * (v1.44.0) As the site's, across the organisation.
+   *
+   * `GET /v1/queue/analytics` · needs `site:read`
+   */
+  everySiteQueueOverTime(params?: {
+    query?: {
+      days?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/queue/analytics", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -15442,6 +15556,17 @@ export class Operations {
    */
   fleetInvoicingAutomation(options?: RequestOptions): Promise<FleetInvoicingAutomationResponse> {
     return this.transport.request<FleetInvoicingAutomationResponse>({ method: "GET", path: "/v1/finance/fleet-automation", accept: "json" }, options);
+  }
+
+  /**
+   * Fleet vehicles
+   *
+   * (v1.44.0) Each vehicle: name, plate, fleet account, battery, the card it charges with, its usual departure time and target.
+   *
+   * `GET /v1/fleet-vehicles` · needs `smartcharging:read`
+   */
+  fleetVehicles(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/fleet-vehicles", accept: "json" }, options);
   }
 
   /**
@@ -17934,6 +18059,20 @@ export class Operations {
     cpId: string;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/charger-health/{cpId}/work-order", pathParams: { cpId: params.cpId }, accept: "json" }, options);
+  }
+
+  /**
+   * Open a work order from a run
+   *
+   * (v1.44.0) A corrective work order with the run's summary. Audited.
+   *
+   * `POST /v1/diagnostics-bot/runs/{id}/work-order` · needs `charge_point:write`, `payment:write`
+   */
+  openWorkOrderFromRun(params: {
+    /** The run. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/diagnostics-bot/runs/{id}/work-order", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -20456,6 +20595,21 @@ export class Operations {
   }
 
   /**
+   * Run the diagnostics bot on a charger
+   *
+   * (v1.44.0) allowReset (a SOFT reset only when a connector is Faulted and nothing is charging), openWorkOrder (when someone has to go or act). Reads the charger's connection and 7 days of errors; when connected, asks for a fresh status and reads its key configuration. Never a hard reset, never a configuration change. 202: the run continues in the background; poll it. Audited.
+   *
+   * `POST /v1/diagnostics-bot/charge-points/{cpId}` · needs `charge_point:command`
+   */
+  runDiagnosticsBotOnCharger(params: {
+    /** The charge point (id). */
+    cpId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/diagnostics-bot/charge-points/{cpId}", pathParams: { cpId: params.cpId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Run fleet invoicing automation now
    *
    * (v1.27.0) What the worker does hourly: issue the month on the day, then send what is ready (with a payment link). Audited.
@@ -20917,6 +21071,20 @@ export class Operations {
     body: SendWhatsAppTestMessageBody;
   }, options?: RequestOptions): Promise<SendWhatsAppTestMessageResponse> {
     return this.transport.request<SendWhatsAppTestMessageResponse>({ method: "POST", path: "/v1/whatsapp/test", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A session's carbon
+   *
+   * (v1.44.0) kWh, the grid factor and its source, the solar share measured during the session, the REC share, emitted and avoided kg CO2e (against petrol). Also on the driver's receipt.
+   *
+   * `GET /v1/sessions/{id}/carbon` · needs `session:read`, `payment:read`
+   */
+  sessionCarbon(params: {
+    /** The charging session. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/sessions/{id}/carbon", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -21529,6 +21697,21 @@ export class Operations {
   }
 
   /**
+   * Set a session's departure
+   *
+   * (v1.44.0) departureAt (5 minutes to 7 days ahead) and neededKwh (the energy the session must deliver in all). Overrides the vehicle's or the car's. Audited.
+   *
+   * `PUT /v1/depot/sessions/{sessionId}/departure` · needs `smartcharging:write`
+   */
+  setSessionDeparture(params: {
+    /** The charging session. */
+    sessionId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/depot/sessions/{sessionId}/departure", pathParams: { sessionId: params.sessionId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set settlement tracking
    *
    * (v1.23.0) graceDays (0–14, default 2): a settlement is late after them; withdrawalDays (1–14, default 3): a withdrawal is missing when bank statements cover that many days after it. Audited.
@@ -22053,6 +22236,23 @@ export class Operations {
   }
 
   /**
+   * A site's queue over time
+   *
+   * (v1.44.0) Over the last days (default 30): joins, charged from the queue, no-shows (missed / (served + missed)), abandonment (left or waited too long), median and 90th-percentile wait, the priority lane's share and wait, places by day and joins by hour.
+   *
+   * `GET /v1/sites/{siteId}/queue/analytics` · needs `site:read`
+   */
+  siteQueueOverTime(params: {
+    /** The site. */
+    siteId: string;
+    query?: {
+      days?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/sites/{siteId}/queue/analytics", pathParams: { siteId: params.siteId }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
    * Solar and battery results
    *
    * (v1.42.0) Over a period (from, to; 30 days by default, at most 400): solar produced and used on site (self-consumption), export, grid import, the battery's charge (from solar or the grid) and discharge, the grid peak against the peak without the battery, and the savings at the site's electricity tariff; day by day too.
@@ -22478,6 +22678,21 @@ export class Operations {
     body?: SuspendChargePointBody;
   }, options?: RequestOptions): Promise<SuspendChargePointResponse> {
     return this.transport.request<SuspendChargePointResponse>({ method: "POST", path: "/v1/charge-points/{identity}/suspend", pathParams: { identity: params.identity }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Switch depot scheduling on or off at a site
+   *
+   * (v1.44.0) enabled. On: the load manager plans each session with a departure so it is ready in time, using off-peak hours when there is time. Audited.
+   *
+   * `PUT /v1/depot/sites/{siteId}` · needs `smartcharging:write`
+   */
+  switchDepotSchedulingOnOrOffAtSite(params: {
+    /** The site. */
+    siteId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/depot/sites/{siteId}", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

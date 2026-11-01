@@ -34,7 +34,11 @@ const addMonths = (m: string, n: number) => { const [y, mo] = m.split('-').map(N
 export async function settings(orgId: string) {
   const r = await outsideRequestScope(() => one<{ carbon: any }>(`SELECT carbon FROM finance_org_settings WHERE org_id = $1`, [orgId]));
   const s = r?.carbon ?? {};
-  return { gridKgPerKwh: Number(s.gridKgPerKwh ?? 0.8), iceKgPerKwh: Number(s.iceKgPerKwh ?? 0.7) };
+  return {
+    gridKgPerKwh: Number(s.gridKgPerKwh ?? 0.8), iceKgPerKwh: Number(s.iceKgPerKwh ?? 0.7),
+    /** (v1.44.0) Grid emission factors by province (BPS code, the first two digits of a site's kabupaten/kota code). */
+    provinceKgPerKwh: (s.provinceKgPerKwh && typeof s.provinceKgPerKwh === 'object' ? s.provinceKgPerKwh : {}) as Record<string, number>,
+  };
 }
 
 export async function saveSettings(orgId: string, b: Record<string, unknown>, userId: string | null) {
@@ -44,6 +48,18 @@ export async function saveSettings(orgId: string, b: Record<string, unknown>, us
     const n = Number(b[k]);
     if (!Number.isFinite(n) || n < 0 || n > 3) throw new CarbonError(422, `${k} is 0 to 3 kg CO2 per kWh.`);
     v[k] = n;
+  }
+  if (b.provinceKgPerKwh !== undefined) {
+    const raw = b.provinceKgPerKwh;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new CarbonError(422, 'provinceKgPerKwh is { "<BPS province code>": kg CO2 per kWh }.');
+    const out: Record<string, number> = {};
+    for (const [k, x] of Object.entries(raw as Record<string, unknown>)) {
+      if (x === null || x === '') continue;
+      const n = Number(x);
+      if (!/^\d{2}$/.test(k) || !Number.isFinite(n) || n < 0 || n > 3) throw new CarbonError(422, `provinceKgPerKwh: ${k.slice(0, 10)} must be a two-digit province code with 0 to 3 kg CO2 per kWh.`);
+      out[k] = n;
+    }
+    v.provinceKgPerKwh = out;
   }
   await outsideRequestScope(() => query(
     `INSERT INTO finance_org_settings (org_id, carbon, updated_by) VALUES ($1, $2, $3)
@@ -204,5 +220,144 @@ export async function reportXlsx(orgId: string, fromRaw: unknown, toRaw: unknown
     { name: 'By month', rows: [['Month', 'MWh charged', 'RECs retired (MWh)', 'Green %', 'Avoided tCO2e'], ...months.map((m) => [m.month, m.mwh, m.recMwh, m.greenPct, m.avoidedTonnes])], widths: [10, 14, 18, 10, 16] },
     { name: 'By site', rows: [['Month', 'Site', 'Sessions', 'MWh', 'REC MWh', 'Green %', 'Avoided tCO2e'], ...months.flatMap((m) => m.sites.map((s) => [m.month, s.site, s.sessions, s.mwh, s.recMwh, s.greenPct, s.avoidedTonnes]))], widths: [10, 30, 10, 10, 10, 10, 14] },
     { name: 'Method', rows: [['Setting', 'Value'], ['Grid kg CO2 per kWh', months[0]?.settings.gridKgPerKwh ?? ''], ['Petrol car kg CO2 per kWh charged (avoided)', months[0]?.settings.iceKgPerKwh ?? '']], widths: [44, 12] },
+  ]);
+}
+
+// ------------------------------------------------------------------ (v1.44.0) per session and per site
+
+/**
+ * Carbon per session and per site (v1.44.0), on top of the monthly figures above:
+ *   grid factor   the site's own (Sites → Edit → Carbon), else its province's (Finance → Carbon; the first two digits of
+ *                 the site's kabupaten/kota code), else the default. No figures are built in: enter the ones your
+ *                 methodology uses (e.g. the published grid emission factor of the PLN system the site is on).
+ *   solar share   measured: the site's own solar used on site over its total supply, from the energy box's readings
+ *                 during the session (Assets → Solar & battery). Battery output counts as grid (conservative: the
+ *                 battery may have charged from the grid). No readings: 0.
+ *   REC share     the month's renewable certificates for the site (as above), applied to what is not solar.
+ *   emitted       kWh × (1 − solar) × (1 − REC share) × grid factor
+ *   avoided       kWh × the petrol figure − emitted
+ */
+
+export interface Reading { ts: number; solarW: number | null; gridW: number | null; batteryW: number | null }
+
+/** The solar share of the site's supply over readings (each held until the next, at most maxStepS). Null with none. */
+export function solarShareOf(readings: Reading[], maxStepS = 900): number | null {
+  let solar = 0, load = 0;
+  for (let i = 0; i < readings.length; i++) {
+    const r = readings[i]!, next = readings[i + 1];
+    const dt = Math.min(maxStepS, next ? Math.max(0, (next.ts - r.ts) / 1000) : 60);
+    const exported = Math.max(0, -(r.gridW ?? 0));
+    const used = Math.max(0, (r.solarW ?? 0) - exported);
+    solar += used * dt;
+    load += (used + Math.max(0, r.gridW ?? 0) + Math.max(0, r.batteryW ?? 0)) * dt;
+  }
+  return load > 0 ? Math.min(1, solar / load) : null;
+}
+
+/** kg CO2e emitted for kWh with these shares (0–1) and factor. */
+export const emittedKg = (kwh: number, solarShare: number, recShare: number, gridKgPerKwh: number) =>
+  kwh * (1 - Math.min(1, Math.max(0, solarShare))) * (1 - Math.min(1, Math.max(0, recShare))) * gridKgPerKwh;
+
+/** The grid factor a site uses, and where it came from. */
+export function gridFactorFor(site: { grid_kg_per_kwh: unknown; kabupaten_kota_code: string | null; country_code: string | null }, s: Awaited<ReturnType<typeof settings>>) {
+  if (site.grid_kg_per_kwh != null) return { kgPerKwh: Number(site.grid_kg_per_kwh), source: 'site' as const };
+  const prov = site.kabupaten_kota_code ? String(site.kabupaten_kota_code).slice(0, 2) : null;
+  if (prov && s.provinceKgPerKwh[prov] != null) return { kgPerKwh: Number(s.provinceKgPerKwh[prov]), source: 'province' as const, province: prov };
+  return { kgPerKwh: s.gridKgPerKwh, source: 'default' as const };
+}
+
+const monthOfZone = (t: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: zone(), year: 'numeric', month: '2-digit' }).format(t).slice(0, 7);
+
+/** The REC (green) share per site for each month, memoised for one report. */
+function recShares(orgId: string) {
+  const cache = new Map<string, Promise<Map<string, number>>>();
+  return async (siteId: string, m: string) => {
+    if (!cache.has(m)) cache.set(m, month(orgId, m).then((x) => new Map(x.sites.map((y) => [y.siteId, y.greenPct / 100]))).catch(() => new Map()));
+    return (await cache.get(m)!).get(siteId) ?? 0;
+  };
+}
+
+async function readingsFor(siteId: string, from: Date, to: Date): Promise<Reading[]> {
+  const rows = await outsideRequestScope(() => many<any>(
+    `SELECT ts, solar_w, grid_w, battery_w FROM site_energy_reading WHERE site_id = $1 AND ts >= $2 AND ts <= $3 ORDER BY ts`, [siteId, from, to]));
+  return rows.map((r) => ({ ts: new Date(r.ts).getTime(), solarW: r.solar_w == null ? null : Number(r.solar_w), gridW: r.grid_w == null ? null : Number(r.grid_w), batteryW: r.battery_w == null ? null : Number(r.battery_w) }));
+}
+
+/** One session's carbon (the driver's receipt; the console). Null for a session with no energy. */
+export async function sessionCarbon(orgId: string, sessionId: string) {
+  if (!UUID_RE.test(sessionId)) throw ERR(404, 'No such session.');
+  const r = await outsideRequestScope(() => one<any>(
+    `SELECT cs.id, cs.site_id, cs.started_at, COALESCE(cs.ended_at, now()) AS ended_at, cs.energy_wh, s.grid_kg_per_kwh, s.kabupaten_kota_code, s.country_code
+       FROM charging_session cs JOIN site s ON s.id = cs.site_id WHERE cs.id = $1 AND cs.org_id = $2`, [sessionId, orgId]));
+  if (!r) throw ERR(404, 'No such session.');
+  const kwh = Number(r.energy_wh ?? 0) / 1000;
+  if (kwh <= 0) return null;
+  const s = await settings(orgId);
+  const g = gridFactorFor(r, s);
+  const solar = solarShareOf(await readingsFor(r.site_id, new Date(r.started_at), new Date(r.ended_at))) ?? 0;
+  const rec = await recShares(orgId)(r.site_id, monthOfZone(new Date(r.started_at)));
+  const emitted = emittedKg(kwh, solar, rec, g.kgPerKwh);
+  return {
+    sessionId, kwh: r3(kwh), gridKgPerKwh: g.kgPerKwh, gridFactorSource: g.source, solarSharePct: Math.round(solar * 1000) / 10, recSharePct: Math.round(rec * 1000) / 10,
+    emittedKg: Math.round(emitted * 100) / 100, petrolKg: Math.round(kwh * s.iceKgPerKwh * 100) / 100, avoidedKg: Math.round((kwh * s.iceKgPerKwh - emitted) * 100) / 100,
+  };
+}
+
+/** Per site over a period (at most 92 days; without one, the last 30 days): sessions, energy, the factor, solar and REC shares, emitted and avoided. */
+export async function siteReport(orgId: string, fromRaw: unknown, toRaw: unknown) {
+  const empty = (v: unknown) => v === undefined || v === null || v === '';
+  const to = empty(toRaw) ? today() : String(toRaw);
+  const from = empty(fromRaw) ? (DATE_RE.test(to) ? new Date(Date.parse(`${to}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10) : '') : String(fromRaw);
+  if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from) throw ERR(422, 'from and to are dates (YYYY-MM-DD), to on or after from.');
+  const fromT = new Date(`${from}T00:00:00Z`), toT = new Date(new Date(`${to}T00:00:00Z`).getTime() + 86_400_000);
+  if ((toT.getTime() - fromT.getTime()) / 86_400_000 > 92) throw ERR(422, 'At most 92 days at a time.');
+  const s = await settings(orgId);
+  const recOf = recShares(orgId);
+  const sites = await outsideRequestScope(() => many<any>(`SELECT id, name, grid_kg_per_kwh, kabupaten_kota_code, country_code FROM site WHERE org_id = $1 AND archived_at IS NULL ORDER BY name`, [orgId]));
+  const out = [];
+  for (const site of sites) {
+    const sess = await outsideRequestScope(() => many<any>(
+      `SELECT started_at, COALESCE(ended_at, started_at) AS ended_at, energy_wh FROM charging_session
+        WHERE site_id = $1 AND started_at >= $2 AND started_at < $3 AND state IN ('ended', 'rated') AND energy_wh > 0 ORDER BY started_at`, [site.id, fromT, toT]));
+    const g = gridFactorFor(site, s);
+    const readings = sess.length ? await readingsFor(site.id, fromT, toT) : [];
+    let kwh = 0, solarKwh = 0, emitted = 0;
+    for (const x of sess) {
+      const a = new Date(x.started_at).getTime(), b = new Date(x.ended_at).getTime();
+      const share = readings.length ? solarShareOf(readings.filter((r) => r.ts >= a - 900_000 && r.ts <= b)) ?? 0 : 0;
+      const k = Number(x.energy_wh) / 1000;
+      kwh += k; solarKwh += k * share;
+      emitted += emittedKg(k, share, await recOf(site.id, monthOfZone(new Date(x.started_at))), g.kgPerKwh);
+    }
+    out.push({
+      siteId: site.id, site: site.name, sessions: sess.length, kwh: r3(kwh), gridKgPerKwh: g.kgPerKwh, gridFactorSource: g.source,
+      solarSharePct: kwh ? Math.round((solarKwh / kwh) * 1000) / 10 : null, emittedKg: Math.round(emitted * 10) / 10,
+      avoidedKg: Math.round((kwh * s.iceKgPerKwh - emitted) * 10) / 10,
+    });
+  }
+  const tot = out.reduce((a, x) => ({ kwh: a.kwh + x.kwh, emitted: a.emitted + x.emittedKg, avoided: a.avoided + x.avoidedKg, sessions: a.sessions + x.sessions }), { kwh: 0, emitted: 0, avoided: 0, sessions: 0 });
+  return { from, to, settings: s, sites: out, totals: { sessions: tot.sessions, kwh: r3(tot.kwh), emittedTonnes: r3(tot.emitted / 1000), avoidedTonnes: r3(tot.avoided / 1000) } };
+}
+
+/** The ESG report in Excel: summary, per site, and how it was worked out. */
+export async function esgWorkbook(orgId: string, from: unknown, to: unknown): Promise<Buffer> {
+  const r = await siteReport(orgId, from, to);
+  const prov = Object.entries(r.settings.provinceKgPerKwh);
+  return xlsx([
+    { name: 'Summary', rows: [['Charging emissions report', `${r.from} to ${r.to}`], [], ['Sessions', r.totals.sessions], ['Energy (kWh)', r.totals.kwh],
+      ['Emitted (t CO2e)', r.totals.emittedTonnes], ['Avoided against petrol (t CO2e)', r.totals.avoidedTonnes]] },
+    { name: 'Sites', rows: [['Site', 'Sessions', 'kWh', 'Grid factor (kg/kWh)', 'Factor from', 'Solar share %', 'Emitted (kg CO2e)', 'Avoided (kg CO2e)'],
+      ...r.sites.map((x) => [x.site, x.sessions, x.kwh, x.gridKgPerKwh, x.gridFactorSource, x.solarSharePct, x.emittedKg, x.avoidedKg])] },
+    { name: 'Methodology', rows: [
+      ['Emitted', 'kWh × (1 − solar share) × (1 − REC share) × grid factor'],
+      ['Avoided', 'kWh × petrol figure − emitted'],
+      ['Petrol figure (kg CO2 per kWh charged)', r.settings.iceKgPerKwh],
+      ['Default grid factor (kg CO2e per kWh)', r.settings.gridKgPerKwh],
+      ['Grid factor', 'The site’s own if set; else its province’s (BPS code = the first two digits of the site’s kabupaten/kota code); else the default'],
+      ...prov.map(([k, v]) => [`Province ${k}`, v]),
+      ['Solar share', 'Measured from the site’s energy readings during each session: solar used on site over the site’s supply; battery output counted as grid'],
+      ['REC share', 'Renewable energy certificates retired for the site’s month (the portfolio’s shared by energy)'],
+      ['Sessions', 'Ended sessions with energy, by start time'],
+    ] },
   ]);
 }

@@ -50,7 +50,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'customer_contract', 'contract_obligation', 'contract_billing', 'tp_policy', 'dq_run', 'finance_scenario',
       'site_energy_asset', 'site_energy_settings', 'site_energy_reading', 'charger_health', 'report_definition', 'org_saml_provider', 'saml_login_tx', 'saml_user_link',
       'scim_config', 'scim_user', 'scim_group', 'scim_group_member', 'dynamic_price_settings', 'dynamic_price_rule', 'site_price_now',
-      'dr_program', 'dr_event', 'dr_event_site', 'status_page', 'status_incident', 'status_subscriber']]);
+      'dr_program', 'dr_event', 'dr_event_site', 'status_page', 'status_incident', 'status_subscriber',
+      'fleet_vehicle', 'session_departure', 'diagnostic_run']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -160,5 +161,6 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     dynamic_price_settings: 'INSERT,SELECT,UPDATE', dynamic_price_rule: 'INSERT,SELECT,UPDATE', site_price_now: 'INSERT,SELECT,UPDATE',
     dr_program: 'INSERT,SELECT,UPDATE', dr_event: 'INSERT,SELECT,UPDATE', dr_event_site: 'INSERT,SELECT,UPDATE',
     status_page: 'INSERT,SELECT,UPDATE', status_incident: 'INSERT,SELECT,UPDATE', status_subscriber: 'DELETE,INSERT,SELECT,UPDATE',
+    fleet_vehicle: 'INSERT,SELECT,UPDATE', session_departure: 'INSERT,SELECT,UPDATE', diagnostic_run: 'INSERT,SELECT,UPDATE',
   });
 });

@@ -209,6 +209,12 @@ export async function publicStatus(slug: string | null, host: string | null = nu
     const state = siteState(s, maint);
     return { id: s.id, name: s.name, address: s.address, state, ...(p.showCounts ? { connectors: s.total, working: s.working, available: s.working - s.inUse } : {}) };
   });
+  // (v1.44.0) Sites with a driver queue: how many are waiting and the likely wait for someone arriving now.
+  const { siteQueue } = await import('../driver/queue.js');
+  for (const v of siteViews) {
+    const q = await outsideRequestScope(() => siteQueue(v.id, null)).catch(() => null);
+    if (q?.enabled) (v as any).queue = { waiting: q.waiting, estimatedWaitMinutes: q.estimatedWaitMinutes };
+  }
   const open = items.filter((i) => i.open && i.kind === 'incident');
   // A major outage: every listed site out of service, or a critical incident. One site out among working ones is partial.
   const worst = (siteViews.length > 0 && siteViews.every((s) => s.state === 'outage')) || open.some((i) => i.impact === 'critical') ? 'major_outage'

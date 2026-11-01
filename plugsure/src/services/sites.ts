@@ -66,6 +66,10 @@ export interface SiteInput {
   queueOfferMinutes?: number;
   queueMaxLength?: number;
   queueMaxWaitMinutes?: number;
+  /** (v1.44.0) The queue's priority lane: none | fleet | members | fleet_members. */
+  queuePriority?: 'none' | 'fleet' | 'members' | 'fleet_members';
+  /** (v1.44.0) The site's own grid emission factor, kg CO2e per kWh (overrides the province's and the default); null = none. */
+  gridKgPerKwh?: number | null;
   /** Fee for reserving a connector here in the driver app (before PPN); 0 = free. */
   reservationFeeMinor?: number;
   /** Bidirectional charging programme (services/v2x.ts). */
@@ -164,6 +168,8 @@ export function validateSite(input: SiteInput, creating: boolean): SiteValidatio
     errors.powerFactor = 'Power factor must be between 0.50 and 1.00';
   }
   if (input.phases != null && ![1, 3].includes(Number(input.phases))) errors.phases = 'Incoming supply is 1-phase or 3-phase';
+  if (input.queuePriority != null && !['none', 'fleet', 'members', 'fleet_members'].includes(input.queuePriority)) errors.queuePriority = 'Priority lane: none, fleet, members or fleet_members';
+  if (input.gridKgPerKwh != null && !(Number(input.gridKgPerKwh) >= 0 && Number(input.gridKgPerKwh) <= 3)) errors.gridKgPerKwh = 'Grid emission factor: 0 to 3 kg CO2e per kWh, or empty';
   if (input.offlineAlertMinutes != null) {
     const m = Number(input.offlineAlertMinutes);
     if (!Number.isInteger(m) || m < 1 || m > 1440) errors.offlineAlertMinutes = 'Offline alert after 1 to 1440 minutes, or leave empty for the fleet default';
@@ -260,6 +266,8 @@ const COLS: Array<[keyof SiteInput, string]> = [
   ['queueOfferMinutes', 'queue_offer_minutes'],
   ['queueMaxLength', 'queue_max_length'],
   ['queueMaxWaitMinutes', 'queue_max_wait_minutes'],
+  ['queuePriority', 'queue_priority'],
+  ['gridKgPerKwh', 'grid_kg_per_kwh'],
   ['reservationFeeMinor', 'reservation_fee_minor'],
   ['v2xEnabled', 'v2x_enabled'],
   ['v2xWindows', 'v2x_windows'],
@@ -324,6 +332,8 @@ export function siteInputFrom(b: any): SiteInput {
   if (out.reservationFeeMinor === null) out.reservationFeeMinor = 0;
   // The queue settings have defaults in the database: an empty field keeps the current value.
   for (const k of ['queueOfferMinutes', 'queueMaxLength', 'queueMaxWaitMinutes'] as const) if (out[k] === null) delete out[k];
+  if (b.queuePriority !== undefined && b.queuePriority !== null && b.queuePriority !== '') out.queuePriority = String(b.queuePriority) as SiteInput['queuePriority'];
+  if (b.gridKgPerKwh !== undefined) out.gridKgPerKwh = b.gridKgPerKwh === null || b.gridKgPerKwh === '' ? null : Number(b.gridKgPerKwh);
   if (b.queueEnabled !== undefined) out.queueEnabled = b.queueEnabled === true || b.queueEnabled === 'true' || b.queueEnabled === 'on' || b.queueEnabled === '1';
   if (out.spkluId) out.spkluId = out.spkluId.toUpperCase();
   if (out.phases != null && out.nominalVoltageV == null) out.nominalVoltageV = out.phases === 1 ? 230 : 400;

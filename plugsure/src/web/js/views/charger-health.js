@@ -10,6 +10,54 @@ const bar = (score) => `<span style="display:inline-block;width:64px;height:8px;
   <span style="display:block;height:100%;width:${score}%;background:${score < 60 ? 'var(--crit)' : score < 80 ? 'var(--warn)' : 'var(--accent)'}"></span></span>`;
 const trend = (now, then) => (then == null ? '' : now > then ? `<span style="color:var(--accent)">▲ ${now - then}</span>` : now < then ? `<span style="color:var(--crit)">▼ ${then - now}</span>` : '<span class="muted">=</span>');
 
+const VERDICT = { healthy: ['t-ok', 'healthy'], fixed: ['t-ok', 'fixed'], needs_attention: ['t-warn', 'needs attention'], needs_visit: ['t-crit', 'needs a visit'], unreachable: ['t-crit', 'unreachable'] };
+const SEV = { info: 't-info', warning: 't-warn', critical: 't-crit' };
+
+/** (v1.44.0) The diagnostics bot: reads the charger's errors, asks it for a fresh status and its configuration, tries a soft reset when allowed, and says what to do. */
+async function diagTab(host, cpId) {
+  const canRun = state.can('charge_point:command');
+  const canOrder = state.can('charge_point:write') || state.can('payment:write');
+  const runHtml = (r) => `<div class="card" style="padding:12px">
+      <div class="row" style="gap:8px;flex-wrap:wrap">${r.status === 'running' ? tag('t-info', 'running…') : r.status === 'failed' ? tag('t-crit', 'failed') : tag(...(VERDICT[r.verdict] ?? ['t-mute', r.verdict ?? '—']))}
+        <span class="cell-sub">${esc(fmt.time(r.startedAt))}${r.allowReset ? ' · soft reset allowed' : ''}</span>
+        ${r.workOrder ? tag('t-info', `work order ${r.workOrder}`) : r.status === 'done' && canOrder && ['needs_visit', 'needs_attention', 'unreachable'].includes(r.verdict) ? `<button class="btn sm right" type="button" data-dwo="${esc(r.id)}">Open work order</button>` : ''}</div>
+      ${r.summary ? `<p style="margin:8px 0">${esc(r.summary.split('\n')[0])}</p>` : ''}
+      ${r.findings.length ? `<ul style="margin:4px 0 8px;padding-left:18px">${r.findings.map((f) => `<li>${tag(SEV[f.severity] ?? 't-mute', f.severity)} ${esc(f.text)}</li>`).join('')}</ul>` : ''}
+      <details><summary class="cell-sub">Steps (${r.steps.length})</summary><ol style="margin:6px 0;padding-left:18px">${r.steps.map((s) => `<li>${s.ok ? '✓' : '✗'} <b>${esc(s.step)}</b> <span class="cell-sub">${esc(s.detail ?? '')}</span></li>`).join('')}</ol></details></div>`;
+  host.innerHTML = `<div class="stack" style="gap:12px">
+      <p class="cell-sub">The bot reads 7 days of the charger's errors and its connection, asks it for a fresh status and reads its key configuration, then says what is wrong and whether someone has to go. It never changes the configuration and never does a hard reset.</p>
+      ${canRun ? `<div class="row" style="gap:12px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-reset> Allow a soft reset if a connector is faulted and nothing is charging</label>
+        <label class="row" style="gap:6px"><input type="checkbox" data-order> Open a work order if someone has to act</label>
+        <button class="btn primary sm" type="button" data-drun>${icon('play')} Run diagnostics</button></div>` : ''}
+      <div data-runs class="stack" style="gap:10px"><div class="skeleton" style="height:60px"></div></div></div>`;
+  const el = host.firstElementChild; // replaced when the tab changes, so polling and listeners stop with it
+  let timer = null;
+  const load = async () => {
+    clearTimeout(timer);
+    if (!el.isConnected) return;
+    let runs;
+    try { runs = (await api(`/v1/diagnostics-bot/charge-points/${cpId}`)).runs; } catch (e) { $('[data-runs]', el).innerHTML = callout('crit', esc(e.message)); return; }
+    if (!el.isConnected) return;
+    $('[data-runs]', el).innerHTML = runs.length ? runs.map(runHtml).join('') : '<p class="cell-sub">No runs yet.</p>';
+    const running = runs.some((r) => r.status === 'running');
+    const btn = $('[data-drun]', el);
+    if (btn) btn.disabled = running;
+    if (running) timer = setTimeout(load, 3000);
+  };
+  $('[data-drun]', el)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { await api(`/v1/diagnostics-bot/charge-points/${cpId}`, { method: 'POST', body: { allowReset: $('[data-reset]', el).checked, openWorkOrder: $('[data-order]', el).checked } }); toast('Diagnostics started.', 'ok'); } catch (err) { toast(err.message, 'crit'); }
+    load();
+  });
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-dwo]');
+    if (!b) return;
+    b.disabled = true;
+    try { const w = await api(`/v1/diagnostics-bot/runs/${b.dataset.dwo}/work-order`, { method: 'POST' }); toast(`Work order ${w.number} opened.`, 'ok'); load(); } catch (err) { toast(err.message, 'crit'); b.disabled = false; }
+  });
+  await load();
+}
+
 registerView('charger-health', {
   title: 'Charger health',
   icon: 'shield',
@@ -66,7 +114,8 @@ registerView('charger-health', {
             <polyline fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" points="${hist.map((h, i) => `${i * 6},${100 - h.score}`).join(' ')}"/></svg>
             <div class="cell-sub">${esc(fmt.date(hist[0].day))} – ${esc(fmt.date(hist[hist.length - 1].day))}</div></div>` : '<p class="cell-sub">The daily history starts with the first daily run.</p>'}
         </div>`;
-      drawer({ title: c.name ?? c.identity, subtitle: `${esc(c.siteName)} · health ${c.score}/100`, tabs: [{ id: 'health', label: 'Health', render: (el) => { el.innerHTML = html; } }] });
+      drawer({ title: c.name ?? c.identity, subtitle: `${esc(c.siteName)} · health ${c.score}/100`, tabs: [{ id: 'health', label: 'Health', render: (el) => { el.innerHTML = html; } },
+        { id: 'diag', label: 'Diagnostics', render: (el) => diagTab(el, id) }] });
     };
     $('[data-list]', root).addEventListener('click', async (e) => {
       const b = e.target.closest('[data-wo]');
