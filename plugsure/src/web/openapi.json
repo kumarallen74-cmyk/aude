@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.33.0",
+    "version": "1.34.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Govern → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Govern → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Govern → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Govern → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -56980,6 +56980,2178 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/inventory": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Inventory",
+        "operationId": "inventory",
+        "description": "(v1.34.0) Items with what is on hand, the moving average cost and the value; the stock value per currency; items at or below their reorder point; locations; quantities by location. format=xlsx for the workbook.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/inventory/items": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a stock item",
+        "operationId": "addStockItem",
+        "description": "(v1.34.0) SKU, name, unit, category, currency, reorder point and quantity, the usual supplier. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sku": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "part",
+                      "consumable",
+                      "tool"
+                    ]
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "reorderPoint": {
+                    "type": "number"
+                  },
+                  "reorderQty": {
+                    "type": "number"
+                  },
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/inventory/items/{id}": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a stock item",
+        "operationId": "changeStockItem",
+        "description": "(v1.34.0) As adding; archived. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sku": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "part",
+                      "consumable",
+                      "tool"
+                    ]
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "reorderPoint": {
+                    "type": "number"
+                  },
+                  "reorderQty": {
+                    "type": "number"
+                  },
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/inventory/locations": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a stock location",
+        "operationId": "addStockLocation",
+        "description": "(v1.34.0) A depot or a site store. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/inventory/locations/{id}": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a stock location",
+        "operationId": "changeStockLocation",
+        "description": "(v1.34.0) Name, site, archived. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/inventory/moves": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Stock moves",
+        "operationId": "stockMoves",
+        "description": "(v1.34.0) The last 500 moves (itemId to filter): receipts, issues, transfers and adjustments with their value.",
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a stock move",
+        "operationId": "recordStockMove",
+        "description": "(v1.34.0) kind receipt (qty, unitCost, purchaseOrderId), issue (qty, workOrderId), transfer (qty, toLocationId) or adjust (countedQty, note); itemId, locationId, onDate. Never below zero at a location. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "itemId",
+                  "locationId"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "receipt",
+                      "issue",
+                      "transfer",
+                      "adjust"
+                    ]
+                  },
+                  "itemId": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "toLocationId": {
+                    "type": "string"
+                  },
+                  "qty": {
+                    "type": "number"
+                  },
+                  "unitCost": {
+                    "type": "number"
+                  },
+                  "countedQty": {
+                    "type": "number"
+                  },
+                  "purchaseOrderId": {
+                    "type": "string"
+                  },
+                  "workOrderId": {
+                    "type": "string"
+                  },
+                  "onDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/maintenance": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Work orders",
+        "operationId": "workOrders",
+        "description": "(v1.34.0) Work orders (status to filter) with their cost: labour, parts, contractors, accrued, warranty recovered, net.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Open a work order",
+        "operationId": "openWorkOrder",
+        "description": "(v1.34.0) Numbered WO-00001…. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "corrective",
+                      "preventive",
+                      "warranty"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "in_progress",
+                      "done",
+                      "cancelled"
+                    ]
+                  },
+                  "chargePointId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "openedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "doneOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "labourHours": {
+                    "type": "number"
+                  },
+                  "labourRate": {
+                    "type": "integer"
+                  },
+                  "contractorEstimate": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/maintenance/costs": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Maintenance costs",
+        "operationId": "maintenanceCosts",
+        "description": "(v1.34.0) Per charger (and site) over from–to (default the year to date): orders, labour, parts, contractors, accrued, recovered, net, kWh and the cost per kWh; by kind. format=xlsx.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/maintenance/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Work order",
+        "operationId": "workOrder",
+        "description": "(v1.34.0) With the parts issued, the contractor bills and the warranty claims.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a work order",
+        "operationId": "changeWorkOrder",
+        "description": "(v1.34.0) As opening; status done (doneOn) or cancelled. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "corrective",
+                      "preventive",
+                      "warranty"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "in_progress",
+                      "done",
+                      "cancelled"
+                    ]
+                  },
+                  "chargePointId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "openedOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "doneOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "labourHours": {
+                    "type": "number"
+                  },
+                  "labourRate": {
+                    "type": "integer"
+                  },
+                  "contractorEstimate": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/maintenance/{id}/claims": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Claim a warranty",
+        "operationId": "claimWarranty",
+        "description": "(v1.34.0) supplierId, amount (default the orderAPOSs cost), reference, note, submittedOn. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "supplierId"
+                ],
+                "properties": {
+                  "supplierId": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "integer"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "submittedOn": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/maintenance/claims/{cid}": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Update a warranty claim",
+        "operationId": "updateWarrantyClaim",
+        "description": "(v1.34.0) status accepted, rejected or paid (paid, on). Audited.",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "description": "The claim.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "rejected",
+                      "paid"
+                    ]
+                  },
+                  "paid": {
+                    "type": "integer"
+                  },
+                  "on": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/bills/{id}/links": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Set a billAPOSs stock and work order",
+        "operationId": "setBillAPOSsStockAndWorkOrder",
+        "description": "(v1.34.0) stock (the bill is for stock received: posted against goods received not invoiced), workOrderId (a contractorAPOSs bill for a work order; null to unlink). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stock": {
+                    "type": "boolean"
+                  },
+                  "workOrderId": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/assurance": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Revenue assurance",
+        "operationId": "revenueAssurance",
+        "description": "(v1.34.0) A monthAPOSs (default last month) findings: sessions not billed, billed at zero, with energy, meter or price out of line, signed values not verified, roaming without a charge record; billed, expected, gap and status; the leakage, recovered and written off per currency. format=xlsx.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/assurance/run": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Run revenue assurance",
+        "operationId": "runRevenueAssurance",
+        "description": "(v1.34.0) Check a monthAPOSs sessions now (month, default last month); findings found again keep their review. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "month": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/assurance/findings/{id}": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Review a revenue finding",
+        "operationId": "reviewRevenueFinding",
+        "description": "(v1.34.0) status recovered (recovered amount), written_off or dismissed (note), or open. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "recovered",
+                      "written_off",
+                      "dismissed",
+                      "open"
+                    ]
+                  },
+                  "recovered": {
+                    "type": "integer"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Loans and covenants",
+        "operationId": "loansAndCovenants",
+        "description": "(v1.34.0) The loans (facility, drawn, repaid, balance) and the covenants with their last twelve tests.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/pack": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Lender pack",
+        "operationId": "lenderPack",
+        "description": "(v1.34.0) The monthAPOSs (default last month) twelve-month results, covenant tests and loan schedules; format=pdf or xlsx (audited).",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "pdf",
+                "xlsx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/loans": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a loan",
+        "operationId": "addLoan",
+        "description": "(v1.34.0) Lender, facility, rate, start, term, grace, repayment, the cash account it runs through. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lender": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "facility": {
+                    "type": "integer"
+                  },
+                  "ratePct": {
+                    "type": "number"
+                  },
+                  "startOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "termMonths": {
+                    "type": "integer"
+                  },
+                  "graceMonths": {
+                    "type": "integer"
+                  },
+                  "repayment": {
+                    "type": "string",
+                    "enum": [
+                      "annuity",
+                      "equal_principal",
+                      "bullet"
+                    ]
+                  },
+                  "cashAccountId": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/loans/{id}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Loan",
+        "operationId": "loan",
+        "description": "(v1.34.0) With its drawdowns, payments and schedule.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a loan",
+        "operationId": "changeLoan",
+        "description": "(v1.34.0) As adding (not below what is drawn). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lender": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "facility": {
+                    "type": "integer"
+                  },
+                  "ratePct": {
+                    "type": "number"
+                  },
+                  "startOn": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "termMonths": {
+                    "type": "integer"
+                  },
+                  "graceMonths": {
+                    "type": "integer"
+                  },
+                  "repayment": {
+                    "type": "string",
+                    "enum": [
+                      "annuity",
+                      "equal_principal",
+                      "bullet"
+                    ]
+                  },
+                  "cashAccountId": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/loans/{id}/drawdowns": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a drawdown",
+        "operationId": "recordDrawdown",
+        "description": "(v1.34.0) amount (up to the undrawn facility), onDate, reference. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "amount"
+                ],
+                "properties": {
+                  "amount": {
+                    "type": "integer"
+                  },
+                  "onDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "reference": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/loans/{id}/payments": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Record a loan payment",
+        "operationId": "recordLoanPayment",
+        "description": "(v1.34.0) principal (up to the balance), interest, fees, onDate, reference. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "principal": {
+                    "type": "integer"
+                  },
+                  "interest": {
+                    "type": "integer"
+                  },
+                  "fees": {
+                    "type": "integer"
+                  },
+                  "onDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "reference": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/covenants": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a covenant",
+        "operationId": "addCovenant",
+        "description": "(v1.34.0) kind dscr, interest_cover, leverage or min_cash; threshold; currency; loanId; monthly or quarterly. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "threshold",
+                  "currency"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "dscr",
+                      "interest_cover",
+                      "leverage",
+                      "min_cash"
+                    ]
+                  },
+                  "threshold": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "loanId": {
+                    "type": "string"
+                  },
+                  "frequency": {
+                    "type": "string",
+                    "enum": [
+                      "monthly",
+                      "quarterly"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/covenants/{id}": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change a covenant",
+        "operationId": "changeCovenant",
+        "description": "(v1.34.0) As adding. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "threshold",
+                  "currency"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "dscr",
+                      "interest_cover",
+                      "leverage",
+                      "min_cash"
+                    ]
+                  },
+                  "threshold": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "loanId": {
+                    "type": "string"
+                  },
+                  "frequency": {
+                    "type": "string",
+                    "enum": [
+                      "monthly",
+                      "quarterly"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/finance/lenders/covenants/test": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Test the covenants",
+        "operationId": "testCovenants",
+        "description": "(v1.34.0) For a month (default last month) over the twelve months to its end; breaches and thin headroom raise alerts. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "month": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
           },
           "401": {
             "$ref": "#/components/responses/E401"
