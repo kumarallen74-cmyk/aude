@@ -41503,7 +41503,7 @@
         ],
         "summary": "My finance digest",
         "operationId": "myFinanceDigest",
-        "description": "(v1.27.0) The caller's digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation's WhatsApp template for digests. Console users only.\n\n**Permissions checked:** `payment:read`.",
+        "description": "(v1.27.0) The caller's digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation's WhatsApp template for digests. Digests are for console users: called with an API key, the subscription is off, there are no sends, and consoleUsersOnly is true.\n\n**Permissions checked:** `payment:read`.",
         "responses": {
           "200": {
             "description": "Digest",
@@ -41529,6 +41529,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "consoleUsersOnly": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -41540,9 +41543,6 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
-          },
-          "422": {
-            "$ref": "#/components/responses/E422"
           },
           "429": {
             "$ref": "#/components/responses/E429"

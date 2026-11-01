@@ -1292,9 +1292,8 @@ export const ops: Op[] = [
   // ─────────────────────────── (v1.27.0) digests, energy tariffs, owner documents, fleet automation
   {
     method: 'GET', path: '/v1/finance/digest', tag: T, summary: 'My finance digest',
-    description: '(v1.27.0) The caller\'s digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation\'s WhatsApp template for digests. Console users only.',
-    responses: { 200: { description: 'Digest', schema: { type: 'object', properties: { subscription: { type: 'object' }, sends: arrayOf({ type: 'object' }), organisation: { type: 'object' }, sections: arrayOf({ type: 'string' }) } } } },
-    errors: [422],
+    description: '(v1.27.0) The caller\'s digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation\'s WhatsApp template for digests. Digests are for console users: called with an API key, the subscription is off, there are no sends, and consoleUsersOnly is true.',
+    responses: { 200: { description: 'Digest', schema: { type: 'object', properties: { subscription: { type: 'object' }, sends: arrayOf({ type: 'object' }), organisation: { type: 'object' }, sections: arrayOf({ type: 'string' }), consoleUsersOnly: { type: 'boolean' } } } } },
   },
   {
     method: 'PUT', path: '/v1/finance/digest', tag: T, summary: 'Subscribe to the finance digest',

@@ -1471,7 +1471,9 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
   app.get('/v1/finance/digest', async (req, reply) => {
     assertCan(req.principal, { permission: 'payment:read' });
     try {
-      const u = me(req);
+      const u = userUuid(req);
+      // An API key has no digest of its own: the organisation's part, and no subscription.
+      if (!u) return { subscription: { frequency: 'off' }, sends: [], organisation: await digest.orgSettings(req.principal.orgId), sections: digest.SECTIONS, consoleUsersOnly: true };
       return { subscription: await digest.subscription(req.principal.orgId, u), sends: await digest.sends(req.principal.orgId, u), organisation: await digest.orgSettings(req.principal.orgId), sections: digest.SECTIONS };
     } catch (e) { return p16Failed(reply, e); }
   });

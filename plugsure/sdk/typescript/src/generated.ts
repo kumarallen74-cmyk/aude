@@ -6631,6 +6631,7 @@ export type MyFinanceDigestResponse = {
   sends?: Record<string, unknown>[];
   organisation?: Record<string, unknown>;
   sections?: string[];
+  consoleUsersOnly?: boolean;
 };
 
 export type MyHubCDRsBothSidesResponse = {
@@ -12534,7 +12535,7 @@ export class Operations {
   /**
    * My finance digest
    *
-   * (v1.27.0) The caller's digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation's WhatsApp template for digests. Console users only.
+   * (v1.27.0) The caller's digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation's WhatsApp template for digests. Digests are for console users: called with an API key, the subscription is off, there are no sends, and consoleUsersOnly is true.
    *
    * `GET /v1/finance/digest` · needs `payment:read`
    */
