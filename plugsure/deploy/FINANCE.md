@@ -628,6 +628,69 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
     an invoice on a plan counts as current). *Record* the month for the
     journal: Dr bad-debt expense, Cr allowance for the movement.
 
+## Assets, bills, cash and benchmarking (v1.29.0)
+
+- **Assets** (tab). The fixed asset register:
+  - **each asset:** category, site and charge point, cost before PPN and a
+    residual value, the month it goes into service (by default the month
+    after it was bought), its life, and the method: straight line, or
+    declining balance at a yearly rate (by default double the straight-line
+    rate), never below the residual;
+  - **importing:** *Import* turns the site investments into assets
+    (straight line over their months);
+  - **disposing:** *Dispose* records the date and the proceeds. Depreciation
+    stops from that month, and the gain or loss is in that month's journal.
+    *Void* is for an asset recorded in error, and only before its
+    depreciation is in a recorded month;
+  - **the journal:** for a month, Dr depreciation expense / Cr accumulated
+    depreciation by category, and for disposals, Dr accumulated, Dr bank,
+    Cr cost, and the gain or loss. *Record the month* once it has ended. The
+    account codes are in the settings (`PUT /v1/finance/assets/accounts`).
+- **Bills** (tab). What the operator owes its suppliers:
+  - **suppliers:** NPWP, bank details, payment terms, and the PPh 23 rate
+    withheld. A changed bank account is audited in full;
+  - **a bill:** the supplier's number, its dates (due by default after the
+    terms), category, site, subtotal, PPN and PPh 23 (by default the
+    supplier's rate). It is saved as a draft or submitted;
+  - **approval:** by a second person, never the submitter. The approvals
+    matrix's *Supplier bills* row can require a Finance Manager or two
+    approvers above an amount. *Reject* sends it back with a reason;
+  - **paying:** payments are recorded against an approved bill. When they
+    reach the payable, the bill is paid. Bank transfers are candidates in
+    Bank reconciliation;
+  - **capitalising:** equipment or installation can be capitalised: on
+    approval it becomes an asset (the subtotal, over the months given);
+  - **ageing:** by supplier and days past due (not due, 1–30, 31–60, 61–90,
+    90+), with what falls due in 14 days. An approved bill past due raises
+    `finance.supplier_bill_overdue` (daily), resolved when it is paid.
+- **Cash** (tab). The cash position:
+  - **accounts:** bank and cash accounts, each with an opening balance and
+    an optional minimum;
+  - **an account's balance:** its latest anchor, plus the transfers and
+    supplier payments from it since. The anchor is a balance taken by hand,
+    the last balance on a bank statement of the account, or the opening
+    balance. A statement belongs to the account when it is linked, or when
+    the account number ends with the account's last digits;
+  - **gateway balances:** Xendit's and others' balances come from the
+    gateway's snapshots;
+  - **staleness:** accounts with no balance for more than 7 days are
+    flagged;
+  - **the next 13 weeks:** from today's position, the gateway forecast's
+    flows (settlements, fleet invoices, Hub, refunds, owner shares,
+    PlugSure's statements) and supplier bills by due date, week by week,
+    with the first week below the accounts' minimums;
+  - **below the minimum:** an account below its minimum raises
+    `finance.cash_below_minimum` (daily).
+- **Benchmark** (tab). Sites, or site owners, over the last 1 to 12 months,
+  against their peers in the same currency:
+  - **metrics:** revenue, revenue per kWh, utilisation, margin, revenue per
+    connector a month, and collection days (from the charge to the money;
+    fewer is better);
+  - **per metric:** the quartiles, each one's percentile rank (100 is the
+    best), and outliers beyond 1.5 × the interquartile range, flagged good
+    or bad;
+  - **the score:** the average rank.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

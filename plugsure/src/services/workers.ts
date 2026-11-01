@@ -201,6 +201,9 @@ export function startWorkers(): () => void {
   const fleetAutomation = once('fleet-automation', async () => { await (await import('./fleet-automation.js')).sweep(); });
   const paymentPlans = once('payment-plans', async () => { await (await import('./payment-plans.js')).sweep(); });
   const forecastCheck = once('finance-forecast-check', async () => { await (await import('./rolling-forecast.js')).sweep(); });
+  // v1.29.0: supplier bills past due (finance.supplier_bill_overdue) and cash accounts below their minimum.
+  const billsOverdue = once('supplier-bills-overdue', async () => { await (await import('./supplier-bills.js')).sweep(); });
+  const cashCheck = once('cash-minimum-check', async () => { await (await import('./cash-position.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -318,6 +321,8 @@ export function startWorkers(): () => void {
     every(fleetAutomation, 60 * 60_000, 'fleet-automation'),
     every(paymentPlans, 6 * 60 * 60_000, 'payment-plans'),
     every(forecastCheck, 24 * 60 * 60_000, 'finance-forecast-check'),
+    every(billsOverdue, 24 * 60 * 60_000, 'supplier-bills-overdue'),
+    every(cashCheck, 24 * 60 * 60_000, 'cash-minimum-check'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

@@ -544,6 +544,13 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      the subsidiaries under the parent organisation (parent_org_id). Route
      finance.forecast_below_budget and finance.payment_plan_defaulted
      ([FINANCE.md](FINANCE.md)).
+  22. (v1.29.0) Optionally add the bank and cash accounts with their opening
+     balances and minimums (Finance → Cash), the suppliers (Finance → Bills),
+     and import the site investments into the asset register (Finance →
+     Assets); set the supplier_bill row of the approvals matrix if bills above
+     an amount need a Finance Manager or two approvers. Route
+     finance.supplier_bill_overdue and finance.cash_below_minimum
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

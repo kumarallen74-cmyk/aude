@@ -460,7 +460,7 @@ async function operatorStatementsSection(el, canWrite) {
 
 // ─────────────────────────────────────────── (v1.18.0) bank statements and tax
 
-const MATCH_LABEL = { gateway_withdrawal: 'Gateway payout', statement_payment: 'Statement payment', refund: 'Refund', ignored: 'Ignored' };
+const MATCH_LABEL = { gateway_withdrawal: 'Gateway payout', statement_payment: 'Statement payment', refund: 'Refund', roaming_payment: 'Roaming settlement', supplier_payment: 'Supplier payment', ignored: 'Ignored' };
 
 /** Bank: upload the bank's CSV, see what matched, match the rest by hand. */
 async function bankSection(el, canWrite) {
@@ -1019,7 +1019,7 @@ async function summarySection(el) {
     <p class="cell-sub">Revenue is before tax. DSO (days sales outstanding) is what customers owe ÷ the last 90 days' revenue per day. Margin uses energy bills, or estimates from each site's cost per kWh.</p>`;
 }
 
-const KIND_LBL = { refund: 'Refunds', payout: 'Owner payouts', write_off: 'Write-offs', bank_change: 'Owner bank detail changes' };
+const KIND_LBL = { refund: 'Refunds', payout: 'Owner payouts', write_off: 'Write-offs', bank_change: 'Owner bank detail changes', supplier_bill: 'Supplier bills' };
 
 async function phase10Settings(el, canWrite) {
   let fxr, ar, rs;
@@ -1915,6 +1915,215 @@ function ownerDocsDrawer(ownerId, ownerName, canWrite) {
   } }] });
 }
 
+// ─────────────────────────────────────────── (v1.29.0) fixed assets
+
+const sitesList = async () => { try { const r = await api('/v1/sites'); return Array.isArray(r) ? r : (r.sites ?? r.items ?? []); } catch { return []; } };
+const ASSET_CATS = ['chargers', 'installation', 'grid', 'equipment', 'vehicles', 'it', 'other'];
+const ASSET_ST = { in_service: ['t-ok', 'in service'], not_in_service: ['t-info', 'not in service yet'], fully_depreciated: ['t-mute', 'fully depreciated'], disposed: ['t-mute', 'disposed'], voided: ['t-mute', 'voided'] };
+
+async function assetsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, j;
+  try { [d, j] = await Promise.all([api('/v1/finance/assets'), api('/v1/finance/assets/journal')]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => assetsSection(host, canWrite);
+  const live = d.assets.filter((a) => a.status !== 'voided');
+  el.innerHTML = `${d.investmentsNotImported && canWrite ? callout('info', `${d.investmentsNotImported} site investment${d.investmentsNotImported === 1 ? ' is' : 's are'} not in the register. <button class="btn sm" style="white-space:nowrap" type="button" data-aimp>Import</button>`) : ''}
+    <div class="row" style="gap:6px;margin:10px 0">${canWrite ? `<button class="btn primary" type="button" data-anew>${icon('plus')} Record an asset</button>` : ''}<button class="btn" type="button" data-ax>${icon('download')} Excel</button></div>
+    ${Object.entries(d.totals).map(([c, t]) => `<div class="grid k4 section">${kpi(`Assets · ${c}`, esc(fmt.money(t.cost, c)), `${t.count} at cost`)}${kpi('Accumulated depreciation', esc(fmt.money(t.accumulated, c)))}${kpi('Net book value', esc(fmt.money(t.netBookValue, c)))}${kpi('Depreciation this month', esc(fmt.money(t.depreciationThisMonth, c)))}</div>`).join('') || callout('info', 'No assets yet: record chargers and equipment, or import the site investments.')}
+    <div class="card section"><header><h3>Register</h3></header><div data-ar></div></div>
+    <div class="card section"><header><h3>Journal · ${esc(j.month)}</h3>${canWrite && j.currencies.length ? `<button class="btn sm" style="white-space:nowrap" type="button" data-arec>${j.currencies.some((c) => c.recorded) ? 'Record again' : 'Record the month'}</button>` : ''}</header><div data-aj></div></div>`;
+  table($('[data-ar]', el), { columns: [
+    { label: 'Asset', render: (a) => `<b>${esc(a.tag)}</b> ${esc(a.description)}<div class="cell-sub">${esc(a.category)}${a.site ? ` · ${esc(a.site)}` : ''}${a.chargePoint ? ` · ${esc(a.chargePoint)}` : ''}</div>` },
+    { label: 'Cost', num: true, render: (a) => esc(fmt.money(a.cost, a.currency)) },
+    { label: 'Method', render: (a) => `${a.method === 'straight_line' ? 'Straight line' : `Declining ${a.ratePct}%`}<div class="cell-sub">${a.lifeMonths} months from ${esc(a.inService)}</div>` },
+    { label: 'This month', num: true, render: (a) => esc(fmt.money(a.depreciationThisMonth, a.currency)) },
+    { label: 'Net book value', num: true, render: (a) => `<b>${esc(fmt.money(a.netBookValue, a.currency))}</b>${a.disposal ? `<div class="cell-sub">sold ${esc(fmt.money(a.disposal.proceeds, a.currency))} · ${a.disposal.gainLoss >= 0 ? 'gain' : 'loss'} ${esc(fmt.money(Math.abs(a.disposal.gainLoss), a.currency))}</div>` : ''}` },
+    { label: 'Status', render: (a) => tag(...(ASSET_ST[a.status] ?? ['t-mute', a.status])) },
+    { label: '', render: (a) => (canWrite && a.status !== 'voided' && a.status !== 'disposed' ? `<button class="btn sm" style="white-space:nowrap" type="button" data-adis="${esc(a.id)}">Dispose</button> <button class="btn sm" style="white-space:nowrap" type="button" data-avoid="${esc(a.id)}">Void</button>` : '') },
+  ], rows: live, empty: 'No assets.' });
+  const jl = j.currencies.flatMap((c) => c.lines.map((l) => ({ ...l })));
+  table($('[data-aj]', el), { columns: [
+    { label: 'Account', render: (l) => `<span class="mono">${esc(l.code)}</span> ${esc(l.account)}<div class="cell-sub">${esc(l.description)}</div>` },
+    { label: 'Debit', num: true, render: (l) => (l.debit ? esc(fmt.money(l.debit, l.currency)) : '') },
+    { label: 'Credit', num: true, render: (l) => (l.credit ? esc(fmt.money(l.credit, l.currency)) : '') },
+  ], rows: jl, empty: `No depreciation or disposals in ${j.month}.` });
+  if (j.currencies.some((c) => c.recorded)) $('[data-aj]', el).insertAdjacentHTML('beforeend', `<div class="body cell-sub">${j.currencies.filter((c) => c.recorded).map((c) => `${esc(c.currency)} recorded ${esc(fmt.time(c.recorded.at))}${c.recorded.by ? ` by ${esc(c.recorded.by)}` : ''}${c.recorded.changedSince ? ' · <b style="color:var(--warn)">changed since: record again</b>' : ''}`).join('<br>')}</div>`);
+  $('[data-ax]', el).addEventListener('click', async () => { try { const res = await api('/v1/finance/assets?format=xlsx', { raw: true }); download('plugsure-assets.xlsx', await res.blob()); } catch (e) { toast(e.message, 'crit'); } });
+  $('[data-aimp]', el)?.addEventListener('click', async () => { try { const r = await api('/v1/finance/assets/import-investments', { method: 'POST' }); toast(`${r.imported} imported${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}.`, 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); } });
+  $('[data-arec]', el)?.addEventListener('click', async (e) => { e.target.disabled = true; try { await api(`/v1/finance/assets/journal/${j.month}/record`, { method: 'POST' }); toast(`${j.month} recorded.`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.target.disabled = false; } });
+  el.querySelectorAll('[data-adis]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Dispose of the asset', body: `<div class="form">${field('Date', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Proceeds (minor units)', '<input name="p" type="number" min="0" value="0">')}${field('How', '<input name="n" placeholder="Sold to…, scrapped…">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Dispose', kind: 'danger', async onClick(mc) { try { await api(`/v1/finance/assets/${b.dataset.adis}/dispose`, { method: 'POST', body: { disposedOn: $('[name="on"]', mc.el).value, proceeds: Number($('[name="p"]', mc.el).value || 0), note: $('[name="n"]', mc.el).value.trim() } }); reload(); } catch (e) { toast(e.message, 'crit'); return false; } } }] })));
+  el.querySelectorAll('[data-avoid]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Void the asset', body: field('Why (recorded in error)', '<input name="why">'),
+    actions: [{ label: 'Cancel' }, { label: 'Void', kind: 'danger', async onClick(mc) { try { await api(`/v1/finance/assets/${b.dataset.avoid}/void`, { method: 'POST', body: { reason: $('[name="why"]', mc.el).value.trim() } }); reload(); } catch (e) { toast(e.message, 'crit'); return false; } } }] })));
+  $('[data-anew]', el)?.addEventListener('click', async () => {
+    const ss = await sitesList();
+    modal({ title: 'Record an asset', subtitle: 'Cost before PPN, in the minor unit', body: `<div class="form">${field('Category', `<select name="cat">${ASSET_CATS.map((c) => `<option>${c}</option>`).join('')}</select>`)}${field('Description', '<input name="d">')}
+      ${field('Site', `<select name="s"><option value="">— none —</option>${ss.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>`)}${field('Currency (without a site)', `<input name="c" value="${esc(LEGACY_CURRENCY)}">`)}
+      ${field('Cost', '<input name="cost" type="number" min="1">')}${field('Residual', '<input name="res" type="number" min="0" value="0">')}${field('Acquired', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}
+      ${field('Life (months)', '<input name="life" type="number" min="1" max="360" value="96">')}${field('Method', '<select name="m"><option value="straight_line">Straight line</option><option value="declining_balance">Declining balance</option></select>')}${field('Rate % a year (declining)', '<input name="rate" type="number" step="0.01">')}${field('Tag (optional)', '<input name="tag">')}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) {
+        const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+        try { await api('/v1/finance/assets', { method: 'POST', body: { category: v('cat'), description: v('d'), siteId: v('s') || undefined, currency: v('s') ? undefined : v('c'), cost: Number(v('cost')), residual: Number(v('res') || 0), acquiredOn: v('on'), lifeMonths: Number(v('life')), method: v('m'), ratePct: v('rate') ? Number(v('rate')) : undefined, tag: v('tag') || undefined } }); toast('Recorded.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+      } }] });
+  });
+}
+
+// ─────────────────────────────────────────── (v1.29.0) supplier bills
+
+const BILL_CATS = ['energy', 'maintenance', 'rent', 'installation', 'equipment', 'connectivity', 'services', 'other'];
+const BILL_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], paid: ['t-ok', 'paid'], rejected: ['t-crit', 'rejected'], void: ['t-mute', 'void'] };
+
+async function billsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let p, b, s, accts;
+  try { [p, b, s, accts] = await Promise.all([api('/v1/finance/payables'), api('/v1/finance/bills'), api('/v1/finance/suppliers'), api('/v1/finance/cash/accounts')]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => billsSection(host, canWrite);
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-bnew>${icon('plus')} Record a bill</button><button class="btn" type="button" data-snew>Add a supplier</button>` : ''}<button class="btn" type="button" data-bx>${icon('download')} Ageing (Excel)</button></div>
+    ${p.currencies.map((c, i) => `<div class="grid k4 section">${kpi(`Payable · ${c.currency}`, esc(fmt.money(c.total, c.currency)), `${c.suppliers.length} supplier${c.suppliers.length === 1 ? '' : 's'}`)}${kpi('Overdue', esc(fmt.money(c.overdue, c.currency)), '', c.overdue ? 'crit' : '')}${kpi('Due in 14 days', esc(fmt.money(p.dueSoon.filter((x) => x.currency === c.currency).reduce((a, x) => a + x.balance, 0), c.currency)))}${kpi('Awaiting approval', String(p.awaitingApproval.count))}</div>
+      <div class="card section"><header><h3>Ageing · ${esc(c.currency)}</h3></header><div data-bag="${i}"></div></div>`).join('') || (p.awaitingApproval.count ? `<div class="grid k4 section">${kpi('Awaiting approval', String(p.awaitingApproval.count), 'bills approved by a second person')}</div>` : callout('info', 'Nothing owed to suppliers.'))}
+    <div class="card section"><header><h3>Bills</h3></header><div data-bl></div></div>
+    <div class="card section"><header><h3>Suppliers</h3></header><div data-sl></div></div>`;
+  p.currencies.forEach((c, i) => table($(`[data-bag="${i}"]`, el), { columns: [
+    { label: 'Supplier', render: (x) => `${esc(x.supplier)}<div class="cell-sub">${x.bills} bills</div>` },
+    ...p.buckets.map((k) => ({ label: k === 'current' ? 'Not due' : `${k} days`, num: true, render: (x) => (x.buckets[k] ? esc(fmt.money(x.buckets[k], c.currency)) : '') })),
+    { label: 'Total', num: true, render: (x) => `<b>${esc(fmt.money(x.total, c.currency))}</b>` },
+  ], rows: c.suppliers }));
+  table($('[data-bl]', el), { columns: [
+    { label: 'Bill', render: (x) => `<b>${esc(x.supplier)}</b> · ${esc(x.number)}<div class="cell-sub">${esc(x.category)}${x.site ? ` · ${esc(x.site)}` : ''} · ${esc(x.description)}</div>` },
+    { label: 'Due', render: (x) => `${esc(x.dueDate)}${x.overdue ? `<div class="cell-sub" style="color:var(--crit)">${x.daysLate} days late</div>` : ''}` },
+    { label: 'Payable', num: true, render: (x) => `${esc(fmt.money(x.payable, x.currency))}<div class="cell-sub">PPN ${esc(fmt.money(x.vat, x.currency))} · PPh 23 ${esc(fmt.money(x.wht, x.currency))}</div>` },
+    { label: 'Balance', num: true, render: (x) => esc(fmt.money(x.balance, x.currency)) },
+    { label: 'Status', render: (x) => `${tag(...(BILL_ST[x.status] ?? ['t-mute', x.status]))}${x.firstApprovedBy && x.status === 'awaiting_approval' ? `<div class="cell-sub">1st: ${esc(x.firstApprovedBy)}</div>` : ''}${x.assetId ? '<div class="cell-sub">capitalised</div>' : ''}` },
+    { label: '', render: (x) => (!canWrite ? '' : x.status === 'awaiting_approval' ? `<button class="btn sm" style="white-space:nowrap" type="button" data-bap="${esc(x.id)}">Approve</button> <button class="btn sm" style="white-space:nowrap" type="button" data-brj="${esc(x.id)}">Reject</button>`
+      : x.status === 'approved' ? `<button class="btn sm" style="white-space:nowrap" type="button" data-bpay="${esc(x.id)}">Pay</button>` : x.status === 'draft' || x.status === 'rejected' ? `<button class="btn sm" style="white-space:nowrap" type="button" data-bsub="${esc(x.id)}">Submit</button> <button class="btn sm" style="white-space:nowrap" type="button" data-bvo="${esc(x.id)}">Void</button>` : '') },
+  ], rows: b.bills.filter((x) => x.status !== 'void'), empty: 'No bills yet.' });
+  table($('[data-sl]', el), { columns: [
+    { label: 'Supplier', render: (x) => `${esc(x.name)}<div class="cell-sub">${esc(x.taxId ?? 'no NPWP')}${x.bank ? ` · ${esc(x.bank.name)} ${esc(x.bank.accountNumber ?? '')}` : ''}</div>` },
+    { label: 'Terms', render: (x) => `${x.termsDays} days${x.whtPct ? ` · PPh 23 ${x.whtPct}%` : ''}` },
+    { label: 'Open', num: true, render: (x) => (x.open ? esc(fmt.money(x.open, LEGACY_CURRENCY)) : '') },
+  ], rows: s.suppliers, empty: 'No suppliers yet.' });
+  const post = async (url, body, msg) => { try { const r = await api(url, { method: 'POST', body }); toast(r.waitingForSecondApprover ? 'First approval recorded: a second approver is needed.' : msg, 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; } };
+  el.querySelectorAll('[data-bap]').forEach((x) => x.addEventListener('click', () => post(`/v1/finance/bills/${x.dataset.bap}/approve`, undefined, 'Approved.')));
+  el.querySelectorAll('[data-bsub]').forEach((x) => x.addEventListener('click', () => post(`/v1/finance/bills/${x.dataset.bsub}/submit`, undefined, 'Submitted for approval.')));
+  for (const [attr, url, title] of [['brj', 'reject', 'Reject the bill'], ['bvo', 'void', 'Void the bill']]) el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.addEventListener('click', () => modal({ title, body: field('Why', '<input name="why">'),
+    actions: [{ label: 'Cancel' }, { label: 'OK', kind: 'danger', onClick: (mc) => post(`/v1/finance/bills/${x.dataset[attr]}/${url}`, { reason: $('[name="why"]', mc.el).value.trim() }, 'Done.') }] })));
+  el.querySelectorAll('[data-bpay]').forEach((x) => x.addEventListener('click', () => {
+    const bill = b.bills.find((y) => y.id === x.dataset.bpay);
+    modal({ title: `Pay ${bill.supplier} · ${bill.number}`, subtitle: `Balance ${fmt.money(bill.balance, bill.currency)}`, body: `<div class="form">${field('Amount', `<input name="a" type="number" min="1" value="${bill.balance}">`)}${field('Paid on', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}
+      ${field('Method', '<select name="m"><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select>')}${field('From account', `<select name="acc"><option value="">—</option>${accts.accounts.filter((a) => a.currency === bill.currency).map((a) => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select>`)}${field('Reference', '<input name="r">')}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick: (mc) => post(`/v1/finance/bills/${bill.id}/payments`, { amount: Number($('[name="a"]', mc.el).value), paidOn: $('[name="on"]', mc.el).value, method: $('[name="m"]', mc.el).value, cashAccountId: $('[name="acc"]', mc.el).value || undefined, reference: $('[name="r"]', mc.el).value.trim() || undefined }, 'Payment recorded.') }] });
+  }));
+  $('[data-bx]', el).addEventListener('click', async () => { try { const res = await api('/v1/finance/payables?format=xlsx', { raw: true }); download('plugsure-payables.xlsx', await res.blob()); } catch (e) { toast(e.message, 'crit'); } });
+  $('[data-snew]', el)?.addEventListener('click', () => modal({ title: 'Add a supplier', body: `<div class="form">${field('Name', '<input name="n">')}${field('NPWP', '<input name="t">')}${field('E-mail', '<input name="e" type="email">')}${field('Payment terms (days)', '<input name="d" type="number" min="0" max="180" value="30">')}${field('PPh 23 withheld %', '<input name="w" type="number" min="0" max="30" step="0.01" value="0">')}${field('Bank', '<input name="bn" placeholder="BCA">')}${field('Account number', '<input name="ba">')}${field('Account name', '<input name="bh">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/suppliers', { method: 'POST', body: { name: v('n'), taxId: v('t') || undefined, email: v('e') || undefined, termsDays: Number(v('d') || 30), whtPct: Number(v('w') || 0), bank: v('bn') ? { name: v('bn'), accountNumber: v('ba') || undefined, accountName: v('bh') || undefined } : undefined } }); toast('Added.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] }));
+  $('[data-bnew]', el)?.addEventListener('click', async () => {
+    if (!s.suppliers.length) { toast('Add a supplier first.', 'warn'); return; }
+    const ss = await sitesList();
+    modal({ title: 'Record a supplier bill', subtitle: 'Amounts in the minor unit', body: `<div class="form">${field('Supplier', `<select name="sup">${s.suppliers.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>`)}${field('Their number', '<input name="no">')}
+      ${field('Category', `<select name="cat">${BILL_CATS.map((c) => `<option>${c}</option>`).join('')}</select>`)}${field('Site', `<select name="s"><option value="">— none —</option>${ss.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>`)}${field('Description', '<input name="d">')}
+      ${field('Subtotal', '<input name="sub" type="number" min="1">')}${field('PPN', '<input name="vat" type="number" min="0" value="0">')}${field('PPh 23 (blank: the supplier\'s rate)', '<input name="wht" type="number" min="0">')}
+      ${field('Bill date', `<input name="bd" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Due (blank: the terms)', '<input name="dd" type="date">')}${field('Capitalise as an asset', '<select name="cap"><option value="">No</option><option value="1">Yes (installation, equipment, other)</option></select>')}${field('Asset life (months)', '<input name="life" type="number" min="1" max="360" value="96">')}</div>`,
+      actions: [{ label: 'Save as draft', onClick: (mc) => send(mc, true) }, { label: 'Submit for approval', kind: 'primary', onClick: (mc) => send(mc, false) }] });
+    async function send(mc, draft) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/bills', { method: 'POST', body: { supplierId: v('sup'), number: v('no'), category: v('cat'), siteId: v('s') || undefined, description: v('d'), subtotal: Number(v('sub')), vat: Number(v('vat') || 0), wht: v('wht') === '' ? undefined : Number(v('wht')), billDate: v('bd'), dueDate: v('dd') || undefined, capitalise: v('cap') === '1', lifeMonths: v('cap') === '1' ? Number(v('life')) : undefined, draft } }); toast(draft ? 'Saved as a draft.' : 'Submitted: a second person approves it.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    }
+  });
+}
+
+// ─────────────────────────────────────────── (v1.29.0) cash position
+
+async function cashSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let p, w;
+  try { [p, w] = await Promise.all([api('/v1/finance/cash'), api('/v1/finance/cash/weeks')]); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => cashSection(host, canWrite);
+  const SRC = { manual: 'balance taken', statement: 'bank statement', opening: 'opening balance' };
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-cnew>${icon('plus')} Add an account</button><button class="btn" type="button" data-ctr>Record a transfer</button>` : ''}</div>
+    ${Object.entries(p.totals).map(([c, t]) => `<div class="grid k4 section">${kpi(`Cash · ${c}`, esc(fmt.money(t.total, c)), `on ${p.date}`)}${kpi('Banks', esc(fmt.money(t.bank, c)))}${kpi('Gateways', esc(fmt.money(t.gateway, c)))}${kpi('Cash on hand', esc(fmt.money(t.cash, c)))}</div>`).join('') || callout('info', 'Add the bank accounts: their balances come from the bank statements you upload, or a balance you take.')}
+    ${p.stale.length ? callout('warn', `${p.stale.length} account${p.stale.length === 1 ? '' : 's'} with no balance for more than 7 days: upload a statement or take a balance.`) : ''}
+    <div class="card section"><header><h3>Accounts</h3></header><div data-ca></div></div>
+    ${w.currencies.map((c, i) => `<div class="card section"><header><h3>Next 13 weeks · ${esc(c.currency)}</h3><span class="cell-sub">from ${esc(fmt.money(c.opening, c.currency))}${c.firstWeekBelowMinimum ? ` · <b style="color:var(--crit)">below the minimum from ${esc(c.firstWeekBelowMinimum)}</b>` : ''}</span></header><div data-cw="${i}"></div></div>`).join('')}
+    <div class="card section"><header><h3>Transfers</h3></header><div data-ct></div></div>`;
+  w.currencies.forEach((c, i) => table($(`[data-cw="${i}"]`, el), { columns: [
+    { label: 'Week', render: (x) => `${x.week}<div class="cell-sub" style="white-space:nowrap">${esc(x.from.slice(5))}</div>` },
+    { label: 'In', num: true, render: (x) => (x.in ? esc(fmt.money(x.in, c.currency)) : '') },
+    { label: 'Out', num: true, render: (x) => (x.out ? esc(fmt.money(x.out, c.currency)) : '') },
+    { label: 'Closing', num: true, render: (x) => `<b style="color:${x.closing < c.minimum ? 'var(--crit)' : 'inherit'}">${esc(fmt.money(x.closing, c.currency))}</b>` },
+  ], rows: c.weeks }));
+  const rows = [...p.accounts.map((a) => ({ ...a, gw: false })), ...p.gateways.map((g) => ({ id: g.integrationId, name: g.name, kind: 'gateway', currency: g.currency, balance: g.balance, anchor: { source: 'gateway', date: g.takenAt.slice(0, 10) }, gw: true }))];
+  table($('[data-ca]', el), { columns: [
+    { label: 'Account', render: (a) => `${esc(a.name)}<div class="cell-sub">${esc(a.kind)}${a.bankName ? ` · ${esc(a.bankName)}` : ''}${a.accountHint ? ` ·••${esc(a.accountHint)}` : ''}</div>` },
+    { label: 'Balance', num: true, render: (a) => (a.balance == null ? '<span class="cell-sub">none yet</span>' : `<b style="color:${a.belowMinimum ? 'var(--crit)' : 'inherit'}">${esc(fmt.money(a.balance, a.currency))}</b>${a.minimum != null ? `<div class="cell-sub">minimum ${esc(fmt.money(a.minimum, a.currency))}</div>` : ''}`) },
+    { label: 'From', render: (a) => (a.anchor ? `${esc(a.gw ? 'gateway snapshot' : SRC[a.anchor.source] ?? a.anchor.source)} · ${esc(a.anchor.date)}${a.movedSince ? `<div class="cell-sub">${esc(fmt.money(a.movedSince, a.currency))} moved since</div>` : ''}` : '') },
+    { label: '', render: (a) => (canWrite && !a.gw ? `<button class="btn sm" style="white-space:nowrap" type="button" data-cbal="${esc(a.id)}">Balance</button>` : '') },
+  ], rows, empty: 'No accounts.' });
+  table($('[data-ct]', el), { columns: [
+    { label: 'Date', render: (t) => esc(t.onDate) },
+    { label: 'From → to', render: (t) => `${esc(t.from)} → ${esc(t.to)}${t.reference ? `<div class="cell-sub">${esc(t.reference)}</div>` : ''}` },
+    { label: 'Amount', num: true, render: (t) => (t.voided ? `<s>${esc(fmt.money(t.amount, t.currency))}</s>` : esc(fmt.money(t.amount, t.currency))) },
+    { label: '', render: (t) => (canWrite && !t.voided ? `<button class="btn sm" style="white-space:nowrap" type="button" data-ctv="${esc(t.id)}">Void</button>` : '') },
+  ], rows: p.transfers, empty: 'No transfers.' });
+  const post = async (url, body, msg) => { try { await api(url, { method: 'POST', body }); toast(msg, 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; } };
+  el.querySelectorAll('[data-cbal]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Take a balance', body: `<div class="form">${field('Balance (minor units)', '<input name="b" type="number">')}${field('On', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Note', '<input name="n">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', onClick: (mc) => post(`/v1/finance/cash/accounts/${b.dataset.cbal}/balances`, { balance: Number($('[name="b"]', mc.el).value), onDate: $('[name="on"]', mc.el).value, note: $('[name="n"]', mc.el).value.trim() || undefined }, 'Saved.') }] })));
+  el.querySelectorAll('[data-ctv]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Void the transfer', body: field('Why', '<input name="why">'),
+    actions: [{ label: 'Cancel' }, { label: 'Void', kind: 'danger', onClick: (mc) => post(`/v1/finance/cash/transfers/${b.dataset.ctv}/void`, { reason: $('[name="why"]', mc.el).value.trim() }, 'Voided.') }] })));
+  $('[data-cnew]', el)?.addEventListener('click', () => modal({ title: 'Add a cash account', body: `<div class="form">${field('Name', '<input name="n" placeholder="BCA operating">')}${field('Kind', '<select name="k"><option value="bank">Bank</option><option value="cash">Cash on hand</option></select>')}${field('Bank', '<input name="bn">')}${field('Last digits of the number', '<input name="h" inputmode="numeric">')}
+    ${field('Currency', `<input name="c" value="${esc(LEGACY_CURRENCY)}">`)}${field('Opening balance', '<input name="ob" type="number" value="0">')}${field('On', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Alert below (optional)', '<input name="min" type="number" min="0">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/cash/accounts', { method: 'POST', body: { name: v('n'), kind: v('k'), bankName: v('bn') || undefined, accountHint: v('h') || undefined, currency: v('c'), openingBalance: Number(v('ob') || 0), openingOn: v('on'), minimum: v('min') === '' ? null : Number(v('min')) } }); toast('Added.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+    } }] }));
+  $('[data-ctr]', el)?.addEventListener('click', () => {
+    if (p.accounts.length < 2) { toast('Add two accounts first.', 'warn'); return; }
+    const opts = p.accounts.map((a) => `<option value="${esc(a.id)}">${esc(a.name)} (${esc(a.currency)})</option>`).join('');
+    modal({ title: 'Record a transfer', body: `<div class="form">${field('From', `<select name="f">${opts}</select>`)}${field('To', `<select name="t">${opts}</select>`)}${field('Amount (minor units)', '<input name="a" type="number" min="1">')}${field('On', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Reference', '<input name="r">')}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick: (mc) => post('/v1/finance/cash/transfers', { fromAccountId: $('[name="f"]', mc.el).value, toAccountId: $('[name="t"]', mc.el).value, amount: Number($('[name="a"]', mc.el).value), onDate: $('[name="on"]', mc.el).value, reference: $('[name="r"]', mc.el).value.trim() || undefined }, 'Recorded.') }] });
+  });
+}
+
+// ─────────────────────────────────────────── (v1.29.0) KPI benchmarking
+
+const BENCH_LBL = { revenue: 'Revenue', revenuePerKwh: 'Revenue / kWh', utilisationPct: 'Utilisation', marginPct: 'Margin', revenuePerConnector: 'Revenue / connector / month', collectionDays: 'Collection days' };
+
+async function benchmarkSection(host, opts = { by: 'site', months: 3 }) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let b;
+  try { b = await api(`/v1/finance/benchmark?by=${opts.by}&months=${opts.months}`); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = (o) => benchmarkSection(host, { ...opts, ...o });
+  const val = (m, v, cur) => (v == null ? '<span class="cell-sub">—</span>' : m === 'revenue' || m === 'revenuePerKwh' || m === 'revenuePerConnector' ? esc(fmt.money(v, cur)) : m === 'collectionDays' ? `${esc(String(v))} d` : `${esc(String(v))}%`);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Compare', `<select data-bby><option value="site"${opts.by === 'site' ? ' selected' : ''}>Sites</option><option value="owner"${opts.by === 'owner' ? ' selected' : ''}>Site owners</option></select>`)}${field('Months', `<select data-bm>${[1, 3, 6, 12].map((n) => `<option${n === opts.months ? ' selected' : ''}>${n}</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end"><button class="btn" type="button" data-bxl>${icon('download')} Excel</button></div></div>
+    ${callout('info', `${esc(b.from)} to ${esc(b.to)}, against peers in the same currency. The rank is a percentile (100 is the best; fewer collection days is better). Outliers are beyond 1.5 × the interquartile range.`)}
+    ${Object.keys(b.stats).map((cur, i) => `<div class="card section"><header><h3>Peers · ${esc(cur)}</h3></header><div data-bp="${i}"></div></div>`).join('')}
+    <div class="card section"><header><h3>${opts.by === 'owner' ? 'Owners' : 'Sites'}</h3></header><div data-brows></div></div>`;
+  Object.entries(b.stats).forEach(([cur, st], i) => table($(`[data-bp="${i}"]`, el), { columns: [
+    { label: 'Metric', render: (m) => esc(BENCH_LBL[m]) },
+    { label: 'Q1', num: true, render: (m) => val(m, st[m].q1, cur) },
+    { label: 'Median', num: true, render: (m) => `<b>${val(m, st[m].median, cur)}</b>` },
+    { label: 'Q3', num: true, render: (m) => val(m, st[m].q3, cur) },
+  ], rows: b.metrics.filter((m) => st[m]) }));
+  table($('[data-brows]', el), { columns: [
+    { label: opts.by === 'owner' ? 'Owner' : 'Site', render: (r) => `<b>${esc(r.name)}</b><div class="cell-sub">${r.sites > 1 ? `${r.sites} sites · ` : ''}${r.connectors} connectors · ${fmt.num(r.sessions)} sessions</div>` },
+    { label: 'Score', num: true, render: (r) => (r.score == null ? '' : `<b>${r.score}</b>`) },
+    ...b.metrics.map((m) => ({ label: BENCH_LBL[m], num: true, render: (r) => { const o = r.outliers.find((x) => x.metric === m); return `${val(m, r.metrics[m], r.currency)}${r.ranks[m] != null ? `<div class="cell-sub">p${r.ranks[m]}</div>` : ''}${o ? `<div>${tag(o.good ? 't-ok' : 't-crit', o.direction === 'high' ? 'high' : 'low')}</div>` : ''}`; } })),
+  ], rows: b.rows, empty: 'No sessions in the period.' });
+  $('[data-bby]', el).addEventListener('change', (e) => reload({ by: e.target.value }));
+  $('[data-bm]', el).addEventListener('change', (e) => reload({ months: Number(e.target.value) }));
+  $('[data-bxl]', el).addEventListener('click', async () => { try { const res = await api(`/v1/finance/benchmark?by=${opts.by}&months=${opts.months}&format=xlsx`, { raw: true }); download('plugsure-benchmark.xlsx', await res.blob()); } catch (e) { toast(e.message, 'crit'); } });
+}
+
 // ─────────────────────────────────────────── (v1.28.0) driver funds
 
 async function driverFundsSection(host, canWrite) {
@@ -2086,8 +2295,8 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
+      { id: 'payables', label: 'Payables' }, { id: 'bills', label: 'Bills' }, { id: 'cash', label: 'Cash' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -2462,7 +2671,8 @@ registerView('finance', {
       roaming: () => roamingSection(body, canWrite), controls: () => controlsSection(body),
       subscriptions: () => subscriptionsSection(body, canWrite), ppn: () => ppnSection(body, canWrite), autopay: () => autoPayoutsSection(body, canWrite),
       tariffs: () => tariffsSection(body, canWrite), fleetauto: () => fleetAutoSection(body),
-      funds: () => driverFundsSection(body, canWrite), group: () => groupSection(body, canWrite), rforecast: () => rollingSection(body, canWrite), plans: () => plansSection(body, canWrite) };
+      funds: () => driverFundsSection(body, canWrite), group: () => groupSection(body, canWrite), rforecast: () => rollingSection(body, canWrite), plans: () => plansSection(body, canWrite),
+      assets: () => assetsSection(body, canWrite), bills: () => billsSection(body, canWrite), cash: () => cashSection(body, canWrite), benchmark: () => benchmarkSection(body) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
