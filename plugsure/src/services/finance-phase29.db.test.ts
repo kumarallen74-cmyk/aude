@@ -203,6 +203,8 @@ dbDescribe('Finance data quality (v1.40.0)', () => {
     assert.deepEqual(h.changes.map((c: any) => c.action), ['finance.scenario_updated', 'finance.scenario_created']);
     assert.equal(h.changes[1].by, 'Rina');
     assert.equal((await call('GET', '/v1/finance/history?targetType=DROP;&targetId=1')).statusCode, 400);
+    assert.equal((await call('GET', '/v1/finance/history?targetType=supplier')).statusCode, 400, 'both or neither');
+    assert.ok((await call('GET', '/v1/finance/history')).json().changes.some((c: any) => c.action === 'finance.scenario_updated' && c.targetId === s.id), 'the latest finance changes');
     await call('PUT', `/v1/finance/scenarios/${s.id}`, { archive: true });
   });
 });
@@ -224,5 +226,10 @@ dbDescribe('Scenario planning (v1.40.0)', () => {
     assert.equal(c.sensitivity.of, 'Two new sites');
     assert.equal(c.sensitivity.drivers.length, 4);
     assert.equal((await asOrg(orgS, () => call('GET', '/v1/finance/scenarios?format=xlsx'))).statusCode, 200);
+    const sb = (await one<{ id: string }>(`INSERT INTO organisation (name, slug, sandbox_of_org_id) VALUES ($1, $2, $3) RETURNING id`, [`Sandbox ${TAG}`, `p29-sb-${TAG}`, orgS]))!.id;
+    try {
+      assert.equal((await asOrg(sb, () => call('GET', '/v1/finance/intercompany/netting'))).statusCode, 200, 'a sandbox stands alone');
+      assert.equal((await asOrg(sb, () => call('GET', '/v1/finance/intercompany/transfer-pricing'))).statusCode, 200);
+    } finally { await query(`DELETE FROM organisation WHERE id = $1`, [sb]).catch(() => 0); }
   });
 });

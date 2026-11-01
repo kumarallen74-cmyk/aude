@@ -117,13 +117,15 @@ export async function overview(orgId: string) {
 }
 
 /** A record's change history from the audit trail. */
+/** A record's change history from the audit trail; with neither targetType nor targetId, the latest finance changes. */
 export async function history(orgId: string, typeRaw: unknown, idRaw: unknown) {
-  const type = String(typeRaw ?? ''), id = String(idRaw ?? '');
-  if (!/^[a-z_]{2,40}$/.test(type) || !id || id.length > 64) throw new DataQualityError(400, 'targetType and targetId name a record.');
+  const type = typeRaw == null || typeRaw === '' ? null : String(typeRaw), id = idRaw == null || idRaw === '' ? null : String(idRaw);
+  if ((type == null) !== (id == null)) throw new DataQualityError(400, 'targetType and targetId name a record (or neither, for the latest finance changes).');
+  if (type != null && (!/^[a-z_]{2,40}$/.test(type) || id!.length > 64)) throw new DataQualityError(400, 'targetType and targetId name a record.');
   const rows = await outsideRequestScope(() => many<any>(
-    `SELECT a.ts, a.action, a.actor_type, a.actor_id, u.name AS actor_name, a.before_state, a.after_state, a.ip FROM audit_log a LEFT JOIN app_user u ON u.id::text = a.actor_id::text
-      WHERE a.org_id = $1 AND a.target_type = $2 AND a.target_id = $3 ORDER BY a.ts DESC, a.seq DESC LIMIT 200`, [orgId, type, id]));
-  return { targetType: type, targetId: id, changes: rows.map((r) => ({ at: new Date(r.ts).toISOString(), action: r.action, by: r.actor_name ?? (r.actor_type === 'user' ? 'a user' : r.actor_type), before: r.before_state ?? null, after: r.after_state ?? null })) };
+    `SELECT a.ts, a.action, a.actor_type, a.actor_id, a.target_type, a.target_id, u.name AS actor_name, a.before_state, a.after_state FROM audit_log a LEFT JOIN app_user u ON u.id::text = a.actor_id::text
+      WHERE a.org_id = $1 AND ($2::text IS NULL OR (a.target_type = $2 AND a.target_id = $3)) AND ($2::text IS NOT NULL OR a.action LIKE 'finance.%') ORDER BY a.ts DESC, a.seq DESC LIMIT 200`, [orgId, type, id]));
+  return { targetType: type, targetId: id, changes: rows.map((r) => ({ at: new Date(r.ts).toISOString(), action: r.action, targetType: r.target_type ?? null, targetId: r.target_id ?? null, by: r.actor_name ?? (r.actor_type === 'user' ? 'a user' : r.actor_type), before: r.before_state ?? null, after: r.after_state ?? null })) };
 }
 
 /** Daily: every organisation with a ledger or suppliers. */

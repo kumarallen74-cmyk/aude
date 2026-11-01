@@ -11539,7 +11539,7 @@ export class Operations {
   /**
    * Add a corporate card
    *
-   * (v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement 's account). Audited.
+   * (v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement's account). Audited.
    *
    * `POST /v1/finance/cards`
    */
@@ -11721,7 +11721,7 @@ export class Operations {
   /**
    * Add a performance obligation
    *
-   * (v1.40.0) description, kind, amount (its share of the price), recognition ratably (startMonth, endMonth; the contract 's months by default) or point_in_time (deliveredOn). Audited.
+   * (v1.40.0) description, kind, amount (its share of the price), recognition ratably (startMonth, endMonth; the contract's months by default) or point_in_time (deliveredOn). Audited.
    *
    * `POST /v1/finance/contracts/{id}/obligations`
    */
@@ -12490,7 +12490,7 @@ export class Operations {
   /**
    * Bank file of a payment run
    *
-   * (v1.39.0) One transfer per supplier as CSV for the bank 's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.
+   * (v1.39.0) One transfer per supplier as CSV for the bank's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.
    *
    * `GET /v1/finance/payment-runs/{id}/bank-file`
    */
@@ -12579,7 +12579,7 @@ export class Operations {
   /**
    * Budget version
    *
-   * (v1.37.0) Its months by category, sites, the organisation 's lines, totals and the version it follows. format=xlsx.
+   * (v1.37.0) Its months by category, sites, the organisation's lines, totals and the version it follows. format=xlsx.
    *
    * `GET /v1/finance/budget-plans/{id}`
    */
@@ -13035,7 +13035,7 @@ export class Operations {
   /**
    * Change a draft run
    *
-   * (v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill 's balance. Audited.
+   * (v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill's balance. Audited.
    *
    * `PUT /v1/finance/payment-runs/{id}/items`
    */
@@ -13522,7 +13522,7 @@ export class Operations {
   /**
    * Close automation
    *
-   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step 's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.
+   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.
    *
    * `GET /v1/finance/close-automation`
    */
@@ -13698,7 +13698,7 @@ export class Operations {
   /**
    * Corporate cards
    *
-   * (v1.39.0) Each card with the month 's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.
+   * (v1.39.0) Each card with the month's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.
    *
    * `GET /v1/finance/cards`
    */
@@ -13713,7 +13713,7 @@ export class Operations {
   /**
    * Corporate income tax
    *
-   * (v1.39.0) The year 's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year 's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).
+   * (v1.39.0) The year's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).
    *
    * `GET /v1/finance/corporate-tax`
    */
@@ -14945,7 +14945,7 @@ export class Operations {
   }
 
   /**
-   * Finalise or reopen the year 's tax
+   * Finalise or reopen the year's tax
    *
    * (v1.39.0) action finalise (an ended year; the figures are kept and the December tax journal posts: current tax, credits, deferred tax) or reopen; currency. finance:approve. Audited.
    *
@@ -15237,7 +15237,7 @@ export class Operations {
   /**
    * FX exposure
    *
-   * (v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month 's rate, the revaluation since the previous month 's rate and a 10% move. format=xlsx.
+   * (v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month's rate, the revaluation since the previous month's rate and a 10% move. format=xlsx.
    *
    * `GET /v1/finance/fx-exposure`
    */
@@ -15253,7 +15253,7 @@ export class Operations {
   /**
    * FX hedges
    *
-   * (v1.38.0) Every forward contract; open ones marked to market at the month 's rate (month, default this one); settled ones with the realised result; totals per currency sold.
+   * (v1.38.0) Every forward contract; open ones marked to market at the month's rate (month, default this one); settled ones with the realised result; totals per currency sold.
    *
    * `GET /v1/finance/fx-hedges`
    */
@@ -15862,7 +15862,7 @@ export class Operations {
   /**
    * Group netting
    *
-   * (v1.40.0) The group 's issued, unsettled recharges per currency: each pair 's bilateral net, each entity 's multilateral position, and the transfers through the parent as the netting centre.
+   * (v1.40.0) The group's issued, unsettled recharges per currency: each pair's bilateral net, each entity's multilateral position, and the transfers through the parent as the netting centre.
    *
    * `GET /v1/finance/intercompany/netting`
    */
@@ -15922,7 +15922,7 @@ export class Operations {
   /**
    * Import card transactions
    *
-   * (v1.39.0) csv: the bank 's export, one line each: date (YYYY-MM-DD), merchant, amount in the card 's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.
+   * (v1.39.0) csv: the bank's export, one line each: date (YYYY-MM-DD), merchant, amount in the card's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.
    *
    * `POST /v1/finance/cards/{id}/import`
    */
@@ -17164,7 +17164,7 @@ export class Operations {
   /**
    * Mark a contract billing paid
    *
-   * (v1.40.0) paidOn, cashAccountId (in the contract 's currency). Audited.
+   * (v1.40.0) paidOn, cashAccountId (in the contract's currency). Audited.
    *
    * `POST /v1/finance/contracts/{id}/billings/{bid}/paid`
    */
@@ -17181,7 +17181,7 @@ export class Operations {
   /**
    * Mark a payment run paid
    *
-   * (v1.39.0) paidOn (default the run 's day): each bill gets its payment (bank transfer, the run 's number, its account); a bill that cannot be paid is listed with the reason. Audited.
+   * (v1.39.0) paidOn (default the run's day): each bill gets its payment (bank transfer, the run's number, its account); a bill that cannot be paid is listed with the reason. Audited.
    *
    * `POST /v1/finance/payment-runs/{id}/paid`
    */
@@ -17658,7 +17658,7 @@ export class Operations {
   }
 
   /**
-   * An owner 's finance
+   * An owner's finance
    *
    * (v1.38.0) What the owner sees in the portal: per month the sites ' sessions, kWh and revenue and the statements ' gross, commission, share, paid and outstanding; per site; open queries. format=xlsx.
    *
@@ -18402,7 +18402,7 @@ export class Operations {
   /**
    * Record a card statement
    *
-   * (v1.39.0) month, total (the bank statement 's), paidOn and cashAccountId (default the card 's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.
+   * (v1.39.0) month, total (the bank statement's), paidOn and cashAccountId (default the card's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.
    *
    * `PUT /v1/finance/cards/{id}/statements`
    */
@@ -18587,19 +18587,19 @@ export class Operations {
   }
 
   /**
-   * A record 's history
+   * A record's history
    *
-   * (v1.40.0) Every change to a record from the audit trail: targetType (supplier, supplier_bill, corp_card, customer_contract…) and targetId.
+   * (v1.40.0) Every change to a record from the audit trail: targetType (supplier, supplier_bill, corp_card, customer_contract…) and targetId; with neither, the latest finance changes.
    *
    * `GET /v1/finance/history`
    */
-  recordHistory(params: {
-    query: {
-      targetType: string;
-      targetId: string;
+  recordHistory(params?: {
+    query?: {
+      targetType?: string;
+      targetId?: string;
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
-    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/history", query: params.query, accept: "json" }, options);
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/history", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -19844,7 +19844,7 @@ export class Operations {
   /**
    * Review a card transaction
    *
-   * (v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card 's holder. Audited.
+   * (v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card's holder. Audited.
    *
    * `POST /v1/finance/cards/transactions/{tid}/review`
    */
@@ -20539,7 +20539,7 @@ export class Operations {
   /**
    * Set budget lines
    *
-   * (v1.37.0) A draft 's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.
+   * (v1.37.0) A draft's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.
    *
    * `PUT /v1/finance/budget-plans/{id}/lines`
    */
@@ -21130,7 +21130,7 @@ export class Operations {
   /**
    * Settle the group netting
    *
-   * (v1.40.0) currency, settledOn, reference: every pair 's recharges settled. The parent, with finance:approve. Audited.
+   * (v1.40.0) currency, settledOn, reference: every pair's recharges settled. The parent, with finance:approve. Audited.
    *
    * `POST /v1/finance/intercompany/netting/settle`
    */
@@ -21215,7 +21215,7 @@ export class Operations {
   /**
    * Set a transfer-pricing policy
    *
-   * (v1.40.0) kind (management_fee, shared_services, it_services, energy_resale, equipment_rental, other), method (cost_plus, pass_through, cup), markupPct, minPct, maxPct, note. The group 's parent. Audited.
+   * (v1.40.0) kind (management_fee, shared_services, it_services, energy_resale, equipment_rental, other), method (cost_plus, pass_through, cup), markupPct, minPct, maxPct, note. The group's parent. Audited.
    *
    * `PUT /v1/finance/intercompany/transfer-pricing/policies`
    */
@@ -21939,7 +21939,7 @@ export class Operations {
   /**
    * Tax audit pack
    *
-   * (v1.37.0) The year 's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.
+   * (v1.37.0) The year's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.
    *
    * `GET /v1/finance/tax-audit/pack`
    */
@@ -21954,7 +21954,7 @@ export class Operations {
   /**
    * Tax audit readiness
    *
-   * (v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office 's letters. format=xlsx.
+   * (v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office's letters. format=xlsx.
    *
    * `GET /v1/finance/tax-audit`
    */
@@ -22033,7 +22033,7 @@ export class Operations {
   /**
    * Transfer pricing
    *
-   * (v1.40.0) The group 's policy per kind, and each recharge of the year (year) with its kind, method, cost and mark-up against the range (ok, below, above, no_cost, unclassified). format=xlsx (the documentation workpaper).
+   * (v1.40.0) The group's policy per kind, and each recharge of the year (year) with its kind, method, cost and mark-up against the range (ok, below, above, no_cost, unclassified). format=xlsx (the documentation workpaper).
    *
    * `GET /v1/finance/intercompany/transfer-pricing`
    */

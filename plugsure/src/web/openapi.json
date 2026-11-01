@@ -63534,7 +63534,7 @@
         ],
         "summary": "Tax audit readiness",
         "operationId": "taxAuditReadiness",
-        "description": "(v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office 's letters. format=xlsx.",
+        "description": "(v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office's letters. format=xlsx.",
         "parameters": [
           {
             "name": "year",
@@ -63593,7 +63593,7 @@
         ],
         "summary": "Tax audit pack",
         "operationId": "taxAuditPack",
-        "description": "(v1.37.0) The year 's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.",
+        "description": "(v1.37.0) The year's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.",
         "parameters": [
           {
             "name": "year",
@@ -64027,7 +64027,7 @@
         ],
         "summary": "Budget version",
         "operationId": "budgetVersion",
-        "description": "(v1.37.0) Its months by category, sites, the organisation 's lines, totals and the version it follows. format=xlsx.",
+        "description": "(v1.37.0) Its months by category, sites, the organisation's lines, totals and the version it follows. format=xlsx.",
         "parameters": [
           {
             "name": "id",
@@ -64090,7 +64090,7 @@
         ],
         "summary": "Set budget lines",
         "operationId": "setBudgetLines",
-        "description": "(v1.37.0) A draft 's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.",
+        "description": "(v1.37.0) A draft's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.",
         "parameters": [
           {
             "name": "id",
@@ -64318,7 +64318,7 @@
         ],
         "summary": "FX exposure",
         "operationId": "fxExposure",
-        "description": "(v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month 's rate, the revaluation since the previous month 's rate and a 10% move. format=xlsx.",
+        "description": "(v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month's rate, the revaluation since the previous month's rate and a 10% move. format=xlsx.",
         "parameters": [
           {
             "name": "date",
@@ -64378,7 +64378,7 @@
         ],
         "summary": "FX hedges",
         "operationId": "fxHedges",
-        "description": "(v1.38.0) Every forward contract; open ones marked to market at the month 's rate (month, default this one); settled ones with the realised result; totals per currency sold.",
+        "description": "(v1.38.0) Every forward contract; open ones marked to market at the month's rate (month, default this one); settled ones with the realised result; totals per currency sold.",
         "parameters": [
           {
             "name": "month",
@@ -64837,7 +64837,7 @@
         ],
         "summary": "Close automation",
         "operationId": "closeAutomation",
-        "description": "(v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step 's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.",
+        "description": "(v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.",
         "parameters": [
           {
             "name": "month",
@@ -65149,7 +65149,7 @@
         "tags": [
           "Finance"
         ],
-        "summary": "An owner 's finance",
+        "summary": "An owner's finance",
         "operationId": "ownerFinance",
         "description": "(v1.38.0) What the owner sees in the portal: per month the sites ' sessions, kWh and revenue and the statements ' gross, commission, share, paid and outstanding; per site; open queries. format=xlsx.",
         "parameters": [
@@ -65303,7 +65303,7 @@
         ],
         "summary": "Corporate income tax",
         "operationId": "corporateIncomeTax",
-        "description": "(v1.39.0) The year 's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year 's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).",
+        "description": "(v1.39.0) The year's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).",
         "parameters": [
           {
             "name": "year",
@@ -65728,7 +65728,7 @@
         "tags": [
           "Finance"
         ],
-        "summary": "Finalise or reopen the year 's tax",
+        "summary": "Finalise or reopen the year's tax",
         "operationId": "finaliseOrReopenYearTax",
         "description": "(v1.39.0) action finalise (an ended year; the figures are kept and the December tax journal posts: current tax, credits, deferred tax) or reopen; currency. finance:approve. Audited.",
         "parameters": [
@@ -65976,7 +65976,7 @@
         ],
         "summary": "Change a draft run",
         "operationId": "changeDraftRun",
-        "description": "(v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill 's balance. Audited.",
+        "description": "(v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill's balance. Audited.",
         "parameters": [
           {
             "name": "id",
@@ -66192,7 +66192,7 @@
         ],
         "summary": "Bank file of a payment run",
         "operationId": "bankFileOfPaymentRun",
-        "description": "(v1.39.0) One transfer per supplier as CSV for the bank 's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.",
+        "description": "(v1.39.0) One transfer per supplier as CSV for the bank's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.",
         "parameters": [
           {
             "name": "id",
@@ -66263,7 +66263,7 @@
         ],
         "summary": "Mark a payment run paid",
         "operationId": "markPaymentRunPaid",
-        "description": "(v1.39.0) paidOn (default the run 's day): each bill gets its payment (bank transfer, the run 's number, its account); a bill that cannot be paid is listed with the reason. Audited.",
+        "description": "(v1.39.0) paidOn (default the run's day): each bill gets its payment (bank transfer, the run's number, its account); a bill that cannot be paid is listed with the reason. Audited.",
         "parameters": [
           {
             "name": "id",
@@ -66411,7 +66411,7 @@
         ],
         "summary": "Corporate cards",
         "operationId": "corporateCards",
-        "description": "(v1.39.0) Each card with the month 's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.",
+        "description": "(v1.39.0) Each card with the month's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.",
         "parameters": [
           {
             "name": "month",
@@ -66456,7 +66456,7 @@
         ],
         "summary": "Add a corporate card",
         "operationId": "addCorporateCard",
-        "description": "(v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement 's account). Audited.",
+        "description": "(v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement's account). Audited.",
         "requestBody": {
           "required": true,
           "content": {
@@ -66813,7 +66813,7 @@
         ],
         "summary": "Import card transactions",
         "operationId": "importCardTransactions",
-        "description": "(v1.39.0) csv: the bank 's export, one line each: date (YYYY-MM-DD), merchant, amount in the card 's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.",
+        "description": "(v1.39.0) csv: the bank's export, one line each: date (YYYY-MM-DD), merchant, amount in the card's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.",
         "parameters": [
           {
             "name": "id",
@@ -67117,7 +67117,7 @@
         ],
         "summary": "Review a card transaction",
         "operationId": "reviewCardTransaction",
-        "description": "(v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card 's holder. Audited.",
+        "description": "(v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card's holder. Audited.",
         "parameters": [
           {
             "name": "tid",
@@ -67202,7 +67202,7 @@
         ],
         "summary": "Record a card statement",
         "operationId": "recordCardStatement",
-        "description": "(v1.39.0) month, total (the bank statement 's), paidOn and cashAccountId (default the card 's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.",
+        "description": "(v1.39.0) month, total (the bank statement's), paidOn and cashAccountId (default the card's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.",
         "parameters": [
           {
             "name": "id",
@@ -67565,7 +67565,7 @@
         ],
         "summary": "Add a performance obligation",
         "operationId": "addPerformanceObligation",
-        "description": "(v1.40.0) description, kind, amount (its share of the price), recognition ratably (startMonth, endMonth; the contract 's months by default) or point_in_time (deliveredOn). Audited.",
+        "description": "(v1.40.0) description, kind, amount (its share of the price), recognition ratably (startMonth, endMonth; the contract's months by default) or point_in_time (deliveredOn). Audited.",
         "parameters": [
           {
             "name": "id",
@@ -67840,7 +67840,7 @@
         ],
         "summary": "Mark a contract billing paid",
         "operationId": "markContractBillingPaid",
-        "description": "(v1.40.0) paidOn, cashAccountId (in the contract 's currency). Audited.",
+        "description": "(v1.40.0) paidOn, cashAccountId (in the contract's currency). Audited.",
         "parameters": [
           {
             "name": "id",
@@ -67995,7 +67995,7 @@
         ],
         "summary": "Group netting",
         "operationId": "groupNetting",
-        "description": "(v1.40.0) The group 's issued, unsettled recharges per currency: each pair 's bilateral net, each entity 's multilateral position, and the transfers through the parent as the netting centre.",
+        "description": "(v1.40.0) The group's issued, unsettled recharges per currency: each pair's bilateral net, each entity's multilateral position, and the transfers through the parent as the netting centre.",
         "parameters": [
           {
             "name": "currency",
@@ -68039,7 +68039,7 @@
         ],
         "summary": "Settle the group netting",
         "operationId": "settleGroupNetting",
-        "description": "(v1.40.0) currency, settledOn, reference: every pair 's recharges settled. The parent, with finance:approve. Audited.",
+        "description": "(v1.40.0) currency, settledOn, reference: every pair's recharges settled. The parent, with finance:approve. Audited.",
         "requestBody": {
           "required": true,
           "content": {
@@ -68104,7 +68104,7 @@
         ],
         "summary": "Transfer pricing",
         "operationId": "transferPricing",
-        "description": "(v1.40.0) The group 's policy per kind, and each recharge of the year (year) with its kind, method, cost and mark-up against the range (ok, below, above, no_cost, unclassified). format=xlsx (the documentation workpaper).",
+        "description": "(v1.40.0) The group's policy per kind, and each recharge of the year (year) with its kind, method, cost and mark-up against the range (ok, below, above, no_cost, unclassified). format=xlsx (the documentation workpaper).",
         "parameters": [
           {
             "name": "year",
@@ -68163,7 +68163,7 @@
         ],
         "summary": "Set a transfer-pricing policy",
         "operationId": "setTransferPricingPolicy",
-        "description": "(v1.40.0) kind (management_fee, shared_services, it_services, energy_resale, equipment_rental, other), method (cost_plus, pass_through, cup), markupPct, minPct, maxPct, note. The group 's parent. Audited.",
+        "description": "(v1.40.0) kind (management_fee, shared_services, it_services, energy_resale, equipment_rental, other), method (cost_plus, pass_through, cup), markupPct, minPct, maxPct, note. The group's parent. Audited.",
         "requestBody": {
           "required": true,
           "content": {
@@ -68401,14 +68401,14 @@
         "tags": [
           "Finance"
         ],
-        "summary": "A record 's history",
+        "summary": "A record's history",
         "operationId": "recordHistory",
-        "description": "(v1.40.0) Every change to a record from the audit trail: targetType (supplier, supplier_bill, corp_card, customer_contract…) and targetId.",
+        "description": "(v1.40.0) Every change to a record from the audit trail: targetType (supplier, supplier_bill, corp_card, customer_contract…) and targetId; with neither, the latest finance changes.",
         "parameters": [
           {
             "name": "targetType",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -68416,7 +68416,7 @@
           {
             "name": "targetId",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }

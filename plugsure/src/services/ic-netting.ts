@@ -52,7 +52,12 @@ export function tpStatus(amount: number, cost: number | null, policy: { method: 
 }
 
 async function parentOf(orgId: string) {
-  const g = await group(orgId);
+  let g = await group(orgId);
+  // An organisation outside any group listing (a sandbox, an archived parent) stands alone: it is its own parent.
+  if (!g.some((x) => x.me) || !g.some((x) => x.parent)) {
+    const me = await outsideRequestScope(() => one<{ name: string }>(`SELECT name FROM organisation WHERE id = $1`, [orgId]));
+    g = [{ id: orgId, name: me?.name ?? orgId, parent: true, me: true }];
+  }
   return { g, parent: g.find((x) => x.parent)!, isParent: g.find((x) => x.me)?.parent === true };
 }
 
