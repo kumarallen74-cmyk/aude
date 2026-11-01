@@ -3656,6 +3656,208 @@ async function ownerFinanceSection(host, canWrite, months = 12) {
   }));
 }
 
+// ─────────────────────────────────────────── (v1.39.0) financial statements
+
+async function statutorySection(host, canWrite, year) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  const y = year ?? new Date().getFullYear() - 1;
+  let s;
+  try { s = await api(`/v1/finance/financial-statements?year=${y}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const c = s.currency, m = (v) => esc(fmt.money(v, c));
+  const years = Array.from({ length: 6 }, (_, k) => new Date().getFullYear() - k);
+  const row = (label, a, b, bold) => `<tr${bold ? ' style="font-weight:600"' : ''}><td>${esc(label)}</td><td class="num">${a === '' ? '' : m(a)}</td><td class="num">${b === '' ? '' : m(b)}</td></tr>`;
+  const tbl = (title, rows) => `<div class="card section"><header><h3>${esc(title)}</h3></header><div class="table-wrap"><table class="t"><thead><tr><th></th><th class="num" style="width:28%">${s.year}</th><th class="num" style="width:28%">${s.year - 1}</th></tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
+  const C = s.current, P = s.prior, cf = s.cashFlow, pf = s.cashFlowPrior;
+  const wc = (f) => f.operating - f.result - f.depreciation - f.deferredTax;
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Year', `<select data-sty>${years.map((v) => `<option${v === s.year ? ' selected' : ''}>${v}</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px"><button class="btn" type="button" data-stx>${icon('download')} Excel</button><button class="btn" type="button" data-stp>${icon('download')} PDF</button></div></div>
+    ${callout(s.checks.balanced && s.checks.cashFlowReconciles ? 'info' : 'warn', `${s.checks.balanced && s.checks.cashFlowReconciles ? '' : `<b>Check:</b> ${!s.checks.balanced ? 'the balance sheet does not balance. ' : ''}${!s.checks.cashFlowReconciles ? 'the cash flow does not reconcile to the change in cash. ' : ''}`}The year ended 31 December ${s.year} in ${esc(c)}, from the ledger (sync each month first), with ${s.year - 1} beside it. Earlier years' results are retained earnings. Not audited.`)}
+    <div class="grid k4 section">${kpi('Revenue', m(C.profitAndLoss.revenue), `${s.year - 1}: ${m(P.profitAndLoss.revenue)}`)}${kpi('Result for the year', m(C.profitAndLoss.result), `before tax ${m(C.profitAndLoss.resultBeforeTax)}`, C.profitAndLoss.result < 0 ? 'warn' : '')}${kpi('Total assets', m(C.balanceSheet.totalAssets), `equity ${m(C.balanceSheet.equity.total)}`)}${kpi('Cash', m(cf.cashClose), `${cf.net >= 0 ? '+' : ''}${m(cf.net)} in the year`)}</div>
+    <div class="grid k2">${tbl('Statement of financial position', [
+      row('Current assets', C.balanceSheet.currentAssets, P.balanceSheet.currentAssets), row('Non-current assets', C.balanceSheet.nonCurrentAssets, P.balanceSheet.nonCurrentAssets), row('Total assets', C.balanceSheet.totalAssets, P.balanceSheet.totalAssets, true),
+      row('Current liabilities', C.balanceSheet.currentLiabilities, P.balanceSheet.currentLiabilities), row('Non-current liabilities', C.balanceSheet.nonCurrentLiabilities, P.balanceSheet.nonCurrentLiabilities),
+      row('Share capital and other equity', C.balanceSheet.equity.capital, P.balanceSheet.equity.capital), row('Retained earnings', C.balanceSheet.equity.retainedEarnings, P.balanceSheet.equity.retainedEarnings), row('Result for the year', C.balanceSheet.equity.result, P.balanceSheet.equity.result),
+      row('Total liabilities and equity', C.balanceSheet.totalLiabilities + C.balanceSheet.equity.total, P.balanceSheet.totalLiabilities + P.balanceSheet.equity.total, true)])}
+    ${tbl('Statement of profit or loss', [row('Revenue', C.profitAndLoss.revenue, P.profitAndLoss.revenue), row('Cost of energy', C.profitAndLoss.costOfEnergy, P.profitAndLoss.costOfEnergy), row('Gross profit', C.profitAndLoss.grossProfit, P.profitAndLoss.grossProfit, true),
+      row('Operating expenses', C.profitAndLoss.operatingExpenses, P.profitAndLoss.operatingExpenses), row('Other income and expense', C.profitAndLoss.otherIncomeExpense, P.profitAndLoss.otherIncomeExpense), row('Result before tax', C.profitAndLoss.resultBeforeTax, P.profitAndLoss.resultBeforeTax, true),
+      row('Income tax', C.profitAndLoss.incomeTax, P.profitAndLoss.incomeTax), row('Result for the year', C.profitAndLoss.result, P.profitAndLoss.result, true)])}</div>
+    <div class="grid k2">${tbl('Statement of cash flows', [row('Result for the year', cf.result, pf.result), row('Depreciation', cf.depreciation, pf.depreciation), row('Deferred tax', cf.deferredTax, pf.deferredTax), row('Change in working capital', wc(cf), wc(pf)),
+      row('Operating activities', cf.operating, pf.operating, true), row('Investing activities', cf.investingTotal, pf.investingTotal, true), row('Financing activities', cf.financingTotal, pf.financingTotal, true),
+      row('Net change in cash', cf.net, pf.net, true), row('Cash at the start', cf.cashOpen, pf.cashOpen), row('Cash at the end', cf.cashClose, pf.cashClose)])}
+    ${tbl('Changes in equity', [row('Opening equity', s.equity.opening, s.equity.prior.opening), row('Result for the year', s.equity.result, s.equity.prior.result), row('Capital movements', s.equity.capitalMovements, s.equity.prior.capitalMovements), row('Closing equity', s.equity.closing, s.equity.opening, true)])}</div>
+    <div class="card section"><header><h3>Notes</h3></header><div data-stn></div></div>`;
+  table($('[data-stn]', el), { columns: [
+    { label: 'Line', render: (a) => esc(a.line) }, { label: 'Account', render: (a) => `<span class="mono">${esc(a.code)}</span> ${esc(a.name)}` },
+    { label: String(s.year), num: true, render: (a) => m(a.amount) }, { label: String(s.year - 1), num: true, render: (a) => m(a.prior) },
+  ], rows: s.notes.flatMap((n) => n.accounts.map((a) => ({ ...a, line: n.label }))), empty: 'Nothing posted for these years.' });
+  $('[data-sty]', el).addEventListener('change', (e) => statutorySection(host, canWrite, Number(e.target.value)));
+  $('[data-stx]', el).addEventListener('click', () => fetchFile(`/v1/finance/financial-statements?year=${s.year}&format=xlsx`, `plugsure-financial-statements-${s.year}.xlsx`));
+  $('[data-stp]', el).addEventListener('click', () => fetchFile(`/v1/finance/financial-statements?year=${s.year}&format=pdf`, `plugsure-financial-statements-${s.year}.pdf`));
+}
+
+// ─────────────────────────────────────────── (v1.39.0) corporate income tax
+
+const TAXK = { pph25: 'PPh 25 instalment', pph29: 'PPh 29', pph22: 'PPh 22 withheld', pph23: 'PPh 23 withheld' };
+const FC_CAT = ['entertainment', 'donations', 'fines', 'benefits_in_kind', 'final_income', 'non_taxable', 'loss_carried_forward', 'other'];
+
+async function corpTaxSection(host, canWrite, year) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  const y = year ?? new Date().getFullYear() - 1;
+  let c, accts;
+  try { [c, accts] = await Promise.all([api(`/v1/finance/corporate-tax?year=${y}`), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => corpTaxSection(host, canWrite, c.year);
+  const m = (v) => esc(fmt.money(v, c.currency));
+  const final = c.status === 'final', canApprove = state.can('finance:approve');
+  const years = Array.from({ length: 6 }, (_, k) => new Date().getFullYear() - k);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Year', `<select data-cty>${years.map((v) => `<option${v === c.year ? ' selected' : ''}>${v}</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px;flex-wrap:wrap">
+      ${canWrite && !final ? `<button class="btn" type="button" data-ctc>${icon('plus')} Fiscal correction</button>` : ''}${canWrite ? `<button class="btn" type="button" data-ctp>${icon('plus')} Tax paid or withheld</button><button class="btn" type="button" data-cts>Rate &amp; facility</button>` : ''}
+      ${canApprove && c.ended ? `<button class="btn${final ? '' : ' primary'}" type="button" data-ctd="${final ? 'reopen' : 'finalise'}">${final ? 'Reopen' : 'Finalise the year'}</button>` : ''}<button class="btn" type="button" data-ctx>${icon('download')} Workpaper</button></div></div>
+    ${callout(final ? (c.changedSinceFinal ? 'warn' : 'info') : 'info', final ? `Final${c.finalisedBy ? ` (${esc(c.finalisedBy)}, ${esc(fmt.time(c.finalisedAt))})` : ''}: the December tax journal books it.${c.changedSinceFinal ? ' The books have changed since: reopen and finalise again if the change belongs to this year.' : ''}` : `The year's corporate income tax (PPh Badan) from the books, ${c.ratePct}%${c.facility31e ? ' with Article 31E' : ''}. Automatic corrections come from the asset register, leases, the bad-debt allowance and loyalty; add the rest. Confirm with your tax advisor before filing the SPT Tahunan.`)}
+    <div class="grid k4 section">${kpi('Fiscal profit', m(c.fiscalProfit), `commercial ${m(c.resultBeforeTax)}`)}${kpi('Corporate income tax', m(c.tax), c.effectiveRatePct != null ? `${c.effectiveRatePct}% of the result${c.facilitySharePct ? ` · 31E on ${c.facilitySharePct}%` : ''}` : '')}${kpi(c.pph29 >= 0 ? 'PPh 29 to pay' : 'Overpaid', m(Math.abs(c.pph29)), `credits ${m(c.totalCredits)} · paid ${m(c.pph29Paid)}`, c.pph29 - c.pph29Paid > 0 ? 'warn' : '')}${kpi('Deferred tax', m(Math.abs(c.deferred.net)), c.deferred.net > 0 ? 'liability' : c.deferred.net < 0 ? 'asset' : 'none')}</div>
+    <div class="grid k2"><div class="card section"><header><h3>Fiscal corrections</h3></header><div data-ctl></div></div><div class="card section"><header><h3>Tax paid and credits</h3></header><div data-ctpl></div><div class="body cell-sub">Next year's PPh 25: ${m(c.nextPph25)} a month.</div></div></div>
+    <div class="card section"><header><h3>Deferred tax</h3></header><div data-ctdt></div></div>`;
+  table($('[data-ctl]', el), { columns: [
+    { label: 'Correction', render: (x) => `<b>${esc(x.category.replace(/_/g, ' '))}</b>${x.automatic ? ` ${tag('t-info', 'automatic')}` : ''}<div class="cell-sub">${esc(x.description)}</div>` },
+    { label: 'Amount', num: true, render: (x) => `${x.direction === 'positive' ? '+' : '−'}${m(x.amount)}` },
+    { label: '', render: (x) => (!x.automatic && canWrite && !final ? `<button ${BTN} data-ctv="${x.id}">Void</button>` : '') },
+  ], rows: c.corrections, empty: 'No corrections.' });
+  table($('[data-ctpl]', el), { columns: [
+    { label: 'Kind', render: (p) => `${esc(TAXK[p.kind])}${p.month ? ` <span class="cell-sub">${esc(p.month)}</span>` : ''}<div class="cell-sub">${esc(p.reference ?? '')}</div>` },
+    { label: 'Paid', render: (p) => esc(p.paidOn) }, { label: 'Amount', num: true, render: (p) => m(p.amount) },
+    { label: '', render: (p) => (canWrite ? `<button ${BTN} data-ctpv="${p.id}">Void</button>` : '') },
+  ], rows: c.payments, empty: 'None recorded.' });
+  table($('[data-ctdt]', el), { columns: [
+    { label: 'Temporary difference', render: (i) => esc(i.label) }, { label: 'Amount', num: true, render: (i) => m(i.amount) },
+    { label: `Tax at ${c.ratePct}%`, num: true, render: (i) => `${m(Math.abs(i.tax))} <span class="cell-sub">${i.tax > 0 ? 'liability' : i.tax < 0 ? 'asset' : ''}</span>` },
+  ], rows: c.deferred.items, empty: '' });
+  $('[data-cty]', el).addEventListener('change', (e) => corpTaxSection(host, canWrite, Number(e.target.value)));
+  $('[data-ctx]', el).addEventListener('click', () => fetchFile(`/v1/finance/corporate-tax?year=${c.year}&format=xlsx`, `plugsure-corporate-tax-${c.year}.xlsx`));
+  $('[data-ctd]', el)?.addEventListener('click', async (e) => { try { await api(`/v1/finance/corporate-tax/${c.year}/decide`, { method: 'POST', body: { action: e.currentTarget.dataset.ctd } }); toast('Saved', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } });
+  el.querySelectorAll('[data-ctv]').forEach((b) => b.addEventListener('click', async () => { try { await api(`/v1/finance/corporate-tax/corrections/${b.dataset.ctv}/void`, { method: 'POST' }); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+  el.querySelectorAll('[data-ctpv]').forEach((b) => b.addEventListener('click', async () => { try { await api(`/v1/finance/corporate-tax/payments/${b.dataset.ctpv}/void`, { method: 'POST' }); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+  $('[data-ctc]', el)?.addEventListener('click', () => modal({ title: `Fiscal correction · ${c.year}`, body: `<div class="form">${field('Direction', '<select name="d"><option value="positive">Positive: not deductible</option><option value="negative">Negative: not taxable or taxed finally</option></select>')}${field('Category', `<select name="c">${FC_CAT.map((x) => `<option value="${x}">${x.replace(/_/g, ' ')}</option>`).join('')}</select>`)}${field('Description', '<input name="t" maxlength="300">')}${field('Amount', '<input name="a" type="number" min="1">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; try { await api('/v1/finance/corporate-tax/corrections', { method: 'POST', body: { year: c.year, currency: c.currency, direction: v('d'), category: v('c'), description: v('t'), amount: Number(v('a')) } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  const ac = (accts.accounts ?? []).filter((a) => !a.archived && a.currency === c.currency);
+  $('[data-ctp]', el)?.addEventListener('click', () => modal({ title: `Income tax · ${c.year}`, body: `<div class="form">${field('Kind', `<select name="k">${Object.entries(TAXK).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`)}${field('Tax month (PPh 25)', '<input name="mo" type="month">', { opt: true })}${field('Amount', '<input name="a" type="number" min="1">')}${field('Paid or withheld on', `<input name="p" type="date" value="${zonedYmd()}">`)}${field('NTPN or bukti potong', '<input name="r" maxlength="80">', { opt: true })}${field('Paid from (PPh 25 and 29)', `<select name="ac"><option value="">—</option>${ac.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>`, { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; try { await api('/v1/finance/corporate-tax/payments', { method: 'POST', body: { year: c.year, currency: c.currency, kind: v('k'), month: v('mo') || undefined, amount: Number(v('a')), paidOn: v('p'), reference: v('r') || undefined, cashAccountId: v('ac') || undefined } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  $('[data-cts]', el)?.addEventListener('click', () => modal({ title: 'Corporate tax settings', body: `<div class="form">${field('Rate %', `<input name="r" type="number" step="0.5" value="${c.settings.ratePct}">`)}${field('Article 31E (turnover up to 50 billion rupiah)', `<select name="f"><option value="true"${c.settings.facility31e ? ' selected' : ''}>Apply</option><option value="false"${c.settings.facility31e ? '' : ' selected'}>Do not apply</option></select>`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { try { await api('/v1/finance/corporate-tax/settings', { method: 'PUT', body: { ratePct: Number($('[name="r"]', mc.el).value), facility31e: $('[name="f"]', mc.el).value === 'true' } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.39.0) supplier payment runs
+
+const PR_ST = { draft: ['t-mute', 'draft'], submitted: ['t-warn', 'submitted'], approved: ['t-info', 'approved'], paid: ['t-ok', 'paid'], cancelled: ['t-mute', 'cancelled'] };
+
+async function payRunsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, accts;
+  try { [d, accts] = await Promise.all([api('/v1/finance/payment-runs'), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => payRunsSection(host, canWrite);
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-prn>${icon('plus')} Propose a payment run</button>` : ''}</div>
+    ${callout('info', 'Pay many approved bills at once: propose a run from a bank account (every bill due by a day), adjust it, submit it, and have a second Finance Manager approve it. Then upload the bank file to your bank and mark the run paid: each bill gets its payment.')}
+    <div class="card section"><header><h3>Payment runs</h3></header><div data-prl></div></div>`;
+  table($('[data-prl]', el), { columns: [
+    { label: 'Run', render: (r) => `<b class="mono">${esc(r.number)}</b><div class="cell-sub">${esc(r.cashAccount)} · pay ${esc(r.payOn)}</div>` },
+    { label: 'Bills', num: true, render: (r) => String(r.bills) }, { label: 'Total', num: true, render: (r) => esc(fmt.money(r.total, r.currency)) },
+    { label: 'Status', render: (r) => `${tag(...PR_ST[r.status])}<div class="cell-sub">${esc([r.createdBy && `by ${r.createdBy}`, r.approvedBy && `approved by ${r.approvedBy}`, r.exportedAt && 'file exported'].filter(Boolean).join(' · '))}</div>` },
+    { label: '', render: (r) => `<button ${BTN} data-pro="${r.id}">Open</button>` },
+  ], rows: d.runs, empty: 'No payment runs yet.' });
+  const banks = (accts.accounts ?? []).filter((a) => !a.archived && a.kind === 'bank');
+  $('[data-prn]', el)?.addEventListener('click', () => modal({ title: 'Propose a payment run', body: `<div class="form">${field('Pay from', `<select name="a">${banks.map((a) => `<option value="${a.id}">${esc(a.name)} (${esc(a.currency)})</option>`).join('')}</select>`)}${field('Payment day', `<input name="p" type="date" value="${zonedYmd()}">`)}${field('Bills due by', `<input name="d" type="date" value="${zonedYmd(Date.now() + 7 * 864e5)}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Propose', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; try { const r = await api('/v1/finance/payment-runs', { method: 'POST', body: { cashAccountId: v('a'), payOn: v('p'), dueBy: v('d') } }); reload(); open(r.id); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  const open = async (id) => {
+    let r;
+    try { r = await api(`/v1/finance/payment-runs/${id}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const mm = (v) => esc(fmt.money(v, r.currency));
+    drawer({ title: `${r.number} · ${fmt.money(r.total, r.currency)}`, subtitle: esc(`${r.cashAccount} · pay ${r.payOn} · ${r.status}`), tabs: [{ id: 'b', label: 'Bills', render(body, ctx) {
+      const act = async (fn) => { try { await fn(); toast('Done', 'ok'); ctx.close(); reload(); open(id); } catch (err) { toast(err.message, 'crit'); } };
+      body.innerHTML = `${r.missingBank.length ? callout('warn', `No bank account on file for ${esc(r.missingBank.join(', '))}: add it to the supplier, or take their bills out.`) : ''}${r.note ? callout('info', esc(r.note)) : ''}<div data-pri></div>
+        <div class="row" style="gap:6px;margin-top:12px;flex-wrap:wrap">${r.status === 'draft' && canWrite ? `<button ${BTN} data-pa="submit">Submit</button>` : ''}${r.status === 'submitted' && state.can('finance:approve') ? `<button ${BTN} data-pa="approve">Approve</button><button ${BTN} data-pa="return">Send back</button>` : ''}
+        ${['approved', 'paid'].includes(r.status) ? ['generic', 'bca', 'mandiri'].map((f) => `<button ${BTN} data-pf="${f}">${icon('download')} ${f === 'generic' ? 'Bank file (CSV)' : f.toUpperCase() + ' layout'}</button>`).join('') : ''}${r.status === 'approved' && canWrite ? `<button ${BTN} data-pa="paid">Mark paid</button>` : ''}${['draft', 'submitted', 'approved'].includes(r.status) && canWrite ? `<button ${BTN} data-pa="cancel">Cancel</button>` : ''}</div>`;
+      table($('[data-pri]', body), { columns: [
+        { label: 'Bill', render: (i) => `<b>${esc(i.supplier)}</b> <span class="cell-sub mono">${esc(i.billNumber)}</span><div class="cell-sub">due ${esc(i.dueDate)} · ${i.bankReady ? `${esc(i.bank)} ${esc(i.accountNumber)}` : '<span style="color:var(--warn)">no bank account</span>'}</div>${i.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(i.error)}</div>` : ''}` },
+        { label: 'Amount', num: true, render: (i) => `${mm(i.amount)}${i.paid ? `<div>${tag('t-ok', 'paid')}</div>` : ''}` },
+        { label: '', render: (i) => (r.status === 'draft' && canWrite ? `<button ${BTN} data-prx="${i.id}">Take out</button>` : '') },
+      ], rows: r.items, empty: 'No bills.' });
+      $$('[data-prx]', body).forEach((b) => b.addEventListener('click', () => act(() => api(`/v1/finance/payment-runs/${id}/items`, { method: 'PUT', body: { remove: [b.dataset.prx] } }))));
+      $$('[data-pf]', body).forEach((b) => b.addEventListener('click', () => fetchFile(`/v1/finance/payment-runs/${id}/bank-file?format=${b.dataset.pf}`, `${r.number}-${b.dataset.pf}.csv`)));
+      $$('[data-pa]', body).forEach((b) => b.addEventListener('click', () => {
+        const a = b.dataset.pa;
+        if (a === 'submit') act(() => api(`/v1/finance/payment-runs/${id}/submit`, { method: 'POST' }));
+        else if (a === 'approve') act(() => api(`/v1/finance/payment-runs/${id}/decide`, { method: 'POST', body: { approve: true } }));
+        else if (a === 'paid') act(() => api(`/v1/finance/payment-runs/${id}/paid`, { method: 'POST', body: {} }));
+        else modal({ title: a === 'cancel' ? 'Cancel the run' : 'Send the run back', body: `<div class="form">${field(a === 'cancel' ? 'Reason' : 'Note', '<input name="n" maxlength="300">')}</div>`, actions: [{ label: 'Close' }, { label: 'Confirm', kind: 'primary', async onClick(mc) { const n = $('[name="n"]', mc.el).value; await act(() => (a === 'cancel' ? api(`/v1/finance/payment-runs/${id}/cancel`, { method: 'POST', body: { reason: n } }) : api(`/v1/finance/payment-runs/${id}/decide`, { method: 'POST', body: { approve: false, note: n } }))); } }] });
+      }));
+    } }] });
+  };
+  el.querySelectorAll('[data-pro]').forEach((b) => b.addEventListener('click', () => open(b.dataset.pro)));
+}
+
+// ─────────────────────────────────────────── (v1.39.0) corporate cards
+
+const TX_ST = { open: ['t-warn', 'to review'], approved: ['t-ok', 'approved'], rejected: ['t-crit', 'personal'] };
+const FLAG_L = { over_single_limit: 'over the single limit', over_monthly_limit: 'over the monthly limit', weekend: 'weekend', blocked_category: 'blocked category', blocked_merchant: 'blocked merchant', no_receipt: 'no receipt', duplicate: 'possible duplicate' };
+const CARD_CAT = ['fuel', 'travel', 'meals', 'parking', 'tools', 'supplies', 'phone', 'software', 'other'];
+
+async function cardsSection(host, canWrite, month) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  const mo = month ?? zonedYmd().slice(0, 7);
+  let d, tx, users, accts;
+  try { [d, tx, users, accts] = await Promise.all([api(`/v1/finance/cards?month=${mo}`), api(`/v1/finance/cards/transactions?month=${mo}`), api('/v1/users').catch(() => []), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => cardsSection(host, canWrite, mo);
+  const ul = Array.isArray(users) ? users : [];
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-cdm value="${esc(mo)}">`)}<div class="row" style="align-self:flex-end;gap:6px;flex-wrap:wrap">${canWrite ? `<button class="btn primary" type="button" data-cdn>${icon('plus')} Add a card</button><button class="btn" type="button" data-cdp>Spend policy</button>` : ''}<button class="btn" type="button" data-cdx>${icon('download')} Excel</button></div></div>
+    ${callout('info', `Company cards: import each card's transactions from the bank, attach receipts, and review them. Flags: over a limit, weekend, blocked category or merchant, no receipt at or above ${esc(fmt.money(d.policy.receiptAbove))}, a likely duplicate. A flagged one is approved by a Finance Manager with a note; nobody reviews their own card. Personal spending is owed back.`)}
+    <div class="grid k3 section">${kpi('Cards', String(d.cards.filter((c) => c.status === 'active').length), `${d.cards.length} in all`)}${kpi('To review', String(d.open), 'all months', d.open ? 'warn' : '')}${kpi('Flagged', String(d.flagged), 'to review', d.flagged ? 'warn' : '')}</div>
+    <div class="card section"><header><h3>Cards · ${esc(mo)}</h3></header><div data-cdl></div></div>
+    <div class="card section"><header><h3>Transactions · ${esc(mo)}</h3></header><div data-cdt></div></div>
+    <div class="card section"><header><h3>Statements</h3></header><div data-cds></div></div>`;
+  table($('[data-cdl]', el), { columns: [
+    { label: 'Card', render: (c) => `<b>${esc(c.holder)}</b> <span class="mono">${esc(c.masked)}</span><div class="cell-sub">${esc(c.bank)} · ${esc(c.currency)}</div>` },
+    { label: 'Spent', num: true, render: (c) => `${esc(fmt.money(c.spent, c.currency))}${c.monthlyLimit ? `<div class="cell-sub">${c.usedPct}% of ${esc(fmt.money(c.monthlyLimit, c.currency))}</div>` : ''}` },
+    { label: 'To review', num: true, render: (c) => `${c.open}${c.flagged ? ` <span class="cell-sub">${c.flagged} flagged</span>` : ''}` },
+    { label: 'Owed back', num: true, render: (c) => (c.owedByHolder ? esc(fmt.money(c.owedByHolder, c.currency)) : '—') },
+    { label: 'Status', render: (c) => tag(c.status === 'active' ? 't-ok' : c.status === 'frozen' ? 't-warn' : 't-mute', c.status) },
+    { label: '', render: (c) => (canWrite ? `<label class="btn sm" style="white-space:nowrap">Import CSV<input type="file" accept=".csv,text/csv" data-cdi="${c.id}" hidden></label> <button ${BTN} data-cdst="${c.id}">Statement</button> <button ${BTN} data-cde="${c.id}">Edit</button>` : '') },
+  ], rows: d.cards, empty: 'No cards yet.' });
+  table($('[data-cdt]', el), { columns: [
+    { label: 'Date', render: (t) => esc(t.txnOn) },
+    { label: 'Merchant', render: (t) => `<b>${esc(t.merchant)}</b> <span class="cell-sub">${esc(t.category)}</span><div class="cell-sub">${esc(t.card)}${t.note ? ` · ${esc(t.note)}` : ''}</div>${t.flags.length ? `<div>${t.flags.map((f) => tag('t-warn', FLAG_L[f] ?? f)).join(' ')}</div>` : ''}` },
+    { label: 'Amount', num: true, render: (t) => esc(fmt.money(t.amount, t.currency)) },
+    { label: 'Receipt', render: (t) => (t.receipt ? `<a href="/v1/finance/cards/transactions/${esc(t.id)}/receipt" target="_blank" rel="noopener">${esc(t.receipt.name)}</a>` : t.status === 'open' && canWrite ? `<label class="btn sm" style="white-space:nowrap">Attach<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" data-cdr="${t.id}" hidden></label>` : '—') },
+    { label: 'Status', render: (t) => tag(...TX_ST[t.status]) },
+    { label: '', render: (t) => (t.status === 'open' && canWrite ? `<button ${BTN} data-cdv="${t.id}">Review</button>` : '') },
+  ], rows: tx.transactions, empty: 'No transactions this month.' });
+  table($('[data-cds]', el), { columns: [
+    { label: 'Card', render: (s) => `${esc(s.card)} <span class="cell-sub">${esc(s.month)}</span>` },
+    { label: 'Statement', num: true, render: (s) => esc(fmt.money(s.total, s.currency)) }, { label: 'Transactions', num: true, render: (s) => esc(fmt.money(s.transactions, s.currency)) },
+    { label: 'Difference', num: true, render: (s) => (s.difference ? `<b style="color:var(--warn)">${esc(fmt.money(s.difference, s.currency))}</b>` : tag('t-ok', 'matches')) },
+    { label: 'Paid', render: (s) => esc(s.paidOn ?? '—') },
+  ], rows: d.statements, empty: 'No statements recorded.' });
+  $('[data-cdm]', el).addEventListener('change', (e) => e.target.value && cardsSection(host, canWrite, e.target.value));
+  $('[data-cdx]', el).addEventListener('click', () => fetchFile(`/v1/finance/cards/transactions?month=${mo}&format=xlsx`, `plugsure-card-transactions-${mo}.xlsx`));
+  const ac = (accts.accounts ?? []).filter((a) => !a.archived);
+  const cardForm = (c) => `<div class="form">${field('Holder', `<select name="h"><option value="">—</option>${ul.map((u) => `<option value="${esc(u.id)}"${c?.holderId === u.id ? ' selected' : ''}>${esc(u.name ?? u.email)}</option>`).join('')}</select>`, { opt: true })}${field('Name on the card', `<input name="n" maxlength="120" value="${esc(c?.holder ?? '')}">`)}${field('Bank', `<input name="b" maxlength="80" value="${esc(c?.bank ?? '')}">`)}${field('Last four digits', `<input name="l" maxlength="4" inputmode="numeric" value="${esc(c?.last4 ?? '')}">`)}${c ? '' : field('Currency', `<input name="c" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Single transaction limit', `<input name="s" type="number" min="1" value="${c?.singleLimit ?? ''}">`, { opt: true })}${field('Monthly limit', `<input name="m" type="number" min="1" value="${c?.monthlyLimit ?? ''}">`, { opt: true })}${c ? field('Status', `<select name="st">${['active', 'frozen', 'closed'].map((x) => `<option${x === c.status ? ' selected' : ''}>${x}</option>`).join('')}</select>`) : ''}${field('Statement paid from', `<select name="a"><option value="">—</option>${ac.map((a) => `<option value="${a.id}"${c?.cashAccountId === a.id ? ' selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`).join('')}</select>`, { opt: true })}</div>`;
+  const cardBody = (mc, c) => { const v = (n) => $(`[name="${n}"]`, mc.el)?.value; return { holderId: v('h') || null, holderName: v('n'), bank: v('b'), last4: v('l'), ...(c ? { status: v('st') } : { currency: (v('c') || '').toUpperCase() }), singleLimit: v('s') || null, monthlyLimit: v('m') || null, cashAccountId: v('a') || null }; };
+  $('[data-cdn]', el)?.addEventListener('click', () => modal({ title: 'Add a corporate card', body: cardForm(null), actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) { try { await api('/v1/finance/cards', { method: 'POST', body: cardBody(mc, null) }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  el.querySelectorAll('[data-cde]').forEach((b) => b.addEventListener('click', () => { const c = d.cards.find((x) => x.id === b.dataset.cde); modal({ title: `Card ${c.masked}`, body: cardForm(c), actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { try { await api(`/v1/finance/cards/${c.id}`, { method: 'PUT', body: cardBody(mc, c) }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }); }));
+  $('[data-cdp]', el)?.addEventListener('click', () => modal({ title: 'Card spend policy', body: `<div class="form">${field('Receipt needed from', `<input name="r" type="number" min="0" value="${d.policy.receiptAbove}">`)}${field('Flag weekend spending', `<select name="w"><option value="true"${d.policy.weekendFlag ? ' selected' : ''}>Yes</option><option value="false"${d.policy.weekendFlag ? '' : ' selected'}>No</option></select>`)}${field('Blocked categories', `<select name="c" multiple size="5">${CARD_CAT.map((x) => `<option${d.policy.blockedCategories.includes(x) ? ' selected' : ''}>${x}</option>`).join('')}</select>`, { opt: true })}${field('Blocked merchants (comma-separated, part of the name)', `<input name="m" value="${esc(d.policy.blockedMerchants.join(', '))}">`, { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { try { await api('/v1/finance/cards/policy', { method: 'PUT', body: { receiptAbove: Number($('[name="r"]', mc.el).value), weekendFlag: $('[name="w"]', mc.el).value === 'true', blockedCategories: [...$('[name="c"]', mc.el).selectedOptions].map((o) => o.value), blockedMerchants: $('[name="m"]', mc.el).value.split(',').map((x) => x.trim()).filter(Boolean) } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  el.querySelectorAll('[data-cdi]').forEach((inp) => inp.addEventListener('change', async () => { const f = inp.files?.[0]; if (!f) return; try { const r = await api(`/v1/finance/cards/${inp.dataset.cdi}/import`, { method: 'POST', body: { csv: await f.text() } }); toast(`Imported ${r.added}, skipped ${r.skipped} already there${r.errors.length ? `; ${r.errors.length} line(s) not read` : ''}.`, r.errors.length ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+  el.querySelectorAll('[data-cdr]').forEach((inp) => inp.addEventListener('change', async () => { const f = inp.files?.[0]; if (!f) return; try { await api(`/v1/finance/cards/transactions/${inp.dataset.cdr}/receipt`, { method: 'PUT', body: { filename: f.name, mime: f.type, data: await fileB64(f) } }); toast('Attached.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+  el.querySelectorAll('[data-cdv]').forEach((b) => b.addEventListener('click', () => { const t = tx.transactions.find((x) => x.id === b.dataset.cdv); modal({ title: `${t.merchant} · ${fmt.money(t.amount, t.currency)}`, body: `${t.flags.length ? callout('warn', `Flagged: ${t.flags.map((f) => FLAG_L[f] ?? f).join(', ')}. A Finance Manager approves it, with a note.`) : ''}<div class="form">${field('Category', `<select name="c">${CARD_CAT.map((x) => `<option${x === t.category ? ' selected' : ''}>${x}</option>`).join('')}</select>`)}${field('Note', '<input name="n" maxlength="300">', { opt: !t.flags.length })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Personal (owed back)', async onClick(mc) { try { await api(`/v1/finance/cards/transactions/${t.id}/review`, { method: 'POST', body: { action: 'reject', category: $('[name="c"]', mc.el).value, note: $('[name="n"]', mc.el).value } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }, { label: 'Approve', kind: 'primary', async onClick(mc) { try { await api(`/v1/finance/cards/transactions/${t.id}/review`, { method: 'POST', body: { action: 'approve', category: $('[name="c"]', mc.el).value, note: $('[name="n"]', mc.el).value } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }); }));
+  el.querySelectorAll('[data-cdst]').forEach((b) => b.addEventListener('click', () => { const c = d.cards.find((x) => x.id === b.dataset.cdst); modal({ title: `Statement · ${c.masked}`, body: `<div class="form">${field('Month', `<input name="m" type="month" value="${esc(mo)}">`)}${field("The statement's total", '<input name="t" type="number">')}${field('Paid on', '<input name="p" type="date">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el).value; try { const s = await api(`/v1/finance/cards/${c.id}/statements`, { method: 'PUT', body: { month: v('m'), total: Number(v('t')), paidOn: v('p') || undefined } }); toast(s.difference ? `Differs from the transactions by ${fmt.money(s.difference, c.currency)}` : 'Matches the transactions', s.difference ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }); }));
+}
+
 // ─────────────────────────────────────────── (v1.30.0) purchase orders
 
 const PO_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], closed: ['t-ok', 'closed'], cancelled: ['t-mute', 'cancelled'], rejected: ['t-crit', 'rejected'] };
@@ -4230,7 +4432,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'scorecard', label: 'Scorecard' }, { id: 'reports', label: 'Reports' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'fxtreasury', label: 'FX & hedges' }, { id: 'procurement', label: 'Procurement' }, { id: 'closeauto', label: 'Close automation' }, { id: 'ownerfinance', label: 'Owner finance' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'fxtreasury', label: 'FX & hedges' }, { id: 'procurement', label: 'Procurement' }, { id: 'closeauto', label: 'Close automation' }, { id: 'ownerfinance', label: 'Owner finance' }, { id: 'statutory', label: 'Financial statements' }, { id: 'corptax', label: 'Corporate tax' }, { id: 'payruns', label: 'Payment runs' }, { id: 'cards', label: 'Cards' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'feeds', label: 'Bank feeds' }, { id: 'tax', label: 'Tax' }, { id: 'slips', label: 'Withholding' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'leases', label: 'Leases' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'ledger', label: 'Ledger' }, { id: 'closesteps', label: 'Close steps' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'intercompany', label: 'Intercompany' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -4616,7 +4818,8 @@ registerView('finance', {
       carbon: () => carbonSection(body, canWrite), insurance: () => insuranceSection(body, canWrite), pricing: () => pricingSection(body, canWrite), compliance: () => complianceSection(body, canWrite),
       grants: () => grantsSection(body, canWrite), landlords: () => landlordsSection(body, canWrite), chargebacks: () => chargebacksSection(body, canWrite),
       loyaltycost: () => loyaltyCostSection(body, canWrite), taxaudit: () => taxAuditSection(body, canWrite), portfolio: () => portfolioSection(body, canWrite), planning: () => planningSection(body, canWrite),
-      fxtreasury: () => fxTreasurySection(body, canWrite), procurement: () => procurementSection(body, canWrite), closeauto: () => closeAutoSection(body, canWrite), ownerfinance: () => ownerFinanceSection(body, canWrite) };
+      fxtreasury: () => fxTreasurySection(body, canWrite), procurement: () => procurementSection(body, canWrite), closeauto: () => closeAutoSection(body, canWrite), ownerfinance: () => ownerFinanceSection(body, canWrite),
+      statutory: () => statutorySection(body, canWrite), corptax: () => corpTaxSection(body, canWrite), payruns: () => payRunsSection(body, canWrite), cards: () => cardsSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

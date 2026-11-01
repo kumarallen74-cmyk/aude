@@ -1104,6 +1104,54 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   finance.close_step_overdue, resolved once signed off or the month
   locked. *Trend*: the days from each month's end to its lock.
 
+## Financial statements, corporate tax, payment runs and cards (v1.39.0)
+
+- **Financial statements** (tab). For a year and a currency, with the year
+  before: the statement of financial position (current and non-current
+  assets and liabilities; equity: capital, retained earnings, the year's
+  result), profit or loss (revenue, cost of energy, operating expenses,
+  other income and expense, result before tax, income tax), cash flows
+  (indirect: the result, depreciation, deferred tax and each working-capital
+  account; investing: fixed and right-of-use assets at cost; financing:
+  loans, lease liabilities, capital; reconciled to the change in cash and
+  cash equivalents, 1050, 1100, 1110, 1130, 1150), changes in equity and
+  notes per account. The ledger does not close a year: every earlier year's
+  result is retained earnings. Sync each month first. Excel and PDF.
+- **Corporate tax** (tab). PPh Badan for a year: the commercial result before
+  tax; fiscal corrections, automatic (book depreciation against fiscal
+  straight line over the tax groups' lives: IT 4 years; chargers,
+  installation, equipment, vehicles 8; grid connections 16; leases: the
+  PSAK 73 cost added back and the rent paid deducted; the increase in the
+  bad-debt allowance and the loyalty liability) and recorded (entertainment,
+  donations, fines, benefits in kind; final or non-taxable income; losses
+  carried forward); the tax at 22% (settable), with Article 31E for
+  turnover up to 50 billion rupiah; credits (PPh 22 and 23 withheld by
+  others, PPh 25 paid); PPh 29; next year's PPh 25; deferred tax on fixed
+  assets, leases, the allowance and the loyalty liability. A Finance
+  Manager finalises an ended year: the December tax journal books 9100 /
+  2700, the credits against 1460 and 1465, and the deferred tax's change
+  (1470 or 2710 against 9110). PPh 25 and 29 paid from an account post in
+  their month. The workpaper for the SPT Tahunan is in Excel.
+- **Payment runs** (tab). Propose a run from a bank account: every approved
+  bill in its currency with a balance, due by a day and not in another open
+  run. Lower amounts or take bills out while a draft; submit; a second
+  Finance Manager (neither the proposer nor the submitter) approves it.
+  Then the bank file: one transfer per supplier, CSV, generic or laid out
+  like BCA's or Mandiri's bulk templates (check against your bank's current
+  template; every supplier needs its bank account). Mark it paid: each bill
+  gets its payment with the run's number, from the run's account.
+- **Cards** (tab). Company cards: holder, bank, the last four digits only,
+  limits, status and the account the statement is paid from. Import the
+  bank's CSV (date, merchant, amount, reference, category; lines already
+  imported are skipped) or add transactions; attach receipts. Policy flags:
+  over the single or monthly limit, weekend, a blocked category or
+  merchant, no receipt at or above the amount set (100 000 by default), a
+  likely duplicate. A flagged transaction is approved by a Finance Manager
+  with a note; nobody reviews their own card; personal spending is rejected
+  and owed back (1480). Statements: the bank's total against the
+  transactions, and its payment. The cards journal books each month's
+  spending by category against 2165 corporate cards payable.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

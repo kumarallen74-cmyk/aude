@@ -205,6 +205,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
   const grantMoves = await (await import('./grants.js')).cashMoves(orgId, upTo);
   // (v1.38.0) FX hedges settled net into the account.
   const hedgeMoves = await (await import('./fx-treasury.js')).cashMoves(orgId, upTo);
+  // (v1.39.0) Corporate income tax paid, and card statements paid.
+  const [taxMoves, cardMoves] = await Promise.all([(await import('./corporate-tax.js')).cashMoves(orgId, upTo), (await import('./corporate-cards.js')).cashMoves(orgId, upTo)]);
   return {
     accounts,
     manual: manual.map((m) => ({ account_id: m.account_id, d: m.d, balance: Number(m.balance_minor) })),
@@ -221,6 +223,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
       ...insuranceMoves,
       ...grantMoves,
       ...hedgeMoves,
+      ...taxMoves,
+      ...cardMoves,
     ],
   };
 }

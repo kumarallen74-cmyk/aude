@@ -88,6 +88,10 @@ import * as fxTreasury from '../services/fx-treasury.js';
 import * as procurement from '../services/procurement.js';
 import * as closeAuto from '../services/close-automation.js';
 import * as ownerFinance from '../services/owner-finance.js';
+import * as statutory from '../services/statutory.js';
+import * as corpTax from '../services/corporate-tax.js';
+import * as payRuns from '../services/payment-runs.js';
+import * as cards from '../services/corporate-cards.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -3439,6 +3443,152 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-owner-finance', await ownerFinance.summaryXlsx(req.principal.orgId, prm(req, 'oid'), qs(req)));
       return await ownerFinance.summary(req.principal.orgId, prm(req, 'oid'), qs(req));
     } catch (e) { return p27Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.39.0) statutory statements, corporate tax, payment runs, corporate cards
+
+  const p28Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof statutory.StatutoryError || e instanceof corpTax.CorporateTaxError || e instanceof payRuns.PaymentRunError || e instanceof cards.CardError) return reply.status(e.statusCode).send({ error: e.message });
+    return p27Failed(reply, e);
+  };
+
+  app.get('/v1/finance/financial-statements', async (req, reply) => {
+    R(req);
+    try {
+      const q = qs(req), f = q.format;
+      if (f === 'xlsx') return xl(reply, `plugsure-financial-statements-${q.year ?? ''}`, statutory.statementsXlsx(await statutory.statements(req.principal.orgId, q)));
+      if (f === 'pdf') return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="plugsure-financial-statements-${String(q.year ?? '').replace(/\D/g, '')}.pdf"`).send(await statutory.statementsPdf(req.principal.orgId, q));
+      return await statutory.statements(req.principal.orgId, q);
+    } catch (e) { return p28Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/corporate-tax', async (req, reply) => {
+    R(req);
+    try {
+      const q = qs(req);
+      if (q.format === 'xlsx') return xl(reply, `plugsure-corporate-tax-${q.year ?? ''}`, await corpTax.workpaper(req.principal.orgId, q.year, q.currency));
+      return { ...(await corpTax.computation(req.principal.orgId, q.year, q.currency)), settings: await corpTax.settings(req.principal.orgId) };
+    } catch (e) { return p28Failed(reply, e); }
+  });
+  app.put('/v1/finance/corporate-tax/settings', async (req, reply) => {
+    W(req);
+    try { const r = await corpTax.saveSettings(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.corporate_tax_settings_saved', 'organisation', null, r); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/corporate-tax/corrections', async (req, reply) => {
+    W(req);
+    try { const r = await corpTax.addCorrection(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.fiscal_correction_recorded', 'tax_fiscal_correction', r.id, r); return created(reply, r); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/corporate-tax/corrections/:id/void', async (req, reply) => {
+    W(req);
+    try { const r = await corpTax.voidCorrection(req.principal.orgId, prm(req, 'id')); await audit21(req, 'finance.fiscal_correction_voided', 'tax_fiscal_correction', r.id, {}); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/corporate-tax/payments', async (req, reply) => {
+    W(req);
+    try { const r = await corpTax.addPayment(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.income_tax_payment_recorded', 'tax_payment', r.id, r); return created(reply, r); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/corporate-tax/payments/:id/void', async (req, reply) => {
+    W(req);
+    try { const r = await corpTax.voidPayment(req.principal.orgId, prm(req, 'id')); await audit21(req, 'finance.income_tax_payment_voided', 'tax_payment', r.id, {}); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/corporate-tax/:year/decide', async (req, reply) => {
+    W(req);
+    try {
+      const r = await corpTax.decide(req.principal.orgId, prm(req, 'year'), body(req), { userId: userUuid(req), canApprove: canApprove(req) });
+      await audit21(req, r.status === 'final' ? 'finance.corporate_tax_finalised' : 'finance.corporate_tax_reopened', 'corporate_tax_year', `${r.year}`, { currency: r.currency, tax: r.tax, pph29: r.pph29, deferred: r.deferred.net });
+      return r;
+    } catch (e) { return p28Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/payment-runs', async (req, reply) => {
+    R(req);
+    try { return { runs: await payRuns.list(req.principal.orgId) }; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-runs', async (req, reply) => {
+    W(req);
+    try { const r = await payRuns.propose(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.payment_run_proposed', 'payment_run', r.id, { number: r.number, bills: r.items.length, total: r.total, currency: r.currency }); return created(reply, r); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.get('/v1/finance/payment-runs/:id', async (req, reply) => {
+    R(req);
+    try { return await payRuns.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.put('/v1/finance/payment-runs/:id/items', async (req, reply) => {
+    W(req);
+    try { const r = await payRuns.setItems(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.payment_run_changed', 'payment_run', r.id, { bills: r.items.length, total: r.total }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-runs/:id/submit', async (req, reply) => {
+    W(req);
+    try { const r = await payRuns.submit(req.principal.orgId, prm(req, 'id'), userUuid(req)); await audit21(req, 'finance.payment_run_submitted', 'payment_run', r.id, { total: r.total }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-runs/:id/decide', async (req, reply) => {
+    W(req);
+    try { const r = await payRuns.decide(req.principal.orgId, prm(req, 'id'), body(req), { userId: userUuid(req), canApprove: canApprove(req) }); await audit21(req, r.status === 'approved' ? 'finance.payment_run_approved' : 'finance.payment_run_returned', 'payment_run', r.id, { total: r.total, note: r.note }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.get('/v1/finance/payment-runs/:id/bank-file', async (req, reply) => {
+    W(req);
+    try {
+      const f = await payRuns.bankFile(req.principal.orgId, prm(req, 'id'), qs(req).format);
+      await audit21(req, 'finance.payment_run_exported', 'payment_run', prm(req, 'id'), { format: qs(req).format ?? 'generic', transfers: f.transfers, total: f.total });
+      return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="${f.name}"`).send(f.body);
+    } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-runs/:id/paid', async (req, reply) => {
+    W(req);
+    try { const r = await payRuns.markPaid(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.payment_run_paid', 'payment_run', r.id, { paid: r.items.filter((i) => i.paid).length, failed: r.items.filter((i) => i.error).length }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/payment-runs/:id/cancel', async (req, reply) => {
+    W(req);
+    try { const r = await payRuns.cancel(req.principal.orgId, prm(req, 'id'), body(req).reason); await audit21(req, 'finance.payment_run_cancelled', 'payment_run', r.id, { reason: r.cancelReason }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/cards', async (req, reply) => {
+    R(req);
+    try { return await cards.overview(req.principal.orgId, qs(req).month); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.put('/v1/finance/cards/policy', async (req, reply) => {
+    W(req);
+    try { const r = await cards.savePolicy(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.card_policy_saved', 'organisation', null, r); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/cards', async (req, reply) => {
+    W(req);
+    try { const r = await cards.createCard(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.card_added', 'corp_card', r.id, { holder: r.holder, last4: r.last4, singleLimit: r.singleLimit, monthlyLimit: r.monthlyLimit }); return created(reply, r); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.put('/v1/finance/cards/:id', async (req, reply) => {
+    W(req);
+    try { const r = await cards.updateCard(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.card_updated', 'corp_card', r.id, { status: r.status, singleLimit: r.singleLimit, monthlyLimit: r.monthlyLimit }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.get('/v1/finance/cards/transactions', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-card-transactions', await cards.transactionsXlsx(req.principal.orgId, qs(req)));
+      return { transactions: await cards.transactions(req.principal.orgId, qs(req)) };
+    } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/cards/:id/import', { bodyLimit: 3 * 1024 * 1024 }, async (req, reply) => {
+    W(req);
+    try { const r = await cards.importCsv(req.principal.orgId, prm(req, 'id'), body(req).csv, userUuid(req)); await audit21(req, 'finance.card_transactions_imported', 'corp_card', prm(req, 'id'), { added: r.added, skipped: r.skipped }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/cards/:id/transactions', async (req, reply) => {
+    W(req);
+    try { const r = await cards.addTransaction(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.card_transaction_added', 'card_txn', r.id, { amount: r.amount, merchant: r.merchant }); return created(reply, r); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.put('/v1/finance/cards/transactions/:tid/receipt', { bodyLimit: 5 * 1024 * 1024 }, async (req, reply) => {
+    W(req);
+    try { return await cards.addReceipt(req.principal.orgId, prm(req, 'tid'), body(req)); } catch (e) { return p28Failed(reply, e); }
+  });
+  app.get('/v1/finance/cards/transactions/:tid/receipt', async (req, reply) => {
+    R(req);
+    try {
+      const f = await cards.receipt(req.principal.orgId, prm(req, 'tid'));
+      return reply.header('content-type', f.type).header('content-disposition', `inline; filename="${f.name.replace(/"/g, '')}"`).header('x-content-type-options', 'nosniff').send(f.data);
+    } catch (e) { return p28Failed(reply, e); }
+  });
+  app.post('/v1/finance/cards/transactions/:tid/review', async (req, reply) => {
+    W(req);
+    try { const r = await cards.review(req.principal.orgId, prm(req, 'tid'), body(req), { userId: userUuid(req), canApprove: canApprove(req) }); await audit21(req, r.status === 'approved' ? 'finance.card_transaction_approved' : 'finance.card_transaction_rejected', 'card_txn', r.id, { flags: r.flags, note: r.note, category: r.category }); return r; } catch (e) { return p28Failed(reply, e); }
+  });
+  app.put('/v1/finance/cards/:id/statements', async (req, reply) => {
+    W(req);
+    try { const r = await cards.saveStatement(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.card_statement_saved', 'corp_card', prm(req, 'id'), { month: r.month, total: r.total, difference: r.difference, paidOn: r.paidOn }); return r; } catch (e) { return p28Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

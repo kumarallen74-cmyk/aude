@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.38.0";
+export const API_VERSION = "1.39.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5020,6 +5020,14 @@ export type AddCapexProjectBody = {
   note?: string;
 };
 
+export type AddCardTransactionBody = {
+  txnOn: string;
+  merchant: string;
+  amount: number;
+  category?: string;
+  reference?: string;
+};
+
 export type AddCashAccountBody = {
   name: string;
   kind?: "bank" | "cash";
@@ -5048,6 +5056,18 @@ export type AddComplianceTaskBody = {
   ownerId?: string;
   remindDays?: number;
   note?: string;
+};
+
+export type AddCorporateCardBody = {
+  holderId?: string;
+  holderName?: string;
+  bank?: string;
+  last4?: string;
+  currency?: string;
+  singleLimit?: number;
+  monthlyLimit?: number;
+  status?: "active" | "frozen" | "closed";
+  cashAccountId?: string;
 };
 
 export type AddCovenantBody = {
@@ -5462,6 +5482,11 @@ export type ApproveOrRejectWriteOffResponse = {
   state?: string;
 };
 
+export type ApproveOrReturnPaymentRunBody = {
+  approve: boolean;
+  note?: string;
+};
+
 export type ApprovePurchaseOrderResponse = {
   id?: string;
   number?: string;
@@ -5566,6 +5591,12 @@ export type AssignTariffResponse = {
   flags: TariffFlag[];
 };
 
+export type AttachCardReceiptBody = {
+  mime: string;
+  filename?: string;
+  data: string;
+};
+
 export type AttachEvidenceToRequestBody = {
   filename?: string;
   mime: "application/pdf" | "image/png" | "image/jpeg" | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" | "text/csv";
@@ -5662,6 +5693,10 @@ export type CancelFirmwareCampaignResponse = {
 };
 
 export type CancelPaymentPlanBody = {
+  reason: string;
+};
+
+export type CancelPaymentRunBody = {
   reason: string;
 };
 
@@ -5838,6 +5873,18 @@ export type ChangeConnectorAvailabilityBody = {
   reason?: string;
 };
 
+export type ChangeCorporateCardBody = {
+  holderId?: string;
+  holderName?: string;
+  bank?: string;
+  last4?: string;
+  currency?: string;
+  singleLimit?: number;
+  monthlyLimit?: number;
+  status?: "active" | "frozen" | "closed";
+  cashAccountId?: string;
+};
+
 export type ChangeCovenantBody = {
   kind: "dscr" | "interest_cover" | "leverage" | "min_cash";
   threshold: number;
@@ -5846,6 +5893,11 @@ export type ChangeCovenantBody = {
   frequency?: "monthly" | "quarterly";
   enabled?: boolean;
   note?: string;
+};
+
+export type ChangeDraftRunBody = {
+  remove?: string[];
+  amounts?: Record<string, number>;
 };
 
 export type ChangeDriverAppRoamingSettingsBody = {
@@ -6807,6 +6859,11 @@ export type FetchPkiRootCertificatesResponse = {
   received: number;
 };
 
+export type FinaliseOrReopenYearTaxBody = {
+  action: "finalise" | "reopen";
+  currency?: string;
+};
+
 export type FinaliseRoamingSettlementBody = {
   month: string;
   currency: string;
@@ -7222,6 +7279,10 @@ export type HandWhatsAppConversationOverResponse = {
 export type HoldOrReleaseAccountBody = {
   hold: boolean;
   reason?: string;
+};
+
+export type ImportCardTransactionsBody = {
+  csv: string;
 };
 
 export type ImportPartnerNetworkResponse = {
@@ -7681,6 +7742,10 @@ export type MakePaymentLinkForFleetInvoiceResponse = {
   url?: string;
   amount?: number;
   status?: string;
+};
+
+export type MarkPaymentRunPaidBody = {
+  paidOn?: string;
 };
 
 export type MarkTaxObligationFiledBody = {
@@ -8285,6 +8350,14 @@ export type PriceWhatIfBody = {
   siteId?: string;
 };
 
+export type ProposePaymentRunBody = {
+  cashAccountId: string;
+  payOn?: string;
+  dueBy?: string;
+  supplierIds?: string[];
+  note?: string;
+};
+
 export type ProvisionDefaultChargingProfilesResponse = {
   applied: number;
 };
@@ -8503,6 +8576,13 @@ export type RecordBalanceResponse = {
   balance?: number;
 };
 
+export type RecordCardStatementBody = {
+  month: string;
+  total: number;
+  paidOn?: string;
+  cashAccountId?: string;
+};
+
 export type RecordChargebackBody = {
   paymentId?: string;
   paymentRef?: string;
@@ -8575,6 +8655,15 @@ export type RecordFakturPajakNumberBody = {
   number?: string | null;
 };
 
+export type RecordFiscalCorrectionBody = {
+  year: number;
+  currency?: string;
+  direction: "positive" | "negative";
+  category: string;
+  description: string;
+  amount: number;
+};
+
 export type RecordFxHedgeBody = {
   bank: string;
   reference?: string;
@@ -8607,6 +8696,17 @@ export type RecordGoodsReceivedResponse = {
   received?: number;
   billed?: number;
   toBill?: number;
+};
+
+export type RecordIncomeTaxPaidOrWithheldBody = {
+  year: number;
+  currency?: string;
+  kind: "pph25" | "pph29" | "pph22" | "pph23";
+  month?: string;
+  amount: number;
+  paidOn: string;
+  reference?: string;
+  cashAccountId?: string;
 };
 
 export type RecordIntercompanyEliminationBody = {
@@ -9381,6 +9481,12 @@ export type ReverseJournalEntryResponse = {
   lines?: Record<string, unknown>[];
 };
 
+export type ReviewCardTransactionBody = {
+  action: "approve" | "reject";
+  category?: string;
+  note?: string;
+};
+
 export type ReviewFindingBody = {
   decision: "dismiss" | "confirm";
   note: string;
@@ -9782,6 +9888,13 @@ export type SetBudgetLinesBody = {
   }[];
 };
 
+export type SetCardPolicyBody = {
+  receiptAbove?: number;
+  weekendFlag?: boolean;
+  blockedCategories?: string[];
+  blockedMerchants?: string[];
+};
+
 export type SetCashForecastBody = {
   horizonDays?: number;
   collectionsPct?: number;
@@ -9815,6 +9928,11 @@ export type SetControlsThresholdsBody = {
     from?: number;
     to?: number;
   } | null;
+};
+
+export type SetCorporateTaxRateBody = {
+  ratePct?: number;
+  facility31e?: boolean;
 };
 
 export type SetDigestWhatsAppTemplateBody = {
@@ -11288,6 +11406,21 @@ export class Operations {
   }
 
   /**
+   * Add a card transaction
+   *
+   * (v1.39.0) txnOn, merchant, amount (minor units; a refund negative), category (fuel, travel, meals, parking, tools, supplies, phone, software, other), reference. Audited.
+   *
+   * `POST /v1/finance/cards/{id}/transactions`
+   */
+  addCardTransaction(params: {
+    /** The id. */
+    id: string;
+    body: AddCardTransactionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/cards/{id}/transactions", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a cash account
    *
    * (v1.29.0) name, kind (bank or cash), bankName, accountHint (the number's last digits: statements with them count for the account), currency, openingBalance and openingOn, minimum (alert below it, finance.cash_below_minimum). Audited.
@@ -11311,6 +11444,19 @@ export class Operations {
     body: AddComplianceTaskBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/compliance/tasks", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a corporate card
+   *
+   * (v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement 's account). Audited.
+   *
+   * `POST /v1/finance/cards`
+   */
+  addCorporateCard(params: {
+    body: AddCorporateCardBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/cards", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11837,6 +11983,21 @@ export class Operations {
   }
 
   /**
+   * Approve or return a payment run
+   *
+   * (v1.39.0) approve, or a note to send it back to draft. By a second person with finance:approve who neither proposed nor submitted it. Audited.
+   *
+   * `POST /v1/finance/payment-runs/{id}/decide`
+   */
+  approveOrReturnPaymentRun(params: {
+    /** The id. */
+    id: string;
+    body: ApproveOrReturnPaymentRunBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-runs/{id}/decide", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Approve a payroll run
    *
    * (v1.33.0) By someone other than the submitter, under the approvals matrix (kind payroll_run). Audited.
@@ -12089,6 +12250,21 @@ export class Operations {
   }
 
   /**
+   * Attach a card receipt
+   *
+   * (v1.39.0) mime (image/jpeg, image/png, image/webp, application/pdf), filename, data (base64, up to 3 MB). While open.
+   *
+   * `PUT /v1/finance/cards/transactions/{tid}/receipt`
+   */
+  attachCardReceipt(params: {
+    /** The transaction id. */
+    tid: string;
+    body: AttachCardReceiptBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/cards/transactions/{tid}/receipt", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Attach evidence to a request
    *
    * (v1.35.0) As for a task. Audited.
@@ -12204,6 +12380,23 @@ export class Operations {
    */
   bankFeedsAndMatchRules(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/bank-feeds", accept: "json" }, options);
+  }
+
+  /**
+   * Bank file of a payment run
+   *
+   * (v1.39.0) One transfer per supplier as CSV for the bank 's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.
+   *
+   * `GET /v1/finance/payment-runs/{id}/bank-file`
+   */
+  bankFileOfPaymentRun(params: {
+    /** The id. */
+    id: string;
+    query?: {
+      format?: "generic" | "bca" | "mandiri";
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/payment-runs/{id}/bank-file", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
   }
 
   /**
@@ -12368,6 +12561,21 @@ export class Operations {
   }
 
   /**
+   * Cancel a payment run
+   *
+   * (v1.39.0) reason. Not once paid. Audited.
+   *
+   * `POST /v1/finance/payment-runs/{id}/cancel`
+   */
+  cancelPaymentRun(params: {
+    /** The id. */
+    id: string;
+    body: CancelPaymentRunBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-runs/{id}/cancel", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Cancel a purchase order
    *
    * (v1.30.0) With a reason, while nothing is received or billed. Audited.
@@ -12451,6 +12659,39 @@ export class Operations {
    */
   cardHoldsAndPostPayEWalletCharges(options?: RequestOptions): Promise<CardHoldsAndPostPayEWalletChargesResponse> {
     return this.transport.request<CardHoldsAndPostPayEWalletChargesResponse>({ method: "GET", path: "/v1/card-holds", accept: "json" }, options);
+  }
+
+  /**
+   * A card receipt
+   *
+   * (v1.39.0) The file.
+   *
+   * `GET /v1/finance/cards/transactions/{tid}/receipt` · needs `payment:write`
+   */
+  cardReceipt(params: {
+    /** The transaction id. */
+    tid: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/cards/transactions/{tid}/receipt", pathParams: { tid: params.tid }, accept: "binary" }, options);
+  }
+
+  /**
+   * Card transactions
+   *
+   * (v1.39.0) With their policy flags (over_single_limit, over_monthly_limit, weekend, blocked_category, blocked_merchant, no_receipt, duplicate): cardId, month, status, flagged=true. format=xlsx.
+   *
+   * `GET /v1/finance/cards/transactions`
+   */
+  cardTransactions(params?: {
+    query?: {
+      cardId?: string;
+      month?: string;
+      status?: "open" | "approved" | "rejected";
+      flagged?: boolean;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/cards/transactions", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -12642,6 +12883,21 @@ export class Operations {
   }
 
   /**
+   * Change a corporate card
+   *
+   * (v1.39.0) Its holder, limits, status (active, frozen, closed) or account. Audited.
+   *
+   * `PUT /v1/finance/cards/{id}`
+   */
+  changeCorporateCard(params: {
+    /** The id. */
+    id: string;
+    body: ChangeCorporateCardBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/cards/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a covenant
    *
    * (v1.34.0) As adding. Audited.
@@ -12654,6 +12910,21 @@ export class Operations {
     body: ChangeCovenantBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/lenders/covenants/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a draft run
+   *
+   * (v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill 's balance. Audited.
+   *
+   * `PUT /v1/finance/payment-runs/{id}/items`
+   */
+  changeDraftRun(params: {
+    /** The id. */
+    id: string;
+    body: ChangeDraftRunBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/payment-runs/{id}/items", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13272,6 +13543,38 @@ export class Operations {
     body: CopyMonthBudgetForwardBody;
   }, options?: RequestOptions): Promise<CopyMonthBudgetForwardResponse> {
     return this.transport.request<CopyMonthBudgetForwardResponse>({ method: "POST", path: "/v1/finance/budgets/copy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Corporate cards
+   *
+   * (v1.39.0) Each card with the month 's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.
+   *
+   * `GET /v1/finance/cards`
+   */
+  corporateCards(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/cards", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Corporate income tax
+   *
+   * (v1.39.0) The year 's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year 's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).
+   *
+   * `GET /v1/finance/corporate-tax`
+   */
+  corporateIncomeTax(params?: {
+    query?: {
+      year?: number;
+      currency?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/corporate-tax", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -14433,6 +14736,21 @@ export class Operations {
   }
 
   /**
+   * Finalise or reopen the year 's tax
+   *
+   * (v1.39.0) action finalise (an ended year; the figures are kept and the December tax journal posts: current tax, credits, deferred tax) or reopen; currency. finance:approve. Audited.
+   *
+   * `POST /v1/finance/corporate-tax/{year}/decide`
+   */
+  finaliseOrReopenYearTax(params: {
+    /** YYYY. */
+    year: string;
+    body: FinaliseOrReopenYearTaxBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/corporate-tax/{year}/decide", pathParams: { year: params.year }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Finalise a roaming settlement
    *
    * (v1.25.0) Freezes an ended month's figures with the partner in a currency, numbered RS-…; once. Audited.
@@ -14593,6 +14911,23 @@ export class Operations {
    */
   financeToday(options?: RequestOptions): Promise<FinanceTodayResponse> {
     return this.transport.request<FinanceTodayResponse>({ method: "GET", path: "/v1/finance/today", accept: "json" }, options);
+  }
+
+  /**
+   * Financial statements
+   *
+   * (v1.39.0) For a year (default last year) and a currency, with the year before: the statement of financial position, profit or loss (result before tax, income tax), cash flows (indirect, reconciled to the change in cash), changes in equity and notes per account. format=xlsx or pdf.
+   *
+   * `GET /v1/finance/financial-statements`
+   */
+  financialStatements(params?: {
+    query?: {
+      year?: number;
+      currency?: string;
+      format?: "json" | "xlsx" | "pdf";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/financial-statements", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -15347,6 +15682,21 @@ export class Operations {
     body: HoldOrReleaseAccountBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/credit/accounts/{id}/hold", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Import card transactions
+   *
+   * (v1.39.0) csv: the bank 's export, one line each: date (YYYY-MM-DD), merchant, amount in the card 's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.
+   *
+   * `POST /v1/finance/cards/{id}/import`
+   */
+  importCardTransactions(params: {
+    /** The id. */
+    id: string;
+    body: ImportCardTransactionsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/cards/{id}/import", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16577,6 +16927,21 @@ export class Operations {
   }
 
   /**
+   * Mark a payment run paid
+   *
+   * (v1.39.0) paidOn (default the run 's day): each bill gets its payment (bank transfer, the run 's number, its account); a bill that cannot be paid is listed with the reason. Audited.
+   *
+   * `POST /v1/finance/payment-runs/{id}/paid`
+   */
+  markPaymentRunPaid(params: {
+    /** The id. */
+    id: string;
+    body: MarkPaymentRunPaidBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-runs/{id}/paid", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Mark a tax obligation filed
    *
    * (v1.23.0) The obligation and period, the date filed or paid, the reference (NTPN, BPE, receipt) and optionally the amount. 409 when already marked (void it first). Audited as finance.tax_filed.
@@ -17149,6 +17514,20 @@ export class Operations {
   }
 
   /**
+   * A payment run
+   *
+   * (v1.39.0) Its bills with the suppliers ' bank details, the total, the transfers per supplier and the suppliers without a bank account.
+   *
+   * `GET /v1/finance/payment-runs/{id}`
+   */
+  paymentRun(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/payment-runs/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Payments accounts with finance data
    *
    * The gateway accounts the caller may see: its organisation's own Xendit account(s), and for platform administrators the platform's.
@@ -17474,6 +17853,19 @@ export class Operations {
   }
 
   /**
+   * Propose a payment run
+   *
+   * (v1.39.0) From a bank account (cashAccountId; its currency), payOn and dueBy: every approved bill with a balance due by then and not in another open run (supplierIds to limit it). Audited.
+   *
+   * `POST /v1/finance/payment-runs`
+   */
+  proposePaymentRun(params: {
+    body: ProposePaymentRunBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-runs", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Provision charger security credentials
    *
    * Profiles 1-2 issue a new AuthorizationKey (generated, or your own) and return it with a commissioning export; the key is shown once and the previous key stays valid for a grace window. Profile 3 issues a client certificate automatically from PlugSure's charging-station CA (method "auto": key and certificate, the key shown once and not stored; method "csr": the charger's own request signed), issues one from Vault PKI (method "vault"), or binds your certificate PEM or fingerprint; with neither, the binding is cleared. This does not raise the security profile: configure the credential on the charger first, then raise the profile. Vault errors return 501 (not configured) or 502.
@@ -17756,6 +18148,21 @@ export class Operations {
   }
 
   /**
+   * Record a card statement
+   *
+   * (v1.39.0) month, total (the bank statement 's), paidOn and cashAccountId (default the card 's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.
+   *
+   * `PUT /v1/finance/cards/{id}/statements`
+   */
+  recordCardStatement(params: {
+    /** The id. */
+    id: string;
+    body: RecordCardStatementBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/cards/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a chargeback
    *
    * (v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (the date on the gateway's notice; default 7 calendar days, Xendit's window). Audited.
@@ -17872,6 +18279,19 @@ export class Operations {
   }
 
   /**
+   * Record a fiscal correction
+   *
+   * (v1.39.0) year, currency, direction (positive: not deductible; negative: not taxable or taxed finally), category (entertainment, donations, fines, benefits_in_kind, final_income, non_taxable, loss_carried_forward, other), description, amount. Not on a final year. Audited.
+   *
+   * `POST /v1/finance/corporate-tax/corrections`
+   */
+  recordFiscalCorrection(params: {
+    body: RecordFiscalCorrectionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/corporate-tax/corrections", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record an FX hedge
    *
    * (v1.38.0) A forward with a bank: buy notional (minor units) of buyCurrency against sellCurrency at rate (one unit bought, in the currency sold), traded tradeOn, maturing maturityOn; the settlement account (cashAccountId, in the currency sold). Audited.
@@ -17897,6 +18317,19 @@ export class Operations {
     body: RecordGoodsReceivedBody;
   }, options?: RequestOptions): Promise<RecordGoodsReceivedResponse> {
     return this.transport.request<RecordGoodsReceivedResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/receipts", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record income tax paid or withheld
+   *
+   * (v1.39.0) kind pph25 (an instalment; month) or pph29 (paid from cashAccountId: posts to the ledger and the cash position), or pph22/pph23 (withheld by others, a credit); year, amount, paidOn, reference. Audited.
+   *
+   * `POST /v1/finance/corporate-tax/payments`
+   */
+  recordIncomeTaxPaidOrWithheld(params: {
+    body: RecordIncomeTaxPaidOrWithheldBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/corporate-tax/payments", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -19126,6 +19559,21 @@ export class Operations {
   }
 
   /**
+   * Review a card transaction
+   *
+   * (v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card 's holder. Audited.
+   *
+   * `POST /v1/finance/cards/transactions/{tid}/review`
+   */
+  reviewCardTransaction(params: {
+    /** The transaction id. */
+    tid: string;
+    body: ReviewCardTransactionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/cards/transactions/{tid}/review", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Review a finding
    *
    * (v1.30.0) decision dismiss (it is fine) or confirm (it needs action: raises finance.anomaly_confirmed), with a note of what was checked. Audited.
@@ -19779,6 +20227,19 @@ export class Operations {
   }
 
   /**
+   * Set the card policy
+   *
+   * (v1.39.0) receiptAbove, weekendFlag, blockedCategories, blockedMerchants (matched in the merchant name). Audited.
+   *
+   * `PUT /v1/finance/cards/policy`
+   */
+  setCardPolicy(params: {
+    body: SetCardPolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/cards/policy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the cash forecast
    *
    * (v1.33.0) horizonDays (30–180), collectionsPct (the default scenario), alert (the shortfall alert). Audited.
@@ -19856,6 +20317,19 @@ export class Operations {
     body: SetControlsThresholdsBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/controls/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the corporate tax rate
+   *
+   * (v1.39.0) ratePct (default 22) and facility31e (Article 31E for turnover up to Rp 50 billion). Audited.
+   *
+   * `PUT /v1/finance/corporate-tax/settings`
+   */
+  setCorporateTaxRate(params: {
+    body: SetCorporateTaxRateBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/corporate-tax/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20839,6 +21313,20 @@ export class Operations {
   }
 
   /**
+   * Submit a payment run
+   *
+   * (v1.39.0) For approval. Audited.
+   *
+   * `POST /v1/finance/payment-runs/{id}/submit`
+   */
+  submitPaymentRun(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-runs/{id}/submit", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Submit a payroll run
    *
    * (v1.33.0) For approval. Audited.
@@ -20996,6 +21484,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<SupplierBillsResponse> {
     return this.transport.request<SupplierBillsResponse>({ method: "GET", path: "/v1/finance/bills", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Supplier payment runs
+   *
+   * (v1.39.0) Every run with its status, bills and total.
+   *
+   * `GET /v1/finance/payment-runs`
+   */
+  supplierPaymentRuns(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/payment-runs", accept: "json" }, options);
   }
 
   /**
@@ -21754,6 +22253,20 @@ export class Operations {
   }
 
   /**
+   * Void a fiscal correction
+   *
+   * (v1.39.0) Not on a final year. Audited.
+   *
+   * `POST /v1/finance/corporate-tax/corrections/{id}/void`
+   */
+  voidFiscalCorrection(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/corporate-tax/corrections/{id}/void", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Void a fleet invoice
    *
    * The invoice keeps its number and is marked void; its sessions become billable again, so a corrected invoice can be issued. A paid invoice cannot be voided. If it was exported to e-Faktur, cancel or replace the faktur pajak in Coretax too (`fakturWarning`).
@@ -21946,6 +22459,20 @@ export class Operations {
     body: VoidTaxFilingMarkBody;
   }, options?: RequestOptions): Promise<VoidTaxFilingMarkResponse> {
     return this.transport.request<VoidTaxFilingMarkResponse>({ method: "POST", path: "/v1/finance/tax/filings/{fid}/void", pathParams: { fid: params.fid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a tax payment
+   *
+   * (v1.39.0) Audited.
+   *
+   * `POST /v1/finance/corporate-tax/payments/{id}/void`
+   */
+  voidTaxPayment(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/corporate-tax/payments/{id}/void", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
