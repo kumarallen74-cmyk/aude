@@ -35,7 +35,7 @@ fallback acquirer*. The integration's activity also shows the error.
       **user ID**, **e-mail** and **secret key**. With it, Finance shows the
       balance, and (v1.15.0) refunds of Duitku payments can be sent from the
       Refunds page and owners' bank accounts checked by name.
-2. **In PlugSure:** go to **Govern → Integrations → Payments — fallback**,
+2. **In PlugSure:** go to **Governance → Integrations → Payments — fallback**,
    provider **Duitku**:
    - **Environment:** sandbox or production.
    - **Merchant code** and **API key.**

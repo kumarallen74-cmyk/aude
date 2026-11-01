@@ -19,7 +19,7 @@ import { ensureSystemRoles, hashPassword, generateTemporaryPassword, passwordPro
  *
  * --platform-admin additionally makes the account a PLATFORM administrator: the
  * platform operator's (PlugSure's) own staff, who set each customer's commission
- * plan and finalise monthly statements (Govern → Platform billing). Create it in
+ * plan and finalise monthly statements (Governance → Platform billing). Create it in
  * the operator's own organisation, never in a customer's:
  *   npm run create-admin -- --email billing@plugsure.com --org-slug plugsure --org-name "PlugSure" --platform-admin
  *

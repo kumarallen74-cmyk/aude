@@ -28,6 +28,7 @@ import * as invest from '../services/site-investments.js';
 import * as anomalies from '../services/revenue-anomalies.js';
 import * as taxCal from '../services/tax-calendar.js';
 import * as disputes from '../services/owner-disputes.js';
+import { assignablePeople } from '../services/finance-people.js';
 import * as sharedCosts from '../services/shared-costs.js';
 import * as settle from '../services/settlement-tracking.js';
 import * as driverRefunds from '../services/driver-refunds.js';
@@ -3422,7 +3423,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/v1/finance/close-automation', async (req, reply) => {
     R(req);
-    try { return await closeAuto.overview(req.principal.orgId, qs(req).month); } catch (e) { return p27Failed(reply, e); }
+    // (v1.41.1) people: who can own a step, for a finance user who may not read the user list.
+    try { const r = await closeAuto.overview(req.principal.orgId, qs(req).month); return can(req.principal, { permission: 'payment:write' }) ? { ...r, people: await assignablePeople(req.principal.orgId) } : r; } catch (e) { return p27Failed(reply, e); }
   });
   app.put('/v1/finance/close-automation/settings', async (req, reply) => {
     W(req);
@@ -3546,7 +3548,8 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/v1/finance/cards', async (req, reply) => {
     R(req);
-    try { return await cards.overview(req.principal.orgId, qs(req).month); } catch (e) { return p28Failed(reply, e); }
+    // (v1.41.1) people: who can hold a card, for a finance user who may not read the user list.
+    try { const r = await cards.overview(req.principal.orgId, qs(req).month); return can(req.principal, { permission: 'payment:write' }) ? { ...r, people: await assignablePeople(req.principal.orgId) } : r; } catch (e) { return p28Failed(reply, e); }
   });
   app.put('/v1/finance/cards/policy', async (req, reply) => {
     W(req);

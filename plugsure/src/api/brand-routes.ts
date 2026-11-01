@@ -11,7 +11,7 @@ import { one } from '../db/pool.js';
 import { liveActivityCounts } from '../services/live-activity.js';
 
 /**
- * The operator's own driver app (Commercial → Driver app).
+ * The operator's own driver app (Governance → Driver app).
  *
  *   GET    /v1/driver-app          the brand, its colours as used, what is missing, and where it is served
  *   PUT    /v1/driver-app          create or change it (and set it live)

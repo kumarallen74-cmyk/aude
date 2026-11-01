@@ -1,15 +1,14 @@
 PlugSure CSMS
-Version:   1.41.0
-Package:   plugsure-v1.41.0
-Prepared:  2026-11-01  (v1.40.0 + the console menu restructure — see RELEASE-NOTES-v1.41.0.md)
+Version:   1.41.1
+Package:   plugsure-v1.41.1
+Prepared:  2026-11-01  (v1.41.0 + fixes from a whole-system review — see RELEASE-NOTES-v1.41.1.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (823 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (823 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.41.0 = v1.40.0 + the console's menu restructure: Finance in ten sections (Overview, Revenue,
-           Receivables, Spend, Cash & treasury, Assets, Planning, Tax, Ledger & close, Group & governance), each
-           with its own row of tabs; Month close and Cash forecast each one tab with a switch; the gateway's account
-           and period filters only on the views that read the gateway; Finance usable without a gateway account; a
-           Finance group in the sidebar; every earlier #/finance/<tab> link still works. No migration, no API change.
+Status:    v1.41.1 = v1.41.0 + fixes from a whole-system review (every console page, tab and link for
+           each role; every read API; every end-to-end suite): role-aware tabs and links, a phone-width table
+           fix, the console's "where to find it" hints after the menu restructure, and a driver-app request
+           made before sign-in. No migration, no API change.
 
 v1.39.0 (2026-11-01):
            v1.39.0 = v1.38.0 + finance phase 28: statutory financial statements (balance sheet, profit or loss,

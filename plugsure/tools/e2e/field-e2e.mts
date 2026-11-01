@@ -992,7 +992,7 @@ try {
     };
     const plogin = await pa('POST', '/v1/auth/login', { email: process.env.E2E_PLATFORM_EMAIL ?? 'platform@plugsure.test', password: process.env.E2E_PLATFORM_PASSWORD ?? 'Platform-Test-2026!' });
     if (plogin.status !== 200) {
-      console.log('SKIP  25. platform operator checks (create one with: npm run create-admin -- --email platform@plugsure.test --org-slug plugsure-platform --org-name "PlugSure Platform" --password ... --platform-admin)');
+      console.log('SKIP  25. platform operator checks (create one with: npm run create-admin -- --email platform@plugsure.test --org-slug plugsure-platform --org-name "PlugSure Platform" --platform-admin --password ... --platform-admin)');
     } else {
       try {
         const ov = await pa('GET', '/v1/platform/billing');

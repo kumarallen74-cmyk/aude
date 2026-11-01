@@ -9,6 +9,8 @@ import { $, $$, esc, api, state, registerView, pageHead, icon, field, callout, t
 
 const TABS = ['overview', 'contracts', 'chargers', 'anchors', 'log'];
 const KIND_LABEL = { V2GRootCertificate: 'V2G root', MORootCertificate: 'Mobility operator root', V2GCertificateChain: 'Charger V2G chain' };
+/** Contracts are tokens: a role without token:read (e.g. a financial auditor) does not get the tab. */
+const allowed = (tab) => tab !== 'contracts' || state.can('token:read');
 const daysLeft = (t) => (t ? Math.floor((new Date(t).getTime() - Date.now()) / 86_400_000) : null);
 
 registerView('pnc', {
@@ -22,12 +24,13 @@ registerView('pnc', {
       'Plug & Charge',
       'ISO 15118: the car proves its charging contract with a certificate, so the driver only plugs in. The contract is then treated like a card — status, limits, fleet account and membership apply.',
       '',
-    ) + `<div class="tabs" role="tablist">${[['overview', 'Overview'], ['contracts', 'Contracts'], ['chargers', 'Chargers'], ['anchors', 'Trust anchors'], ['log', 'Log']].map(([k, l]) => `<button type="button" data-tab="${k}">${l}</button>`).join('')}</div><div data-body></div>`;
+    ) + `<div class="tabs" role="tablist">${[['overview', 'Overview'], ['contracts', 'Contracts'], ['chargers', 'Chargers'], ['anchors', 'Trust anchors'], ['log', 'Log']].filter(([k]) => allowed(k)).map(([k, l]) => `<button type="button" data-tab="${k}">${l}</button>`).join('')}</div><div data-body></div>`;
     const body = $('[data-body]', root);
-    const show = (t) => {
+    const show = async (t) => {
+      if (!allowed(t)) t = 'overview';
       $$('[data-tab]', root).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
       history.replaceState(null, '', `#/pnc/${t}`);
-      ({ overview: renderOverview, contracts: renderContracts, chargers: renderChargers, anchors: renderAnchors, log: renderLog }[t])(body, show);
+      try { await ({ overview: renderOverview, contracts: renderContracts, chargers: renderChargers, anchors: renderAnchors, log: renderLog }[t])(body, show); } catch (e) { body.innerHTML = callout('crit', esc(e.message)); }
     };
     $$('[data-tab]', root).forEach((b) => b.addEventListener('click', () => show(b.dataset.tab)));
     show(TABS.includes(tabParam) ? tabParam : 'overview');

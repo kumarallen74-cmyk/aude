@@ -9,7 +9,7 @@ import * as soa from '../services/fleet-statements.js';
 import * as credit2 from '../services/fleet-credit-limits.js';
 
 /**
- * Fleet billing (Commercial → Fleet billing): fleet accounts, their monthly
+ * Fleet billing (Finance → Fleet billing): fleet accounts, their monthly
  * statements, invoices and credit notes (with PDFs), and the e-Faktur export.
  * Reading needs invoice:read; issuing, voiding, crediting, payments and settings
  * need invoice:write.

@@ -17,7 +17,7 @@ import * as wa from './whatsapp-cloud.js';
  *
  *   inbound()       Meta's webhook hands over value.messages[] (whatsapp-cloud.ts): each becomes a message of the
  *                   customer's conversation (one per number), de-duplicated by Meta's id; then respond() runs
- *   respond()       the assistant, when the AI support integration is configured (Govern → Integrations → WhatsApp
+ *   respond()       the assistant, when the AI support integration is configured (Governance → Integrations → WhatsApp
  *                   AI support) and the conversation is the AI's: mode "auto" replies, mode "draft" leaves a draft for
  *                   staff, mode "off" does nothing. It hands over to staff (handler 'human', a platform alert) when it
  *                   cannot help, the customer asks for a person, Claude declines, or a reply cap is reached
@@ -247,7 +247,7 @@ async function handOff(cfg: SupportConfig, c: ConvRow, o: Extract<Outcome, { kin
 /** A platform alert to whoever is on call: a customer waits for staff. Resolved by a staff reply or a handover. */
 async function notifyStaff(c: ConvRow, why: string): Promise<void> {
   await wa.raise('platform.whatsapp_support', 'warning', 'whatsapp_conversation', c.id,
-    `A WhatsApp customer (${c.profile_name ? `${c.profile_name}, ` : ''}${c.phone_masked}) is waiting for staff: ${why}. Answer in Operate → WhatsApp → Inbox.`)
+    `A WhatsApp customer (${c.profile_name ? `${c.profile_name}, ` : ''}${c.phone_masked}) is waiting for staff: ${why}. Answer in Governance → WhatsApp → Inbox.`)
     .catch((e) => logger.warn({ err: (e as Error).message }, 'WhatsApp support alert not raised'));
 }
 
@@ -577,7 +577,7 @@ export async function setHandler(id: string, handler: Handler): Promise<Conversa
 /** A suggested reply for staff, whoever the conversation's handler is (needs the AI support integration). */
 export async function suggest(id: string): Promise<{ draft: string | null; handoff: string | null }> {
   const cfg = await supportConfig();
-  if (!cfg?.apiKey) throw new SupportError(409, 'Set up WhatsApp AI support (Govern → Integrations) to get suggested replies.');
+  if (!cfg?.apiKey) throw new SupportError(409, 'Set up WhatsApp AI support (Governance → Integrations) to get suggested replies.');
   const c = await conv(id);
   if (!c) throw new SupportError(404, 'No such conversation.');
   const out = await runAssistant(cfg, c);

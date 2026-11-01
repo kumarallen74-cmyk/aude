@@ -686,7 +686,7 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   app.get('/d/v1/meta', async () => {
     let publicKey: string | null = null;
     try { publicKey = (await vapid()).publicKey; } catch { /* push unavailable */ }
-    // Govern → Integrations → Map tiles, else MAP_TILE_URL.
+    // Governance → Integrations → Map tiles, else MAP_TILE_URL.
     const tiles = await resolveIntegration('map_tiles').catch(() => null);
     return {
       map: {

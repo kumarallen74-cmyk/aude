@@ -217,7 +217,7 @@ try {
   const aps = rich?.body?.aps ?? {};
   check('rich: the site as a subtitle over the detail, the receipt button’s category and target, and a picture for the service extension (mutable-content)',
     aps.alert?.subtitle === 'Hub Tol KM 57' && aps.alert?.body === '12,5 kWh terisi' && aps.category === 'PS_RECEIPT' && aps['mutable-content'] === 1
-      && rich!.body.actions?.receipt === `/app/#r/${chargeId}` && /^http:\/\/127\.0\.0\.1:9200\/d\/n\/charge\/[0-9a-f-]{36}\.png\?l=id&e=\d+&s=/.test(rich!.body.image) && aps['interruption-level'] === 'active',
+      && rich!.body.actions?.receipt === `/app/#r/${chargeId}` && new RegExp(`^${API.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\/d\\/n\\/charge\\/[0-9a-f-]{36}\\.png\\?l=id&e=\\d+&s=`).test(rich!.body.image) && aps['interruption-level'] === 'active',
     rich?.body);
   check('badge: the notification carries the number of sessions waiting to be paid in this operator’s app (1)', aps.badge === 1, aps);
   const pic = await fetch(rich!.body.image);

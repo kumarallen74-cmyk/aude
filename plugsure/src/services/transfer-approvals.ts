@@ -5,7 +5,7 @@ import { persistAlert, resolveAlertsFor } from './alerts.js';
 /**
  * Approval alerts (v1.18.0): a refund or owner payout transfer waiting for a second person raises an operator alert
  * (finance.transfer_awaiting_approval), which the organisation's alert routing delivers like any other (e-mail,
- * WhatsApp, SMS; Govern → Alert routing: route this kind to the people who approve). Left waiting more than 24 hours, a
+ * WhatsApp, SMS; Governance → Alert routing: route this kind to the people who approve). Left waiting more than 24 hours, a
  * critical alert follows (finance.transfer_approval_overdue). Both resolve when the transfer is approved or rejected.
  * The console shows the number waiting as a badge on Refunds and Finance.
  */

@@ -132,8 +132,8 @@ export async function paymentsFor(orgId: string, country: string = 'ID'): Promis
   const r = await resolve('payments', orgId, country);
   if (!r) {
     throw new PaymentsUnavailable(country === 'ID'
-      ? 'QRIS payments are not set up yet. The operator connects an acquirer under Govern → Integrations.'
-      : `Payments in ${country} are not set up yet. The operator connects an acquirer for ${country} under Govern → Integrations.`);
+      ? 'QRIS payments are not set up yet. The operator connects an acquirer under Governance → Integrations.'
+      : `Payments in ${country} are not set up yet. The operator connects an acquirer for ${country} under Governance → Integrations.`);
   }
   const provider = providerFor(r);
   assertCurrency(provider, currencyOfCountry(country));

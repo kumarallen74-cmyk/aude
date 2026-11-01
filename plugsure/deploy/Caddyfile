@@ -46,7 +46,7 @@
 	}
 
 	# White-label driver apps: a certificate is issued on first use for an
-	# operator's own web address (Commercial → Driver app), and only after the
+	# operator's own web address (Governance → Driver app), and only after the
 	# API confirms the name belongs to a driver app. Without this sk, anyone
 	# pointing a domain here could make Caddy request certificates for it.
 	on_demand_tls {
@@ -196,13 +196,13 @@ ocpp.example.id {
 	# v1.3 — callbacks from providers on the internet. Small bodies only.
 	#   /pay/notify/<key>       payment notifications from the QRIS acquirer
 	#                           (Midtrans, Xendit, a bank's SNAP); one URL per account,
-	#                           shown in Govern → Integrations, verified with its secret
+	#                           shown in Governance → Integrations, verified with its secret
 	#   /hooks/whatsapp/<key>   WhatsApp delivery statuses for alerts (Meta webhook);
 	#                           shown in Alert routing → WhatsApp → Edit settings,
 	#                           signed with the Meta app secret
 	#   /hooks/whatsapp-cloud/<key>  (v1.10.0) Meta status webhook of sign-in codes on
 	#                           the WhatsApp Cloud API (statuses, template and quality events); shown in
-	#                           Integrations → Driver sign-in codes and Operate → WhatsApp → Setup
+	#                           Integrations → Driver sign-in codes and Governance → WhatsApp → Setup
 	@payments path /pay/* /hooks/*
 	handle @payments {
 		request_body {
@@ -359,7 +359,7 @@ console.example.id {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		# "?" = only when the API has not set it: the API sends DENY everywhere
 		# except the driver app, which the console frames for its live preview
-		# (Commercial → Driver app) and which is sent as SAMEORIGIN.
+		# (Governance → Driver app) and which is sent as SAMEORIGIN.
 		?X-Frame-Options "DENY"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
@@ -489,7 +489,7 @@ http://127.0.0.1:8080 {
 # =============================================================================
 #
 # An operator points its address at this server (DNS CNAME to the console or
-# driver hostname) and sets it in Commercial → Driver app. The certificate is
+# driver hostname) and sets it in Governance → Driver app. The certificate is
 # issued on first request (on_demand_tls above, which asks the API). Only the
 # driver app, its API, its public link pages and the store association files are served here; the API
 # picks the brand from the Host header, which reverse_proxy passes through.

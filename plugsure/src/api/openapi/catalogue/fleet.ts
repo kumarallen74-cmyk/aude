@@ -466,7 +466,7 @@ export const ops: Op[] = [
   },
   {
     method: 'POST', path: '/v1/fleet-invoices/:id/send', tag: T, summary: 'E-mail a fleet invoice', pathParams: INV,
-    description: "Sends the invoice to the account's billing e-mail (or `to`) through the organisation's e-mail channel (Govern → Alert routing), with the invoice (PDF) and the session list (CSV) attached.",
+    description: "Sends the invoice to the account's billing e-mail (or `to`) through the organisation's e-mail channel (Governance → Alert routing), with the invoice (PDF) and the session list (CSV) attached.",
     body: { required: false, schema: { type: 'object', properties: { to: { type: 'string' } } } },
     responses: { 200: { description: 'Sent', schema: SENT } },
     errors: [404, 409, 422, 502],

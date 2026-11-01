@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.41.0 (1 November 2026), the current release:** the console's menu restructure: Finance in ten sections, each with its own tabs; a Finance group in the sidebar; the gateway filters only where they apply; every earlier link still works. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.0.md`](RELEASE-NOTES-v1.41.0.md).
+**v1.41.1 (1 November 2026), the current release:** fixes from a whole-system review of every console page, tab and link for each role, every read API and every end-to-end suite. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.1.md`](RELEASE-NOTES-v1.41.1.md).
+
+**v1.41.0 (1 November 2026):** the console's menu restructure: Finance in ten sections, each with its own tabs; a Finance group in the sidebar; the gateway filters only where they apply; every earlier link still works. No migration, no API change. Notes: [`RELEASE-NOTES-v1.41.0.md`](RELEASE-NOTES-v1.41.0.md).
 
 **v1.40.0 (1 November 2026):** finance phase 29: customer contracts with PSAK 72 revenue recognition, group netting and transfer pricing, finance data quality with a score and record history, and scenario planning with cash runway, covenants and sensitivity. Notes: [`RELEASE-NOTES-v1.40.0.md`](RELEASE-NOTES-v1.40.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
@@ -71,7 +73,7 @@ codebase implements.
 
 **v1.11.0 (31 October 2026):** WhatsApp customer support: an inbox for customers who write to the WhatsApp number, answered by an AI assistant (Claude) or by staff. Notes: [`RELEASE-NOTES-v1.11.0.md`](RELEASE-NOTES-v1.11.0.md); setup: [`deploy/WHATSAPP.md`](deploy/WHATSAPP.md) §3.
 
-**v1.10.0 (31 October 2026):** the WhatsApp dashboard (Operate → WhatsApp) and delivery tracking for WhatsApp sign-in codes. Notes: [`RELEASE-NOTES-v1.10.0.md`](RELEASE-NOTES-v1.10.0.md); setup: [`deploy/WHATSAPP.md`](deploy/WHATSAPP.md).
+**v1.10.0 (31 October 2026):** the WhatsApp dashboard (Governance → WhatsApp) and delivery tracking for WhatsApp sign-in codes. Notes: [`RELEASE-NOTES-v1.10.0.md`](RELEASE-NOTES-v1.10.0.md); setup: [`deploy/WHATSAPP.md`](deploy/WHATSAPP.md).
 
 **v1.9.2 (26 October 2026):** v1.9.1 with the PlugSure app on its live host `app.plugsure.co.id` (API and links; website and policies on plugsure.com). Notes: [`RELEASE-NOTES-v1.9.2.md`](RELEASE-NOTES-v1.9.2.md).
 
@@ -435,7 +437,7 @@ of it moves:
 | `CONSOLE_MFA_REQUIRED` | `true` (`false` in development/test) | Two-step verification (TOTP) required for administrator accounts |
 | `CONSOLE_ADMIN_HOSTS` | empty (any host) | Host names on which administrator accounts may sign in, e.g. the office-only console name |
 | `MS_CLIENT_ID` / `MS_CLIENT_SECRET` (or `MS_CLIENT_SECRET_FILE`) | unset (off) | "Sign in with Microsoft" (Entra ID) for the console: one multi-tenant app registration; each operator connects its own tenant. See `deploy/MICROSOFT-SIGN-IN.md` |
-| `MULTI_COUNTRY` | `false` | Malaysian and Singapore sites, tariffs and payments. MY/SG payments go through **Stripe**, one account per country, connected under *Govern → Integrations* (keys are integration secrets, not environment variables). See `deploy/STRIPE.md` |
+| `MULTI_COUNTRY` | `false` | Malaysian and Singapore sites, tariffs and payments. MY/SG payments go through **Stripe**, one account per country, connected under *Governance → Integrations* (keys are integration secrets, not environment variables). See `deploy/STRIPE.md` |
 | `HUB_ENABLED` | `false` | **PlugSure Hub** (v1.8): PlugSure as an OCPI 2.2.1 roaming hub on its own host (`HUB_PUBLIC_URL`, parties `HUB_PARTIES`). Platform administrators run it from *Governance → Hub* (members, token A, agreements, message log, outbox); tenants see their membership under *Roaming → PlugSure Hub*. Operators' runbook: `deploy/HUB-OPERATIONS.md`; guide for external members: `deploy/HUB-ONBOARDING.md`; design: `docs/HUB-DESIGN.md` |
 
 ---

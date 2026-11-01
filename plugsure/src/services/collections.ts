@@ -173,7 +173,7 @@ async function remind(orgId: string, r: Receivable, channel: 'email' | 'whatsapp
   let ok = false, error: string | null = null, dest: string | null = null;
   if (channel === 'email') {
     dest = (to ?? r.email ?? '').trim() || null;
-    if (!ch.email?.config?.host) error = 'No e-mail channel (Govern → Alert routing → Channels).';
+    if (!ch.email?.config?.host) error = 'No e-mail channel (Governance → Alert routing → Channels).';
     else if (!dest || !/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(dest)) error = 'No billing e-mail address.';
     else {
       const what = r.kind === 'fleet_invoice' ? `invoice ${r.number}` : `statement ${r.number}`;

@@ -20,7 +20,7 @@ import { isCountry } from '../domain/country.js';
 import { stripeCheckoutPage, STRIPE_PAGE_JS } from '../services/payments/stripe-page.js';
 
 /**
- * Govern → Integrations: the third parties PlugSure talks to.
+ * Governance → Integrations: the third parties PlugSure talks to.
  *
  *   view                      org:read
  *   the operator's own        org:write     (QRIS payments: its own merchant account)

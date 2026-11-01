@@ -1036,9 +1036,9 @@ async function phase10Settings(el, canWrite) {
       ${rc ? `<div data-fxl></div>` : ''}</div></div>
     <div class="card section"><header><h3>Approvals</h3>${ar.canApprove ? '' : '<span class="cell-sub">changing these needs a Finance Manager (finance:approve)</span>'}</header><div class="body">
       <p class="cell-sub" style="margin-top:0">Every transfer, write-off and bank detail change already needs a second person. Above an amount you can require a Finance Manager (finance:approve), or two approvers.</p>
-      <table class="table" data-rules><thead><tr><th>What</th><th>Rule</th><th class="num">Above (minor unit)</th></tr></thead><tbody>
+      <div class="table-wrap"><table class="table" data-rules><thead><tr><th>What</th><th>Rule</th><th class="num">Above (minor unit)</th></tr></thead><tbody>
       ${Object.keys(KIND_LBL).map((k) => { const r = ar.rules[k] ?? {}; const dis = ar.canApprove && canWrite ? '' : ' disabled'; return `<tr data-k="${k}"><td>${KIND_LBL[k]}</td><td><select name="rule"${dis}><option value="">Second person only</option><option value="finance_approver"${r.rule === 'finance_approver' ? ' selected' : ''}>A Finance Manager</option><option value="two_approvers"${r.rule === 'two_approvers' ? ' selected' : ''}>Two approvers</option></select></td><td class="num">${k === 'bank_change' ? '<span class="cell-sub">every change</span>' : `<input name="above" inputmode="numeric" value="${esc(String(r.above ?? ''))}" style="width:130px"${dis}>`}</td></tr>`; }).join('')}
-      </tbody></table>
+      </tbody></table></div>
       ${ar.canApprove && canWrite ? '<div class="row" style="margin-top:10px"><button class="btn primary" type="button" data-rsave>Save approvals</button></div>' : ''}</div></div>
     <div class="card section"><header><h3>Report e-mails</h3>${canWrite ? '<button class="btn sm right" type="button" data-rnew>New schedule</button>' : ''}</header><div data-rl></div></div>`;
   if (rc) table($('[data-fxl]', el), { columns: [
@@ -1157,7 +1157,7 @@ async function investmentsSection(host, canWrite) {
     ],
     rows: r.sites, empty: 'No investments recorded yet.',
     onRow: (x) => modal({ title: `Investments — ${x.siteName}`, size: 'lg',
-      body: `<table class="table"><thead><tr><th>Paid</th><th>What</th><th class="num">Amount</th><th class="num">Months</th><th></th></tr></thead><tbody>${x.items.map((i) => `<tr><td>${esc(i.investedOn)}</td><td>${esc(INV_CAT[i.category])}<div class="cell-sub">${esc(i.description)}${i.reference ? ` · ${esc(i.reference)}` : ''}</div></td><td class="num">${esc(fmt.money(i.amount, i.currency))}</td><td class="num">${i.lifeMonths}</td><td>${canWrite ? `<button class="btn sm" type="button" data-ivoid="${esc(i.id)}">Void</button>` : ''}</td></tr>`).join('')}</tbody></table>`,
+      body: `<div class="table-wrap"><table class="table"><thead><tr><th>Paid</th><th>What</th><th class="num">Amount</th><th class="num">Months</th><th></th></tr></thead><tbody>${x.items.map((i) => `<tr><td>${esc(i.investedOn)}</td><td>${esc(INV_CAT[i.category])}<div class="cell-sub">${esc(i.description)}${i.reference ? ` · ${esc(i.reference)}` : ''}</div></td><td class="num">${esc(fmt.money(i.amount, i.currency))}</td><td class="num">${i.lifeMonths}</td><td>${canWrite ? `<button class="btn sm" type="button" data-ivoid="${esc(i.id)}">Void</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`,
       onMount: (ctx) => $$('[data-ivoid]', ctx.el).forEach((b) => b.addEventListener('click', async () => {
         const reason = window.prompt('Why is this investment voided?');
         if (!reason || !reason.trim()) return;
@@ -1244,7 +1244,7 @@ async function taxCalendarCard(el, canWrite, all = false) {
   });
   $('[data-tcall]', el).addEventListener('click', () => taxCalendarCard(el, canWrite, !all));
   $('[data-tcset]', el)?.addEventListener('click', () => modal({ title: 'Tax calendar settings', subtitle: 'The due day in the month after the period (31 = its last day)', size: 'lg',
-    body: `<table class="table"><thead><tr><th>Obligation</th><th>Track</th><th class="num">Due day</th></tr></thead><tbody>${Object.entries(c.labels).map(([k, label]) => `<tr data-k="${k}"><td>${esc(label)}</td><td><input type="checkbox" name="on"${st.obligations[k].enabled ? ' checked' : ''}></td><td class="num"><input name="day" type="number" min="1" max="31" value="${st.obligations[k].day}" style="width:80px"></td></tr>`).join('')}</tbody></table>
+    body: `<div class="table-wrap"><table class="table"><thead><tr><th>Obligation</th><th>Track</th><th class="num">Due day</th></tr></thead><tbody>${Object.entries(c.labels).map(([k, label]) => `<tr data-k="${k}"><td>${esc(label)}</td><td><input type="checkbox" name="on"${st.obligations[k].enabled ? ' checked' : ''}></td><td class="num"><input name="day" type="number" min="1" max="31" value="${st.obligations[k].day}" style="width:80px"></td></tr>`).join('')}</tbody></table></div>
       <div class="filters"><label class="check" style="align-self:flex-end"><input type="checkbox" name="rem"${st.reminders ? ' checked' : ''}><span>Remind (alert finance.tax_due)</span></label>${field('Days before', `<input name="days" type="number" min="0" max="30" value="${st.reminderDays}" style="width:80px">`)}</div>`,
     actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(ctx) {
       const obligations = Object.fromEntries($$('tbody tr', ctx.body).map((tr) => [tr.dataset.k, { enabled: $('[name="on"]', tr).checked, day: Number($('[name="day"]', tr).value) }]));
@@ -3028,7 +3028,7 @@ async function pricingSection(host, canWrite, months = 3) {
         try {
           const w = await api('/v1/finance/pricing/what-if', { method: 'POST', body: { months, dimension, key, currency, changePct: Number($('[name="c"]', mc.el).value), elasticity: Number($('[name="e"]', mc.el).value) } });
           const row = (l, a, z) => `<tr><td>${l}</td><td class="num">${a}</td><td class="num">${z}</td></tr>`;
-          $('[data-wr]', mc.el).innerHTML = `<table class="table"><thead><tr><th></th><th class="num">Now</th><th class="num">After</th></tr></thead><tbody>${row('kWh', fmt.num(w.before.kwh), fmt.num(w.after.kwh))}${row('Price per kWh', money(w.before.pricePerKwh, currency), money(w.after.pricePerKwh, currency))}${row('Revenue', money(w.before.revenue, currency), money(w.after.revenue, currency))}${row('Energy cost', money(w.before.energyCost, currency), money(w.after.energyCost, currency))}${row('<b>Margin</b>', money(w.before.margin, currency), `<b>${money(w.after.margin, currency)}</b>`)}</tbody></table>
+          $('[data-wr]', mc.el).innerHTML = `<div class="table-wrap"><table class="table"><thead><tr><th></th><th class="num">Now</th><th class="num">After</th></tr></thead><tbody>${row('kWh', fmt.num(w.before.kwh), fmt.num(w.after.kwh))}${row('Price per kWh', money(w.before.pricePerKwh, currency), money(w.after.pricePerKwh, currency))}${row('Revenue', money(w.before.revenue, currency), money(w.after.revenue, currency))}${row('Energy cost', money(w.before.energyCost, currency), money(w.after.energyCost, currency))}${row('<b>Margin</b>', money(w.before.margin, currency), `<b>${money(w.after.margin, currency)}</b>`)}</tbody></table></div>
             ${w.deltaMargin != null ? callout(w.deltaMargin >= 0 ? 'ok' : 'warn', `Margin ${w.deltaMargin >= 0 ? 'up' : 'down'} ${esc(fmt.money(Math.abs(w.deltaMargin), currency))} over the period.`) : ''}`;
         } catch (err) { toast(err.message, 'crit'); }
         return false;
@@ -3577,10 +3577,11 @@ async function closeAutoSection(host, canWrite, month) {
   host.replaceChildren(el);
   el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
   let d, users;
-  try { [d, users] = await Promise.all([api(`/v1/finance/close-automation${month ? `?month=${month}` : ''}`), api('/v1/users').catch(() => [])]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  try { [d, users] = await Promise.all([api(`/v1/finance/close-automation${month ? `?month=${month}` : ''}`), (state.can('user:read') ? api('/v1/users').catch(() => []) : [])]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
   const reload = (mo = d.month) => closeAutoSection(host, canWrite, mo);
   const c = d.calendar, tr = d.trend;
-  const ul = (Array.isArray(users) ? users : users.users ?? []).filter((u) => u.status !== 'disabled');
+  // The user list when the role may read it; otherwise the people the API returns with the close (v1.41.1).
+  const ul = (Array.isArray(users) && users.length ? users : users?.users?.length ? users.users : d.people ?? []).filter((u) => u.status !== 'disabled');
   el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-cam value="${esc(d.month)}">`)}<div class="row" style="align-self:flex-end;gap:6px">${canWrite && !c.locked ? `<button class="btn primary" type="button" data-carun>${icon('refresh')} Run the close now</button>` : ''}${canWrite ? `<button class="btn" type="button" data-caset>Settings</button><button class="btn" type="button" data-caown>Owners &amp; due days</button>` : ''}</div></div>
     ${callout('info', `The mechanical part of the close: fetch missing rates, record depreciation and leases, sync the ledger and run the checks; then what still blocks. People sign each step off and lock the month (Finance → Month close → Steps). ${d.settings.enabled ? `Automatic: from working day ${d.settings.runOnDay} after the month end, daily until locked${d.nextRunOn ? ` (from ${esc(d.nextRunOn)})` : ''}.` : 'Automatic runs are off.'}`)}
     <div class="grid k4 section">${kpi(`Close · ${esc(d.month)}`, c.locked ? 'locked' : `${c.done} / ${c.total}`, c.locked ? '' : 'steps signed off', c.locked ? 'ok' : '')}${kpi('Overdue steps', String(c.overdue), c.lastDue ? `all due by ${esc(c.lastDue)}` : '', c.overdue ? 'crit' : '')}${kpi('Days to close', tr.averageDays == null ? '—' : String(tr.averageDays), tr.months.length ? `average of ${tr.months.length} month${tr.months.length === 1 ? '' : 's'} · best ${tr.best}` : 'no month locked yet', tr.improving === false ? 'warn' : '')}${kpi('Last run', d.runs[0] ? `${d.runs[0].blocking} blocking` : '—', d.runs[0] ? `${esc(fmt.time(d.runs[0].startedAt))}${d.runs[0].automatic ? ' · automatic' : ''}` : 'not run yet', d.runs[0]?.blocking ? 'warn' : '')}</div>
@@ -3810,9 +3811,10 @@ async function cardsSection(host, canWrite, month) {
   el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
   const mo = month ?? zonedYmd().slice(0, 7);
   let d, tx, users, accts;
-  try { [d, tx, users, accts] = await Promise.all([api(`/v1/finance/cards?month=${mo}`), api(`/v1/finance/cards/transactions?month=${mo}`), api('/v1/users').catch(() => []), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  try { [d, tx, users, accts] = await Promise.all([api(`/v1/finance/cards?month=${mo}`), api(`/v1/finance/cards/transactions?month=${mo}`), (state.can('user:read') ? api('/v1/users').catch(() => []) : []), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
   const reload = () => cardsSection(host, canWrite, mo);
-  const ul = Array.isArray(users) ? users : [];
+  // The user list when the role may read it; otherwise the people the API returns with the cards (v1.41.1).
+  const ul = Array.isArray(users) && users.length ? users : d.people ?? [];
   el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-cdm value="${esc(mo)}">`)}<div class="row" style="align-self:flex-end;gap:6px;flex-wrap:wrap">${canWrite ? `<button class="btn primary" type="button" data-cdn>${icon('plus')} Add a card</button><button class="btn" type="button" data-cdp>Spend policy</button>` : ''}<button class="btn" type="button" data-cdx>${icon('download')} Excel</button></div></div>
     ${callout('info', `Company cards: import each card's transactions from the bank, attach receipts, and review them. Flags: over a limit, weekend, blocked category or merchant, no receipt at or above ${esc(fmt.money(d.policy.receiptAbove))}, a likely duplicate. A flagged one is approved by a Finance Manager with a note; nobody reviews their own card. Personal spending is owed back.`)}
     <div class="grid k3 section">${kpi('Cards', String(d.cards.filter((c) => c.status === 'active').length), `${d.cards.length} in all`)}${kpi('To review', String(d.open), 'all months', d.open ? 'warn' : '')}${kpi('Flagged', String(d.flagged), 'to review', d.flagged ? 'warn' : '')}</div>
@@ -4966,7 +4968,7 @@ registerView('finance', {
           <div class="body"><p class="cell-sub" style="margin-top:0">The Journal export turns the period into double-entry entries, one per day and kind: collections, gateway fees and VAT on fees, withholding tax, refunds, withdrawals to the bank, and owner payouts. Set your chart of accounts' codes; the rest keep PlugSure's defaults.</p>
           <div class="form" data-accts>${Object.keys(r.defaults).map((k) => field(r.labels[k], `<div class="row" style="gap:6px"><input name="code_${k}" value="${esc(st.journalAccounts[k].code)}" maxlength="20" style="width:90px"${canWrite ? '' : ' disabled'}><input name="name_${k}" value="${esc(st.journalAccounts[k].name)}" maxlength="80" style="flex:1"${canWrite ? '' : ' disabled'}></div>`)).join('')}</div></div></div>
         <div class="card section"><header><h3>Monthly close e-mail</h3></header><div class="body">
-          <p class="cell-sub" style="margin-top:0">On the 1st of each month, the previous month's finance export (Excel and PDF) and journal go to these addresses, through your e-mail channel (Govern → Alert routing → Channels).</p>
+          <p class="cell-sub" style="margin-top:0">On the 1st of each month, the previous month's finance export (Excel and PDF) and journal go to these addresses, through your e-mail channel (Governance → Alert routing → Channels).</p>
           <div class="form one">
             <label class="check"><input type="checkbox" name="ce_on"${ce.enabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}><span>Send the monthly close</span></label>
             ${field('Recipients', `<input name="ce_to" value="${esc(ce.recipients.join(', '))}" placeholder="finance@yourcompany.co.id, accountant@firm.co.id"${canWrite ? '' : ' disabled'}>`, { help: 'Up to 10, separated by commas.' })}
@@ -4975,9 +4977,9 @@ registerView('finance', {
         </div></div>
         <div class="card section"><header><h3>Contracted rates</h3></header><div class="body">
           <p class="cell-sub" style="margin-top:0">The fees you agreed with ${gw()} per method, excluding VAT: a percentage plus a fixed fee, an optional minimum, and the amount up to which the method is free (QRIS: ${esc(rp(100000))}). Every fee is checked against them under Fees → Fee audit. Leave a method's percentage empty to not check it.</p>
-          <table class="table" data-rates><thead><tr><th>Method</th><th class="num">%</th><th class="num">Fixed (Rp)</th><th class="num">Minimum (Rp)</th><th class="num">Free up to (Rp)</th></tr></thead><tbody>
+          <div class="table-wrap"><table class="table" data-rates><thead><tr><th>Method</th><th class="num">%</th><th class="num">Fixed (Rp)</th><th class="num">Minimum (Rp)</th><th class="num">Free up to (Rp)</th></tr></thead><tbody>
           ${[...new Set([...RATE_METHODS, ...Object.keys(st.contractRates ?? {})])].map((m) => { const v = st.contractRates?.[m] ?? {}; const inp = (k, w) => `<input name="r_${k}_${esc(m)}" value="${v[k] ?? ''}" inputmode="decimal" style="width:${w}px"${canWrite ? '' : ' disabled'}>`; return `<tr><td class="mono">${esc(m)}</td><td class="num">${inp('pct', 70)}</td><td class="num">${inp('fixed', 90)}</td><td class="num">${inp('min', 90)}</td><td class="num">${inp('freeUpTo', 110)}</td></tr>`; }).join('')}
-          </tbody></table></div></div>
+          </tbody></table></div></div></div>
         ${canWrite ? '<div class="row" style="gap:8px"><button class="btn primary" type="button" data-save>Save</button><button class="btn" type="button" data-send>Send last month now</button></div>' : ''}
         <div class="section" data-acct-sw></div>
         <div data-p10></div>

@@ -117,7 +117,7 @@ registerView('platform-invoices', {
           <label class="check"><input type="checkbox" name="link"${s.autoLink ? ' checked' : ''}><span>With a Xendit payment link</span></label>
           ${field('Reminders (days from the due date)', `<input name="days" value="${esc(s.reminderDays.join(', '))}" placeholder="3, 14, 30">`)}
           ${field('A payment link lasts (days)', `<input name="ld" type="number" min="1" max="90" value="${s.linkDays}">`)}
-        </div><p class="cell-sub">E-mails go out through the e-mail channel (Govern → Alert routing → Channels), to each operator's billing e-mail.</p>`,
+        </div><p class="cell-sub">E-mails go out through the e-mail channel (Governance → Alert routing → Channels), to each operator's billing e-mail.</p>`,
         actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(ctx) {
           const b = ctx?.el ?? document;
           try {

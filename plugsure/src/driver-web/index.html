@@ -2849,7 +2849,8 @@ VIEWS.account=async(v)=>{
   // Notifications belong to the phone, so they are offered signed in or not.
   const nrow=el('<div></div>'); body.appendChild(nrow); paintNotif(nrow);
   const mrow=el('<div></div>'); body.appendChild(mrow); paintMembership(mrow);
-  const lrow=el('<div></div>'); body.appendChild(lrow); paintLoyalty(lrow);
+  // Points belong to a phone-number account: no request (and no 401) before the driver signs in.
+  const lrow=el('<div></div>'); body.appendChild(lrow); if(state.me&&state.me.account) paintLoyalty(lrow);
   const crow=el('<div></div>'); body.appendChild(crow); paintCards(crow);
   const hrow=el('<div></div>'); body.appendChild(hrow); paintHelp(hrow);
   if(me.account) $('#savename').onclick=async()=>{ await api('/v1/account/name',{method:'POST',body:JSON.stringify({name:$('#nm').value})}); state.me=null; alertBanner('Nama tersimpan.'); go('account'); };

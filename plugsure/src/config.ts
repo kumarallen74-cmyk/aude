@@ -266,7 +266,7 @@ export const config = {
     devNoAuth: bool(process.env.API_DEV_NO_AUTH, false),
     /** Per client IP, for the console and anything not using an API key. */
     rateLimitPerMin: num(process.env.API_RATE_LIMIT_PER_MIN, 600),
-    /** Per API key, unless the key has its own limit (Govern → API keys). */
+    /** Per API key, unless the key has its own limit (Governance → API keys). */
     keyRateLimitPerMin: num(process.env.API_KEY_RATE_LIMIT_PER_MIN, 600),
     /** Requests per IP per minute with an API key that does not authenticate. */
     keyAuthFailuresPerMin: num(process.env.API_KEY_AUTH_FAILURES_PER_MIN, 30),

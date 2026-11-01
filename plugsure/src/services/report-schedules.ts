@@ -142,7 +142,7 @@ export async function send(orgId: string, id: string, now = new Date(), period?:
     await outsideRequestScope(() => query(`UPDATE finance_report_schedule SET last_error = $2, updated_at = now() WHERE id = $1`, [id, msg.slice(0, 300)]));
     throw new ReportError(status, msg);
   };
-  if (!ch?.enabled || !ch.config?.host) return fail('Set up the e-mail channel first (Govern → Alert routing → Channels).');
+  if (!ch?.enabled || !ch.config?.host) return fail('Set up the e-mail channel first (Governance → Alert routing → Channels).');
   let secret: string | null = null;
   try { secret = ch.secret ? unseal(ch.secret) : null; } catch { secret = null; }
   const org = await outsideRequestScope(() => one<{ name: string }>(`SELECT name FROM organisation WHERE id = $1`, [orgId]));

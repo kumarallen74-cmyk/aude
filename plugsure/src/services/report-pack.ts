@@ -449,7 +449,7 @@ export async function send(orgId: string, id: string) {
   const s = await settings(orgId);
   if (!s.recipients.length) throw new PackError(422, 'No recipients: add them in the pack settings.');
   const ch = await channels(orgId);
-  if (!ch.email?.config?.host) throw new PackError(422, 'No e-mail channel (Govern → Alert routing → Channels).');
+  if (!ch.email?.config?.host) throw new PackError(422, 'No e-mail channel (Governance → Alert routing → Channels).');
   const org = await outsideRequestScope(() => one<{ name: string }>(`SELECT name FROM organisation WHERE id = $1`, [orgId]));
   const [pdfBuf, xlsBuf] = await Promise.all([pdf(orgId, id), workbook(orgId, id)]);
   const subject = `${org?.name ?? 'PlugSure'}: management report ${p.month}`;

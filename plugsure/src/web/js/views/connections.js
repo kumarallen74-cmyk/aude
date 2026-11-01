@@ -211,7 +211,8 @@ registerView('connections', {
   async render(root, [initial]) {
     const tabs = [
       { id: 'attempts', label: 'Connection attempts', make: attemptsTab },
-      { id: 'pending', label: 'Pending adoption', make: pendingTab },
+      // Adopting a charger that connected unannounced is a platform administrator's job (the API requires platform:admin).
+      ...(state.can('platform:admin') ? [{ id: 'pending', label: 'Pending adoption', make: pendingTab }] : []),
     ];
     root.innerHTML = pageHead(
       'Connections',

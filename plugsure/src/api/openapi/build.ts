@@ -72,13 +72,13 @@ The PlugSure CSMS operator API: everything the operator console does, for your o
 
 ## Authentication
 Send an API key as a bearer token: \`Authorization: Bearer psk_<prefix>_<secret>\`.
-Create keys in the console under **Govern → API keys** (or \`POST /v1/api-keys\`), each with the permissions it needs;
+Create keys in the console under **Governance → API keys** (or \`POST /v1/api-keys\`), each with the permissions it needs;
 a key only ever sees its own organisation. Each operation lists the permissions its handler checks (\`x-permissions\`).
 The console's own session cookie also works, but machines should use keys.
 
 ## Sandbox
 Build and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.
-Create one under **Govern → Developers** (or \`POST /v1/sandboxes\`) and use the key it returns.
+Create one under **Governance → Developers** (or \`POST /v1/sandboxes\`) and use the key it returns.
 Everything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,
 alerts and webhooks fire — and \`POST /v1/sandbox/chargers/{identity}/simulate\` acts out a card tap, a fault or a dropped
 4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.
@@ -88,7 +88,7 @@ alerts and webhooks fire — and \`POST /v1/sandbox/chargers/{identity}/simulate
 - Field names follow the resource they come from: database rows are \`snake_case\`, computed views are \`camelCase\`.
   New fields may be added to any response; ignore what you do not know.
 - Errors are JSON: \`{ "error": "human-readable reason" }\`, sometimes with a \`code\` or details. Validation problems are 400 or 422.
-- Rate limits: each API key has its own limit (default 600 requests a minute, \`API_KEY_RATE_LIMIT_PER_MIN\`; set per key under **Govern → API keys**).
+- Rate limits: each API key has its own limit (default 600 requests a minute, \`API_KEY_RATE_LIMIT_PER_MIN\`; set per key under **Governance → API keys**).
   It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries
   \`RateLimit-Limit\`, \`RateLimit-Remaining\`, \`RateLimit-Reset\` (seconds until the bucket is full) and \`RateLimit-Policy\`; over the limit you get
   429 with \`Retry-After\` and \`code: rate_limited\`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.
@@ -109,7 +109,7 @@ value (and the response has a \`Deprecation: true\` header); request bodies acce
 currencies have no \`…Idr\` name. The old names are marked \`deprecated\` in this document and go away in \`/v2\`.
 
 ## Webhooks
-Subscribe under **Govern → Webhooks** (\`POST /v1/webhooks\`). Each delivery is a POST with the envelope
+Subscribe under **Governance → Webhooks** (\`POST /v1/webhooks\`). Each delivery is a POST with the envelope
 \`{ id, type, created_at, api_version, data }\`, headers \`PlugSure-Event\`, \`PlugSure-Delivery\` and
 \`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>\`. Verify the signature and reject old
 timestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on \`id\`).
@@ -324,7 +324,7 @@ export function buildSpec(opts: BuildOptions): Record<string, any> {
     webhooks,
     components: {
       securitySchemes: {
-        bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'psk_<prefix>_<secret>', description: 'An API key from Govern → API keys, or a sandbox key.' },
+        bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'psk_<prefix>_<secret>', description: 'An API key from Governance → API keys, or a sandbox key.' },
       },
       schemas,
       responses,

@@ -1227,7 +1227,7 @@ Needs: a Google Play developer account, JDK 17, Node 22, \`npm i -g @bubblewrap/
 
 1. Create the upload key once and keep it safe (losing it means a new listing):
    \`keytool -genkeypair -v -keystore android/android.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000\`
-2. In the console (Commercial → Driver app → Store builds), add the SHA-256 fingerprints of **both** the upload key
+2. In the console (Governance → Driver app → Store builds), add the SHA-256 fingerprints of **both** the upload key
    (\`keytool -list -v -keystore android/android.keystore -alias upload\`) and, after the first upload, Play's **app signing key**
    (Play Console → Test and release → App integrity). Without them the app opens with a browser bar.
 3. \`cd android && bubblewrap build\` (or run \`build-android.yml\` in GitHub Actions). Upload \`app-release-bundle.aab\` to Play Console.
@@ -1242,7 +1242,7 @@ Needs: an Apple Developer account (Team ID ${b.iosTeamId ?? 'not set yet'}), a M
 1. \`cd ios && npm install && npx cap add ios && npx cap sync ios\`
 2. Copy the keys in \`Info.plist.additions.xml\` and \`App.entitlements.additions.xml\` into the Xcode project, and the two methods in \`AppDelegate.additions.swift\` into \`AppDelegate.swift\`; set the app icon from \`AppIcon-1024.png\`.
 3. Signing & Capabilities: team, bundle \`${bundle}\`, Associated Domains \`applinks:${host}\`, and **Push Notifications**.
-4. Notifications: in the Apple Developer account, Certificates, Identifiers & Profiles → Keys → **+**, tick *Apple Push Notifications service (APNs)*, download the \`.p8\` (once only) and note its Key ID. Upload both in the console (Commercial → Driver app → iOS notifications); PlugSure checks them with Apple. ${b.apnsConfigured ? `The key ${b.apnsKeyId} is uploaded${b.apnsCheckOk ? ' and was accepted by Apple' : ''}.` : 'Not uploaded yet.'}
+4. Notifications: in the Apple Developer account, Certificates, Identifiers & Profiles → Keys → **+**, tick *Apple Push Notifications service (APNs)*, download the \`.p8\` (once only) and note its Key ID. Upload both in the console (Governance → Driver app → iOS notifications); PlugSure checks them with Apple. ${b.apnsConfigured ? `The key ${b.apnsKeyId} is uploaded${b.apnsCheckOk ? ' and was accepted by Apple' : ''}.` : 'Not uploaded yet.'}
 5. Rich notifications:
    - add \`PlugSureNotifications.swift\` to the App target and call \`PlugSureNotifications.registerCategories()\` in \`application(_:didFinishLaunchingWithOptions:)\` — the buttons: stop charging, view receipt, pay now, give up my turn, cancel reservation;
    - File → New → Target → **Notification Service Extension** named \`NotificationService\`, and replace its source with \`NotificationService/NotificationService.swift\` — the picture of the charge on "charging finished";

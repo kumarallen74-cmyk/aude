@@ -10,7 +10,7 @@ import { journal, journalXlsx } from './finance-journal.js';
 /**
  * The monthly close e-mail (v1.17.0): on the 1st of each month (platform time zone), each gateway account whose close
  * e-mail is on sends the previous month to its recipients: the finance export (Excel and PDF) and the accounting journal
- * (Excel), through the e-mail channel of the organisation that set it up (Govern → Alert routing → Channels). A month
+ * (Excel), through the e-mail channel of the organisation that set it up (Governance → Alert routing → Channels). A month
  * is sent once (gateway_account_settings.close_email_sent_period); a failure is kept and retried on the next pass.
  */
 
@@ -42,7 +42,7 @@ export async function sendClose(a: Account, month: string, opts: { to?: string[]
   const channelOrg = s?.channel_org_id ?? a.orgId;
   const ch = channelOrg ? await outsideRequestScope(() => one<{ enabled: boolean; config: any; secret: string | null }>(
     `SELECT enabled, config, secret FROM notification_channel WHERE org_id = $1 AND kind = 'email'`, [channelOrg])) : null;
-  if (!ch?.enabled || !ch.config?.host) throw new FinanceError(409, 'Set up the e-mail channel first (Govern → Alert routing → Channels).');
+  if (!ch?.enabled || !ch.config?.host) throw new FinanceError(409, 'Set up the e-mail channel first (Governance → Alert routing → Channels).');
   let secret: string | null = null;
   try { secret = ch.secret ? unseal(ch.secret) : null; } catch { secret = null; }
   const p = monthPeriod(month);
