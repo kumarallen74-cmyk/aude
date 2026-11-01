@@ -611,6 +611,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      the portfolio review (Finance → Portfolio). Build next year's budget
      (Finance → Budget planning) and have a second Finance Manager approve
      it. Route finance.tax_audit_due ([FINANCE.md](FINANCE.md)).
+  31. (v1.38.0) Set the month's rates and check the FX exposure; record
+     forward contracts with the bank and settle them at maturity (Finance →
+     FX & hedges). Read the supplier scorecards and record negotiated
+     savings (Finance → Procurement). Give each close step an owner and a
+     due working day, and turn automatic runs on (Finance → Close
+     automation). Check what owners see (Finance → Owner finance; the
+     owner portal's Payouts). Route finance.close_step_overdue
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

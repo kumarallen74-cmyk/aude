@@ -225,6 +225,8 @@ export function startWorkers(): () => void {
   const chargebackChecks = once('chargeback-checks', async () => { await (await import('./chargebacks.js')).sweep(); });
   // (v1.37.0) tax office letters.
   const taxAuditLetters = once('tax-audit-letters', async () => { await (await import('./tax-audit.js')).sweep(); });
+  // (v1.38.0) The automatic month close and steps past their due day.
+  const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -360,6 +362,7 @@ export function startWorkers(): () => void {
     every(landlordStatements, 24 * 60 * 60_000, 'landlord-statements'),
     every(chargebackChecks, 6 * 60 * 60_000, 'chargeback-checks'),
     every(taxAuditLetters, 24 * 60 * 60_000, 'tax-audit-letters'),
+    every(closeAutomation, 6 * 60 * 60_000, 'close-automation'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

@@ -31,6 +31,7 @@ registerView('owner-payouts', {
       const t = cur ? p.totals[cur] : { share: 0, paid: 0, outstanding: 0 };
       const rq = b.request;
       body.innerHTML = `<div class="grid k3">${kpi('Your share', esc(fmt.money(t.share, cur)), 'finalised statements')}${kpi('Paid', esc(fmt.money(t.paid, cur)), `recorded by ${esc(opName)}`)}${kpi('Still due', esc(fmt.money(t.outstanding, cur)), '', t.outstanding > 0 ? 'warn' : '')}</div>
+        <div class="card section" data-fin><header><h3>Your sites' results</h3></header><div class="body"><span class="spinner"></span></div></div>
         <div class="card section"><header><h3>By statement</h3></header><div data-st></div></div>
         <div class="card section"><header><h3>Your queries</h3></header><div data-q></div></div>
         <div class="card section" data-docs><header><h3>Documents</h3></header><div class="body"><span class="spinner"></span></div></div>
@@ -52,6 +53,25 @@ registerView('owner-payouts', {
         ],
         rows: p.statements, empty: 'No finalised statements yet. Each month is finalised after it ends.',
       });
+      // (v1.38.0) The sites' results month by month beside the statements: revenue, your share, paid and still due.
+      api('/v1/owner-portal/finance?months=12').then((f) => {
+        const host = $('[data-fin]', body);
+        if (!host) return;
+        const getF = async (url, name) => { try { const res = await api(url, { raw: true }); download(name, await res.blob()); } catch (err) { toast(err.message, 'crit'); } };
+        const c = f.currencies[0];
+        const lastYear = String(new Date().getFullYear() - 1), thisYear = String(new Date().getFullYear());
+        host.innerHTML = `<header><h3>Your sites' results</h3><span class="right"><button class="btn sm" type="button" data-fx>${icon('download')} Excel</button> <button class="btn sm" type="button" data-pk="${lastYear}">${icon('download')} Pack ${lastYear}</button> <button class="btn sm" type="button" data-pk="${thisYear}">${icon('download')} Pack ${thisYear}</button></span></header>
+          ${c ? `<div class="body"><div class="grid k4">${kpi('Charging revenue', esc(fmt.money(c.totals.revenue, c.currency)), `${fmt.num(Math.round(c.totals.kwh))} kWh · ${c.totals.sessions} sessions`)}${kpi('Your share', esc(fmt.money(c.totals.share, c.currency)), c.totals.sharePct != null ? `${c.totals.sharePct}% of the gross` : '')}${kpi('Paid', esc(fmt.money(c.totals.paid, c.currency)), `last ${f.months} months`)}${kpi('Open queries', String(f.openQueries.count), f.openQueries.claimed ? esc(fmt.money(f.openQueries.claimed, c.currency)) + ' claimed' : '', f.openQueries.count ? 'warn' : '')}</div></div><div data-fm></div>` : `<div class="body"><p class="cell-sub">No results for your sites in the last ${f.months} months.</p></div>`}`;
+        if (c) table($('[data-fm]', host), { columns: [
+          { label: 'Month', render: (m) => `${esc(m.month)}${m.statement ? `<div class="cell-sub mono">${esc(m.statement)}</div>` : ''}` },
+          { label: 'Revenue', num: true, render: (m) => `${esc(fmt.money(m.revenue, c.currency))}<div class="cell-sub">${fmt.num(Math.round(m.kwh))} kWh</div>` },
+          { label: 'Your share', num: true, render: (m) => esc(fmt.money(m.share, c.currency)) },
+          { label: 'Paid', num: true, render: (m) => esc(fmt.money(m.paid, c.currency)) },
+          { label: 'Still due', num: true, render: (m) => (m.outstanding ? `<b>${esc(fmt.money(m.outstanding, c.currency))}</b>` : '—') },
+        ], rows: c.months.slice().reverse(), empty: '' });
+        $('[data-fx]', host)?.addEventListener('click', () => getF('/v1/owner-portal/finance?months=12&format=xlsx', 'my-sites-results.xlsx'));
+        host.querySelectorAll('[data-pk]').forEach((b2) => b2.addEventListener('click', () => getF(`/v1/owner-portal/finance/pack?year=${b2.dataset.pk}`, `my-year-${b2.dataset.pk}.zip`)));
+      }).catch((e) => { const host = $('[data-fin]', body); if (host) host.innerHTML = `<header><h3>Your sites' results</h3></header><div class="body">${callout('crit', esc(e.message))}</div>`; });
       // (v1.27.0) Payout advices, tax withheld, annual statements and payouts on their way.
       api('/v1/owner-portal/documents').then((d) => {
         const host = $('[data-docs]', body);

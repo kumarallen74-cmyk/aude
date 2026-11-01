@@ -1058,6 +1058,52 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   publishes each site's revenue and energy cost to Budgets for the months
   not locked and supersedes the version approved before.
 
+## Owner finance, FX and hedges, procurement and close automation (v1.38.0)
+
+- **Owner finance** (tab, and the owner portal's Payouts). For each site
+  owner over the last 3, 6 or 12 whole months: per month, the owner's
+  sites' sessions, kWh and charging revenue (Margin) and, from the
+  finalised statements, the gross, the commission, the owner's share, what
+  was paid and what is still owed; per site; open queries. The operator's
+  view lists every owner by what is owed, with the oldest statement unpaid.
+  In the portal the owner downloads it in Excel and a *year pack*: the
+  statements, payments and monthly site results as CSV, a README and a
+  manifest with SHA-256s, as one ZIP.
+- **FX & hedges** (tab). The exposure at a day, per currency other than the
+  reporting one: cash and bank, receivables (fleet invoices unpaid),
+  payables (approved bills unpaid), loans outstanding and open hedges (the
+  currency bought +, the currency sold −). Net, in the reporting currency at
+  the month's rate; the revaluation since the previous month's rate; the
+  effect of a 10% move; the share hedged. *Hedges*: forwards with a bank,
+  notional of the currency bought at a contract rate (one unit bought, in
+  the currency sold) to a maturity date. Open ones are marked to market at
+  the month's rate. Settled net (a non-deliverable forward): the realised
+  result, notional × (rate of the day − contract rate), in the currency
+  sold, posts with the ledger source fx (Dr bank / Cr 7400 FX gains, or
+  Dr 8400 FX losses / Cr bank) and moves the settlement account's balance.
+- **Procurement** (tab). Over 3, 6 or 12 whole months: spend (approved and
+  paid bills, before VAT) per supplier, category and month, with the top
+  supplier's and top five's share; part prices on receipt (first against
+  last) and energy cost per kWh per site, a rise over 10% flagged.
+  *Scorecards*: orders delivered by their expected date (the last goods
+  receipt), the average days late (an order not received and past its date
+  counts as late to today), bills rejected, bills paid by their due date.
+  The score is the average of the measures present (late days cost 5
+  points each): A from 90, B from 75, C from 60, else D. *Savings*: the
+  price per unit before and after and the quantity over a period; expected
+  = (before − after) × quantity, to date by the share of the period passed.
+- **Close automation** (tab). A run, for an ended month not locked: fetch
+  the ECB rates still missing (with a reporting currency), record
+  depreciation and the lease journal when not yet recorded, sync the
+  ledger, run the finance checks; then each close step whose check fails
+  is recorded as blocking. Nothing is signed off or locked. Automatic: from
+  a working day after the month's end (1 by default), the worker runs the
+  previous month once a day until it is locked. *Owners*: each step has an
+  owner and a due working day (3 by default, Monday to Friday; public
+  holidays are not counted out); a step not signed off by its date raises
+  finance.close_step_overdue, resolved once signed off or the month
+  locked. *Trend*: the days from each month's end to its lock.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.37.0 (1 November 2026), the current release:** finance phase 26: the loyalty points liability and promotion costs, tax audit readiness with the year's equalisation and an audit pack, the site portfolio review with each site's full P&L and signals, and budget planning with versions approved by a second person. Notes: [`RELEASE-NOTES-v1.37.0.md`](RELEASE-NOTES-v1.37.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.38.0 (1 November 2026), the current release:** finance phase 27: owner and partner finance in the owner portal and across owners, treasury FX exposure and hedges settled to the ledger, procurement analytics with supplier scorecards and a savings register, and close automation with step owners, due days and the days-to-close trend. Notes: [`RELEASE-NOTES-v1.38.0.md`](RELEASE-NOTES-v1.38.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.37.0 (1 November 2026):** finance phase 26: the loyalty points liability and promotion costs, tax audit readiness with the year's equalisation and an audit pack, the site portfolio review with each site's full P&L and signals, and budget planning with versions approved by a second person. Notes: [`RELEASE-NOTES-v1.37.0.md`](RELEASE-NOTES-v1.37.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.36.0 (1 November 2026):** finance phase 25: grants and incentives with deferred release and clawbacks, landlord rent deals with minimum guarantees and statements issued as bills, chargebacks with evidence packs and fraud signals, and the board pack with risk, lenders, sustainability and grants sections, a trend and slides. Notes: [`RELEASE-NOTES-v1.36.0.md`](RELEASE-NOTES-v1.36.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.37.0";
+export const API_VERSION = "1.38.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -8575,6 +8575,19 @@ export type RecordFakturPajakNumberBody = {
   number?: string | null;
 };
 
+export type RecordFxHedgeBody = {
+  bank: string;
+  reference?: string;
+  buyCurrency: string;
+  sellCurrency: string;
+  notional: number;
+  rate: number;
+  tradeOn: string;
+  maturityOn: string;
+  purpose?: string;
+  cashAccountId?: string;
+};
+
 export type RecordGoodsReceivedBody = {
   receivedOn?: string;
   note?: string;
@@ -8651,6 +8664,18 @@ export type RecordMonthLeaseJournalResponse = {
 export type RecordMonthProvisionResponse = {
   month?: string;
   currencies?: Record<string, unknown>[];
+};
+
+export type RecordNegotiatedSavingBody = {
+  supplierId?: string;
+  category: string;
+  description: string;
+  currency: string;
+  baselineUnit: number;
+  negotiatedUnit: number;
+  quantity: number;
+  periodFrom: string;
+  periodTo: string;
 };
 
 export type RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedBody = {
@@ -9421,6 +9446,10 @@ export type RunBankFeedNowResponse = {
   suggested?: number;
 };
 
+export type RunCloseForMonthBody = {
+  month: string;
+};
+
 export type RunFleetInvoicingAutomationNowResponse = {
   issued?: string[];
   sent?: string[];
@@ -9759,8 +9788,21 @@ export type SetCashForecastBody = {
   alert?: boolean;
 };
 
+export type SetCloseAutomationBody = {
+  enabled?: boolean;
+  runOnDay?: number;
+};
+
 export type SetClosePolicyBody = {
   enforce?: boolean;
+};
+
+export type SetCloseStepOwnersBody = {
+  assignments: {
+    step?: string;
+    ownerId?: string;
+    dueDay?: number;
+  }[];
 };
 
 export type SetConnectorLoadManagementPrioritiesResponse = {
@@ -10041,6 +10083,13 @@ export type SettlementsAndWithdrawalsOfPaymentsAccountResponse = {
   settlements?: Record<string, unknown>[];
   withdrawals?: Record<string, unknown>[];
   summary?: Record<string, unknown>;
+};
+
+export type SettleOrCancelFxHedgeBody = {
+  status: "settled" | "cancelled";
+  settledOn?: string;
+  settledRate?: number;
+  cashAccountId?: string;
 };
 
 export type SettleOwnerPayoutDuitkuNeverConfirmedBody = {
@@ -13050,6 +13099,21 @@ export class Operations {
   }
 
   /**
+   * Close automation
+   *
+   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step 's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.
+   *
+   * `GET /v1/finance/close-automation`
+   */
+  closeAutomation(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/close-automation", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Close a deposit
    *
    * (v1.30.0) Matured (on or after maturity) or broken (before): closedOn (default today or the maturity), interestReceived (net; default the expected net at maturity, 0 when broken), penalty (broken only), rollover (termMonths, termDays or maturityOn, ratePct, withInterest) to place a new deposit. Audited.
@@ -14613,6 +14677,37 @@ export class Operations {
    */
   fraudSignals(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/chargebacks/fraud", accept: "json" }, options);
+  }
+
+  /**
+   * FX exposure
+   *
+   * (v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month 's rate, the revaluation since the previous month 's rate and a 10% move. format=xlsx.
+   *
+   * `GET /v1/finance/fx-exposure`
+   */
+  fxExposure(params?: {
+    query?: {
+      date?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/fx-exposure", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * FX hedges
+   *
+   * (v1.38.0) Every forward contract; open ones marked to market at the month 's rate (month, default this one); settled ones with the realised result; totals per currency sold.
+   *
+   * `GET /v1/finance/fx-hedges`
+   */
+  fxHedges(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/fx-hedges", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -16946,6 +17041,41 @@ export class Operations {
   }
 
   /**
+   * An owner 's finance
+   *
+   * (v1.38.0) What the owner sees in the portal: per month the sites ' sessions, kWh and revenue and the statements ' gross, commission, share, paid and outstanding; per site; open queries. format=xlsx.
+   *
+   * `GET /v1/finance/owners/{oid}/finance`
+   */
+  ownerFinance(params: {
+    /** The site owner id. */
+    oid: string;
+    query?: {
+      months?: 3 | 6 | 12;
+      to?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/owners/{oid}/finance", pathParams: { oid: params.oid }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Owner finance overview
+   *
+   * (v1.38.0) Every site owner over n whole months (months 3, 6 or 12; to): sites, gross, share, paid, outstanding, the oldest statement unpaid and open queries; sorted by what is owed.
+   *
+   * `GET /v1/finance/owner-finance`
+   */
+  ownerFinanceOverview(params?: {
+    query?: {
+      months?: 3 | 6 | 12;
+      to?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/owner-finance", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Owner payouts through Duitku Disbursement
    *
    * (v1.16.0) The organisation's owner payouts, newest first (at most 300); open=true: only those not settled.
@@ -17324,6 +17454,23 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/fleet-accounts/{id}/statement.html", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
+  }
+
+  /**
+   * Procurement analytics
+   *
+   * (v1.38.0) Over n whole months to a month (months 3, 6 or 12; to): spend per supplier, category and month with the concentration; part prices on receipt and energy cost per kWh (rises over 10% flagged); supplier scorecards (on time, days late, bills rejected, paid on time; a score and grade); the savings register. format=xlsx.
+   *
+   * `GET /v1/finance/procurement`
+   */
+  procurementAnalytics(params?: {
+    query?: {
+      months?: 3 | 6 | 12;
+      to?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/procurement", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -17725,6 +17872,19 @@ export class Operations {
   }
 
   /**
+   * Record an FX hedge
+   *
+   * (v1.38.0) A forward with a bank: buy notional (minor units) of buyCurrency against sellCurrency at rate (one unit bought, in the currency sold), traded tradeOn, maturing maturityOn; the settlement account (cashAccountId, in the currency sold). Audited.
+   *
+   * `POST /v1/finance/fx-hedges`
+   */
+  recordFxHedge(params: {
+    body: RecordFxHedgeBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/fx-hedges", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record goods received
    *
    * (v1.30.0) Against an approved order: lines (lineId, quantity; never more than is outstanding), receivedOn (default today), note. Audited.
@@ -17820,6 +17980,19 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<RecordMonthProvisionResponse> {
     return this.transport.request<RecordMonthProvisionResponse>({ method: "POST", path: "/v1/finance/provision/{month}/record", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Record a negotiated saving
+   *
+   * (v1.38.0) supplierId, category, description, currency, baselineUnit and negotiatedUnit (per unit), quantity expected, periodFrom, periodTo. Expected = (before − after) × quantity; to date by the share of the period passed. Audited.
+   *
+   * `POST /v1/finance/procurement/savings`
+   */
+  recordNegotiatedSaving(params: {
+    body: RecordNegotiatedSavingBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/procurement/savings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -19117,6 +19290,19 @@ export class Operations {
   }
 
   /**
+   * Run the close for a month
+   *
+   * (v1.38.0) For an ended month not locked: fetch missing ECB rates, record depreciation and the lease journal, sync the ledger, run the finance checks; then record each step still blocking. Nothing is signed off or locked. Audited.
+   *
+   * `POST /v1/finance/close-automation/run`
+   */
+  runCloseForMonth(params: {
+    body: RunCloseForMonthBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/close-automation/run", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Run fleet invoicing automation now
    *
    * (v1.27.0) What the worker does hourly: issue the month on the day, then send what is ready (with a payment link). Audited.
@@ -19606,6 +19792,19 @@ export class Operations {
   }
 
   /**
+   * Set close automation
+   *
+   * (v1.38.0) enabled; runOnDay (the working day after the month end from which the worker runs the previous month daily until it is locked, 1 to 10). Audited.
+   *
+   * `PUT /v1/finance/close-automation/settings`
+   */
+  setCloseAutomation(params: {
+    body: SetCloseAutomationBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/close-automation/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the close policy
    *
    * (v1.32.0) enforce: a month is locked only when every close step is signed off. finance:approve. Audited.
@@ -19616,6 +19815,19 @@ export class Operations {
     body: SetClosePolicyBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/close/policy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set close step owners
+   *
+   * (v1.38.0) assignments: [{ step, ownerId (a user), dueDay (working day after the month end, 1 to 20) }]. A step not signed off by its date raises finance.close_step_overdue. Audited.
+   *
+   * `PUT /v1/finance/close-automation/owners`
+   */
+  setCloseStepOwners(params: {
+    body: SetCloseStepOwnersBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/close-automation/owners", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20128,6 +20340,21 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<SettlementsAndWithdrawalsOfPaymentsAccountResponse> {
     return this.transport.request<SettlementsAndWithdrawalsOfPaymentsAccountResponse>({ method: "GET", path: "/v1/finance/accounts/{id}/settlements", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Settle or cancel an FX hedge
+   *
+   * (v1.38.0) status settled (settledOn, settledRate; the realised result, notional × (settled − contract rate), posts with the ledger source fx: 7400 FX gains or 8400 FX losses) or cancelled. Audited.
+   *
+   * `PUT /v1/finance/fx-hedges/{id}`
+   */
+  settleOrCancelFxHedge(params: {
+    /** The id. */
+    id: string;
+    body: SettleOrCancelFxHedgeBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/fx-hedges/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -21645,6 +21872,20 @@ export class Operations {
     body: VoidRoamingSettlementPaymentBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/roaming/payments/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a saving
+   *
+   * (v1.38.0) Audited.
+   *
+   * `POST /v1/finance/procurement/savings/{id}/void`
+   */
+  voidSaving(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/procurement/savings/{id}/void", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
