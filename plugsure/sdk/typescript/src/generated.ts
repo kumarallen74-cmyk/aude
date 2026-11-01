@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.39.0";
+export const API_VERSION = "1.40.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5217,6 +5217,16 @@ export type AddOrChangeAccountBody = {
   active?: boolean;
 };
 
+export type AddPerformanceObligationBody = {
+  description: string;
+  kind?: "subscription" | "service" | "hardware" | "installation" | "other";
+  amount: number;
+  recognition: "ratably" | "point_in_time";
+  startMonth?: string;
+  endMonth?: string;
+  deliveredOn?: string;
+};
+
 export type AddPolicyBody = {
   insurer?: string;
   policyNo?: string;
@@ -5895,6 +5905,13 @@ export type ChangeCovenantBody = {
   note?: string;
 };
 
+export type ChangeCustomerContractBody = {
+  status?: "draft" | "active" | "ended" | "cancelled";
+  endOn?: string;
+  renewalNoticeDays?: number;
+  note?: string;
+};
+
 export type ChangeDraftRunBody = {
   remove?: string[];
   amounts?: Record<string, number>;
@@ -6011,6 +6028,12 @@ export type ChangeLoanBody = {
 
 export type ChangeNativeAppsVersionGateAndRemoteConfigurationResponse = {
   appConfig: DriverAppConfig;
+};
+
+export type ChangeOrArchiveScenarioBody = {
+  name?: string;
+  assumptions?: Record<string, unknown>;
+  archive?: boolean;
 };
 
 export type ChangePayrollLineBody = {
@@ -6166,6 +6189,11 @@ export type ClaimWarrantyBody = {
   reference?: string;
   note?: string;
   submittedOn?: string;
+};
+
+export type ClassifyRechargeForTransferPricingBody = {
+  tpKind: string;
+  cost?: number;
 };
 
 export type ClearReviewAndBillSessionBody = {
@@ -6361,6 +6389,17 @@ export type CreateBudgetVersionBody = {
   note?: string;
 };
 
+export type CreateCustomerContractBody = {
+  customer: string;
+  fleetAccountId?: string;
+  currency: string;
+  startOn: string;
+  endOn: string;
+  renewalNoticeDays?: number;
+  note?: string;
+  obligations?: Record<string, unknown>[];
+};
+
 export type CreateDeveloperSandboxBody = {
   /** A label, e.g. the integrator. */
   name?: string;
@@ -6523,6 +6562,11 @@ export type DeleteSandboxResponse = {
 
 export type DeleteWebhookEndpointResponse = {
   ok: true;
+};
+
+export type DeliverOrRemoveObligationBody = {
+  deliveredOn?: string;
+  remove?: boolean;
 };
 
 export type DepositResponse = {
@@ -7744,6 +7788,11 @@ export type MakePaymentLinkForFleetInvoiceResponse = {
   status?: string;
 };
 
+export type MarkContractBillingPaidBody = {
+  paidOn: string;
+  cashAccountId: string;
+};
+
 export type MarkPaymentRunPaidBody = {
   paidOn?: string;
 };
@@ -8603,6 +8652,12 @@ export type RecordClawbackBody = {
   onDate?: string;
   note: string;
   conditionId?: string;
+};
+
+export type RecordContractBillingBody = {
+  billedOn: string;
+  amount: number;
+  reference?: string;
 };
 
 export type RecordCreditNoteAsRefundedBody = {
@@ -9669,6 +9724,26 @@ export type SaveLoyaltyProgramBody = {
   pointValueIdr?: number;
 };
 
+export type SaveScenarioBody = {
+  name?: string;
+  currency?: string;
+  assumptions?: {
+    tariffPct?: number;
+    elasticity?: number;
+    utilisationPct?: number;
+    energyPricePct?: number;
+    opexPct?: number;
+    newSites?: {
+      fromMonth?: string;
+      count?: number;
+      capexPerSite?: number;
+      revenuePerSiteMonth?: number;
+      opexPerSiteMonth?: number;
+      rampMonths?: number;
+    }[];
+  };
+};
+
 export type SellCarbonCreditsBody = {
   buyer: string;
   tonnes: number;
@@ -10194,6 +10269,12 @@ export type SetTaxFilingCalendarBody = {
   reminders?: boolean;
 };
 
+export type SettleGroupNettingBody = {
+  currency: string;
+  settledOn?: string;
+  reference?: string;
+};
+
 export type SettlementsAndWithdrawalsOfPaymentsAccountResponse = {
   today?: string;
   settings?: Record<string, unknown>;
@@ -10243,6 +10324,15 @@ export type SettleWithGroupEntityResponse = {
   payable?: number;
   net?: number;
   direction?: string;
+};
+
+export type SetTransferPricingPolicyBody = {
+  kind: string;
+  method: "cost_plus" | "pass_through" | "cup";
+  markupPct?: number;
+  minPct?: number;
+  maxPct?: number;
+  note?: string;
 };
 
 export type SetTreasurySettingsBody = {
@@ -11449,7 +11539,7 @@ export class Operations {
   /**
    * Add a corporate card
    *
-   * (v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement 's account). Audited.
+   * (v1.39.0) holderId, holderName, bank, last4 (only the last four digits), currency, singleLimit, monthlyLimit, cashAccountId (the statement's account). Audited.
    *
    * `POST /v1/finance/cards`
    */
@@ -11626,6 +11716,21 @@ export class Operations {
     body: AddOrChangeAccountBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/ledger/accounts/{code}", pathParams: { code: params.code }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a performance obligation
+   *
+   * (v1.40.0) description, kind, amount (its share of the price), recognition ratably (startMonth, endMonth; the contract's months by default) or point_in_time (deliveredOn). Audited.
+   *
+   * `POST /v1/finance/contracts/{id}/obligations`
+   */
+  addPerformanceObligation(params: {
+    /** The contract id. */
+    id: string;
+    body: AddPerformanceObligationBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/contracts/{id}/obligations", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12385,7 +12490,7 @@ export class Operations {
   /**
    * Bank file of a payment run
    *
-   * (v1.39.0) One transfer per supplier as CSV for the bank 's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.
+   * (v1.39.0) One transfer per supplier as CSV for the bank's bulk upload: format generic, bca or mandiri (laid out like their bulk templates; check against your bank). Once approved. Audited.
    *
    * `GET /v1/finance/payment-runs/{id}/bank-file`
    */
@@ -12474,7 +12579,7 @@ export class Operations {
   /**
    * Budget version
    *
-   * (v1.37.0) Its months by category, sites, the organisation 's lines, totals and the version it follows. format=xlsx.
+   * (v1.37.0) Its months by category, sites, the organisation's lines, totals and the version it follows. format=xlsx.
    *
    * `GET /v1/finance/budget-plans/{id}`
    */
@@ -12913,9 +13018,24 @@ export class Operations {
   }
 
   /**
+   * Change a customer contract
+   *
+   * (v1.40.0) status (draft, active, ended, cancelled), endOn (a renewal extends it), renewalNoticeDays, note. Audited.
+   *
+   * `PUT /v1/finance/contracts/{id}`
+   */
+  changeCustomerContract(params: {
+    /** The contract id. */
+    id: string;
+    body: ChangeCustomerContractBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/contracts/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a draft run
    *
-   * (v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill 's balance. Audited.
+   * (v1.39.0) remove (item ids); amounts {itemId: amount} up to each bill's balance. Audited.
    *
    * `PUT /v1/finance/payment-runs/{id}/items`
    */
@@ -13054,6 +13174,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/report-schedules/{rid}", pathParams: { rid: params.rid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a scenario
+   *
+   * (v1.40.0) name, assumptions, or archive: true. Audited.
+   *
+   * `PUT /v1/finance/scenarios/{id}`
+   */
+  changeOrArchiveScenario(params: {
+    /** The id. */
+    id: string;
+    body: ChangeOrArchiveScenarioBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/scenarios/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13341,6 +13476,21 @@ export class Operations {
   }
 
   /**
+   * Classify a recharge for transfer pricing
+   *
+   * (v1.40.0) tpKind and cost (the cost underneath). By the entity that charged it. Audited.
+   *
+   * `PUT /v1/finance/intercompany/recharges/{id}/tp`
+   */
+  classifyRechargeForTransferPricing(params: {
+    /** The id. */
+    id: string;
+    body: ClassifyRechargeForTransferPricingBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/intercompany/recharges/{id}/tp", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Clear the authorisation cache
    *
    * Sends ClearCache so the charger forgets locally cached idTag authorisations. Audited.
@@ -13372,7 +13522,7 @@ export class Operations {
   /**
    * Close automation
    *
-   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step 's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.
+   * (v1.38.0) For a month (default the previous one): the settings, the next automatic run, each close step's owner, due working day and date, check and sign-off, overdue steps, the runs, and the days-to-close trend.
    *
    * `GET /v1/finance/close-automation`
    */
@@ -13548,7 +13698,7 @@ export class Operations {
   /**
    * Corporate cards
    *
-   * (v1.39.0) Each card with the month 's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.
+   * (v1.39.0) Each card with the month's spend against its limit, open and flagged transactions and what its holder owes back; statements with their difference to the transactions; the policy.
    *
    * `GET /v1/finance/cards`
    */
@@ -13563,7 +13713,7 @@ export class Operations {
   /**
    * Corporate income tax
    *
-   * (v1.39.0) The year 's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year 's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).
+   * (v1.39.0) The year's PPh Badan from the books: the commercial result before tax, the fiscal corrections (automatic: depreciation, leases, the bad-debt allowance, the loyalty liability; and those recorded), the fiscal profit, the tax (Article 31E where it applies), credits, PPh 29, next year's PPh 25 and the deferred tax; draft or final. format=xlsx (the SPT Tahunan workpaper).
    *
    * `GET /v1/finance/corporate-tax`
    */
@@ -13629,6 +13779,19 @@ export class Operations {
     body: CreateBudgetVersionBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/budget-plans", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Create a customer contract
+   *
+   * (v1.40.0) customer, fleetAccountId, currency, startOn, endOn, renewalNoticeDays (60), note, obligations (as below). Numbered CT-00001. Audited.
+   *
+   * `POST /v1/finance/contracts`
+   */
+  createCustomerContract(params: {
+    body: CreateCustomerContractBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/contracts", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13842,6 +14005,35 @@ export class Operations {
   }
 
   /**
+   * A customer contract
+   *
+   * (v1.40.0) Its obligations, billings and the month-by-month schedule: recognised, billed, the contract liability or asset.
+   *
+   * `GET /v1/finance/contracts/{id}`
+   */
+  customerContract(params: {
+    /** The contract id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/contracts/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Customer contracts
+   *
+   * (v1.40.0) Each contract with its value, revenue recognised, remaining performance obligations, billed, paid, the contract liability (billed ahead) or asset (recognised ahead), and whether its renewal is due; totals per currency. format=xlsx.
+   *
+   * `GET /v1/finance/contracts`
+   */
+  customerContracts(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/contracts", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Customer credit
    *
    * (v1.33.0) Fleet accounts with their limit, hold, deposit held, last review (score, grade) and next review date; the open reviews.
@@ -13990,6 +14182,23 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<DeleteWebhookEndpointResponse> {
     return this.transport.request<DeleteWebhookEndpointResponse>({ method: "DELETE", path: "/v1/webhooks/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Deliver or remove an obligation
+   *
+   * (v1.40.0) deliveredOn (a point-in-time obligation), or remove: true. Audited.
+   *
+   * `PUT /v1/finance/contracts/{id}/obligations/{oid}`
+   */
+  deliverOrRemoveObligation(params: {
+    /** The contract id. */
+    id: string;
+    /** The obligation id. */
+    oid: string;
+    body: DeliverOrRemoveObligationBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/contracts/{id}/obligations/{oid}", pathParams: { id: params.id, oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14736,7 +14945,7 @@ export class Operations {
   }
 
   /**
-   * Finalise or reopen the year 's tax
+   * Finalise or reopen the year's tax
    *
    * (v1.39.0) action finalise (an ended year; the figures are kept and the December tax journal posts: current tax, credits, deferred tax) or reopen; currency. finance:approve. Audited.
    *
@@ -14839,6 +15048,17 @@ export class Operations {
    */
   financeDataExport(options?: RequestOptions): Promise<FinanceDataExportResponse> {
     return this.transport.request<FinanceDataExportResponse>({ method: "GET", path: "/v1/finance/warehouse", accept: "json" }, options);
+  }
+
+  /**
+   * Finance data quality
+   *
+   * (v1.40.0) The last run (score, counts, findings), the trend, the checks and their weights.
+   *
+   * `GET /v1/finance/data-quality`
+   */
+  financeDataQuality(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/data-quality", accept: "json" }, options);
   }
 
   /**
@@ -15017,7 +15237,7 @@ export class Operations {
   /**
    * FX exposure
    *
-   * (v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month 's rate, the revaluation since the previous month 's rate and a 10% move. format=xlsx.
+   * (v1.38.0) At a day (date, default today): per currency other than the reporting one, cash, receivables, payables, loans and open hedges; gross and net; the share hedged; net in the reporting currency at the month's rate, the revaluation since the previous month's rate and a 10% move. format=xlsx.
    *
    * `GET /v1/finance/fx-exposure`
    */
@@ -15033,7 +15253,7 @@ export class Operations {
   /**
    * FX hedges
    *
-   * (v1.38.0) Every forward contract; open ones marked to market at the month 's rate (month, default this one); settled ones with the realised result; totals per currency sold.
+   * (v1.38.0) Every forward contract; open ones marked to market at the month's rate (month, default this one); settled ones with the realised result; totals per currency sold.
    *
    * `GET /v1/finance/fx-hedges`
    */
@@ -15640,6 +15860,21 @@ export class Operations {
   }
 
   /**
+   * Group netting
+   *
+   * (v1.40.0) The group's issued, unsettled recharges per currency: each pair's bilateral net, each entity's multilateral position, and the transfers through the parent as the netting centre.
+   *
+   * `GET /v1/finance/intercompany/netting`
+   */
+  groupNetting(params?: {
+    query?: {
+      currency?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/intercompany/netting", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Group trend
    *
    * (v1.28.0) Twelve months of the group's net revenue and operating result per currency.
@@ -15687,7 +15922,7 @@ export class Operations {
   /**
    * Import card transactions
    *
-   * (v1.39.0) csv: the bank 's export, one line each: date (YYYY-MM-DD), merchant, amount in the card 's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.
+   * (v1.39.0) csv: the bank's export, one line each: date (YYYY-MM-DD), merchant, amount in the card's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.
    *
    * `POST /v1/finance/cards/{id}/import`
    */
@@ -16927,9 +17162,26 @@ export class Operations {
   }
 
   /**
+   * Mark a contract billing paid
+   *
+   * (v1.40.0) paidOn, cashAccountId (in the contract's currency). Audited.
+   *
+   * `POST /v1/finance/contracts/{id}/billings/{bid}/paid`
+   */
+  markContractBillingPaid(params: {
+    /** The contract id. */
+    id: string;
+    /** The billing id. */
+    bid: string;
+    body: MarkContractBillingPaidBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/contracts/{id}/billings/{bid}/paid", pathParams: { id: params.id, bid: params.bid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Mark a payment run paid
    *
-   * (v1.39.0) paidOn (default the run 's day): each bill gets its payment (bank transfer, the run 's number, its account); a bill that cannot be paid is listed with the reason. Audited.
+   * (v1.39.0) paidOn (default the run's day): each bill gets its payment (bank transfer, the run's number, its account); a bill that cannot be paid is listed with the reason. Audited.
    *
    * `POST /v1/finance/payment-runs/{id}/paid`
    */
@@ -17406,7 +17658,7 @@ export class Operations {
   }
 
   /**
-   * An owner 's finance
+   * An owner's finance
    *
    * (v1.38.0) What the owner sees in the portal: per month the sites ' sessions, kWh and revenue and the statements ' gross, commission, share, paid and outstanding; per site; open queries. format=xlsx.
    *
@@ -18150,7 +18402,7 @@ export class Operations {
   /**
    * Record a card statement
    *
-   * (v1.39.0) month, total (the bank statement 's), paidOn and cashAccountId (default the card 's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.
+   * (v1.39.0) month, total (the bank statement's), paidOn and cashAccountId (default the card's account) once paid: the difference to the transactions is shown; the payment posts to the ledger and the cash position. Audited.
    *
    * `PUT /v1/finance/cards/{id}/statements`
    */
@@ -18188,6 +18440,21 @@ export class Operations {
     body: RecordClawbackBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/{id}/clawbacks", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a contract billing
+   *
+   * (v1.40.0) billedOn, amount, reference. Posts Dr 1370 / Cr 2280 in the contracts journal. Audited.
+   *
+   * `POST /v1/finance/contracts/{id}/billings`
+   */
+  recordContractBilling(params: {
+    /** The contract id. */
+    id: string;
+    body: RecordContractBillingBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/contracts/{id}/billings", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18317,6 +18584,22 @@ export class Operations {
     body: RecordGoodsReceivedBody;
   }, options?: RequestOptions): Promise<RecordGoodsReceivedResponse> {
     return this.transport.request<RecordGoodsReceivedResponse>({ method: "POST", path: "/v1/finance/purchase-orders/{id}/receipts", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A record's history
+   *
+   * (v1.40.0) Every change to a record from the audit trail: targetType (supplier, supplier_bill, corp_card, customer_contract…) and targetId; with neither, the latest finance changes.
+   *
+   * `GET /v1/finance/history`
+   */
+  recordHistory(params?: {
+    query?: {
+      targetType?: string;
+      targetId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/history", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -19561,7 +19844,7 @@ export class Operations {
   /**
    * Review a card transaction
    *
-   * (v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card 's holder. Audited.
+   * (v1.39.0) action approve (a flagged one by a Finance Manager, with a note) or reject (personal: owed back by the holder; a note); category; note. Never by the card's holder. Audited.
    *
    * `POST /v1/finance/cards/transactions/{tid}/review`
    */
@@ -19751,6 +20034,17 @@ export class Operations {
   }
 
   /**
+   * Run the data-quality checks
+   *
+   * (v1.40.0) The ledger (unbalanced entries, accounts outside the chart, posted after a lock, old drafts), the masters (duplicate or incomplete suppliers, fleet accounts without a tax id), site costs without a site, stale bank balances; the score; finance.data_quality_low under 70.
+   *
+   * `POST /v1/finance/data-quality/run`
+   */
+  runDataQualityChecks(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/data-quality/run", accept: "json" }, options);
+  }
+
+  /**
    * Run fleet invoicing automation now
    *
    * (v1.27.0) What the worker does hourly: issue the month on the day, then send what is ready (with a payment link). Audited.
@@ -19841,6 +20135,37 @@ export class Operations {
     body: SaveLoyaltyProgramBody;
   }, options?: RequestOptions): Promise<LoyaltyStats> {
     return this.transport.request<LoyaltyStats>({ method: "PUT", path: "/v1/loyalty", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Save a scenario
+   *
+   * (v1.40.0) name, currency, assumptions: tariffPct, elasticity (volume to price, 0 to −5), utilisationPct, energyPricePct, opexPct, newSites [{fromMonth, count, capexPerSite, revenuePerSiteMonth, opexPerSiteMonth, rampMonths}]. Audited.
+   *
+   * `POST /v1/finance/scenarios`
+   */
+  saveScenario(params: {
+    body: SaveScenarioBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/scenarios", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Scenarios
+   *
+   * (v1.40.0) The base (the rolling forecast flat, running costs, cash, debt service) and the saved scenarios (or ids) side by side for twelve months: revenue, energy, running costs, EBITDA, capex, cash, the lowest cash and the runway, each covenant; the sensitivity of one (sensitivityOf). format=xlsx.
+   *
+   * `GET /v1/finance/scenarios`
+   */
+  scenarios(params?: {
+    query?: {
+      currency?: string;
+      ids?: string;
+      sensitivityOf?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/scenarios", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -20214,7 +20539,7 @@ export class Operations {
   /**
    * Set budget lines
    *
-   * (v1.37.0) A draft 's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.
+   * (v1.37.0) A draft's lines: siteId (none: the organisation), month, category (revenue, energy_cost, rent, maintenance, insurance for a site; staff, marketing, it, other_opex, capex for the organisation), amount. Audited.
    *
    * `PUT /v1/finance/budget-plans/{id}/lines`
    */
@@ -20803,6 +21128,19 @@ export class Operations {
   }
 
   /**
+   * Settle the group netting
+   *
+   * (v1.40.0) currency, settledOn, reference: every pair's recharges settled. The parent, with finance:approve. Audited.
+   *
+   * `POST /v1/finance/intercompany/netting/settle`
+   */
+  settleGroupNetting(params: {
+    body: SettleGroupNettingBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/intercompany/netting/settle", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Settlements and withdrawals of a payments account
    *
    * (v1.23.0) Settlements per expected day (45 days back, 14 ahead): expected net, settled, pending, state (settled, due, upcoming, late after the grace days). Withdrawals to the bank (45 days) against the bank statement lines matched to them: in_bank, short, missing, awaiting_statement.
@@ -20872,6 +21210,19 @@ export class Operations {
     body: SettleWithGroupEntityBody;
   }, options?: RequestOptions): Promise<SettleWithGroupEntityResponse> {
     return this.transport.request<SettleWithGroupEntityResponse>({ method: "POST", path: "/v1/finance/intercompany/settle", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set a transfer-pricing policy
+   *
+   * (v1.40.0) kind (management_fee, shared_services, it_services, energy_resale, equipment_rental, other), method (cost_plus, pass_through, cup), markupPct, minPct, maxPct, note. The group's parent. Audited.
+   *
+   * `PUT /v1/finance/intercompany/transfer-pricing/policies`
+   */
+  setTransferPricingPolicy(params: {
+    body: SetTransferPricingPolicyBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/intercompany/transfer-pricing/policies", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -21588,7 +21939,7 @@ export class Operations {
   /**
    * Tax audit pack
    *
-   * (v1.37.0) The year 's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.
+   * (v1.37.0) The year's workbook, the gaps as CSV, a README and a manifest with SHA-256s, as one ZIP (x-manifest-sha256). Audited.
    *
    * `GET /v1/finance/tax-audit/pack`
    */
@@ -21603,7 +21954,7 @@ export class Operations {
   /**
    * Tax audit readiness
    *
-   * (v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office 's letters. format=xlsx.
+   * (v1.37.0) For a year (default last year): per month the PPN return as filed against today, the charging revenue against PPN output, input PPN on bills against faktur masukan, PPh withheld against slips; the gaps; readiness; the tax office's letters. format=xlsx.
    *
    * `GET /v1/finance/tax-audit`
    */
@@ -21677,6 +22028,22 @@ export class Operations {
    */
   transferListForBank(options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/finance/owner-shares/transfer-list.csv", accept: "text" }, options);
+  }
+
+  /**
+   * Transfer pricing
+   *
+   * (v1.40.0) The group's policy per kind, and each recharge of the year (year) with its kind, method, cost and mark-up against the range (ok, below, above, no_cost, unclassified). format=xlsx (the documentation workpaper).
+   *
+   * `GET /v1/finance/intercompany/transfer-pricing`
+   */
+  transferPricing(params?: {
+    query?: {
+      year?: number;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/intercompany/transfer-pricing", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -22161,6 +22528,22 @@ export class Operations {
     body: VoidAssetBody;
   }, options?: RequestOptions): Promise<VoidAssetResponse> {
     return this.transport.request<VoidAssetResponse>({ method: "POST", path: "/v1/finance/assets/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a contract billing
+   *
+   * (v1.40.0) Not once paid. Audited.
+   *
+   * `POST /v1/finance/contracts/{id}/billings/{bid}/void`
+   */
+  voidContractBilling(params: {
+    /** The contract id. */
+    id: string;
+    /** The billing id. */
+    bid: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/contracts/{id}/billings/{bid}/void", pathParams: { id: params.id, bid: params.bid }, accept: "json" }, options);
   }
 
   /**
