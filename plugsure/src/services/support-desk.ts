@@ -319,7 +319,7 @@ async function notifyDriver(appDriverId: string, caseRef: string, caseId: string
   await notifyDevices(devices.map((d) => d.id), 'support_reply', `support:${caseId}:${Date.now()}`, {
     id: { title: 'Balasan dari layanan pelanggan', body: `Laporan ${caseRef} mendapat balasan.` },
     en: { title: 'A reply from support', body: `Your report ${caseRef} has a reply.` },
-    url: `/app/#/help/${caseId}`, tag: `support-${caseId}`,
+    url: `/app/#help/${caseId}`, tag: `support-${caseId}`,
   });
 }
 

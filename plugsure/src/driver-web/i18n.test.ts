@@ -29,6 +29,12 @@ const MESSAGES = [
   'Charger ini sementara tidak dapat dipesan. Biaya reservasi dikembalikan.',
   // carbon on the receipt (v1.44.0)
   'CO₂ dihindari dibanding bensin',
+  // credit, referrals, reporting a problem (v1.45.0)
+  'Laporkan masalah', 'Masalahnya tentang', 'Kirim laporan', 'Laporan terhubung dengan sesi ini. Balasan muncul di Akun → Laporan saya.', 'Menunggu balasan Anda',
+  'Seberapa puas Anda?', 'Punya kode kartu hadiah atau voucher?', 'Punya kode referal dari teman?', 'Riwayat kredit', 'Dibayar dengan kredit', 'Laporan saya',
+  'Pakai kredit Rp 30.000', 'Saldo kredit Rp 65.000. Yang tidak terpakai kembali menjadi kredit.', '±12,5 kWh · kredit Rp 30.000',
+  'Ajak teman ke PlugSure Demo: Anda dapat Rp 20.000, teman Anda Rp 10.000 setelah pengisian pertamanya.', 'Laporan PS-12 terkirim.', 'Kredit Rp 50.000 ditambahkan.',
+  'Kode diterima. Kredit Rp 10.000 masuk setelah pengisian pertama Anda.', 'Nilai Anda: 5/5. Terima kasih.',
   // queue waits (v1.44.0)
   'Perkiraan 15 menit', 'Prioritas',
   // dynamic pricing (v1.43.0)

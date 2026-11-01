@@ -669,6 +669,16 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      carbon report (Finance → Carbon → Emission factors, FINANCE.md); run
      the diagnostics bot from a charger in Maintain → Charger health
      ([DIAGNOSTICS-BOT.md](DIAGNOSTICS-BOT.md)).
+  38. (v1.45.0) Optional, per operator: switch the support desk on, create the
+     inbound e-mail key and have the mail provider forward the support
+     address to it, and route support.sla_breach (Operate → Support,
+     [SUPPORT-DESK.md](SUPPORT-DESK.md)); give sites a map position for
+     candidate scoring (Assets & energy → Demand & planning,
+     [DEMAND-PLANNING.md](DEMAND-PLANNING.md)); switch driver credit on and
+     set the gateway minimum before selling gift cards (Commercial → Credit
+     & referrals, [DRIVER-CREDIT.md](DRIVER-CREDIT.md)); connect fleet
+     telematics (Depot charging → Telematics). Workers added: support SLAs
+     (5 min), driver credit (15 min), telematics polling (5 min).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

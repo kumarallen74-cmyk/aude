@@ -136,8 +136,21 @@ export async function fleetTokenProblem(tokenId: string, currency?: string | nul
   return null;
 }
 
+/** The driver's credit with this operator, in this currency, and the part of `amountMinor` it can pay. */
+async function creditFor(orgId: string, appDriverId: string | null, currency: string, amountMinor: number): Promise<{ creditMinor?: number; creditUsableMinor?: number }> {
+  if (!appDriverId) return {};
+  const credit = await import('../services/driver-credit.js');
+  const cs = await credit.settings(orgId).catch(() => null);
+  if (!cs?.enabled || cs.currency !== currency) return {};
+  const bal = (await credit.balance(orgId, appDriverId, currency)).totalMinor;
+  if (bal <= 0) return {};
+  return { creditMinor: bal, creditUsableMinor: Math.max(0, Math.min(bal, amountMinor - Math.max(1, cs.minGatewayMinor))) };
+}
+
 export interface QuoteResult {
   ok: boolean;
+  creditMinor?: number;
+  creditUsableMinor?: number;
   error?: string;
   minimumViableMinor?: number;
   allowanceWh?: number;
@@ -271,6 +284,8 @@ export async function quotePrepaid(
     pricesIncludeTax: tariff.pricesIncludeTax === true || country.displayPricesInclTax,
     dynamicPrice: dyn && dyn.bps !== 10_000 ? { factorPct: dyn.bps / 100, reason: dyn.reason } : null,
     dynamicPriceBps: dyn?.bps ?? null,
+    // (v1.45.0) Credit the driver can pay part of it with (gift cards, vouchers, referral rewards), and how much of this amount.
+    ...(await creditFor(c.org_id, p?.appDriverId ?? null, country.currency, amountMinor)),
     ...(await paymentSetupFor(c.org_id, p, country.code)),
   };
 }
@@ -953,7 +968,8 @@ export async function liveStatus(principal: DriverPrincipal, chargeId: string): 
   const base = {
     chargeId: dc.id,
     mode: dc.mode,
-    amountMinor: dc.amount_minor,
+    // (v1.45.0) With credit held at checkout: what the charge can spend in all (the payment and the credit).
+    amountMinor: dc.amount_minor == null ? dc.amount_minor : Number(dc.amount_minor) + Number((dc as any).credit_hold_minor ?? 0),
     currency: currencyOr(c?.currency),
     siteName: c?.site_name ?? '—',
     connectorLabel: c ? `${c.current_type} ${Math.round(c.max_power_w / 100) / 10} kW` : '—',
@@ -1201,7 +1217,9 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
       `SELECT amount_captured_minor AS captured, mode, amount_authorised_minor AS authorised, hold_capture_minor, hold_state, channel, checkout_url, hold_error, currency FROM payment_intent WHERE id = $1`,
       [dc.payment_intent_id],
     );
-    const used = Number(row.total_minor ?? 0);
+    // (v1.45.0) What credit paid is not the payment's to cover: the settlement below is the gateway's part.
+    const creditPaid = Number((await one<{ u: string | null }>(`SELECT credit_used_minor AS u FROM driver_charge WHERE id = $1`, [dc.id]))?.u ?? 0);
+    const used = Math.max(0, Number(row.total_minor ?? 0) - creditPaid);
     if (pi?.mode === 'postpay') {
       const charged = Number(pi.captured ?? pi.hold_capture_minor ?? Math.min(used, Number(pi.authorised ?? 0)));
       const unpaid = pi.hold_state === 'capture_failed' || pi.hold_state === 'capturing';
