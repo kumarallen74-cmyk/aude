@@ -376,7 +376,12 @@ dbDescribe('the hub surface, in-process', () => {
       if (!row) await new Promise((r) => setTimeout(r, 100));
     }
     assert.equal(row?.data?.last_updated, loc.last_updated);
-    const legs = await many<{ route: string }>(`SELECT route FROM hub_message WHERE leg = 'out' AND connection_id = $1 AND route LIKE 'broadcast%'`, [conns.t!.id]);
+    // The outbound leg is logged without being awaited (hub/call.ts): wait for the row as for the location.
+    let legs: Array<{ route: string }> = [];
+    for (let i = 0; i < 30 && !legs.some((l) => l.route === 'broadcast+inproc'); i++) {
+      legs = await many<{ route: string }>(`SELECT route FROM hub_message WHERE leg = 'out' AND connection_id = $1 AND route LIKE 'broadcast%'`, [conns.t!.id]);
+      if (!legs.some((l) => l.route === 'broadcast+inproc')) await new Promise((r) => setTimeout(r, 100));
+    }
     assert.ok(legs.some((l) => l.route === 'broadcast+inproc'));
     assert.equal((await one<{ n: number }>(`SELECT count(*)::int AS n FROM hub_outbox WHERE recipient_connection_id = $1 AND object_key LIKE $2`, [conns.xe2!.id, `locations:%:${loc.id}`]))?.n, 0);
   });
