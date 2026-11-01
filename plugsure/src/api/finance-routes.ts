@@ -36,6 +36,10 @@ import * as yearEnd from '../services/year-end.js';
 import * as opInv from '../services/operator-invoicing.js';
 import * as roamSettle from '../services/roaming-settlement.js';
 import * as controls from '../services/finance-controls.js';
+import * as autoPay from '../services/owner-payout-automation.js';
+import * as subRev from '../services/subscription-revenue.js';
+import * as ppn from '../services/ppn-return.js';
+import * as finToday from '../services/finance-today.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -1345,6 +1349,107 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await audit(req, 'finance.controls_report_exported', req.principal.orgId, { month: r.month });
       return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="plugsure-finance-controls-${r.month}.xlsx"`).send(r.xlsx);
     } catch (e) { return p14Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.26.0) finance today, subscription revenue, PPN, automatic owner payouts
+
+  const p15Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof autoPay.AutomationError || e instanceof subRev.SubscriptionRevenueError || e instanceof ppn.PpnError) return reply.status(e.statusCode).send({ error: e.message });
+    return p14Failed(reply, e);
+  };
+
+  app.get('/v1/finance/today', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await finToday.today(req.principal.orgId, userUuid(req)); } catch (e) { return p15Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/subscription-revenue', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const r = await subRev.report(req.principal.orgId, qs(req).month);
+      if (qs(req).format === 'xlsx') {
+        return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="plugsure-subscription-revenue-${r.month}.xlsx"`).send(subRev.reportXlsx(r));
+      }
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
+  });
+  app.get('/v1/finance/subscription-revenue/trend', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await subRev.trend(req.principal.orgId, qs(req).month); } catch (e) { return p15Failed(reply, e); }
+  });
+  app.put('/v1/finance/subscription-revenue/accounts', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await subRev.saveAccounts(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.subscription_accounts_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/ppn', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const p = await ppn.period(req.principal.orgId, qs(req).month);
+      const f = qs(req).format;
+      if (f === 'xlsx') return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', `attachment; filename="plugsure-ppn-${p.month}.xlsx"`).send(ppn.workingPapers(p));
+      if (f === 'input-csv') return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="plugsure-ppn-masukan-${p.month}.csv"`).send(ppn.inputCsv(p));
+      if (f === 'output-csv') return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="plugsure-ppn-keluaran-${p.month}.csv"`).send(ppn.outputCsv(p));
+      return { ...p, periods: await ppn.periods(req.principal.orgId) };
+    } catch (e) { return p15Failed(reply, e); }
+  });
+  app.post('/v1/finance/ppn/input-invoices', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await ppn.recordInput(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.ppn_input_recorded', 'ppn_input_invoice', r.id, r as unknown as Record<string, unknown>);
+      return reply.status(201).send(r);
+    } catch (e) { return p15Failed(reply, e); }
+  });
+  app.post('/v1/finance/ppn/input-invoices/:id/void', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const reason = body(req).reason;
+      const r = await ppn.voidInput(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.ppn_input_voided', 'ppn_input_invoice', prm(req, 'id'), { month: r.month, reason });
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
+  });
+  app.post('/v1/finance/ppn/:month/file', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await ppn.file(req.principal.orgId, prm(req, 'month'), body(req), userUuid(req));
+      await auditPay(req, r.amended ? 'finance.ppn_amended' : 'finance.ppn_filed', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/owner-payouts/automation', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await autoPay.preview(req.principal.orgId); } catch (e) { return p15Failed(reply, e); }
+  });
+  app.put('/v1/finance/owner-payouts/automation', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await autoPay.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.owner_payout_automation_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
+  });
+  app.put('/v1/finance/owner-payouts/automation/owners/:oid', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await autoPay.saveRule(req.principal.orgId, prm(req, 'oid'), body(req), userUuid(req));
+      await auditPay(req, 'finance.owner_payout_rule_saved', 'site_owner', r.ownerId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
+  });
+  app.post('/v1/finance/owner-payouts/automation/run', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await autoPay.run(req.principal.orgId);
+      await auditPay(req, 'finance.owner_payouts_requested_automatically', 'organisation', req.principal.orgId, { requested: r.requested.length, failed: r.failed.length, statements: r.requested.map((x) => x.number) });
+      return r;
+    } catch (e) { return p15Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

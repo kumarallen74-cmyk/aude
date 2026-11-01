@@ -527,6 +527,11 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      finance.platform_invoice_link. Operators: roaming settlement is in
      Finance → Roaming; Finance → Controls needs audit:read, and its
      thresholds a Finance Manager ([FINANCE.md](FINANCE.md)).
+  19. (v1.26.0) Optionally turn on automatic owner payouts (Finance → Auto
+     payouts; they still wait for approval), set the subscription revenue
+     accounts (Finance → Subscriptions), and record faktur masukan and file
+     the month in Finance → PPN if you are a PKP. Finance today is the
+     phone page for approvals ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

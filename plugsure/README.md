@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.25.0 (31 October 2026), the current release:** finance phase 14: PlugSure's fee invoices to operators with Xendit payment links, roaming settlement with partners, and finance controls (the change log and segregation-of-duties checks). Notes: [`RELEASE-NOTES-v1.25.0.md`](RELEASE-NOTES-v1.25.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.26.0 (1 November 2026), the current release:** finance phase 15: Finance today for the phone, subscription and membership revenue (deferred revenue, MRR, churn), the monthly PPN return, and automatic owner payouts. Notes: [`RELEASE-NOTES-v1.26.0.md`](RELEASE-NOTES-v1.26.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.25.0 (31 October 2026):** finance phase 14: PlugSure's fee invoices to operators with Xendit payment links, roaming settlement with partners, and finance controls (the change log and segregation-of-duties checks). Notes: [`RELEASE-NOTES-v1.25.0.md`](RELEASE-NOTES-v1.25.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.24.0 (31 October 2026):** finance phase 13: driver refund requests in the app, fleet credit limits and prepaid deposits, a nightly finance data export, and the year-end close and pack. Notes: [`RELEASE-NOTES-v1.24.0.md`](RELEASE-NOTES-v1.24.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 

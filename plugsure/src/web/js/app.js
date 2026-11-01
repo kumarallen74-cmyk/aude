@@ -10,6 +10,7 @@ import { msSignInButton, msMessage, takeMsOutcome, microsoftOffered, signInMulti
 import './views/dashboard.js';
 import './views/whatsapp.js';
 import './views/finance.js';
+import './views/finance-today.js';
 import './views/chargers.js';
 import './views/onboard.js';
 import './views/onboarding.js';

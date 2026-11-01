@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.25.0";
+export const API_VERSION = "1.26.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5209,6 +5209,13 @@ export type AssignTariffResponse = {
   flags: TariffFlag[];
 };
 
+export type AutomaticOwnerPayoutsResponse = {
+  settings?: Record<string, unknown>;
+  rails?: string[];
+  candidates?: Record<string, unknown>[];
+  rules?: Record<string, unknown>[];
+};
+
 export type BankStatementLinesAndTheirMatchesResponse = {
   lines: {
     id?: string;
@@ -6032,6 +6039,14 @@ export type FinanceSummaryKeyFiguresResponse = {
   months?: string[];
   perCurrency?: Record<string, unknown>[];
   consolidated?: Record<string, unknown> | null;
+};
+
+export type FinanceTodayResponse = {
+  day?: string;
+  today?: Record<string, unknown>[];
+  month?: Record<string, unknown>[];
+  approvals?: Record<string, unknown>[];
+  waiting?: number;
 };
 
 export type FleetAccountCreditPositionResponse = {
@@ -7004,6 +7019,18 @@ export type Pph23WithholdingForYearResponse = {
   received?: TaxWithholding[];
 };
 
+export type PpnReturnSptMasaPpnResponse = {
+  month?: string;
+  pkp?: boolean;
+  output?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+  broughtForward?: number;
+  payable?: number;
+  carriedForward?: number;
+  filed?: Record<string, unknown> | null;
+  periods?: Record<string, unknown>[];
+};
+
 export type PreviewTariffBody = {
   tariff: TariffDefinition;
   /** Default one hour ago. */
@@ -7127,6 +7154,23 @@ export type RecordDepositTopUpOrAdjustmentBody = {
   note?: string;
 };
 
+export type RecordFakturMasukanBody = {
+  month: string;
+  supplier: string;
+  supplierNpwp?: string;
+  faktur: string;
+  date: string;
+  dpp: number;
+  ppn: number;
+  description?: string;
+  creditable?: boolean;
+  amend?: boolean;
+};
+
+export type RecordFakturMasukanResponse = {
+  id?: string;
+};
+
 export type RecordFakturPajakNumberBody = {
   number?: string | null;
 };
@@ -7224,6 +7268,21 @@ export type RecordPPh23WithholdingBody = {
 export type RecordPPh23WithholdingResponse = {
   id: string;
   amount: number;
+};
+
+export type RecordPpnReturnAsFiledBody = {
+  ntpn?: string;
+  reference?: string;
+  unpaid?: boolean;
+  amend?: boolean;
+};
+
+export type RecordPpnReturnAsFiledResponse = {
+  month?: string;
+  output?: number;
+  input?: number;
+  payable?: number;
+  carriedForward?: number;
 };
 
 export type RecordRefundPaidByBankTransferBody = {
@@ -7488,6 +7547,11 @@ export type RequestOwnerPayoutThroughDuitkuDisbursementBody = {
 
 export type RequestOwnerPayoutThroughDuitkuDisbursementResponse = {
   transfer: PayoutTransfer;
+};
+
+export type RequestReadyPayoutsNowResponse = {
+  requested?: Record<string, unknown>[];
+  failed?: Record<string, unknown>[];
 };
 
 export type RequestRefundTransferThroughDuitkuDisbursementBody = {
@@ -7817,6 +7881,12 @@ export type SetApprovalsMatrixResponse = {
   canApprove?: boolean;
 };
 
+export type SetAutomaticOwnerPayoutsBody = {
+  enabled?: boolean;
+  delayDays?: number;
+  minAmount?: number;
+};
+
 export type SetAutomaticStatementsOfAccountBody = {
   enabled?: boolean;
   day?: number;
@@ -7897,6 +7967,13 @@ export type SetOcpiPartyOfCountryBody = {
 
 export type SetOcpiPartyOfCountryResponse = {
   party: RoamingParty;
+};
+
+export type SetOwnerPayoutRuleBody = {
+  automatic?: boolean | null;
+  minAmount?: number | null;
+  hold?: boolean;
+  holdReason?: string;
 };
 
 export type SetReminderScheduleBody = {
@@ -7995,6 +8072,12 @@ export type SetSitePowerBudgetBody = {
   curtailed?: boolean;
   curtailedReason?: string;
   applyNow?: boolean;
+};
+
+export type SetSubscriptionRevenueAccountsBody = {
+  deferred?: Record<string, unknown>;
+  revenue?: Record<string, unknown>;
+  receivable?: Record<string, unknown>;
 };
 
 export type SetTaxFilingCalendarBody = {
@@ -8217,6 +8300,18 @@ export type StopSessionRemotelyBody = {
   transactionId: number | string;
 };
 
+export type SubscriptionAndMembershipRevenueResponse = {
+  month?: string;
+  accounts?: Record<string, unknown>;
+  currencies?: Record<string, unknown>[];
+  journal?: Record<string, unknown>[];
+};
+
+export type SubscriptionRevenueTwelveMonthsResponse = {
+  months?: string[];
+  rows?: Record<string, unknown>[];
+};
+
 export type SuggestWhatsAppReplyResponse = {
   draft: string | null;
   handoff: string | null;
@@ -8436,6 +8531,10 @@ export type VoidElectricityBillBody = {
 
 export type VoidElectricityBillResponse = {
   ok?: boolean;
+};
+
+export type VoidFakturMasukanBody = {
+  reason: string;
 };
 
 export type VoidFleetInvoiceBody = {
@@ -9258,6 +9357,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/accounts/{id}/audit-pack", pathParams: { id: params.id }, query: params.query, accept: "binary" }, options);
+  }
+
+  /**
+   * Automatic owner payouts
+   *
+   * (v1.26.0) The settings, the payout rails, the per-owner rules, and every finalised owner statement with something left to pay: ready, or why not (held, off, below the minimum, a query open, a bank change waiting, no bank details, the name check failed, a payout open, still waiting after finalising).
+   *
+   * `GET /v1/finance/owner-payouts/automation` · needs `payment:read`
+   */
+  automaticOwnerPayouts(options?: RequestOptions): Promise<AutomaticOwnerPayoutsResponse> {
+    return this.transport.request<AutomaticOwnerPayoutsResponse>({ method: "GET", path: "/v1/finance/owner-payouts/automation", accept: "json" }, options);
   }
 
   /**
@@ -10713,6 +10823,17 @@ export class Operations {
    */
   financeSummaryKeyFigures(options?: RequestOptions): Promise<FinanceSummaryKeyFiguresResponse> {
     return this.transport.request<FinanceSummaryKeyFiguresResponse>({ method: "GET", path: "/v1/finance/summary", accept: "json" }, options);
+  }
+
+  /**
+   * Finance today
+   *
+   * (v1.26.0) For the phone: today's revenue per currency, the month (revenue, margin, receivables, DSO, cash), and every approval waiting (owner payouts, refund transfers, write-offs, owner bank changes, driver refund requests), each with whether the caller may decide it and the route that decides it.
+   *
+   * `GET /v1/finance/today` · needs `payment:read`
+   */
+  financeToday(options?: RequestOptions): Promise<FinanceTodayResponse> {
+    return this.transport.request<FinanceTodayResponse>({ method: "GET", path: "/v1/finance/today", accept: "json" }, options);
   }
 
   /**
@@ -12701,6 +12822,22 @@ export class Operations {
   }
 
   /**
+   * PPN return (SPT Masa PPN)
+   *
+   * (v1.26.0) A tax period (default last month), rupiah: output (retail charge records not on a fleet invoice, fleet invoices less credit notes, paid memberships and passes), input (recorded faktur masukan, with suggestions for the gateway's and PlugSure's VAT), the overpayment brought forward, payable or carried forward, the due date, and the filing. format=xlsx (working papers), input-csv or output-csv.
+   *
+   * `GET /v1/finance/ppn` · needs `payment:read`
+   */
+  ppnReturnSptMasaPpn(params?: {
+    query?: {
+      month?: string;
+      format?: "json" | "xlsx" | "input-csv" | "output-csv";
+    };
+  }, options?: RequestOptions): Promise<PpnReturnSptMasaPpnResponse> {
+    return this.transport.request<PpnReturnSptMasaPpnResponse>({ method: "GET", path: "/v1/finance/ppn", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Preview a tariff
    *
    * Rates a hypothetical session under a tariff definition without saving anything: CDR lines, charging class, tax stack and regulatory flags.
@@ -12949,6 +13086,19 @@ export class Operations {
   }
 
   /**
+   * Record a faktur masukan
+   *
+   * (v1.26.0) An input VAT invoice for a tax period: supplier (and NPWP), faktur number (once), date (not after the period), DPP and PPN (at most 12% of the DPP), creditable. A filed period needs amend. Audited.
+   *
+   * `POST /v1/finance/ppn/input-invoices` · needs `payment:write`
+   */
+  recordFakturMasukan(params: {
+    body: RecordFakturMasukanBody;
+  }, options?: RequestOptions): Promise<RecordFakturMasukanResponse> {
+    return this.transport.request<RecordFakturMasukanResponse>({ method: "POST", path: "/v1/finance/ppn/input-invoices", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record the faktur pajak number
    *
    * The faktur number Coretax assigned when the imported faktur was approved; printed on the invoice.
@@ -13017,6 +13167,21 @@ export class Operations {
     body: RecordPPh23WithholdingBody;
   }, options?: RequestOptions): Promise<RecordPPh23WithholdingResponse> {
     return this.transport.request<RecordPPh23WithholdingResponse>({ method: "POST", path: "/v1/finance/tax/withholdings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a PPN return as filed
+   *
+   * (v1.26.0) An ended period of a PKP: the figures as filed, with the NTPN when something is payable (or unpaid: true), and a reference. amend: true replaces a filed period while no later one is filed. The carried-forward overpayment feeds the next period. Audited.
+   *
+   * `POST /v1/finance/ppn/{month}/file` · needs `payment:write`
+   */
+  recordPpnReturnAsFiled(params: {
+    /** YYYY-MM. */
+    month: string;
+    body: RecordPpnReturnAsFiledBody;
+  }, options?: RequestOptions): Promise<RecordPpnReturnAsFiledResponse> {
+    return this.transport.request<RecordPpnReturnAsFiledResponse>({ method: "POST", path: "/v1/finance/ppn/{month}/file", pathParams: { month: params.month }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13562,6 +13727,17 @@ export class Operations {
   }
 
   /**
+   * Request the ready payouts now
+   *
+   * (v1.26.0) What the worker does hourly: a payout request for every ready statement, waiting for approval. Audited.
+   *
+   * `POST /v1/finance/owner-payouts/automation/run` · needs `payment:write`
+   */
+  requestReadyPayoutsNow(options?: RequestOptions): Promise<RequestReadyPayoutsNowResponse> {
+    return this.transport.request<RequestReadyPayoutsNowResponse>({ method: "POST", path: "/v1/finance/owner-payouts/automation/run", accept: "json" }, options);
+  }
+
+  /**
    * Request a refund transfer through Duitku Disbursement
    *
    * (v1.15.0) For a due (or failed) refund of a Duitku payment whose account has Disbursement: the driver's bank account is checked by Duitku's inquiry (the holder's name the bank has) and the transfer waits for a SECOND person's approval. The refund is held (processing) meanwhile. Refused above the largest transfer allowed. payment:write; audited as refund.transfer_requested.
@@ -14084,6 +14260,19 @@ export class Operations {
   }
 
   /**
+   * Set automatic owner payouts
+   *
+   * (v1.26.0) enabled, delayDays (0–60 after finalising), minAmount. The worker requests the payout hourly; it still waits for the approvals. Audited.
+   *
+   * `PUT /v1/finance/owner-payouts/automation` · needs `payment:write`
+   */
+  setAutomaticOwnerPayouts(params: {
+    body: SetAutomaticOwnerPayoutsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/owner-payouts/automation", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set automatic statements of account
    *
    * (v1.22.0) enabled; day 1–28: on that day of each month, every account with a billing address that had movements or owes something is e-mailed its statement for the month just ended. Audited.
@@ -14232,6 +14421,21 @@ export class Operations {
     body: SetOcpiPartyOfCountryBody;
   }, options?: RequestOptions): Promise<SetOcpiPartyOfCountryResponse> {
     return this.transport.request<SetOcpiPartyOfCountryResponse>({ method: "PUT", path: "/v1/roaming/parties/{country}", pathParams: { country: params.country }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set an owner's payout rule
+   *
+   * (v1.26.0) automatic (true, false, or null for the default), minAmount (null for the default), hold with holdReason. Audited.
+   *
+   * `PUT /v1/finance/owner-payouts/automation/owners/{oid}` · needs `payment:write`
+   */
+  setOwnerPayoutRule(params: {
+    /** The site owner id. */
+    oid: string;
+    body: SetOwnerPayoutRuleBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/owner-payouts/automation/owners/{oid}", pathParams: { oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14387,6 +14591,19 @@ export class Operations {
     body: SetSitePowerBudgetBody;
   }, options?: RequestOptions): Promise<PowerSiteBudget> {
     return this.transport.request<PowerSiteBudget>({ method: "PUT", path: "/v1/sites/{siteId}/power/budget", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the subscription revenue accounts
+   *
+   * (v1.26.0) The journal's accounts: deferred (deferred revenue), revenue, receivable (cash or receivable), each { code, name }. Audited.
+   *
+   * `PUT /v1/finance/subscription-revenue/accounts` · needs `payment:write`
+   */
+  setSubscriptionRevenueAccounts(params: {
+    body: SetSubscriptionRevenueAccountsBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/subscription-revenue/accounts", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14704,6 +14921,37 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Response> {
     return this.transport.request<Response>({ method: "GET", path: "/v1/events/frames", query: params?.query, accept: "stream" }, options);
+  }
+
+  /**
+   * Subscription and membership revenue
+   *
+   * (v1.26.0) For a month (default this month), per currency: billed (paid, or invoiced to a fleet), recognised pro rata over each charge's period, deferred at the start and end, MRR and ARR, subscribers (new, cancelled, expired, churn), per plan, and the month's journal (billed into deferred revenue, recognised out of it). format=xlsx for a workbook.
+   *
+   * `GET /v1/finance/subscription-revenue` · needs `payment:read`
+   */
+  subscriptionAndMembershipRevenue(params?: {
+    query?: {
+      month?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<SubscriptionAndMembershipRevenueResponse> {
+    return this.transport.request<SubscriptionAndMembershipRevenueResponse>({ method: "GET", path: "/v1/finance/subscription-revenue", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Subscription revenue, twelve months
+   *
+   * (v1.26.0) Recognised, deferred at the end, MRR and subscribers for the twelve months to the month given (default this month).
+   *
+   * `GET /v1/finance/subscription-revenue/trend` · needs `payment:read`
+   */
+  subscriptionRevenueTwelveMonths(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<SubscriptionRevenueTwelveMonthsResponse> {
+    return this.transport.request<SubscriptionRevenueTwelveMonthsResponse>({ method: "GET", path: "/v1/finance/subscription-revenue/trend", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -15223,6 +15471,21 @@ export class Operations {
     body: VoidElectricityBillBody;
   }, options?: RequestOptions): Promise<VoidElectricityBillResponse> {
     return this.transport.request<VoidElectricityBillResponse>({ method: "POST", path: "/v1/finance/energy-bills/{bid}/void", pathParams: { bid: params.bid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a faktur masukan
+   *
+   * (v1.26.0) With a reason. Audited.
+   *
+   * `POST /v1/finance/ppn/input-invoices/{id}/void` · needs `payment:write`
+   */
+  voidFakturMasukan(params: {
+    /** The input invoice id. */
+    id: string;
+    body: VoidFakturMasukanBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/ppn/input-invoices/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

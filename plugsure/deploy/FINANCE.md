@@ -532,6 +532,36 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   finance action from the audit log with what was recorded (CSV), and the
   **controls report** is the month's workbook for the auditor.
 
+## Finance today, subscriptions, PPN and automatic payouts (v1.26.0)
+
+- **Finance today** (Commercial → Finance today). Made for the phone:
+  today's takings, the month so far, cash and what is owed, and every
+  approval waiting (owner payouts, refund transfers, write-offs, owner bank
+  changes, driver refund requests). Approve or reject there: the same rules
+  apply as in Finance (never the person who asked; the approvals matrix).
+- **Subscriptions** (tab). A membership or pass is paid ahead for its
+  period, and its revenue is earned day by day over it:
+  - **recognised:** the part of each charge's period in the month;
+  - **deferred:** what was billed for days still to come (a liability);
+  - **MRR / ARR, subscribers and churn,** per plan;
+  - **journal:** billed into deferred revenue, earned out of it (set the
+    account codes; Excel).
+- **PPN** (tab; PKP only). The monthly return, SPT Masa PPN, in rupiah:
+  - **output:** retail charge records (not on a fleet invoice), fleet
+    invoices less credit notes, memberships and passes paid;
+  - **input:** the faktur masukan you record (supplier, NPWP, number, DPP,
+    PPN). The gateway's VAT on fees and PlugSure's fee statement are
+    suggested, counted once recorded with their faktur;
+  - **net:** payable (kurang bayar) or carried forward (lebih bayar) into
+    the next period;
+  - **record as filed** with the NTPN of the payment; amend while no later
+    period is filed. Working papers (Excel) and masukan / keluaran CSVs.
+- **Auto payouts** (tab). Once an owner statement is finalised and the wait
+  has passed, the payout of the owner's share is requested hourly. It still
+  waits for the approvals. Skipped, with the reason shown, while the owner is
+  held or below the minimum, has a query open on the statement or a bank
+  change waiting, or has no checked bank details.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

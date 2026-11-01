@@ -1,11 +1,19 @@
 PlugSure CSMS
-Version:   1.25.0
-Package:   plugsure-v1.25.0
-Prepared:  2026-10-31  (v1.24.0 + finance phase 14 — see RELEASE-NOTES-v1.25.0.md)
+Version:   1.26.0
+Package:   plugsure-v1.26.0
+Prepared:  2026-11-01  (v1.25.0 + finance phase 15 — see RELEASE-NOTES-v1.26.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (472 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (484 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.25.0 = v1.24.0 + finance phase 14: PlugSure's fee statements invoiced to operators (PDF e-mailed to
+Status:    v1.26.0 = v1.25.0 + finance phase 15: Finance today (a phone-first page: today's takings, the month, cash
+           and every approval waiting, decided there), subscription and membership revenue (recognised over the
+           period, deferred revenue, MRR and churn, a journal), the PPN return (output and input tax, faktur masukan,
+           filed with the NTPN, overpayments carried forward, working papers and CSVs), and automatic owner payouts
+           (requested once a statement is finalised, held or skipped with a reason, still approved by people).
+           Migration 094 (additive).
+
+v1.25.0 (2026-10-31):
+           v1.25.0 = v1.24.0 + finance phase 14: PlugSure's fee statements invoiced to operators (PDF e-mailed to
            the operator's billing address, a Xendit payment link on PlugSure's account recorded when paid, reminders,
            a statement of account), roaming settlement per partner, month and currency (receivable, payable, net;
            finalised, payments recorded and matched on the bank statement), and finance controls (the change log,
