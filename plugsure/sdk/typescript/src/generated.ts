@@ -15046,8 +15046,8 @@ export class Operations {
       from?: string;
       to?: string;
     };
-  }, options?: RequestOptions): Promise<void> {
-    return this.transport.request<void>({ method: "GET", path: "/v1/finance/carbon/esg", query: params?.query, accept: "none" }, options);
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/finance/carbon/esg", query: params?.query, accept: "text" }, options);
   }
 
   /**

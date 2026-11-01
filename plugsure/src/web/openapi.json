@@ -71688,7 +71688,15 @@
         ],
         "responses": {
           "200": {
-            "description": "An .xlsx file."
+            "description": "An .xlsx file.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/E401"

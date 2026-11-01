@@ -46,7 +46,7 @@ export const ops: Op[] = [
   { method: 'GET', path: '/v1/finance/carbon/esg', tag: 'Finance', summary: 'The ESG workbook',
     description: '(v1.44.0) The per-site report in Excel, with a summary and the methodology (factors, solar share, REC share).',
     query: [{ name: 'from', schema: { type: 'string', format: 'date' } }, { name: 'to', schema: { type: 'string', format: 'date' } }],
-    responses: { 200: { description: 'An .xlsx file.', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' } }, errors: [422] },
+    responses: { 200: { description: 'An .xlsx file.', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', schema: { type: 'string', format: 'binary' } } }, errors: [422] },
   { method: 'GET', path: '/v1/sessions/:id/carbon', tag: 'Sessions', summary: 'A session\'s carbon',
     description: '(v1.44.0) kWh, the grid factor and its source, the solar share measured during the session, the REC share, emitted and avoided kg CO2e (against petrol). Also on the driver\'s receipt.',
     pathParams: { id: 'The charging session.' }, responses: { 200: { description: 'The carbon.', schema: obj } }, errors: [404] },
