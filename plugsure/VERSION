@@ -1,11 +1,18 @@
 PlugSure CSMS
-Version:   1.27.0
-Package:   plugsure-v1.27.0
-Prepared:  2026-11-01  (v1.26.0 + finance phase 16 — see RELEASE-NOTES-v1.27.0.md)
+Version:   1.28.0
+Package:   plugsure-v1.28.0
+Prepared:  2026-11-01  (v1.27.0 + finance phase 17 — see RELEASE-NOTES-v1.28.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (498 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (514 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.27.0 = v1.26.0 + finance phase 16: finance digests (daily or weekly, e-mail and WhatsApp, per person),
+Status:    v1.28.0 = v1.27.0 + finance phase 17: driver funds (prepaid money held as a liability: in use, unused,
+           refund due, loyalty; breakage recognised past the breakage days; the month against the gateway), group
+           consolidation (a parent and its subsidiaries, eliminations, the reporting currency), a rolling 12-month
+           revenue forecast per site (trend, seasonality, scenarios, below-budget alerts), and payment plans for
+           overdue fleet invoices with the month-end bad-debt provision. Migration 096 (additive).
+
+v1.27.0 (2026-11-01):
+           v1.27.0 = v1.26.0 + finance phase 16: finance digests (daily or weekly, e-mail and WhatsApp, per person),
            electricity tariffs per site with a simulation (load by hour, PLN classes compared, the price for a target
            margin, moving load off-peak), site owners' payout advices, tax withheld and annual statements (also in the
            Site Owner portal), and fleet invoicing automation (issued on a day, held for the e-Faktur number, sent with

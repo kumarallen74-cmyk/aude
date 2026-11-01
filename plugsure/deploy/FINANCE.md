@@ -592,6 +592,42 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   a buyer with an NPWP waits until its faktur number is set. Reminders stay
   with Collections' dunning.
 
+## Driver funds, group, revenue forecast, plans and provision (v1.28.0)
+
+- **Driver funds** (tab). Money drivers paid ahead, held as a liability:
+  - **in use:** paid for a charge that has not ended;
+  - **unused:** charged less than paid, not refunded — owed to the driver;
+  - **refund due:** approved, not paid yet;
+  - **loyalty:** points outstanding at their value.
+
+  Unused balances older than the breakage days (default 180) are breakage
+  candidates by month of payment. A Finance Manager *recognises* a month's
+  breakage (once): it moves to revenue and out of the liability. The month's
+  movement (collected, used, refunded, breakage) is shown beside the
+  gateway's ledger for the same payments.
+- **Group** (tab; the parent organisation). The parent and its subsidiaries
+  for a month:
+  - **per entity:** revenue, energy, shared costs, depreciation, owners'
+    shares, PlugSure fees and the operating result;
+  - **the group:** less intercompany eliminations (record them; fleet
+    invoices between entities, matched by NPWP, are suggested), and in the
+    parent's reporting currency.
+- **Revenue forecast** (tab). Each site's next 12 months:
+  - built from its trend (flat at the average with fewer than 6 months of
+    history), and its seasonality once there are 13 months;
+  - under a scenario: growth, price and energy cost changes;
+  - against the revenue budget, with an alert when the next 3 months fall
+    below it by the threshold (`finance.forecast_below_budget`, daily).
+- **Plans & provision** (tab).
+  - **Payment plans:** agree instalments (2–24, monthly or every N days)
+    for an overdue fleet invoice. Payments pay the earliest instalments, and
+    when all are paid the invoice is paid. A reminder goes 3 days before
+    each instalment. An instalment unpaid past the grace days defaults the
+    plan (`finance.payment_plan_defaulted`).
+  - **Provision:** receivables by age × rates (a Finance Manager sets them;
+    an invoice on a plan counts as current). *Record* the month for the
+    journal: Dr bad-debt expense, Cr allowance for the movement.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

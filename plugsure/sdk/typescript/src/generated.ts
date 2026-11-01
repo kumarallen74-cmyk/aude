@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.27.0";
+export const API_VERSION = "1.28.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5045,6 +5045,14 @@ export type AdoptPendingChargerResponse = {
   identity: string;
 };
 
+export type AgreePaymentPlanBody = {
+  count: number;
+  firstDue: string;
+  everyDays?: number;
+  graceDays?: number;
+  note?: string;
+};
+
 export type AnswerDisputeCpoSideAcceptOrRejectBody = {
   action: "accept" | "reject";
   note?: string;
@@ -5216,6 +5224,12 @@ export type AutomaticOwnerPayoutsResponse = {
   rules?: Record<string, unknown>[];
 };
 
+export type BadDebtProvisionResponse = {
+  rates?: Record<string, unknown>;
+  currencies?: Record<string, unknown>[];
+  history?: Record<string, unknown>[];
+};
+
 export type BankStatementLinesAndTheirMatchesResponse = {
   lines: {
     id?: string;
@@ -5258,6 +5272,10 @@ export type BudgetsVsActualsForMonthResponse = {
 
 export type CancelFirmwareCampaignResponse = {
   ok: true;
+};
+
+export type CancelPaymentPlanBody = {
+  reason: string;
 };
 
 export type CardHoldsAndPostPayEWalletChargesResponse = {
@@ -5770,6 +5788,12 @@ export type DisputeWithItsNotesResponse = {
   notes: Record<string, unknown>[];
 };
 
+export type DriverFundsResponse = {
+  position?: Record<string, unknown>;
+  movement?: Record<string, unknown>;
+  recognised?: Record<string, unknown>[];
+};
+
 export type DriversRefundRequestsResponse = {
   requests?: Record<string, unknown>[];
   pending?: number;
@@ -6262,6 +6286,22 @@ export type GetStoredDeviceModelOcpp201Response = {
   components?: Record<string, unknown>[];
   monitors?: Record<string, unknown>[];
   reports?: Record<string, unknown>[];
+};
+
+export type GroupConsolidationResponse = {
+  grouped?: boolean;
+  month?: string;
+  entities?: Record<string, unknown>[];
+  group?: Record<string, unknown>;
+  eliminations?: Record<string, unknown>;
+  net?: Record<string, unknown>;
+  reporting?: Record<string, unknown> | null;
+};
+
+export type GroupTrendResponse = {
+  grouped?: boolean;
+  months?: string[];
+  rows?: Record<string, unknown>[];
 };
 
 export type HandWhatsAppConversationOverBody = {
@@ -6970,6 +7010,10 @@ export type PayInvoiceFromDepositResponse = {
   depositLeft?: number;
 };
 
+export type PaymentPlansResponse = {
+  plans?: Record<string, unknown>[];
+};
+
 export type PaymentsAccountsWithFinanceDataResponse = {
   accounts: FinanceAccount[];
 };
@@ -7158,6 +7202,18 @@ export type ReceivablesResponse = {
   }[];
 };
 
+export type RecogniseMonthBreakageBody = {
+  month: string;
+  currency: string;
+};
+
+export type RecogniseMonthBreakageResponse = {
+  month?: string;
+  currency?: string;
+  amount?: number;
+  payments?: number;
+};
+
 export type ReconcileStuckSessionsResponse = {
   /** Sessions closed for review. */
   stuck: number;
@@ -7200,6 +7256,19 @@ export type RecordFakturMasukanResponse = {
 
 export type RecordFakturPajakNumberBody = {
   number?: string | null;
+};
+
+export type RecordIntercompanyEliminationBody = {
+  month: string;
+  kind: "revenue" | "cost";
+  description: string;
+  amount: number;
+  currency: string;
+};
+
+export type RecordMonthProvisionResponse = {
+  month?: string;
+  currencies?: Record<string, unknown>[];
 };
 
 export type RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedBody = {
@@ -7263,6 +7332,12 @@ export type RecordPaymentAsPayerOrAsPayeeCountsAsConfirmedResponse = {
 export type RecordPaymentOfFleetInvoiceBody = {
   paidAt?: string;
   reference?: string;
+};
+
+export type RecordPaymentOnPlanBody = {
+  amount: number;
+  paidOn?: string;
+  reference: string;
 };
 
 export type RecordPayoutOrStatementPaymentBody = {
@@ -7676,6 +7751,13 @@ export type RoamingSettlementResponse = {
   totals?: Record<string, unknown>;
 };
 
+export type RollingTwelveMonthForecastResponse = {
+  scenario?: Record<string, unknown>;
+  months?: string[];
+  sites?: Record<string, unknown>[];
+  totals?: Record<string, unknown>;
+};
+
 export type RotateSandboxApiKeyResponse = {
   apiKey: string;
 };
@@ -7769,6 +7851,13 @@ export type SaveFleetBillingSettingsBody = {
     unitCode?: string;
     confirmed?: boolean;
   };
+};
+
+export type SaveForecastScenarioBody = {
+  growthPct?: number;
+  pricePct?: number;
+  energyPct?: number;
+  alertPct?: number;
 };
 
 export type SaveLoyaltyProgramBody = {
@@ -7941,6 +8030,10 @@ export type SetAutomaticStatementsOfAccountBody = {
   day?: number;
 };
 
+export type SetBreakageDaysBody = {
+  breakageDays: number;
+};
+
 export type SetBudgetAlertThresholdBody = {
   budgetAlertPct: number;
 };
@@ -8039,6 +8132,14 @@ export type SetOwnerPayoutRuleBody = {
   minAmount?: number | null;
   hold?: boolean;
   holdReason?: string;
+};
+
+export type SetProvisionRatesBody = {
+  current?: number;
+  "1-30"?: number;
+  "31-60"?: number;
+  "61-90"?: number;
+  "90+"?: number;
 };
 
 export type SetReminderScheduleBody = {
@@ -8633,6 +8734,10 @@ export type VoidElectricityBillResponse = {
   ok?: boolean;
 };
 
+export type VoidEliminationBody = {
+  reason: string;
+};
+
 export type VoidFakturMasukanBody = {
   reason: string;
 };
@@ -9107,6 +9212,21 @@ export class Operations {
   }
 
   /**
+   * Agree a payment plan
+   *
+   * (v1.28.0) The invoice's balance in count (2–24) instalments from firstDue, monthly or every everyDays (7–92), with graceDays (0–60) before an instalment defaults the plan. One active plan per invoice. Audited.
+   *
+   * `POST /v1/fleet-invoices/{id}/payment-plan` · needs `invoice:write`
+   */
+  agreePaymentPlan(params: {
+    /** The fleet invoice id. */
+    id: string;
+    body: AgreePaymentPlanBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/fleet-invoices/{id}/payment-plan", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Answer a dispute (CPO side): accept or reject
    *
    * accept: you will send a credit CDR (and a corrected CDR) through the hub; reject: a note is required.
@@ -9471,6 +9591,21 @@ export class Operations {
   }
 
   /**
+   * Bad-debt provision
+   *
+   * (v1.28.0) Receivables by age bucket × the rates (an invoice on an active plan counts as current), the provision per currency against the last recorded, the movement; the history. format=xlsx with the journal.
+   *
+   * `GET /v1/finance/provision` · needs `payment:read`
+   */
+  badDebtProvision(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<BadDebtProvisionResponse> {
+    return this.transport.request<BadDebtProvisionResponse>({ method: "GET", path: "/v1/finance/provision", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Bank statement lines and their matches
    *
    * (v1.18.0) Up to 1000 lines, open first. statement: one upload; open=true: unmatched only. Amounts are signed (credits positive).
@@ -9556,6 +9691,21 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<Subscription> {
     return this.transport.request<Subscription>({ method: "POST", path: "/v1/subscriptions/{id}/cancel", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Cancel a payment plan
+   *
+   * (v1.28.0) With a reason; the invoice returns to Collections. Audited.
+   *
+   * `POST /v1/finance/payment-plans/{id}/cancel` · needs `invoice:write`
+   */
+  cancelPaymentPlan(params: {
+    /** The plan id. */
+    id: string;
+    body: CancelPaymentPlanBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-plans/{id}/cancel", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -10502,6 +10652,22 @@ export class Operations {
     year: string;
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/year-end/{year}/pack", pathParams: { year: params.year }, accept: "binary" }, options);
+  }
+
+  /**
+   * Driver funds
+   *
+   * (v1.28.0) The money drivers paid ahead, as a liability per currency: in use (charging now), unused (owed), refund due, loyalty points at their value; breakage candidates (unused past the breakage days) by month of payment; the month's movement (collected, used, refunded, breakage) against the gateway's ledger. format=xlsx for a workbook.
+   *
+   * `GET /v1/finance/driver-funds` · needs `payment:read`
+   */
+  driverFunds(params?: {
+    query?: {
+      month?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<DriverFundsResponse> {
+    return this.transport.request<DriverFundsResponse>({ method: "GET", path: "/v1/finance/driver-funds", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -11549,6 +11715,36 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<AvailabilityReport> {
     return this.transport.request<AvailabilityReport>({ method: "GET", path: "/v1/reports/availability", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Group consolidation
+   *
+   * (v1.28.0) For the caller's organisation and its subsidiaries (parent_org_id), a month (default last month): per entity revenue, energy, shared costs, depreciation, contribution, owners' shares, PlugSure fees, operating result and KPIs; the group per currency less eliminations, and in the reporting currency; eliminations recorded and suggested. grouped is false when the organisation has no subsidiaries.
+   *
+   * `GET /v1/finance/group` · needs `payment:read`
+   */
+  groupConsolidation(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<GroupConsolidationResponse> {
+    return this.transport.request<GroupConsolidationResponse>({ method: "GET", path: "/v1/finance/group", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Group trend
+   *
+   * (v1.28.0) Twelve months of the group's net revenue and operating result per currency.
+   *
+   * `GET /v1/finance/group/trend` · needs `payment:read`
+   */
+  groupTrend(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<GroupTrendResponse> {
+    return this.transport.request<GroupTrendResponse>({ method: "GET", path: "/v1/finance/group/trend", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -12833,6 +13029,21 @@ export class Operations {
   }
 
   /**
+   * Payment plans
+   *
+   * (v1.28.0) Instalment plans agreed with fleet customers, active first: each instalment due, paid, late.
+   *
+   * `GET /v1/finance/payment-plans` · needs `invoice:read`
+   */
+  paymentPlans(params?: {
+    query?: {
+      status?: "active" | "completed" | "defaulted" | "cancelled";
+    };
+  }, options?: RequestOptions): Promise<PaymentPlansResponse> {
+    return this.transport.request<PaymentPlansResponse>({ method: "GET", path: "/v1/finance/payment-plans", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Payments accounts with finance data
    *
    * The gateway accounts the caller may see: its organisation's own Xendit account(s), and for platform administrators the platform's.
@@ -13174,6 +13385,19 @@ export class Operations {
   }
 
   /**
+   * Recognise a month's breakage
+   *
+   * (v1.28.0) The unused balances of payments made in a month, past the breakage days, recognised as revenue; once per month and currency. Needs finance:approve. Audited.
+   *
+   * `POST /v1/finance/driver-funds/breakage` · needs `finance:approve`
+   */
+  recogniseMonthBreakage(params: {
+    body: RecogniseMonthBreakageBody;
+  }, options?: RequestOptions): Promise<RecogniseMonthBreakageResponse> {
+    return this.transport.request<RecogniseMonthBreakageResponse>({ method: "POST", path: "/v1/finance/driver-funds/breakage", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Reconcile stuck sessions
    *
    * Closes the organisation’s sessions still active past the maximum session length (flagged STUCK_SESSION for review) and rates ended sessions that never produced a CDR.
@@ -13261,6 +13485,33 @@ export class Operations {
   }
 
   /**
+   * Record an intercompany elimination
+   *
+   * (v1.28.0) month, kind (revenue or cost), description, amount, currency: taken out of the group's figures. Audited.
+   *
+   * `POST /v1/finance/group/eliminations` · needs `payment:write`
+   */
+  recordIntercompanyElimination(params: {
+    body: RecordIntercompanyEliminationBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/group/eliminations", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a month's provision
+   *
+   * (v1.28.0) The provision now, per currency, with the previous month's and the movement (Dr bad-debt expense / Cr allowance, or a release). Recording the month again replaces it. Audited.
+   *
+   * `POST /v1/finance/provision/{month}/record` · needs `payment:write`
+   */
+  recordMonthProvision(params: {
+    /** YYYY-MM. */
+    month: string;
+  }, options?: RequestOptions): Promise<RecordMonthProvisionResponse> {
+    return this.transport.request<RecordMonthProvisionResponse>({ method: "POST", path: "/v1/finance/provision/{month}/record", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
    * Record a payment (as payer, or as payee: counts as confirmed)
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -13286,6 +13537,21 @@ export class Operations {
     body?: RecordPaymentOfFleetInvoiceBody;
   }, options?: RequestOptions): Promise<FleetStatement> {
     return this.transport.request<FleetStatement>({ method: "POST", path: "/v1/fleet-invoices/{id}/pay", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a payment on a plan
+   *
+   * (v1.28.0) Pays the earliest unpaid instalments first; when all are paid, the invoice is marked paid and the plan completed. Audited.
+   *
+   * `POST /v1/finance/payment-plans/{id}/payments` · needs `invoice:write`
+   */
+  recordPaymentOnPlan(params: {
+    /** The plan id. */
+    id: string;
+    body: RecordPaymentOnPlanBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payment-plans/{id}/payments", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14144,6 +14410,24 @@ export class Operations {
   }
 
   /**
+   * Rolling twelve-month forecast
+   *
+   * (v1.28.0) Per site: up to 24 months of history, a trend line over the last 12, seasonality from 13 months or more, the next 12 months of revenue, energy cost and margin under the scenario (growthPct a year, pricePct, energyPct), against the revenue budget; totals per currency. The scenario defaults to the saved one.
+   *
+   * `GET /v1/finance/rolling-forecast` · needs `payment:read`
+   */
+  rollingTwelveMonthForecast(params?: {
+    query?: {
+      growthPct?: number;
+      pricePct?: number;
+      energyPct?: number;
+      alertPct?: number;
+    };
+  }, options?: RequestOptions): Promise<RollingTwelveMonthForecastResponse> {
+    return this.transport.request<RollingTwelveMonthForecastResponse>({ method: "GET", path: "/v1/finance/rolling-forecast", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Rotate a sandbox's API key
    *
    * Revokes every key of the sandbox and returns a new one (shown once).
@@ -14223,6 +14507,19 @@ export class Operations {
     body: SaveFleetBillingSettingsBody;
   }, options?: RequestOptions): Promise<FleetBillingSettings> {
     return this.transport.request<FleetBillingSettings>({ method: "PUT", path: "/v1/fleet-billing/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Save the forecast scenario
+   *
+   * (v1.28.0) growthPct, pricePct, energyPct, and alertPct (the variance below budget that raises finance.forecast_below_budget, daily). Audited.
+   *
+   * `PUT /v1/finance/rolling-forecast/settings` · needs `payment:write`
+   */
+  saveForecastScenario(params: {
+    body: SaveForecastScenarioBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/rolling-forecast/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14470,6 +14767,19 @@ export class Operations {
   }
 
   /**
+   * Set the breakage days
+   *
+   * (v1.28.0) breakageDays (30–1825, default 180): after how many days an unused balance is breakage. Audited.
+   *
+   * `PUT /v1/finance/driver-funds/settings` · needs `payment:write`
+   */
+  setBreakageDays(params: {
+    body: SetBreakageDaysBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/driver-funds/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the budget alert threshold
    *
    * (v1.20.0) From the 7th of the month, revenue below or energy cost above the pro-rated budget by more than this % raises finance.budget_off_track. Audited.
@@ -14646,6 +14956,19 @@ export class Operations {
     body: SetOwnerPayoutRuleBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/owner-payouts/automation/owners/{oid}", pathParams: { oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set the provision rates
+   *
+   * (v1.28.0) A rate (0–100 %) per bucket: current, 1-30, 31-60, 61-90, 90+; older buckets at least as high. Needs finance:approve. Audited.
+   *
+   * `PUT /v1/finance/provision/rates` · needs `finance:approve`
+   */
+  setProvisionRates(params: {
+    body: SetProvisionRatesBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/provision/rates", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15758,6 +16081,21 @@ export class Operations {
     body: VoidElectricityBillBody;
   }, options?: RequestOptions): Promise<VoidElectricityBillResponse> {
     return this.transport.request<VoidElectricityBillResponse>({ method: "POST", path: "/v1/finance/energy-bills/{bid}/void", pathParams: { bid: params.bid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void an elimination
+   *
+   * (v1.28.0) With a reason. Audited.
+   *
+   * `POST /v1/finance/group/eliminations/{id}/void` · needs `payment:write`
+   */
+  voidElimination(params: {
+    /** The elimination id. */
+    id: string;
+    body: VoidEliminationBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/group/eliminations/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

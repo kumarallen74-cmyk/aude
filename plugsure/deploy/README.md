@@ -538,6 +538,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      on fleet invoicing automation (Finance → Fleet invoicing; payment links
      need your own Xendit account), and route finance.fleet_invoice_link
      ([FINANCE.md](FINANCE.md)).
+  21. (v1.28.0) Optionally set the breakage days (Finance → Driver funds),
+     the forecast scenario (Finance → Revenue forecast) and the provision
+     rates (Finance → Plans & provision; a Finance Manager); for a group, put
+     the subsidiaries under the parent organisation (parent_org_id). Route
+     finance.forecast_below_budget and finance.payment_plan_defaulted
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

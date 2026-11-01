@@ -35,7 +35,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'driver_refund_request', 'fleet_prepay_entry', 'fleet_credit_alert', 'finance_export_run',
       'platform_invoice_send', 'platform_invoice_link', 'roaming_settlement', 'roaming_settlement_payment',
       'owner_payout_rule', 'ppn_input_invoice', 'ppn_period',
-      'finance_digest_subscription', 'finance_digest_send', 'site_tariff', 'fleet_invoice_link']]);
+      'finance_digest_subscription', 'finance_digest_send', 'site_tariff', 'fleet_invoice_link',
+      'driver_funds_breakage', 'consolidation_elimination', 'payment_plan', 'payment_plan_instalment', 'bad_debt_provision']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -100,5 +101,10 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     finance_digest_send: 'INSERT,SELECT,UPDATE',
     site_tariff: 'INSERT,SELECT,UPDATE',
     fleet_invoice_link: 'INSERT,SELECT,UPDATE',
+    driver_funds_breakage: 'INSERT,SELECT,UPDATE',
+    consolidation_elimination: 'INSERT,SELECT,UPDATE',
+    payment_plan: 'INSERT,SELECT,UPDATE',
+    payment_plan_instalment: 'INSERT,SELECT,UPDATE',
+    bad_debt_provision: 'INSERT,SELECT,UPDATE',
   });
 });
