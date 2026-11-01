@@ -963,6 +963,55 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   SHA-256 kept) attach to a deadline or to an auditor's request. The PBC
   list: requested → in progress → provided (a file needed) → accepted.
 
+## Grants, landlords, chargebacks and the board pack (v1.36.0)
+
+- **Grants** (tab). Government, utility or development-bank money. A
+  *capital* grant (towards assets) is deferred when received (2600) and
+  released to grant income (4400) straight-line over its release period
+  from the month received. *Revenue* and *per-kWh* grants are income when a
+  claim is approved (Dr 1350 grant receivable), cleared when paid (a short
+  payment reduces the income). A per-kWh claim takes the kWh charged in its
+  period at the grant's site (or every site). Claims (GC-00001…) are at most
+  what was awarded. Conditions due within 14 days raise
+  finance.grant_condition_due (critical once past). A clawback comes out of
+  the deferred balance first, the rest is an expense (6700); it is owed
+  (2610) until repaid, and a capital grant stops releasing.
+- **Landlords** (tab). What a site pays the owner of its land or car park
+  (a supplier): fixed rent, a share of revenue (before tax) or of margin
+  (after energy), the higher of a share and a minimum guarantee (the top-up
+  is shown), or fixed plus a share. Escalation grows the fixed rent and the
+  minimum each year of the deal; rent-free months waive both (a share is
+  still due); part months are pro-rated by days; an energy recharge per kWh
+  adds the landlord's power. Link the PSAK 73 lease when the fixed rent is
+  one: the fixed part is then left out of the statements. Statements
+  (LS-00001…) are drafted on the 2nd for periods that have ended; issued,
+  the total becomes the landlord's bill (rent, awaiting approval), and the
+  landlord gets the PDF. Months not billed by their end are accrued (Dr
+  6210 / Cr 2420) and reversed the next month. Terms are fixed once a
+  statement is issued: end the deal and add a new one from the change.
+  (Site owners who share the platform's revenue under a commercial plan are
+  under Owners and Statements.)
+- **Chargebacks** (tab). Record each case as the gateway reports it, on the
+  payment (by its reference): reason, amount (default what was captured),
+  fee, the date to respond by (default 7 days). finance.chargeback_due warns
+  3 days ahead (critical once past). *Evidence* builds a PDF from the
+  payment and its charging session (times, charger, connector, energy and
+  meter readings, the receipt's lines, any refund; personal details masked)
+  for the provider. Ledger: received Dr 1190 disputed funds / Cr 1130
+  gateway balance (the fee to 6110); won back to 1130; lost or accepted to
+  6520. *Fraud signals* over 90 days: tokens with repeat chargebacks (block
+  them from here), payments refunded and also charged back, bursts of five
+  or more failed payments at a connector in a day (card testing), and the
+  chargeback rate per method: finance.chargeback_rate from 0.9% (two cases
+  or more), where the card schemes start to act.
+- **Board pack** (Reports). The pack gains *Risk and compliance* (insurance
+  renewals and claims, compliance deadlines and auditor requests,
+  chargebacks, grant conditions), *Lenders* (the month's covenant tests),
+  *Sustainability* (MWh, green share, emissions avoided) and *Grants*
+  (received, deferred, to claim, repayable), each when the module is in use,
+  with commentary; a twelve-month trend of revenue and result; and *Slides*:
+  the pack as a 16:9 deck (PDF).
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

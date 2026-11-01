@@ -77,6 +77,9 @@ import * as carbon from '../services/carbon.js';
 import * as insure from '../services/insurance.js';
 import * as pricing from '../services/pricing-analysis.js';
 import * as comply from '../services/compliance-calendar.js';
+import * as grants from '../services/grants.js';
+import * as landlords from '../services/landlord-deals.js';
+import * as cbacks from '../services/chargebacks.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -2567,6 +2570,7 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       const f = qs(req).format;
       if (f === 'pdf') { const p = await pack.get(req.principal.orgId, prm(req, 'id')); return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="management-report-${p.month}.pdf"`).send(await pack.pdf(req.principal.orgId, p.id)); }
       if (f === 'xlsx') { const p = await pack.get(req.principal.orgId, prm(req, 'id')); return xl(reply, `management-report-${p.month}`, await pack.workbook(req.principal.orgId, p.id)); }
+      if (f === 'slides') { const p = await pack.get(req.principal.orgId, prm(req, 'id')); return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="board-pack-${p.month}.pdf"`).send(await pack.slides(req.principal.orgId, p.id)); }
       return await pack.get(req.principal.orgId, prm(req, 'id'));
     } catch (e) { return p21Failed(reply, e); }
   });
@@ -3142,6 +3146,132 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       const f = await comply.getEvidence(req.principal.orgId, prm(req, 'id'));
       return reply.header('content-type', f.mime).header('content-disposition', `attachment; filename="${f.filename.replace(/"/g, '')}"`).header('x-content-type-options', 'nosniff').send(f.data);
     } catch (e) { return p24Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.36.0) grants, landlords, chargebacks
+
+  const p25Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof grants.GrantError || e instanceof landlords.LandlordError || e instanceof cbacks.ChargebackError) return reply.status(e.statusCode).send({ error: e.message });
+    return p24Failed(reply, e);
+  };
+
+  app.get('/v1/finance/grants', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-grants', await grants.registerXlsx(req.principal.orgId));
+      return await grants.overview(req.principal.orgId);
+    } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants', async (req, reply) => {
+    W(req);
+    try { const r = await grants.save(req.principal.orgId, null, body(req), userUuid(req)); await audit21(req, 'finance.grant_saved', 'grant_programme', r.id, { grantor: r.grantor, programme: r.programme, kind: r.kind, awarded: r.awarded }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.get('/v1/finance/grants/:id', async (req, reply) => {
+    R(req);
+    try { return await grants.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.put('/v1/finance/grants/:id', async (req, reply) => {
+    W(req);
+    try { const r = await grants.save(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.grant_saved', 'grant_programme', r.id, { status: r.status, awarded: r.awarded }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants/:id/conditions', async (req, reply) => {
+    W(req);
+    try { const r = await grants.addCondition(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.grant_condition_added', 'grant_programme', r.id, { description: body(req).description, dueOn: body(req).dueOn ?? null }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants/conditions/:cid', async (req, reply) => {
+    W(req);
+    try { const r = await grants.setCondition(req.principal.orgId, prm(req, 'cid'), body(req)); await audit21(req, 'finance.grant_condition_set', 'grant_condition', prm(req, 'cid'), { status: body(req).status, note: body(req).note ?? null }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants/:id/claims', async (req, reply) => {
+    W(req);
+    try { const r = await grants.claim(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); const c = r.claims.at(-1); await audit21(req, 'finance.grant_claimed', 'grant_programme', r.id, { number: c?.number, amount: c?.amount, kwh: c?.kwh }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants/claims/:cid', async (req, reply) => {
+    W(req);
+    try { const r = await grants.updateClaim(req.principal.orgId, prm(req, 'cid'), body(req)); await audit21(req, 'finance.grant_claim_updated', 'grant_claim', prm(req, 'cid'), { status: body(req).status, paid: body(req).paid ?? null }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants/:id/clawbacks', async (req, reply) => {
+    W(req);
+    try { const r = await grants.clawback(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.grant_clawed_back', 'grant_programme', r.id, { amount: body(req).amount, note: body(req).note }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/grants/clawbacks/:cid/repay', async (req, reply) => {
+    W(req);
+    try { const r = await grants.repayClawback(req.principal.orgId, prm(req, 'cid'), body(req)); await audit21(req, 'finance.grant_clawback_repaid', 'grant_clawback', prm(req, 'cid'), { repaidOn: body(req).repaidOn ?? null }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/landlords', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-landlord-deals', await landlords.dealsXlsx(req.principal.orgId));
+      return await landlords.overview(req.principal.orgId);
+    } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/landlords', async (req, reply) => {
+    W(req);
+    try { const r = await landlords.save(req.principal.orgId, null, body(req), userUuid(req)); await audit21(req, 'finance.landlord_deal_saved', 'landlord_deal', r.id, { site: r.site, landlord: r.landlord, basis: r.basis }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.get('/v1/finance/landlords/:id', async (req, reply) => {
+    R(req);
+    try { return await landlords.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.put('/v1/finance/landlords/:id', async (req, reply) => {
+    W(req);
+    try { const r = await landlords.save(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); await audit21(req, 'finance.landlord_deal_saved', 'landlord_deal', r.id, { basis: r.basis, status: r.status }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/landlords/:id/statements', async (req, reply) => {
+    W(req);
+    try { const r = await landlords.draftStatement(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.landlord_statement_drafted', 'landlord_statement', r.id, { number: r.number, total: r.total }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.get('/v1/finance/landlords/statements/:sid', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'pdf') { const s = await landlords.statement(req.principal.orgId, prm(req, 'sid')); return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="${s.number}.pdf"`).send(await landlords.statementPdf(req.principal.orgId, s.id)); }
+      return await landlords.statement(req.principal.orgId, prm(req, 'sid'));
+    } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/landlords/statements/:sid/issue', async (req, reply) => {
+    W(req);
+    try { const r = await landlords.issue(req.principal.orgId, prm(req, 'sid'), userUuid(req)); await audit21(req, 'finance.landlord_statement_issued', 'landlord_statement', r.id, { number: r.number, total: r.total, billId: r.billId }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/landlords/statements/:sid/void', async (req, reply) => {
+    W(req);
+    try { const r = await landlords.voidStatement(req.principal.orgId, prm(req, 'sid')); await audit21(req, 'finance.landlord_statement_voided', 'landlord_statement', r.id, { number: r.number }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/chargebacks', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-chargebacks', await cbacks.listXlsx(req.principal.orgId));
+      return await cbacks.list(req.principal.orgId, qs(req));
+    } catch (e) { return p25Failed(reply, e); }
+  });
+  app.get('/v1/finance/chargebacks/fraud', async (req, reply) => {
+    R(req);
+    try { return await cbacks.signals(req.principal.orgId); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/chargebacks', async (req, reply) => {
+    W(req);
+    try { const r = await cbacks.create(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.chargeback_recorded', 'chargeback', r.id, { provider: r.provider, caseRef: r.caseRef, amount: r.amount, reason: r.reason }); return created(reply, r); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.get('/v1/finance/chargebacks/:id', async (req, reply) => {
+    R(req);
+    try { return await cbacks.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/chargebacks/:id', async (req, reply) => {
+    W(req);
+    try { const r = await cbacks.update(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, 'finance.chargeback_updated', 'chargeback', r.id, { status: r.status, caseRef: r.caseRef }); return r; } catch (e) { return p25Failed(reply, e); }
+  });
+  app.get('/v1/finance/chargebacks/:id/evidence', async (req, reply) => {
+    R(req);
+    try {
+      const c = await cbacks.get(req.principal.orgId, prm(req, 'id'));
+      await audit21(req, 'finance.chargeback_evidence_exported', 'chargeback', c.id, { caseRef: c.caseRef });
+      return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="chargeback-${c.caseRef.replace(/[^\w.-]+/g, '_')}.pdf"`).send(await cbacks.evidencePdf(req.principal.orgId, c.id));
+    } catch (e) { return p25Failed(reply, e); }
+  });
+  app.post('/v1/finance/chargebacks/tokens/:tid/block', async (req, reply) => {
+    W(req);
+    try { const r = await cbacks.blockToken(req.principal.orgId, prm(req, 'tid')); await audit21(req, 'finance.token_blocked_for_fraud', 'token', r.tokenId, { token: r.token, reason: body(req).reason ?? null }); return r; } catch (e) { return p25Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

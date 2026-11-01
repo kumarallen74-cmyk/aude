@@ -312,7 +312,7 @@ export async function packPdf(orgId: string, monthRaw: unknown): Promise<Buffer>
   if (p.covenants.length) {
     f.heading('Covenants');
     f.table([{ label: 'Covenant', width: 3 }, { label: 'Threshold', width: 1.6, align: 'right' }, { label: p.month, width: 1.6, align: 'right' }, { label: 'Headroom', width: 1.4, align: 'right' }, { label: '', width: 1.2 }],
-      p.covenants.map((c) => { const t = c.tests.find((x) => x.month === p.month); return { cells: [`${c.lender ?? 'Overall'} · ${c.kind}`, `${c.direction === 'min' ? '≥' : '≤'} ${c.threshold}`, t?.value == null ? '—' : String(t.value), t?.headroomPct == null ? '—' : `${t.headroomPct}%`, t ? (t.passed === false ? 'BREACH' : t.passed ? 'met' : '—') : 'not tested'] }; }));
+      p.covenants.map((c) => { const t = c.tests.find((x) => x.month === p.month); return { cells: [`${c.lender ?? 'Overall'} · ${c.kind}`, `${c.direction === 'min' ? '>=' : '<='} ${c.threshold}`, t?.value == null ? '—' : String(t.value), t?.headroomPct == null ? '—' : `${t.headroomPct}%`, t ? (t.passed === false ? 'BREACH' : t.passed ? 'met' : '—') : 'not tested'] }; }));
   }
   for (const l of p.loans) {
     f.heading(`${l.lender}${l.reference ? ` · ${l.reference}` : ''}`);

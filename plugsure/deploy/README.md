@@ -596,6 +596,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      Pricing). Add the standard deadlines and the auditors' requests
      (Finance → Compliance). Route finance.insurance_renewal and
      finance.compliance_due ([FINANCE.md](FINANCE.md)).
+  29. (v1.36.0) Record the grants with their conditions and claims
+     (Finance → Grants). Add each site's landlord as a supplier and the rent
+     deal (Finance → Landlords); link the PSAK 73 lease when the fixed rent
+     is one. Record chargebacks as the gateway reports them (Finance →
+     Chargebacks) and send the evidence by the deadline. Check the board
+     pack's new sections and the slides (Finance → Reports). Route
+     finance.grant_condition_due, finance.chargeback_due and
+     finance.chargeback_rate ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

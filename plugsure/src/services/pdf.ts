@@ -15,6 +15,8 @@ export type Rgb = [number, number, number];
 export interface TextOpts { size?: number; bold?: boolean; color?: Rgb; align?: 'left' | 'right' | 'center' }
 
 export const A4 = { width: 595.28, height: 841.89 };
+/** A 16:9 landscape slide (13.33 × 7.5 in). */
+export const SLIDE = { width: 960, height: 540 };
 
 // Advance widths (1/1000 em) of the standard fonts, characters 32–126 (Adobe AFM).
 const HELV = [
@@ -99,12 +101,15 @@ export function wrapText(s: string, width: number, size: number, bold = false): 
 }
 
 export class PdfDoc {
-  readonly width = A4.width;
-  readonly height = A4.height;
+  readonly width: number;
+  readonly height: number;
   private pages: string[][] = [];
   private ops!: string[];
 
-  constructor(private meta: { title?: string; author?: string; subject?: string; created?: Date } = {}) {
+  /** (v1.36.0) size: the page in points (default A4 portrait), e.g. SLIDE for 16:9 landscape slides. */
+  constructor(private meta: { title?: string; author?: string; subject?: string; created?: Date; size?: { width: number; height: number } } = {}) {
+    this.width = meta.size?.width ?? A4.width;
+    this.height = meta.size?.height ?? A4.height;
     this.addPage();
   }
 

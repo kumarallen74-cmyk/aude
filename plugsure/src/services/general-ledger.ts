@@ -40,7 +40,7 @@ export class LedgerError extends Error {
 
 export const TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense', 'other'] as const;
 type AccountType = typeof TYPES[number];
-export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance'] as const;
+export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks'] as const;
 type Source = typeof SOURCES[number];
 
 export const SEED: Array<[string, string, AccountType]> = [
@@ -65,6 +65,8 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['7100', 'Gain on disposal', 'other'], ['7200', 'Interest on lease liabilities', 'other'], ['7300', 'Interest income', 'other'], ['8100', 'Loss on disposal', 'other'], ['8200', 'Deposit penalties', 'other'], ['8300', 'Capex written off', 'other'], ['7210', 'Interest on loans', 'other'], ['7215', 'Loan fees', 'other'],
   ['1450', 'Prepaid insurance', 'asset'], ['1750', 'Renewable energy certificates', 'asset'], ['4300', 'Carbon credit sales', 'revenue'], ['5150', 'Renewable energy certificates retired', 'expense'],
   ['6600', 'Insurance', 'expense'], ['6605', 'Insurance recoveries', 'expense'],
+  ['1190', 'Disputed funds (chargebacks)', 'asset'], ['1350', 'Grants receivable', 'asset'], ['2420', 'Accrued rent', 'liability'], ['2600', 'Deferred grant income', 'liability'], ['2610', 'Grants repayable', 'liability'],
+  ['4400', 'Grant income', 'revenue'], ['6520', 'Chargeback losses', 'expense'], ['6700', 'Grant clawbacks', 'expense'],
 ];
 export const BILL_ACCOUNT: Record<string, string> = { energy: '5100', maintenance: '6200', rent: '6210', installation: '6220', equipment: '6230', connectivity: '6240', services: '6250', other: '6290' };
 /** (v1.32.0) The payable a bill's withholding is posted to, by kind. */
@@ -390,6 +392,11 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
     L.push({ account: bank(c.kind), debit: v, credit: 0, description: d }, { account: '6605', debit: 0, credit: v, description: d });
   }
   for (const [c, L] of Object.entries(inLines)) add('insurance', c, `Insurance, ${month}`, L);
+  // (v1.36.0) Grants, landlord rent accruals and chargebacks, each module's own journal (imported here: no cycles).
+  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks']] as const) {
+    const j: Record<string, Line[]> = await (await import(mod)).journal(orgId, month);
+    for (const [c, L] of Object.entries(j)) if (L.length) add(src, c, `${label}, ${month}`, L);
+  }
   return out.filter((d) => balanced(d.lines));
 }
 
