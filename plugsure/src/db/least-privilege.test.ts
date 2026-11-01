@@ -51,7 +51,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'site_energy_asset', 'site_energy_settings', 'site_energy_reading', 'charger_health', 'report_definition', 'org_saml_provider', 'saml_login_tx', 'saml_user_link',
       'scim_config', 'scim_user', 'scim_group', 'scim_group_member', 'dynamic_price_settings', 'dynamic_price_rule', 'site_price_now',
       'dr_program', 'dr_event', 'dr_event_site', 'status_page', 'status_incident', 'status_subscriber',
-      'fleet_vehicle', 'session_departure', 'diagnostic_run']]);
+      'fleet_vehicle', 'session_departure', 'diagnostic_run',
+      'support_settings', 'support_case', 'support_message', 'support_macro', 'site_candidate', 'credit_settings', 'gift_card_batch', 'gift_card', 'referral_code', 'referral', 'driver_credit_entry', 'telematics_connection', 'vehicle_telemetry']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -162,5 +163,6 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     dr_program: 'INSERT,SELECT,UPDATE', dr_event: 'INSERT,SELECT,UPDATE', dr_event_site: 'INSERT,SELECT,UPDATE',
     status_page: 'INSERT,SELECT,UPDATE', status_incident: 'INSERT,SELECT,UPDATE', status_subscriber: 'DELETE,INSERT,SELECT,UPDATE',
     fleet_vehicle: 'INSERT,SELECT,UPDATE', session_departure: 'INSERT,SELECT,UPDATE', diagnostic_run: 'INSERT,SELECT,UPDATE',
+    support_settings: 'INSERT,SELECT,UPDATE', support_case: 'INSERT,SELECT,UPDATE', support_message: 'INSERT,SELECT,UPDATE', support_macro: 'INSERT,SELECT,UPDATE', site_candidate: 'INSERT,SELECT,UPDATE', credit_settings: 'INSERT,SELECT,UPDATE', gift_card_batch: 'INSERT,SELECT,UPDATE', gift_card: 'INSERT,SELECT,UPDATE', referral_code: 'INSERT,SELECT,UPDATE', referral: 'INSERT,SELECT,UPDATE', driver_credit_entry: 'INSERT,SELECT,UPDATE', telematics_connection: 'INSERT,SELECT,UPDATE', vehicle_telemetry: 'INSERT,SELECT,UPDATE',
   });
 });

@@ -118,7 +118,9 @@ export async function needsFor(siteId: string, now = new Date()): Promise<{ need
     let departureAt: Date | null = r.departure_at ? new Date(r.departure_at) : null;
     let neededWh: number | null = r.needed_wh != null ? Number(r.needed_wh) : null;
     if (!departureAt) {
-      const soc = r.soc_percent != null ? Number(r.soc_percent) : null;
+      // (v1.45.0) The car's own state of charge, else a fresh telematics reading for the vehicle.
+      const soc = r.soc_percent != null ? Number(r.soc_percent)
+        : r.vehicle_id ? await (await import('./telematics.js')).freshSoc(r.vehicle_id, now).catch(() => null) : null;
       let source: 'ocpp' | 'vehicle' | null = null;
       let fromNow = false; // worked out from the SoC now: the energy still to come, so what was delivered is added below
       if (r.ocpp_departure && new Date(r.ocpp_departure).getTime() > now.getTime()) {
@@ -171,11 +173,16 @@ export async function recordPlans(siteId: string, plans: Plan[], allocations: Al
 const vehicleOf = (r: any) => ({
   id: String(r.id), name: r.name, plate: r.plate ?? null, fleetAccountId: r.fleet_account_id ?? null, fleet: r.fleet_name ?? null, batteryKwh: r.battery_kwh == null ? null : Number(r.battery_kwh),
   tokenId: r.token_id ?? null, tokenUid: r.token_uid ?? null, departureTime: r.departure_time ?? null, targetSocPct: r.target_soc_pct ?? null, targetKwh: r.target_kwh == null ? null : Number(r.target_kwh),
+  // (v1.45.0) Telematics: the connection, the vehicle's id there, and its latest reading.
+  telematicsConnectionId: r.telematics_connection_id == null ? null : String(r.telematics_connection_id), telematicsId: r.telematics_vehicle_id ?? null,
+  socPct: r.t_soc == null ? null : Number(r.t_soc), rangeKm: r.t_range == null ? null : Number(r.t_range), readingAt: r.t_at ? new Date(r.t_at).toISOString() : null,
 });
 
 export async function vehicles(orgId: string) {
   const rows = await outsideRequestScope(() => many<any>(
-    `SELECT v.*, f.name AS fleet_name, t.uid AS token_uid FROM fleet_vehicle v LEFT JOIN fleet_account f ON f.id = v.fleet_account_id LEFT JOIN token t ON t.id = v.token_id
+    `SELECT v.*, f.name AS fleet_name, t.uid AS token_uid, tm.soc_pct AS t_soc, tm.range_km AS t_range, tm.recorded_at AS t_at
+       FROM fleet_vehicle v LEFT JOIN fleet_account f ON f.id = v.fleet_account_id LEFT JOIN token t ON t.id = v.token_id
+       LEFT JOIN LATERAL (SELECT soc_pct, range_km, recorded_at FROM vehicle_telemetry x WHERE x.vehicle_id = v.id ORDER BY x.recorded_at DESC LIMIT 1) tm ON true
       WHERE v.org_id = $1 AND v.archived_at IS NULL ORDER BY v.name, v.id`, [orgId]));
   return rows.map(vehicleOf);
 }

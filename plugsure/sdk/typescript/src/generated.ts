@@ -11483,6 +11483,19 @@ export class Operations {
   }
 
   /**
+   * Add a candidate site
+   *
+   * (v1.45.0) name, lat, lon, connectors (1–100), powerKw, status (idea, surveyed, approved, rejected), notes. Audited.
+   *
+   * `POST /v1/demand/candidates` · needs `site:write`
+   */
+  addCandidateSite(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/demand/candidates", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a capex project
    *
    * (v1.33.0) Numbered CP-0001…; budget by bill category. Audited.
@@ -11863,6 +11876,32 @@ export class Operations {
     body: AddSupplierBody;
   }, options?: RequestOptions): Promise<AddSupplierResponse> {
     return this.transport.request<AddSupplierResponse>({ method: "POST", path: "/v1/finance/suppliers", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a support macro
+   *
+   * (v1.45.0) name, body ({{name}}, {{number}}, {{charger}}, {{site}}), category, setStatus (open, pending, resolved). Audited.
+   *
+   * `POST /v1/support/macros` · needs `session:write`
+   */
+  addSupportMacro(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/macros", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a telematics connection
+   *
+   * (v1.45.0) name, kind (webhook: the platform posts to /v1/telematics/ingest/{key}, the key returned once; poll: url (https, public), authorization (kept sealed), pollMinutes 5–1440), fieldMap (dot paths: list, vehicleId, socPct, rangeKm, lat, lon, odometerKm, charging, at; socIsFraction "true" for 0–1). Audited.
+   *
+   * `POST /v1/telematics/connections` · needs `smartcharging:write`
+   */
+  addTelematicsConnection(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/telematics/connections", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12763,6 +12802,17 @@ export class Operations {
   }
 
   /**
+   * Candidate sites, scored
+   *
+   * (v1.45.0) Each place being considered, scored 0–100 from nearby demand (50 %), the gap to the nearest site (30 %) and how busy the sites within 5 km are (20 %), with an estimate of sessions a day. Best first.
+   *
+   * `GET /v1/demand/candidates` · needs `site:read`
+   */
+  candidateSitesScored(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/demand/candidates", accept: "json" }, options);
+  }
+
+  /**
    * Capex project
    *
    * (v1.33.0) The project with its budget by category, linked bills and orders.
@@ -13245,6 +13295,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a candidate site
+   *
+   * (v1.45.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/demand/candidates/{id}` · needs `site:write`
+   */
+  changeOrArchiveCandidateSite(params: {
+    /** The candidate. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/demand/candidates/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a dynamic pricing rule
    *
    * (v1.43.0) The fields above, or archive: true. Audited.
@@ -13350,6 +13415,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a support macro
+   *
+   * (v1.45.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/support/macros/{id}` · needs `session:write`
+   */
+  changeOrArchiveSupportMacro(params: {
+    /** The macro. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/support/macros/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a payroll line
    *
    * (v1.33.0) overtime, bonus, deduction (draft only); the line and totals are recomputed.
@@ -13392,6 +13472,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/status-page", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, re-key or archive a telematics connection
+   *
+   * (v1.45.0) The fields above, rotateKey: true (a webhook's new key, returned once), or archive: true (its vehicles are unlinked). Audited.
+   *
+   * `PUT /v1/telematics/connections/{id}` · needs `smartcharging:write`
+   */
+  changeReKeyOrArchiveTelematicsConnection(params: {
+    /** The connection. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/telematics/connections/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13450,6 +13545,34 @@ export class Operations {
     body: ChangeSupplierBody;
   }, options?: RequestOptions): Promise<ChangeSupplierResponse> {
     return this.transport.request<ChangeSupplierResponse>({ method: "PUT", path: "/v1/finance/suppliers/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a support case
+   *
+   * (v1.45.0) status (open, pending, resolved, closed), priority (moves the due times), category, assigneeId (null to unassign). Resolving it resolves its SLA alert. Audited.
+   *
+   * `PUT /v1/support/cases/{id}` · needs `session:write`
+   */
+  changeSupportCase(params: {
+    /** The case. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/support/cases/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change the support desk settings
+   *
+   * (v1.45.0) enabled (drivers can report problems in the app; e-mail and WhatsApp open cases), sla {urgent|high|normal|low: {first, resolve}} in minutes, autoAcknowledge. Audited.
+   *
+   * `PUT /v1/support/settings` · needs `session:write`
+   */
+  changeSupportDeskSettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/support/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14048,6 +14171,19 @@ export class Operations {
   }
 
   /**
+   * Create gift cards or vouchers
+   *
+   * (v1.45.0) name, kind (gift: sold — priceMinor per card, at most its value, soldOn, buyer, cashAccountId; voucher: given away), currency, valueMinor, quantity (1–10,000), expiresOn. The codes are returned once, here. Audited.
+   *
+   * `POST /v1/credit/batches` · needs `tariff:write`
+   */
+  createGiftCardsOrVouchers(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/credit/batches", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Create a membership plan
    *
    * With `offeredInApp`, drivers can buy it in the app as a 30-day pass (QRIS, e-wallet or card), renewed by hand or automatically with a saved card or linked e-wallet. A driver switching to another plan has the unused days of the current pass credited.
@@ -14413,6 +14549,17 @@ export class Operations {
     body: DeliverOrRemoveObligationBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/contracts/{id}/obligations/{oid}", pathParams: { id: params.id, oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Demand by site
+   *
+   * (v1.45.0) Each site over the last 8 weeks: connectors, utilisation, the busiest hour and how busy it is, hours a week at 80 % or more, drivers turned away by the queue in 30 days, the trend, the next 7 days' sessions and kWh, and advice (add_connectors with how many, under_used, ok, no_history).
+   *
+   * `GET /v1/demand/sites` · needs `site:read`
+   */
+  demandBySite(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/demand/sites", accept: "json" }, options);
   }
 
   /**
@@ -14822,6 +14969,46 @@ export class Operations {
     body: DraftReportPackBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/report-packs", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Driver credit: a month's movement
+   *
+   * (v1.45.0) month (YYYY-MM), currency: gift cards sold (price and value), credit redeemed and issued (vouchers, referrals, adjustments), used (paid-for and promotional) and expired. The ledger posts it (source driver_credit): 2260 gift card liability, 4110 charging paid with credit, 4160 breakage, 6450 promotions.
+   *
+   * `GET /v1/finance/driver-credit` · needs `payment:read`, `tariff:read`
+   */
+  driverCreditMonthMovement(params?: {
+    query?: {
+      month?: string;
+      currency?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/driver-credit", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Driver credit: overview
+   *
+   * (v1.45.0) The settings, credit outstanding (paid-for, promotional, held by charges), this month's movement, the gift card and voucher batches, and the latest referrals.
+   *
+   * `GET /v1/credit` · needs `tariff:read`
+   */
+  driverCreditOverview(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/credit", accept: "json" }, options);
+  }
+
+  /**
+   * Driver credit settings
+   *
+   * (v1.45.0) enabled, currency, expiryMonths (1–60), minGatewayMinor (what a charge paid partly with credit still pays through the gateway), referralEnabled, referrerRewardMinor, refereeRewardMinor, referralMinKwh (the new driver's first paid session), referralMonthlyCap. Audited.
+   *
+   * `PUT /v1/credit/settings` · needs `tariff:write`
+   */
+  driverCreditSettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/credit/settings", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16162,6 +16349,21 @@ export class Operations {
   }
 
   /**
+   * Give or take back a driver's credit
+   *
+   * (v1.45.0) amountMinor (positive: goodwill credit; negative: takes back promotional credit only, never paid-for), note (required). Audited.
+   *
+   * `POST /v1/credit/drivers/{driverId}/adjust` · needs `tariff:write`
+   */
+  giveOrTakeBackDriverCredit(params: {
+    /** The app driver. */
+    driverId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/credit/drivers/{driverId}/adjust", pathParams: { driverId: params.driverId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Grant
    *
    * (v1.36.0) With its conditions, claims and clawbacks.
@@ -16266,6 +16468,22 @@ export class Operations {
   }
 
   /**
+   * Hour-by-hour demand forecast
+   *
+   * (v1.45.0) siteId (default: every site together), days (1–14, default 7): the hour-of-week heatmap (occupancy, sessions, kWh) and the forecast for each coming hour (the profile × the trend).
+   *
+   * `GET /v1/demand/forecast` · needs `site:read`
+   */
+  hourByHourDemandForecast(params?: {
+    query?: {
+      siteId?: string;
+      days?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/demand/forecast", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Import card transactions
    *
    * (v1.39.0) csv: the bank's export, one line each: date (YYYY-MM-DD), merchant, amount in the card's currency (a refund negative), reference, category. Lines already imported are skipped. Audited.
@@ -16303,6 +16521,21 @@ export class Operations {
    */
   importSiteInvestments(options?: RequestOptions): Promise<ImportSiteInvestmentsResponse> {
     return this.transport.request<ImportSiteInvestmentsResponse>({ method: "POST", path: "/v1/finance/assets/import-investments", accept: "json" }, options);
+  }
+
+  /**
+   * Inbound support e-mail (the e-mail provider)
+   *
+   * (v1.45.0) The operator's e-mail provider forwards what arrives at the support address: JSON {from, fromName, subject, text}. A subject carrying a case's [PS-n] from the case's own customer adds to it (and reopens it); anything else opens a case. Quoted earlier messages are cut. Authenticated by the key in the path.
+   *
+   * `POST /v1/support/inbound-email/{key}`
+   */
+  inboundSupportEMailEMailProvider(params: {
+    /** The inbound key (Support → Settings). */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/inbound-email/{key}", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -16759,6 +16992,21 @@ export class Operations {
     body: LinkBankStatementToAccountBody;
   }, options?: RequestOptions): Promise<LinkBankStatementToAccountResponse> {
     return this.transport.request<LinkBankStatementToAccountResponse>({ method: "POST", path: "/v1/finance/cash/accounts/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Link a fleet vehicle to its telematics id
+   *
+   * (v1.45.0) connectionId and telematicsId (the vehicle's id on the platform, often its VIN); connectionId null to unlink. Audited.
+   *
+   * `PUT /v1/fleet-vehicles/{id}/telematics` · needs `smartcharging:write`
+   */
+  linkFleetVehicleToItsTelematicsId(params: {
+    /** The vehicle. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/fleet-vehicles/{id}/telematics", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17886,6 +18134,17 @@ export class Operations {
   }
 
   /**
+   * A new key for inbound support e-mail
+   *
+   * (v1.45.0) The key for /v1/support/inbound-email/{key}, shown once; the old one stops working. Audited.
+   *
+   * `POST /v1/support/settings/inbound-key` · needs `session:write`
+   */
+  newKeyForInboundSupportEMail(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/settings/inbound-key", accept: "json" }, options);
+  }
+
+  /**
    * A new key for the site's energy box
    *
    * (v1.42.0) Returns the key once (pse_…); only its hash is kept and the previous key stops working. Audited.
@@ -18032,6 +18291,19 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/status-page/incidents", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Open a support case (staff)
+   *
+   * (v1.45.0) subject, body, category (charging, payment, refund, account, charger_fault, other), priority (low, normal, high, urgent; by default from the category), customerName, customerEmail, sessionId, chargePointId. Its first-answer and resolution times come from the priority's SLA. Audited.
+   *
+   * `POST /v1/support/cases` · needs `session:write`
+   */
+  openSupportCaseStaff(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/cases", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18449,6 +18721,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/programs/{id}/poll", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Poll a telematics connection now
+   *
+   * (v1.45.0) Reads the platform now (through the outbound guard: 15 s, 1 MB, no redirects).
+   *
+   * `POST /v1/telematics/connections/{id}/poll` · needs `smartcharging:write`
+   */
+  pollTelematicsConnectionNow(params: {
+    /** The connection. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/telematics/connections/{id}/poll", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -20039,6 +20325,21 @@ export class Operations {
   }
 
   /**
+   * Reply to a support case, or add a note
+   *
+   * (v1.45.0) body, or macroId (its text, with {{name}}, {{number}}, {{charger}}, {{site}} filled in, and its status); internal: true for a note never sent; status. A reply goes out on the case's channel: e-mail (the operator's e-mail channel), WhatsApp (within its 24-hour window) or the app (with a push notification). Audited.
+   *
+   * `POST /v1/support/cases/{id}/messages` · needs `session:write`
+   */
+  replyToSupportCaseOrAddNote(params: {
+    /** The case. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/cases/{id}/messages", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Reply to a WhatsApp customer
    *
    * Sends a free-form text from the platform's number. Allowed within 24 hours of the customer's last message only (409 otherwise: WhatsApp then takes approved templates only). Staff take the conversation over (handler human; the assistant stops), except in draft mode when the assistant has it: sending its drafts keeps it drafting. 502 with Meta's reason when the send fails. Audited as whatsapp.support_reply.
@@ -21058,6 +21359,21 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<WebhookSendResult> {
     return this.transport.request<WebhookSendResult>({ method: "POST", path: "/v1/webhooks/{id}/test", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Send vehicle readings (telematics platform)
+   *
+   * (v1.45.0) One reading or a list, read with the connection's field map; each matched to a linked vehicle by its telematics id. Unknown vehicles are counted, not stored. Authenticated by the key in the path.
+   *
+   * `POST /v1/telematics/ingest/{key}`
+   */
+  sendVehicleReadingsTelematicsPlatform(params: {
+    /** The connection's key. */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/telematics/ingest/{key}", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -22666,6 +22982,77 @@ export class Operations {
   }
 
   /**
+   * A support case
+   *
+   * (v1.45.0) The case, its messages (and the WhatsApp chat since it opened), the session it is about (energy, total, payment and refund state) and the customer's other cases.
+   *
+   * `GET /v1/support/cases/{id}` · needs `session:read`
+   */
+  supportCase(params: {
+    /** The case. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/support/cases/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Support cases
+   *
+   * (v1.45.0) status (active — the default: new, open and pending — or one status), priority, category, assignee (me, none), breached, q (subject, customer, PS-number). Most urgent and soonest due first; at most 300. With counts (new, active, breached, unassigned, mine).
+   *
+   * `GET /v1/support/cases` · needs `session:read`
+   */
+  supportCases(params?: {
+    query?: {
+      status?: string;
+      priority?: string;
+      category?: string;
+      assignee?: string;
+      breached?: string;
+      q?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/support/cases", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Support desk figures
+   *
+   * (v1.45.0) Over days (default 30): opened, resolved, breached (and its share), the median first answer and resolution in minutes, satisfaction (1–5), by channel and by category.
+   *
+   * `GET /v1/support/stats` · needs `session:read`
+   */
+  supportDeskFigures(params?: {
+    query?: {
+      days?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/support/stats", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Support desk settings
+   *
+   * (v1.45.0) enabled, the SLA per priority (minutes to the first answer and to resolution), autoAcknowledge (e-mail), the inbound key's prefix.
+   *
+   * `GET /v1/support/settings` · needs `session:read`
+   */
+  supportDeskSettings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/support/settings", accept: "json" }, options);
+  }
+
+  /**
+   * Support macros
+   *
+   * (v1.45.0) Saved replies.
+   *
+   * `GET /v1/support/macros` · needs `session:read`
+   */
+  supportMacros(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/support/macros", accept: "json" }, options);
+  }
+
+  /**
    * Suspend a charge point
    *
    * Takes a charge point out of service without revoking its credentials: it stays connected, its BootNotification is answered Pending, and new authorisations, starts and remote starts are refused; the driver app keeps it on the map but sells, reserves and queues nothing. Live driver reservations and queue offers on it are released, their fee waived or refunded and the queue place kept. A session already running finishes normally and is billed. Any open outage is closed (planned downtime). 409 when it is already suspended, awaiting adoption or decommissioned. The optional reason is recorded in the audit entry charge_point.suspended.
@@ -22793,6 +23180,17 @@ export class Operations {
    */
   taxFilingCalendar(options?: RequestOptions): Promise<TaxFilingCalendarResponse> {
     return this.transport.request<TaxFilingCalendarResponse>({ method: "GET", path: "/v1/finance/tax/calendar", accept: "json" }, options);
+  }
+
+  /**
+   * Telematics connections and the latest readings
+   *
+   * (v1.45.0) Each connection (webhook or poll; its field map, last reading, last error, vehicles linked) and each vehicle's latest reading (state of charge, range, position, odometer; fresh when 30 minutes or newer).
+   *
+   * `GET /v1/telematics/connections` · needs `smartcharging:read`
+   */
+  telematicsConnectionsAndLatestReadings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/telematics/connections", accept: "json" }, options);
   }
 
   /**
@@ -23345,6 +23743,20 @@ export class Operations {
     body: VoidAssetBody;
   }, options?: RequestOptions): Promise<VoidAssetResponse> {
     return this.transport.request<VoidAssetResponse>({ method: "POST", path: "/v1/finance/assets/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a batch's unused codes
+   *
+   * (v1.45.0) Codes not redeemed yet stop working; credit already redeemed stays the drivers'. Audited.
+   *
+   * `POST /v1/credit/batches/{id}/void` · needs `tariff:write`
+   */
+  voidBatchUnusedCodes(params: {
+    /** The batch. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/credit/batches/{id}/void", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**

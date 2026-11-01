@@ -235,6 +235,10 @@ export function startWorkers(): () => void {
   // (v1.43.0) Each site's dynamic price now (a session starting is fixed at it), and OpenADR 3 demand-response events.
   const dynamicPrices = once('dynamic-pricing', async () => { await (await import('./dynamic-pricing.js')).sweep(); });
   const openAdr = once('demand-response-poll', async () => { await (await import('./demand-response.js')).pollAll(); });
+  // (v1.45.0) Support SLAs, driver credit (stale holds, expiry, referrals) and telematics polling.
+  const supportSla = once('support-sla', async () => { await (await import('./support-desk.js')).slaSweep(); });
+  const creditSweep = once('driver-credit', async () => { const m = await import('./driver-credit.js'); await m.sweep(); await m.qualifyReferrals(); });
+  const telematicsPoll = once('telematics-poll', async () => { await (await import('./telematics.js')).pollDue(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -378,6 +382,9 @@ export function startWorkers(): () => void {
     every(customReports, 60 * 60_000, 'custom-reports'),
     every(dynamicPrices, 60_000, 'dynamic-pricing'),
     every(openAdr, 5 * 60_000, 'demand-response-poll'),
+    every(supportSla, 5 * 60_000, 'support-sla'),
+    every(creditSweep, 15 * 60_000, 'driver-credit'),
+    every(telematicsPoll, 5 * 60_000, 'telematics-poll'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

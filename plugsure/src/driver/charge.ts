@@ -363,7 +363,7 @@ export interface PaymentView {
 }
 
 /** Where acquirers send the driver back after an e-wallet or card payment. */
-export interface PayOptions { channel?: string | null; phone?: string | null; returnUrl: string; savedCardId?: string | null; saveCard?: boolean; walletId?: string | null }
+export interface PayOptions { channel?: string | null; phone?: string | null; returnUrl: string; savedCardId?: string | null; saveCard?: boolean; walletId?: string | null; useCredit?: boolean }
 
 /** Render a QRIS string as a compact SVG data URI, so the app just displays it. */
 export async function qrDataUri(text: string): Promise<string> {
@@ -424,6 +424,22 @@ export async function checkoutPrepaid(
     : null;
   const claimTag = reserved?.uid ?? `PS-${randomBytes(6).toString('hex').toUpperCase()}`;
 
+  // (v1.45.0) Credit (gift cards, vouchers, referral rewards) pays part of it: held now, and only the rest goes to the
+  // payment gateway (never less than the operator's minimum). What the session does not use comes back as credit.
+  const chargeId = randomUUID();
+  let creditHeld = 0;
+  if (pay.useCredit && principal.appDriverId) {
+    const credit = await import('../services/driver-credit.js');
+    const cs = await credit.settings(c.org_id);
+    if (cs.enabled && cs.currency === currency) {
+      const bal = (await credit.balance(c.org_id, principal.appDriverId, currency)).totalMinor;
+      const want = Math.min(bal, amountMinor - Math.max(1, cs.minGatewayMinor));
+      if (want > 0) creditHeld = (await credit.hold(c.org_id, principal.appDriverId, currency, want, chargeId)).heldMinor;
+    }
+  }
+  const releaseCredit = async () => { if (creditHeld > 0) await (await import('../services/driver-credit.js')).settle(chargeId, 0).catch(() => {}); };
+  const gatewayMinor = amountMinor - creditHeld;
+
   // The payment is recorded (pending, bound to its claim tag) BEFORE the acquirer is asked, and its acquirer reference —
   // derived from this record's id, so a repeated request names the same payment — is added just before the request
   // (startPayment's prepare). A saved card or linked e-wallet charged at once whose answer is lost, or whose record could
@@ -435,7 +451,7 @@ export async function checkoutPrepaid(
         (id, org_id, provider, method, mode, state, amount_authorised_minor, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted,
          expires_at, integration_id, channel, currency, dynamic_price_bps)
       VALUES ($1, $2, $3, $4, 'prepurchase', 'pending', $5, $6, $7, $8, true, now() + interval '30 minutes', $9, $10, $11, $12)`,
-    [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), amountMinor, q.allowanceWh, c.connector_uuid, claimTag,
+    [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), gatewayMinor, q.allowanceWh, c.connector_uuid, claimTag,
      acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20), currency, q.dynamicPriceBps ?? null],
   );
   // (v1.13.0) The account asked is recorded too: the fallback (Duitku), when the main acquirer did not answer.
@@ -452,7 +468,7 @@ export async function checkoutPrepaid(
       channel: pay.channel, customerPhone: pay.phone ?? principal.account?.phone ?? null, returnUrl: pay.returnUrl,
       appDriverId: principal.appDriverId, savedCardId: pay.savedCardId ?? null, saveCard: pay.saveCard === true, allowHold: true, walletId: pay.walletId ?? null,
       referenceId: `charge:${intentId}`,
-      amountMinor,
+      amountMinor: gatewayMinor,
       currency,
       description: `${await appNameFor(c.org_id)} ${c.site_name} • ${c.ocpp_identity}/${c.connector_no}`,
       prepare,
@@ -461,6 +477,7 @@ export async function checkoutPrepaid(
     if (e instanceof MethodUnavailable) {
       // Refused (declined, not offered, link ended): nothing was taken.
       await query(`UPDATE payment_intent SET state = 'failed', updated_at = now() WHERE id = $1 AND state = 'pending'`, [intentId]);
+      await releaseCredit();
       return { ok: false, error: e.message, ...(e.code ? { code: e.code } : {}) };
     }
     // No answer from the acquirer: the record stays pending with its reference, for a notification to settle.
@@ -499,28 +516,29 @@ export async function checkoutPrepaid(
 
   const dc = await one<{ id: string }>(
     `INSERT INTO driver_charge
-        (device_id, app_driver_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_minor, promo_code, currency)
-      VALUES ($1,$2,$3,$4,$5,$6,'prepaid',$7,$8,$9) RETURNING id`,
-    [principal.deviceId, principal.appDriverId, c.org_id, c.connector_uuid, tok!.id, intent.id, amountMinor,
+        (id, device_id, app_driver_id, org_id, connector_uuid, token_id, payment_intent_id, mode, amount_minor, promo_code, currency, credit_hold_minor)
+      VALUES ($10,$1,$2,$3,$4,$5,$6,'prepaid',$7,$8,$9,$11) RETURNING id`,
+    [principal.deviceId, principal.appDriverId, c.org_id, c.connector_uuid, tok!.id, intent.id, gatewayMinor,
      // Kept only when it applies, so the session is rated with it.
-     promoCode && q.promotion && !q.codeProblem ? String(promoCode).trim().toUpperCase().slice(0, 30) : null, currency],
+     promoCode && q.promotion && !q.codeProblem ? String(promoCode).trim().toUpperCase().slice(0, 30) : null, currency, chargeId, creditHeld],
   );
 
-  logger.info({ chargeId: dc!.id, connector: c.connector_uuid, amountMinor, provider: acq.provider.name }, 'driver prepaid checkout');
-  await logPaymentCreated(acq.resolved, c.org_id, charge.providerRef, amountMinor, 'driver app', charge.channel);
+  logger.info({ chargeId: dc!.id, connector: c.connector_uuid, amountMinor, creditHeld, provider: acq.provider.name }, 'driver prepaid checkout');
+  await logPaymentCreated(acq.resolved, c.org_id, charge.providerRef, gatewayMinor, 'driver app', charge.channel);
   return {
     ok: true,
     chargeId: dc!.id,
     // The app keeps showing the site's currency when it comes back from the acquirer's page.
     currency,
-    payment: paymentView(charge, amountMinor),
+    ...(creditHeld > 0 ? { creditMinor: creditHeld } : {}),
+    payment: paymentView(charge, gatewayMinor),
     ...(charge.qrString ? {
       qr: {
         qrString: charge.qrString,
         qrImage: await qrDataUri(charge.qrString),
         qrPng: await qrPngDataUri(charge.qrString),
         providerRef: charge.providerRef,
-        amountMinor,
+        amountMinor: gatewayMinor,
         expiresAt: charge.expiresAt,
       },
     } : {}),
@@ -1316,6 +1334,8 @@ export async function receipt(principal: DriverPrincipal, chargeId: string): Pro
     signedData: await signedSummary(row.session_id ?? dc.session_id),
     // (v1.44.0) The charge's carbon: emitted and avoided against a petrol car (services/carbon.ts). Never blocks the receipt.
     carbon: await (await import('../services/carbon.js')).sessionCarbon(row.org_id, row.session_id ?? dc.session_id).catch(() => null),
+    // (v1.45.0) Credit that paid part of it (gift cards, vouchers, referral rewards).
+    creditUsedMinor: await one<{ u: string | null }>(`SELECT credit_used_minor AS u FROM driver_charge WHERE id = $1`, [dc.id]).then((r) => (r?.u == null ? null : Number(r.u))),
   };
 }
 

@@ -347,6 +347,8 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
       savedCardId: b.savedCardId ? String(b.savedCardId) : null,
       saveCard: b.saveCard === true,
       walletId: b.walletId ? String(b.walletId) : null,
+      // (v1.45.0) Pay part of a charge with credit (gift cards, vouchers, referral rewards).
+      useCredit: kind === 'charge' && b.useCredit === true,
       // The native app's return (G11): only its own `<slug>://paid` / link-domain `/paid`, through this server's bounce.
       returnUrl: acquirerReturnUrl(base, kind, appReturnSlug(b.returnUrl, req.brand ?? null)),
     };
@@ -830,6 +832,52 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     if (!r.ok) return reply.status(r.status).send({ error: r.error });
     return r;
   });
+
+  // ───────────────────────────────────────────────────────── (v1.45.0) credit and referrals
+
+  const creditFail = (reply: import('fastify').FastifyReply, e: unknown) => {
+    const s = (e as { statusCode?: number })?.statusCode;
+    if (s && s < 500) return reply.status(s).send({ error: (e as Error).message });
+    throw e;
+  };
+  app.get('/d/v1/credit', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk melihat kredit Anda.' });
+    return (await import('../services/driver-credit.js')).driverCredit(p.appDriverId);
+  });
+  app.post('/d/v1/credit/redeem', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk memakai kode.' });
+    try { return await (await import('../services/driver-credit.js')).redeem(p.appDriverId, (req.body as any)?.code); } catch (e) { return creditFail(reply, e); }
+  }));
+  app.post('/d/v1/credit/referral', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk memakai kode referal.' });
+    try { return await (await import('../services/driver-credit.js')).applyReferral(p.appDriverId, p.deviceId ?? null, (req.body as any)?.code); } catch (e) { return creditFail(reply, e); }
+  }));
+
+  // ───────────────────────────────────────────────────────── (v1.45.0) reporting a problem
+
+  app.get('/d/v1/support/cases', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk melihat laporan Anda.' });
+    return { cases: await (await import('../services/support-desk.js')).driverCases(p.appDriverId) };
+  });
+  app.post('/d/v1/support/cases', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk melapor.' });
+    try { return reply.status(201).send(await (await import('../services/support-desk.js')).driverCreate(p.appDriverId, (req.body ?? {}) as Record<string, unknown>)); } catch (e) { return creditFail(reply, e); }
+  }));
+  app.get('/d/v1/support/cases/:id', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP.' });
+    try { return await (await import('../services/support-desk.js')).driverCase(p.appDriverId, (req.params as { id: string }).id); } catch (e) { return creditFail(reply, e); }
+  });
+  app.post('/d/v1/support/cases/:id/messages', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP.' });
+    try { return await (await import('../services/support-desk.js')).driverReply(p.appDriverId, (req.params as { id: string }).id, (req.body ?? {}) as Record<string, unknown>); } catch (e) { return creditFail(reply, e); }
+  }));
 
   // ───────────────────────────────────────────────────────── loyalty points (per operator)
 

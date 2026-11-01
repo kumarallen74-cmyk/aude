@@ -241,6 +241,8 @@ async function handOff(cfg: SupportConfig, c: ConvRow, o: Extract<Outcome, { kin
     await deliver(c, text, { author: 'ai', model: o.model ?? null, inputTokens: o.inputTokens ?? null, outputTokens: o.outputTokens ?? null });
   }
   await notifyStaff(c, o.reason);
+  // (v1.45.0) A case on the support desk of the operator the driver last charged with (when its desk is on).
+  void import('./support-desk.js').then((m) => m.openFromWhatsapp(c.id, o.reason)).catch(() => null);
   return o;
 }
 
