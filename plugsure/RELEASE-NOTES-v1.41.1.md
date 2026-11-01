@@ -26,7 +26,7 @@ v1.41.1 fixes what a whole-system review found after the finance build and the m
   It recorded page errors, refused or failed API calls, error messages shown, text such as `undefined` or `NaN`, links that lead nowhere and pages wider than a phone.
 - **The driver web app:** at phone width, in light and dark mode, through each of its screens.
 - **The API:** every read operation in the OpenAPI document (323), with ids taken from the lists, checked for server errors.
-- **End-to-end suites:** all of them, including the 18 that the CI pipeline does not run, against a stack started as the pipeline starts it.
+- **End-to-end suites:** all 38, against a stack started as the pipeline starts it (the pipeline's two jobs between them run every suite), with field's platform-operator checks.
 
 ## Fixed
 
@@ -53,7 +53,11 @@ v1.41.1 fixes what a whole-system review found after the finance build and the m
 
 ### Driver app
 
-**Account, before signing in:** the app no longer asks for loyalty points, which need a phone-number account.
+- **Account, before signing in:** the app no longer asks for loyalty points, which need a phone-number account.
+- **Enter code, and the app's questions, in the app's own style.** The browser's plain pop-ups are replaced by a sheet that slides up in the app's colours and buttons, in Indonesian or English:
+  - *Enter code* (it asked with the browser's own prompt): the charger code, with an example. An empty code is answered on the sheet. Enter opens the charger; Escape, *Cancel* or a tap outside close it.
+  - *Stop charging now?* (on both charge screens) and *Remove this card?* / *Unlink this e-wallet?*: the same sheet, with the action in red.
+  - In English, unlinking an e-wallet asked "Remove this card?"; it now asks the right question.
 
 ### Tests and documentation
 
@@ -81,5 +85,6 @@ Deploy. There is nothing to migrate or configure.
 
 ## Verification
 
+- **Driver app:** the sheet checked in a phone browser in Indonesian and English, light and dark: it opens with the cursor in the code field, refuses an empty code, closes with Escape, Cancel or a tap outside, and an unknown code gives the app's usual message. No browser pop-up appears.
 - **Server:** typecheck clean; all unit and database tests passing, 2 of them new: the people a finance user can assign (active console users only), returned by both endpoints to a finance writer and not to a reader.
 - **End-to-end:** every suite passing.

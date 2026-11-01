@@ -344,6 +344,18 @@ input{font-family:inherit}
 
 /* scanner */
 .scanview{position:fixed;inset:0;background:#000;z-index:60;display:flex;flex-direction:column}
+/* (v1.41.1) The app's own sheet for a question or a code: in place of the browser's prompt() and confirm(). */
+.sheet-wrap{position:fixed;inset:0;z-index:70;background:rgba(4,10,12,.55);display:flex;align-items:flex-end;justify-content:center;animation:shfade .16s ease-out}
+.sheet{width:100%;max-width:520px;background:var(--raised);border-top:1px solid var(--line-2);border-radius:22px 22px 0 0;padding:10px 20px calc(20px + env(safe-area-inset-bottom));animation:shup .2s ease-out}
+.sheet .grip{width:40px;height:4px;border-radius:2px;background:var(--line-2);margin:0 auto 14px}
+.sheet h3{font-family:var(--f-num);font-weight:700;font-size:19px;color:var(--ink);margin:0 0 6px;letter-spacing:-.01em}
+.sheet p{margin:0;color:var(--body);font-size:14px}
+.sheet .sh-err{color:var(--danger);font-size:13px;font-weight:600;margin-top:8px}
+.sheet .acts{display:flex;gap:10px;margin-top:18px}
+.sheet .acts .cta{flex:1}
+@keyframes shup{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+@keyframes shfade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.sheet,.sheet-wrap{animation:none}}
 .scanview video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .scan-overlay{position:relative;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:2}
 .scan-frame{width:240px;height:240px;border-radius:28px;position:relative;box-shadow:0 0 0 100vmax rgba(0,0,0,.55)}
@@ -576,7 +588,7 @@ input{font-family:inherit}
     'Tidak bisa mengakses kamera. Gunakan kode manual.':'Can’t access the camera. Use manual code.',
     'Kode charger tidak dikenal. Coba pindai ulang atau masukkan kode manual.':'Charger code not recognized. Scan again or enter it manually.',
     'Ada masalah':'Something went wrong','Gagal memuat.':'Failed to load.','Tidak dapat terhubung ke server.':'Unable to connect to the server.',
-    'Konektor tidak ditemukan.':'Connector not found.','Masukkan kode charger (mis. AUTEL-DC60-SMB-002:1)':'Enter charger code (e.g. AUTEL-DC60-SMB-002:1)','Transaksi tidak ditemukan.':'Transaction not found.',
+    'Konektor tidak ditemukan.':'Connector not found.','Kode charger':'Charger code','Buka charger':'Open charger','Ketik kode yang tertera di charger, mis. AUTEL-DC60-SMB-002:1.':'Type the code shown on the charger, e.g. AUTEL-DC60-SMB-002:1.','Masukkan kode charger.':'Enter the charger code.','Masukkan kode charger (mis. AUTEL-DC60-SMB-002:1)':'Enter charger code (e.g. AUTEL-DC60-SMB-002:1)','Transaksi tidak ditemukan.':'Transaction not found.',
     'Beranda':'Home','Riwayat ':'History',
     'Watch live progress':'Watch live progress',
     'Perawatan':'Maintenance','Dalam perawatan':'Under maintenance','Sedang dalam perawatan.':'Under maintenance.',
@@ -1932,7 +1944,7 @@ VIEWS.rsession=async(v)=>{
       act.innerHTML=`<div class="banner b-info">${svg(I.info)}<div>Jika charger tidak mulai dalam satu menit, tempelkan kartu Anda di charger.</div></div>`;
     } else if(s.canStop){
       act.innerHTML=`<button class="cta danger" id="stop">${svg(I.stop)} Hentikan pengisian</button>`;
-      $('#stop').onclick=async()=>{ if(!confirm(window.tstr('Hentikan pengisian sekarang?')))return;
+      $('#stop').onclick=async()=>{ if(!(await askSheet({title:'Hentikan pengisian sekarang?',ok:'Hentikan pengisian',danger:true})))return;
         $('#stop').innerHTML='<span class="spinner"></span>';
         try{ await api('/v1/roaming/charge/'+id+'/stop',{method:'POST'}); alertBanner('Permintaan berhenti dikirim.'); }
         catch(e){ alertBanner(e.message); paint(s); }
@@ -1993,9 +2005,39 @@ async function resolveAndOpen(code){
   try{ const c=await api('/v1/resolve?code='+encodeURIComponent(code)); openConnector(c.connectorId); }
   catch(e){ alertBanner('Kode charger tidak dikenal. Coba pindai ulang atau masukkan kode manual.'); go('home'); }
 }
-function manualCode(){
-  const code=prompt(window.tstr('Masukkan kode charger (mis. AUTEL-DC60-SMB-002:1)'));
-  if(code&&code.trim()) resolveAndOpen(code.trim());
+/**
+ * (v1.41.1) A sheet in the app's own style, for a yes/no question or a short text (the charger code), in place of the
+ * browser's confirm() and prompt(). Resolves true or the text; null when cancelled (button, backdrop or Escape).
+ * The texts are Indonesian like the rest of the app; the language observer translates them on screen.
+ */
+function askSheet({title,text='',input=null,ok,cancel='Batalkan',danger=false}){
+  return new Promise((resolve)=>{
+    const w=el(`<div class="sheet-wrap" role="dialog" aria-modal="true" aria-labelledby="sh-t"><div class="sheet"><div class="grip"></div>
+      <h3 id="sh-t">${esc(title)}</h3>${text?`<p>${esc(text)}</p>`:''}
+      ${input?`<div class="field"><input id="sh-in" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" placeholder="${esc(input.placeholder||'')}" aria-label="${esc(window.tstr(title))}"></div><div class="sh-err" role="alert" hidden></div>`:''}
+      <div class="acts"><button class="cta ghost" type="button" data-no>${esc(cancel)}</button><button class="cta${danger?' danger':''}" type="button" data-ok>${esc(ok)}</button></div></div></div>`);
+    const prev=document.activeElement;
+    const done=(v)=>{ document.removeEventListener('keydown',key); w.remove(); try{ prev&&prev.focus&&prev.focus(); }catch(e){} resolve(v); };
+    const inp=$('#sh-in',w);
+    const submit=()=>{
+      if(!inp) return done(true);
+      const v=inp.value.trim();
+      if(!v){ const e=$('.sh-err',w); e.textContent=window.tstr(input.empty||'Masukkan kode charger.'); e.hidden=false; inp.focus(); return; }
+      done(v);
+    };
+    const key=(e)=>{ if(e.key==='Escape') done(null); else if(e.key==='Enter'&&inp&&document.activeElement===inp){ e.preventDefault(); submit(); } };
+    document.addEventListener('keydown',key);
+    w.addEventListener('click',(e)=>{ if(e.target===w) done(null); });
+    $('[data-no]',w).onclick=()=>done(null);
+    $('[data-ok]',w).onclick=submit;
+    document.body.appendChild(w);
+    setTimeout(()=>{ (inp||$('[data-ok]',w)).focus(); },30);
+  });
+}
+async function manualCode(){
+  const code=await askSheet({title:'Kode charger',text:'Ketik kode yang tertera di charger, mis. AUTEL-DC60-SMB-002:1.',
+    input:{placeholder:'AUTEL-DC60-SMB-002:1',empty:'Masukkan kode charger.'},ok:'Buka charger'});
+  if(code) resolveAndOpen(code);
 }
 async function openScanner(){
   document.body.classList.add('tabhide');
@@ -2540,7 +2582,7 @@ VIEWS.session=async(v)=>{
       $('#cancel').onclick=()=>go('home');
     } else {
       act.innerHTML=`<button class="cta danger" id="stop">${svg(I.stop)} Hentikan pengisian</button>`;
-      $('#stop').onclick=async()=>{ if(!confirm(window.tstr('Hentikan pengisian sekarang?')))return;
+      $('#stop').onclick=async()=>{ if(!(await askSheet({title:'Hentikan pengisian sekarang?',ok:'Hentikan pengisian',danger:true})))return;
         $('#stop').innerHTML='<span class="spinner"></span>';
         try{ await api('/v1/charge/'+id+'/stop',{method:'POST'}); tickSession(id,paint); }
         catch(e){ alertBanner(e.message); paint(s); }
@@ -2930,7 +2972,7 @@ async function paintCards(row){
         <div class="s">${k.expired?'Kedaluwarsa':wal(k)&&k.status==='pending'?'Menunggu persetujuan · '+esc(k.usableAt):(wal(k)?'Terhubung · ':'')+'Untuk '+esc(k.usableAt)}</div></div>
       <button class="cta ghost" type="button" data-rmcard="${esc(k.id)}" style="width:auto;padding:9px 14px;font-size:13.5px">${wal(k)?'Putuskan':'Hapus'}</button></div>`).join('')+
     `<div class="small muted" style="margin-top:8px">Nomor kartu dan akses e-wallet disimpan oleh penyedia pembayaran, bukan oleh PlugSure.</div>`;
-  row.querySelectorAll('[data-rmcard]').forEach((b)=>b.onclick=async()=>{ if(!confirm(window.tstr(b.textContent.trim()==='Putuskan'?'Putuskan e-wallet ini?':'Hapus kartu ini?'))) return;
+  row.querySelectorAll('[data-rmcard]').forEach((b)=>b.onclick=async()=>{ const unlink=b.textContent.trim()==='Putuskan'||b.textContent.trim()==='Unlink'; if(!(await askSheet({title:unlink?'Putuskan e-wallet ini?':'Hapus kartu ini?',ok:unlink?'Putuskan':'Hapus',danger:true}))) return;
     b.disabled=true; try{ await api('/v1/cards/'+b.dataset.rmcard,{method:'DELETE'}); try{ if(LS.getItem('ps_method')==='SAVED:'+b.dataset.rmcard) LS.removeItem('ps_method'); }catch(e){} haptic(); paintCards(row); }
     catch(e){ alertBanner(e.message); b.disabled=false; } });
   if(!d.cards.length) row.innerHTML='';
