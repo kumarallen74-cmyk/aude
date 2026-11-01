@@ -201,7 +201,7 @@ dbDescribe('Currencies and consolidation', () => {
     assert.deepEqual(f.json().rates, [{ currency: 'MYR', rate: 3500.5 }]);
     assert.ok(fxSeen.some((u) => /from=MYR&to=IDR/.test(u)));
     e = (await call('GET', `/v1/finance/energy?month=${month}`)).json();
-    assert.deepEqual({ missing: e.consolidated.missing, rev: e.consolidated.revenue }, { missing: [], rev: 1_000_000 + Math.round(10_000 * 3500.5) });
+    assert.deepEqual({ missing: e.consolidated.missing, rev: e.consolidated.revenue }, { missing: [], rev: 1_000_000 + Math.round((10_000 / 100) * 3500.5) }, 'RM 100.00 (10,000 sen) at Rp 3,500.50');
     assert.equal((await call('PUT', '/v1/finance/fx-rates', { month, currency: 'MYR', rate: 3400 })).statusCode, 200);
     const list = (await call('GET', `/v1/finance/fx-rates?month=${month}`)).json();
     assert.deepEqual(list.rates.map((r: any) => [r.currency, r.rate, r.source]), [['MYR', 3400, 'manual']]);
@@ -225,7 +225,7 @@ dbDescribe('The summary', () => {
     assert.equal(idr.dso, Math.round(500_000 / (1_000_000 / 90)));
     assert.equal(idr.margin.mtd, 1_000_000 - 600_000, '400 kWh at Rp 1 500');
     assert.equal(s.consolidated.currency, 'IDR');
-    assert.equal(s.consolidated.revenueMtd.amount, 1_000_000 + 10_000 * 3400);
+    assert.equal(s.consolidated.revenueMtd.amount, 1_000_000 + (10_000 / 100) * 3400, 'RM 100.00 at Rp 3,400');
   });
 });
 

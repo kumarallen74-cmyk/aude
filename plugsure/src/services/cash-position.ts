@@ -203,6 +203,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
   const [carbonMoves, insuranceMoves] = await Promise.all([(await import('./carbon.js')).cashMoves(orgId, upTo), (await import('./insurance.js')).cashMoves(orgId, upTo)]);
   // (v1.36.0) grant claims received and clawbacks repaid.
   const grantMoves = await (await import('./grants.js')).cashMoves(orgId, upTo);
+  // (v1.38.0) FX hedges settled net into the account.
+  const hedgeMoves = await (await import('./fx-treasury.js')).cashMoves(orgId, upTo);
   return {
     accounts,
     manual: manual.map((m) => ({ account_id: m.account_id, d: m.d, balance: Number(m.balance_minor) })),
@@ -218,6 +220,7 @@ async function book(orgId: string, upTo: string): Promise<Book> {
       ...carbonMoves,
       ...insuranceMoves,
       ...grantMoves,
+      ...hedgeMoves,
     ],
   };
 }

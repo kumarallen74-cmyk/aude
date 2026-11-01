@@ -3460,6 +3460,202 @@ async function planningSection(host, canWrite) {
   el.addEventListener('click', (e) => { const o = e.target.closest('[data-bpo]'); if (o) open(o.dataset.bpo); });
 }
 
+// ─────────────────────────────────────────── (v1.38.0) FX treasury and hedging
+
+const HG_ST = { open: ['t-info', 'open'], settled: ['t-ok', 'settled'], cancelled: ['t-mute', 'cancelled'] };
+// Treasury holds currencies the platform does not charge in (USD, EUR…): two decimals unless the platform knows better.
+const fxExp = (c) => CURRENCIES[c]?.exponent ?? (['JPY', 'KRW', 'VND'].includes(c) ? 0 : 2);
+const fxMoney = (v, c) => (CURRENCIES[c] ? fmt.money(v, c) : `${c} ${(v / 10 ** fxExp(c)).toLocaleString('en-US', { minimumFractionDigits: fxExp(c), maximumFractionDigits: fxExp(c) })}`);
+
+async function fxTreasurySection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let ex, hs, accts;
+  try { [ex, hs, accts] = await Promise.all([api('/v1/finance/fx-exposure'), api('/v1/finance/fx-hedges'), api('/v1/finance/cash/accounts').catch(() => ({ accounts: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => fxTreasurySection(host, canWrite);
+  const rep = ex.reportingCurrency;
+  const m = (v, c) => (v == null ? '—' : esc(fxMoney(v, c)));
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-hgnew>${icon('plus')} Record a hedge</button>` : ''}<button class="btn" type="button" data-fxx>${icon('download')} Excel</button></div>
+    ${rep ? callout('info', `What moves when rates move, at ${esc(ex.date)}: per currency, cash and receivables less payables and loans, and the open hedges. In ${esc(rep)} at ${esc(ex.month)}'s rate, the change since ${esc(ex.previousMonth)}'s rate, and the effect of a ${ex.sensitivityPct}% move.${ex.missingRates.length ? ` No rate for ${esc(ex.missingRates.join(', '))} this month (Settings → Currencies).` : ''}`)
+      : callout('warn', 'Set a reporting currency and the month\'s rates (Finance → Settings → Currencies) to value the exposure.')}
+    <div class="grid k3 section">${ex.total ? `${kpi(`Net exposure · ${esc(rep)}`, m(ex.total.net, rep), `${ex.currencies.length} currenc${ex.currencies.length === 1 ? 'y' : 'ies'}`)}${kpi('Revaluation', m(ex.total.revaluation, rep), `since ${esc(ex.previousMonth)}`, ex.total.revaluation < 0 ? 'warn' : '')}${kpi(`${ex.sensitivityPct}% move`, m(ex.total.sensitivity, rep), 'gain or loss either way')}` : kpi('Net exposure', '—', 'no reporting currency')}</div>
+    <div class="card section"><header><h3>Exposure by currency</h3></header><div data-fxe></div></div>
+    <div class="card section"><header><h3>Hedges</h3></header><div data-fxh></div></div>`;
+  table($('[data-fxe]', el), { columns: [
+    { label: 'Currency', render: (c) => `<b>${esc(c.currency)}</b>${c.rate != null ? `<div class="cell-sub">rate ${c.rate}${c.previousRate != null ? ` (was ${c.previousRate})` : ''}</div>` : `<div class="cell-sub">${tag('t-warn', 'no rate')}</div>`}` },
+    { label: 'Cash + receivables', num: true, render: (c) => `${m(c.cash + c.receivables, c.currency)}<div class="cell-sub">cash ${m(c.cash, c.currency)}</div>` },
+    { label: 'Payables + loans', num: true, render: (c) => `${m(c.payables + c.loans, c.currency)}<div class="cell-sub">loans ${m(c.loans, c.currency)}</div>` },
+    { label: 'Hedges', num: true, render: (c) => `${m(c.hedges, c.currency)}<div class="cell-sub">${c.hedgedPct}% hedged</div>` },
+    { label: 'Net', num: true, render: (c) => `<b>${m(c.net, c.currency)}</b>${c.netReporting != null ? `<div class="cell-sub">${m(c.netReporting, rep)}</div>` : ''}` },
+    { label: 'Revaluation', num: true, render: (c) => m(c.revaluation, rep) },
+  ], rows: ex.currencies, empty: 'Everything is in the reporting currency: no FX exposure.' });
+  table($('[data-fxh]', el), { columns: [
+    { label: 'Hedge', render: (h) => `<b>${esc(h.bank)}</b> <span class="cell-sub mono">${esc(h.reference ?? '')}</span><div class="cell-sub">${esc(h.purpose ?? '')}</div>` },
+    { label: 'Buys', num: true, render: (h) => `${m(h.notional, h.buyCurrency)}<div class="cell-sub">sells ${m(h.sellAmount, h.sellCurrency)} at ${h.rate}</div>` },
+    { label: 'Maturity', render: (h) => `${esc(h.maturityOn)}${h.daysToMaturity != null ? `<div class="cell-sub">${h.daysToMaturity < 0 ? `${-h.daysToMaturity} days past` : `in ${h.daysToMaturity} days`}</div>` : ''}` },
+    { label: 'Result', num: true, render: (h) => (h.status === 'open' ? (h.markToMarket != null ? `${m(h.markToMarket, h.sellCurrency)}<div class="cell-sub">marked at ${Number(h.marketRate.toFixed(4)).toLocaleString('en-US')}</div>` : '<span class="cell-sub">no rate</span>') : h.realised != null ? `${m(h.realised, h.sellCurrency)}<div class="cell-sub">realised at ${h.settledRate} on ${esc(h.settledOn)}</div>` : '—') },
+    { label: 'Status', render: (h) => tag(...HG_ST[h.status]) },
+    { label: '', render: (h) => (canWrite && h.status === 'open' ? `<button ${BTN} data-hgs="${h.id}">Settle</button> <button ${BTN} data-hgc="${h.id}">Cancel</button>` : '') },
+  ], rows: hs.hedges, empty: 'No hedges recorded.' });
+  const ac = (accts.accounts ?? []).filter((a) => !a.archived);
+  $('[data-fxx]', el).addEventListener('click', () => fetchFile('/v1/finance/fx-exposure?format=xlsx', 'plugsure-fx-exposure.xlsx'));
+  $('[data-hgnew]', el)?.addEventListener('click', () => modal({ title: 'Record an FX hedge', body: `<div class="form">${field('Bank', '<input name="b" maxlength="120">')}${field('Reference', '<input name="r" maxlength="80">', { opt: true })}${field('Buy currency', '<input name="bc" maxlength="3" placeholder="USD">')}${field('Sell currency', `<input name="sc" maxlength="3" value="${esc(rep ?? LEGACY_CURRENCY)}">`)}${field('Notional (in the currency bought)', '<input name="n" type="number" step="any" min="0">')}${field('Contract rate (one unit bought, in the currency sold)', '<input name="rt" type="number" step="any" min="0">')}${field('Trade date', `<input name="t" type="date" value="${zonedYmd()}">`)}${field('Maturity', '<input name="mt" type="date">')}${field('Settlement account', `<select name="a"><option value="">—</option>${ac.map((a) => `<option value="${a.id}">${esc(a.name)} (${esc(a.currency)})</option>`).join('')}</select>`, { opt: true })}${field('Purpose', '<input name="p" maxlength="300">', { opt: true })}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el)?.value.trim(); try { await api('/v1/finance/fx-hedges', { method: 'POST', body: { bank: v('b'), reference: v('r') || undefined, buyCurrency: v('bc').toUpperCase(), sellCurrency: v('sc').toUpperCase(), notional: Math.round(Number(v('n')) * 10 ** fxExp(v('bc').toUpperCase())), rate: Number(v('rt')), tradeOn: v('t'), maturityOn: v('mt'), cashAccountId: v('a') || undefined, purpose: v('p') || undefined } }); toast('Hedge recorded'); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  el.querySelectorAll('[data-hgs]').forEach((b) => b.addEventListener('click', () => modal({ title: 'Settle the hedge', body: `<div class="form">${field('Settled on', `<input name="d" type="date" value="${zonedYmd()}">`)}${field('Rate of the day', '<input name="r" type="number" step="any" min="0">')}</div><p class="cell-sub">The result, notional × (rate of the day − contract rate), posts to the ledger: FX gains (7400) or FX losses (8400).</p>`,
+    actions: [{ label: 'Cancel' }, { label: 'Settle', kind: 'primary', async onClick(mc) { try { const r = await api(`/v1/finance/fx-hedges/${b.dataset.hgs}`, { method: 'PUT', body: { status: 'settled', settledOn: $('[name="d"]', mc.el).value, settledRate: Number($('[name="r"]', mc.el).value) } }); toast(`Settled: ${fxMoney(r.realised, r.sellCurrency)}`); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] })));
+  el.querySelectorAll('[data-hgc]').forEach((b) => b.addEventListener('click', async () => { try { await api(`/v1/finance/fx-hedges/${b.dataset.hgc}`, { method: 'PUT', body: { status: 'cancelled' } }); toast('Hedge cancelled'); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+}
+
+// ─────────────────────────────────────────── (v1.38.0) procurement analytics
+
+const GRADE_T = { A: 't-ok', B: 't-info', C: 't-warn', D: 't-crit' };
+
+async function procurementSection(host, canWrite, months = 12) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, sup;
+  try { [d, sup] = await Promise.all([api(`/v1/finance/procurement?months=${months}`), api('/v1/finance/suppliers').catch(() => ({ suppliers: [] }))]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (n = months) => procurementSection(host, canWrite, n);
+  const m = (v, c) => (v == null ? '—' : esc(fmt.money(v, c)));
+  const pct = (v) => (v == null ? '—' : `${v}%`);
+  const c0 = d.spend.currencies[0];
+  const rising = d.prices.parts.filter((p) => p.rising).length + d.prices.energy.filter((p) => p.rising).length;
+  const sv = Object.entries(d.savings.totals)[0];
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Months', `<select data-prm>${[3, 6, 12].map((n) => `<option value="${n}"${n === months ? ' selected' : ''}>Last ${n} whole months</option>`).join('')}</select>`)}<div class="row" style="align-self:flex-end;gap:6px">${canWrite ? `<button class="btn primary" type="button" data-svnew>${icon('plus')} Record a saving</button>` : ''}<button class="btn" type="button" data-prx>${icon('download')} Excel</button></div></div>
+    <div class="grid k4 section">${c0 ? kpi(`Spend · ${esc(c0.currency)}`, m(c0.total, c0.currency), `${c0.bills} bills · ${c0.suppliers.length} suppliers`) : kpi('Spend', '—', 'no approved bills')}${kpi('Top supplier', c0?.topSupplierPct != null ? `${c0.topSupplierPct}%` : '—', c0?.suppliers[0] ? esc(c0.suppliers[0].supplier) : '', (c0?.topSupplierPct ?? 0) > 50 ? 'warn' : '')}${kpi('Prices rising', String(rising), `over ${d.prices.risePct}% in the period`, rising ? 'warn' : '')}${kpi('Savings', sv ? m(sv[1].expected, sv[0]) : '—', sv ? `${m(sv[1].toDate, sv[0])} to date` : 'none recorded')}</div>
+    <div class="grid k2 section"><div class="card"><header><h3>Spend by supplier</h3></header><div data-prs></div></div><div class="card"><header><h3>By category</h3></header><div data-prc></div></div></div>
+    <div class="card section"><header><h3>Supplier scorecards</h3></header><div data-prsc></div></div>
+    <div class="grid k2 section"><div class="card"><header><h3>Part prices</h3></header><div data-prp></div></div><div class="card"><header><h3>Energy per kWh</h3></header><div data-pre></div></div></div>
+    <div class="card section"><header><h3>Savings register</h3></header><div data-prv></div></div>`;
+  table($('[data-prs]', el), { columns: [
+    { label: 'Supplier', render: (s) => `<b>${esc(s.supplier)}</b><div class="cell-sub">${s.bills} bills</div>` },
+    { label: 'Spend', num: true, render: (s) => m(s.total, c0.currency) }, { label: 'Share', num: true, render: (s) => pct(s.sharePct) },
+  ], rows: (c0?.suppliers ?? []).slice(0, 10), empty: 'No approved bills in the period.' });
+  table($('[data-prc]', el), { columns: [
+    { label: 'Category', render: (k) => esc(k.category) }, { label: 'Spend', num: true, render: (k) => m(k.total, c0.currency) }, { label: 'Share', num: true, render: (k) => pct(k.sharePct) },
+  ], rows: c0?.categories ?? [], empty: '' });
+  table($('[data-prsc]', el), { columns: [
+    { label: 'Supplier', render: (s) => `<b>${esc(s.supplier)}</b><div class="cell-sub">${s.orders} orders · ${s.bills} bills</div>` },
+    { label: 'On time', num: true, render: (s) => `${pct(s.onTimePct)}${s.avgDaysLate != null ? `<div class="cell-sub">${s.avgDaysLate} days late on average</div>` : ''}` },
+    { label: 'Bills rejected', num: true, render: (s) => pct(s.rejectedPct) },
+    { label: 'Paid on time', num: true, render: (s) => pct(s.paidOnTimePct) },
+    { label: 'Score', num: true, render: (s) => (s.score == null ? '—' : `<b>${s.score}</b> ${tag(GRADE_T[s.grade], s.grade)}`) },
+  ], rows: d.scorecards.suppliers, empty: 'No orders or bills in the period.' });
+  table($('[data-prp]', el), { columns: [
+    { label: 'Part', render: (p) => `<b>${esc(p.name)}</b> <span class="cell-sub mono">${esc(p.sku)}</span><div class="cell-sub">${esc([p.supplier, `${p.receipts} receipt${p.receipts === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</div>` },
+    { label: 'Unit cost', num: true, render: (p) => `${m(p.last, p.currency)}<div class="cell-sub">from ${m(p.first, p.currency)}</div>` },
+    { label: 'Change', num: true, render: (p) => (p.changePct == null ? '—' : p.rising ? tag('t-warn', `+${p.changePct}%`) : `${p.changePct}%`) },
+  ], rows: d.prices.parts, empty: 'No parts received in the period.' });
+  table($('[data-pre]', el), { columns: [
+    { label: 'Site', render: (s) => `<b>${esc(s.site)}</b><div class="cell-sub">${s.months.length} bill${s.months.length === 1 ? '' : 's'}</div>` },
+    { label: 'Per kWh', num: true, render: (s) => `${s.last == null ? '—' : esc(fmt.money(s.last, s.currency))}<div class="cell-sub">from ${s.first == null ? '—' : esc(fmt.money(s.first, s.currency))}</div>` },
+    { label: 'Change', num: true, render: (s) => (s.changePct == null ? '—' : s.rising ? tag('t-warn', `+${s.changePct}%`) : `${s.changePct}%`) },
+  ], rows: d.prices.energy, empty: 'No energy bills in the period.' });
+  table($('[data-prv]', el), { columns: [
+    { label: 'Saving', render: (v) => `<b>${esc(v.description)}</b><div class="cell-sub">${esc([v.supplier, v.category].filter(Boolean).join(' · '))}</div>` },
+    { label: 'Price', num: true, render: (v) => `${m(v.negotiatedUnit, v.currency)}<div class="cell-sub">was ${m(v.baselineUnit, v.currency)} (−${v.unitSavingPct}%)</div>` },
+    { label: 'Period', render: (v) => `${esc(v.periodFrom)} – ${esc(v.periodTo)}<div class="cell-sub">${v.passedPct}% passed</div>` },
+    { label: 'Expected', num: true, render: (v) => `${m(v.expected, v.currency)}<div class="cell-sub">${m(v.toDate, v.currency)} to date</div>` },
+    { label: '', render: (v) => (v.voided ? tag('t-mute', 'void') : canWrite ? `<button ${BTN} data-svv="${v.id}">Void</button>` : '') },
+  ], rows: d.savings.savings, empty: 'No savings recorded.' });
+  $('[data-prm]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  $('[data-prx]', el).addEventListener('click', () => fetchFile(`/v1/finance/procurement?months=${months}&format=xlsx`, 'plugsure-procurement.xlsx'));
+  el.querySelectorAll('[data-svv]').forEach((b) => b.addEventListener('click', async () => { try { await api(`/v1/finance/procurement/savings/${b.dataset.svv}/void`, { method: 'POST' }); toast('Saving voided'); reload(); } catch (err) { toast(err.message, 'crit'); } }));
+  const sl = (sup.suppliers ?? []).filter((s) => !s.archived);
+  $('[data-svnew]', el)?.addEventListener('click', () => modal({ title: 'Record a negotiated saving', body: `<div class="form">${field('Supplier', `<select name="s"><option value="">—</option>${sl.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`, { opt: true })}${field('Category', '<input name="c" maxlength="40" placeholder="parts, energy, maintenance…">')}${field('Description', '<input name="d" maxlength="300">')}${field('Currency', `<input name="cu" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Price per unit before', '<input name="b" type="number" min="0">')}${field('Negotiated price per unit', '<input name="n" type="number" min="0">')}${field('Quantity expected', '<input name="q" type="number" step="any" min="0">')}${field('From', `<input name="f" type="date" value="${zonedYmd()}">`)}${field('To', '<input name="t" type="date">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) { const v = (n) => $(`[name="${n}"]`, mc.el)?.value.trim(); try { await api('/v1/finance/procurement/savings', { method: 'POST', body: { supplierId: v('s') || undefined, category: v('c'), description: v('d'), currency: v('cu').toUpperCase(), baselineUnit: Number(v('b')), negotiatedUnit: Number(v('n')), quantity: Number(v('q')), periodFrom: v('f'), periodTo: v('t') } }); toast('Saving recorded'); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.38.0) close automation
+
+const ACT_T = { done: 't-ok', skipped: 't-mute', failed: 't-crit' };
+
+async function closeAutoSection(host, canWrite, month) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, users;
+  try { [d, users] = await Promise.all([api(`/v1/finance/close-automation${month ? `?month=${month}` : ''}`), api('/v1/users').catch(() => [])]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (mo = d.month) => closeAutoSection(host, canWrite, mo);
+  const c = d.calendar, tr = d.trend;
+  const ul = (Array.isArray(users) ? users : users.users ?? []).filter((u) => u.status !== 'disabled');
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-cam value="${esc(d.month)}">`)}<div class="row" style="align-self:flex-end;gap:6px">${canWrite && !c.locked ? `<button class="btn primary" type="button" data-carun>${icon('refresh')} Run the close now</button>` : ''}${canWrite ? `<button class="btn" type="button" data-caset>Settings</button><button class="btn" type="button" data-caown>Owners &amp; due days</button>` : ''}</div></div>
+    ${callout('info', `The mechanical part of the close: fetch missing rates, record depreciation and leases, sync the ledger and run the checks; then what still blocks. People sign each step off and lock the month (Finance → Close steps). ${d.settings.enabled ? `Automatic: from working day ${d.settings.runOnDay} after the month end, daily until locked${d.nextRunOn ? ` (from ${esc(d.nextRunOn)})` : ''}.` : 'Automatic runs are off.'}`)}
+    <div class="grid k4 section">${kpi(`Close · ${esc(d.month)}`, c.locked ? 'locked' : `${c.done} / ${c.total}`, c.locked ? '' : 'steps signed off', c.locked ? 'ok' : '')}${kpi('Overdue steps', String(c.overdue), c.lastDue ? `all due by ${esc(c.lastDue)}` : '', c.overdue ? 'crit' : '')}${kpi('Days to close', tr.averageDays == null ? '—' : String(tr.averageDays), tr.months.length ? `average of ${tr.months.length} month${tr.months.length === 1 ? '' : 's'} · best ${tr.best}` : 'no month locked yet', tr.improving === false ? 'warn' : '')}${kpi('Last run', d.runs[0] ? `${d.runs[0].blocking} blocking` : '—', d.runs[0] ? `${esc(fmt.time(d.runs[0].startedAt))}${d.runs[0].automatic ? ' · automatic' : ''}` : 'not run yet', d.runs[0]?.blocking ? 'warn' : '')}</div>
+    <div class="card section"><header><h3>Calendar</h3></header><div data-cac></div></div>
+    <div class="grid k2 section"><div class="card"><header><h3>Runs</h3></header><div data-car></div></div><div class="card"><header><h3>Days from month end to lock</h3></header><div data-cat></div></div></div>`;
+  table($('[data-cac]', el), { columns: [
+    { label: 'Due', render: (s) => `${esc(s.dueOn)}<div class="cell-sub">working day ${s.dueDay}</div>` },
+    { label: 'Step', render: (s) => `<b>${esc(s.label)}</b><div class="cell-sub">${esc(s.detail)}</div>` },
+    { label: 'Owner', render: (s) => esc(s.owner ?? '—') },
+    { label: 'Check', render: (s) => (s.ok ? tag('t-ok', 'passes') : tag('t-warn', 'open')) },
+    { label: 'Status', render: (s) => (s.done ? tag('t-ok', 'signed off') : s.overdue ? tag('t-crit', 'overdue') : tag('t-mute', 'to do')) },
+  ], rows: c.steps, empty: '' });
+  table($('[data-car]', el), { columns: [
+    { label: 'Run', render: (r) => `${esc(fmt.time(r.startedAt))}<div class="cell-sub">${r.automatic ? 'automatic' : esc(r.by ?? '')}</div>` },
+    { label: 'Actions', render: (r) => r.actions.filter((a) => !a.action.startsWith('blocking:')).map((a) => `<div>${tag(ACT_T[a.status], a.status)} ${esc(a.action.replace(/_/g, ' '))}<span class="cell-sub"> ${esc(a.detail)}</span></div>`).join('') },
+    { label: 'Blocking', num: true, render: (r) => (r.blocking ? `<b>${r.blocking}</b>` : tag('t-ok', 'none')) },
+  ], rows: d.runs, empty: 'Not run for this month.' });
+  table($('[data-cat]', el), { columns: [
+    { label: 'Month', render: (x) => esc(x.month) }, { label: 'Locked', render: (x) => esc(x.lockedOn) }, { label: 'Days', num: true, render: (x) => String(x.days) },
+  ], rows: tr.months.slice().reverse(), empty: 'No month locked yet.' });
+  $('[data-cam]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+  $('[data-carun]', el)?.addEventListener('click', async (e) => { e.target.disabled = true; try { const r = await api('/v1/finance/close-automation/run', { method: 'POST', body: { month: d.month } }); toast(`Run done: ${r.blocking} step(s) still blocking`); reload(); } catch (err) { toast(err.message, 'crit'); e.target.disabled = false; } });
+  $('[data-caset]', el)?.addEventListener('click', () => modal({ title: 'Close automation', body: `<div class="form">${field('Automatic runs', `<select name="e"><option value="true"${d.settings.enabled ? ' selected' : ''}>On</option><option value="false"${d.settings.enabled ? '' : ' selected'}>Off</option></select>`)}${field('From working day', `<input name="r" type="number" min="1" max="10" value="${d.settings.runOnDay}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { try { await api('/v1/finance/close-automation/settings', { method: 'PUT', body: { enabled: $('[name="e"]', mc.el).value === 'true', runOnDay: Number($('[name="r"]', mc.el).value) } }); toast('Saved'); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  $('[data-caown]', el)?.addEventListener('click', () => modal({ title: 'Owners and due days', body: `<div class="form">${c.steps.slice().sort((a, b) => a.label.localeCompare(b.label)).map((s) => `<div class="row" style="gap:8px;align-items:flex-end">${field(esc(s.label), `<select data-ow="${s.step}"><option value="">—</option>${ul.map((u) => `<option value="${esc(u.id)}"${u.id === s.ownerId ? ' selected' : ''}>${esc(u.name ?? u.email)}</option>`).join('')}</select>`)}${field('Day', `<input data-dd="${s.step}" type="number" min="1" max="20" value="${s.dueDay}" style="width:70px">`)}</div>`).join('')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) { const assignments = c.steps.map((s) => ({ step: s.step, ownerId: $(`[data-ow="${s.step}"]`, mc.el).value || null, dueDay: Number($(`[data-dd="${s.step}"]`, mc.el).value) })); try { await api('/v1/finance/close-automation/owners', { method: 'PUT', body: { assignments } }); toast('Saved'); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+}
+
+// ─────────────────────────────────────────── (v1.38.0) owner and partner finance
+
+async function ownerFinanceSection(host, canWrite, months = 12) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api(`/v1/finance/owner-finance?months=${months}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (n = months) => ownerFinanceSection(host, canWrite, n);
+  const m = (v, c) => (v == null || !c ? '—' : esc(fmt.money(v, c)));
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Months', `<select data-ofm>${[3, 6, 12].map((n) => `<option value="${n}"${n === months ? ' selected' : ''}>Last ${n} whole months</option>`).join('')}</select>`)}</div>
+    ${callout('info', 'What each site owner earns from the sites you run for them, as they see it in the owner portal (Payouts): their sites\' revenue, the statements\' share, what has been paid and what is still owed.')}
+    <div class="grid k3 section">${Object.entries(d.totals).map(([c, t]) => `${kpi(`Owners' share · ${esc(c)}`, m(t.share, c), `${t.owners} owners`)}${kpi('Paid', m(t.paid, c), `${esc(d.from)} to ${esc(d.to)}`)}${kpi('Still owed', m(t.outstanding, c), '', t.outstanding ? 'warn' : '')}`).join('') || kpi("Owners' share", '—', 'no finalised statements')}</div>
+    <div class="card section"><header><h3>Owners</h3></header><div data-ofl></div></div>`;
+  table($('[data-ofl]', el), { columns: [
+    { label: 'Owner', render: (o) => `<b>${esc(o.owner)}</b><div class="cell-sub">${o.sites} site${o.sites === 1 ? '' : 's'}</div>` },
+    { label: 'Share', num: true, render: (o) => `${m(o.share, o.currency)}<div class="cell-sub">of ${m(o.gross, o.currency)}</div>` },
+    { label: 'Paid', num: true, render: (o) => m(o.paid, o.currency) },
+    { label: 'Still owed', num: true, render: (o) => (o.outstanding ? `<b>${m(o.outstanding, o.currency)}</b><div class="cell-sub">since ${esc(o.oldestUnpaid ?? '')}</div>` : '—') },
+    { label: 'Queries', num: true, render: (o) => (o.openQueries ? tag('t-warn', `${o.openQueries} open`) : '—') },
+    { label: '', render: (o) => `<button ${BTN} data-ofo="${esc(o.ownerId)}">Open</button>` },
+  ], rows: d.owners, empty: 'No site owners.' });
+  $('[data-ofm]', el).addEventListener('change', (e) => reload(Number(e.target.value)));
+  el.querySelectorAll('[data-ofo]').forEach((b) => b.addEventListener('click', async () => {
+    let s;
+    try { s = await api(`/v1/finance/owners/${b.dataset.ofo}/finance?months=${months}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const c = s.currencies[0];
+    drawer({ title: s.owner.name, subtitle: esc(`${s.from} to ${s.to} · ${s.siteCount} site${s.siteCount === 1 ? '' : 's'}`), tabs: [
+      { label: 'By month', render: (body) => {
+        if (!c) { body.innerHTML = '<p class="cell-sub">Nothing in the period.</p>'; return; }
+        body.innerHTML = `<div class="grid k3">${kpi('Revenue', m(c.totals.revenue, c.currency), `${fmt.num(Math.round(c.totals.kwh))} kWh`)}${kpi('Share', m(c.totals.share, c.currency), c.totals.sharePct != null ? `${c.totals.sharePct}%` : '')}${kpi('Still owed', m(c.totals.outstanding, c.currency), s.openQueries.count ? `${s.openQueries.count} open queries` : '', c.totals.outstanding ? 'warn' : '')}</div><div data-x></div><div class="row" style="margin-top:10px"><button class="btn" type="button" data-oxx>${icon('download')} Excel</button></div>`;
+        table($('[data-x]', body), { columns: [
+          { label: 'Month', render: (x) => `${esc(x.month)}${x.statement ? `<div class="cell-sub mono">${esc(x.statement)}</div>` : ''}` },
+          { label: 'Revenue', num: true, render: (x) => m(x.revenue, c.currency) },
+          { label: 'Share', num: true, render: (x) => m(x.share, c.currency) },
+          { label: 'Paid', num: true, render: (x) => m(x.paid, c.currency) },
+          { label: 'Owed', num: true, render: (x) => (x.outstanding ? m(x.outstanding, c.currency) : '—') },
+        ], rows: c.months.slice().reverse(), empty: '' });
+        $('[data-oxx]', body).addEventListener('click', () => fetchFile(`/v1/finance/owners/${s.owner.id}/finance?months=${months}&format=xlsx`, 'plugsure-owner-finance.xlsx'));
+      } },
+      { label: 'Sites', render: (body) => { table(body, { columns: [
+        { label: 'Site', render: (x) => `<b>${esc(x.site)}</b><div class="cell-sub">${x.sessions} sessions</div>` }, { label: 'kWh', num: true, render: (x) => fmt.num(Math.round(x.kwh)) }, { label: 'Revenue', num: true, render: (x) => m(x.revenue, c?.currency) },
+      ], rows: c?.sites ?? [], empty: 'No activity.' }); } },
+    ] });
+  }));
+}
+
 // ─────────────────────────────────────────── (v1.30.0) purchase orders
 
 const PO_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], closed: ['t-ok', 'closed'], cancelled: ['t-mute', 'cancelled'], rejected: ['t-crit', 'rejected'] };
@@ -4034,7 +4230,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'scorecard', label: 'Scorecard' }, { id: 'reports', label: 'Reports' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'carbon', label: 'Carbon' }, { id: 'insurance', label: 'Insurance' }, { id: 'pricing', label: 'Pricing' }, { id: 'compliance', label: 'Compliance' }, { id: 'grants', label: 'Grants' }, { id: 'landlords', label: 'Landlords' }, { id: 'chargebacks', label: 'Chargebacks' }, { id: 'loyaltycost', label: 'Loyalty costs' }, { id: 'taxaudit', label: 'Tax audit' }, { id: 'portfolio', label: 'Portfolio' }, { id: 'planning', label: 'Budget planning' }, { id: 'fxtreasury', label: 'FX & hedges' }, { id: 'procurement', label: 'Procurement' }, { id: 'closeauto', label: 'Close automation' }, { id: 'ownerfinance', label: 'Owner finance' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'feeds', label: 'Bank feeds' }, { id: 'tax', label: 'Tax' }, { id: 'slips', label: 'Withholding' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'leases', label: 'Leases' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'ledger', label: 'Ledger' }, { id: 'closesteps', label: 'Close steps' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'intercompany', label: 'Intercompany' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -4419,7 +4615,8 @@ registerView('finance', {
       inventory: () => inventorySection(body, canWrite), maintenance: () => maintenanceSection(body, canWrite), assurance: () => assuranceSection(body, canWrite), lenders: () => lendersSection(body, canWrite),
       carbon: () => carbonSection(body, canWrite), insurance: () => insuranceSection(body, canWrite), pricing: () => pricingSection(body, canWrite), compliance: () => complianceSection(body, canWrite),
       grants: () => grantsSection(body, canWrite), landlords: () => landlordsSection(body, canWrite), chargebacks: () => chargebacksSection(body, canWrite),
-      loyaltycost: () => loyaltyCostSection(body, canWrite), taxaudit: () => taxAuditSection(body, canWrite), portfolio: () => portfolioSection(body, canWrite), planning: () => planningSection(body, canWrite) };
+      loyaltycost: () => loyaltyCostSection(body, canWrite), taxaudit: () => taxAuditSection(body, canWrite), portfolio: () => portfolioSection(body, canWrite), planning: () => planningSection(body, canWrite),
+      fxtreasury: () => fxTreasurySection(body, canWrite), procurement: () => procurementSection(body, canWrite), closeauto: () => closeAutoSection(body, canWrite), ownerfinance: () => ownerFinanceSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

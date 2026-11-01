@@ -45,7 +45,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'stock_item', 'stock_location', 'stock_move', 'work_order', 'warranty_claim', 'revenue_finding', 'loan', 'loan_drawdown', 'loan_payment', 'covenant', 'covenant_test',
       'rec_purchase', 'carbon_credit', 'carbon_credit_sale', 'insurance_policy', 'insurance_claim', 'compliance_task', 'pbc_request', 'compliance_evidence',
       'grant_programme', 'grant_condition', 'grant_claim', 'grant_clawback', 'landlord_deal', 'landlord_statement', 'chargeback',
-      'tax_audit_case', 'budget_plan', 'budget_plan_line']]);
+      'tax_audit_case', 'budget_plan', 'budget_plan_line', 'fx_hedge', 'procurement_saving', 'close_assignment', 'close_run']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -148,6 +148,6 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     rec_purchase: 'INSERT,SELECT,UPDATE', carbon_credit: 'INSERT,SELECT,UPDATE', carbon_credit_sale: 'INSERT,SELECT,UPDATE', insurance_policy: 'INSERT,SELECT,UPDATE', insurance_claim: 'INSERT,SELECT,UPDATE',
     compliance_task: 'INSERT,SELECT,UPDATE', pbc_request: 'INSERT,SELECT,UPDATE', compliance_evidence: 'INSERT,SELECT,UPDATE',
     grant_programme: 'INSERT,SELECT,UPDATE', grant_condition: 'INSERT,SELECT,UPDATE', grant_claim: 'INSERT,SELECT,UPDATE', grant_clawback: 'INSERT,SELECT,UPDATE', landlord_deal: 'INSERT,SELECT,UPDATE',
-    landlord_statement: 'INSERT,SELECT,UPDATE', chargeback: 'INSERT,SELECT,UPDATE', tax_audit_case: 'INSERT,SELECT,UPDATE', budget_plan: 'INSERT,SELECT,UPDATE', budget_plan_line: 'INSERT,SELECT,UPDATE',
+    landlord_statement: 'INSERT,SELECT,UPDATE', chargeback: 'INSERT,SELECT,UPDATE', tax_audit_case: 'INSERT,SELECT,UPDATE', budget_plan: 'INSERT,SELECT,UPDATE', budget_plan_line: 'INSERT,SELECT,UPDATE', fx_hedge: 'INSERT,SELECT,UPDATE', procurement_saving: 'INSERT,SELECT,UPDATE', close_assignment: 'INSERT,SELECT,UPDATE', close_run: 'INSERT,SELECT,UPDATE',
   });
 });

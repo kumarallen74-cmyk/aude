@@ -3,6 +3,7 @@ import { writeAudit } from '../services/audit.js';
 import * as portal from '../services/owner-portal.js';
 import * as disputes from '../services/owner-disputes.js';
 import * as docs from '../services/owner-docs.js';
+import * as ownerFinance from '../services/owner-finance.js';
 
 /**
  * The Site Owner portal's money (v1.19.0), /v1/owner-portal: a Site Owner user (role site_owner, scope 'owner') sees
@@ -16,6 +17,7 @@ export async function registerOwnerPortalRoutes(app: FastifyInstance): Promise<v
       if (e instanceof portal.OwnerPortalError) return reply.status(e.statusCode).send({ error: e.message });
       if (e instanceof disputes.DisputeError) return reply.status(e.statusCode).send({ error: e.message });
       if (e instanceof docs.OwnerDocsError) return reply.status(e.statusCode).send({ error: e.message });
+      if (e instanceof ownerFinance.OwnerFinanceError) return reply.status(e.statusCode).send({ error: e.message });
       throw e;
     }
   };
@@ -24,6 +26,21 @@ export async function registerOwnerPortalRoutes(app: FastifyInstance): Promise<v
     orgId: req.principal.orgId, actorType: 'user', actorId: req.principal.userId, action, targetType, targetId, ip: req.ip, after,
   });
 
+  // (v1.38.0) The owner's finance: the sites' results, statements, payouts and what is owed; the year's pack.
+  app.get('/v1/owner-portal/finance', async (req, reply) => run(reply, async () => {
+    const q = (req.query ?? {}) as Record<string, unknown>, ownerId = portal.portalOwner(req.principal);
+    if (q.format === 'xlsx') {
+      const buf = await ownerFinance.summaryXlsx(req.principal.orgId, ownerId, q);
+      return reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('content-disposition', 'attachment; filename="plugsure-owner-finance.xlsx"').send(buf);
+    }
+    return ownerFinance.summary(req.principal.orgId, ownerId, q);
+  }));
+  app.get('/v1/owner-portal/finance/pack', async (req, reply) => run(reply, async () => {
+    const q = (req.query ?? {}) as Record<string, unknown>, ownerId = portal.portalOwner(req.principal);
+    const r = await ownerFinance.pack(req.principal.orgId, ownerId, q.year);
+    await audit(req, 'owner.finance_pack_exported', ownerId, { year: q.year ?? null, manifestSha256: r.manifestSha256 }, 'site_owner');
+    return reply.header('content-type', 'application/zip').header('content-disposition', `attachment; filename="${r.name}"`).header('x-manifest-sha256', r.manifestSha256).send(r.buffer);
+  }));
   app.get('/v1/owner-portal/payouts', async (req, reply) => run(reply, () => portal.payouts(req.principal.orgId, portal.portalOwner(req.principal))));
   app.get('/v1/owner-portal/bank', async (req, reply) => run(reply, () => portal.bank(req.principal.orgId, portal.portalOwner(req.principal))));
   app.post('/v1/owner-portal/bank/change-request', async (req, reply) => run(reply, async () => {

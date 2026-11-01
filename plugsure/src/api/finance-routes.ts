@@ -84,6 +84,10 @@ import * as loyaltyAcct from '../services/loyalty-accounting.js';
 import * as taxAudit from '../services/tax-audit.js';
 import * as sitePnl from '../services/site-pnl.js';
 import * as planning from '../services/budget-planning.js';
+import * as fxTreasury from '../services/fx-treasury.js';
+import * as procurement from '../services/procurement.js';
+import * as closeAuto from '../services/close-automation.js';
+import * as ownerFinance from '../services/owner-finance.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -3361,6 +3365,80 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await audit21(req, r.status === 'approved' ? 'finance.budget_plan_approved' : 'finance.budget_plan_rejected', 'budget_plan', r.id, { year: r.year, version: r.version, published: r.published, skipped: r.skipped, note: r.decisionNote });
       return r;
     } catch (e) { return p26Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.38.0) owner finance, FX treasury, procurement, close automation
+
+  const p27Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof fxTreasury.FxTreasuryError || e instanceof procurement.ProcurementError || e instanceof closeAuto.CloseAutomationError || e instanceof ownerFinance.OwnerFinanceError) return reply.status(e.statusCode).send({ error: e.message });
+    return p26Failed(reply, e);
+  };
+
+  app.get('/v1/finance/fx-exposure', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-fx-exposure', await fxTreasury.exposureXlsx(req.principal.orgId, qs(req)));
+      return await fxTreasury.exposure(req.principal.orgId, qs(req));
+    } catch (e) { return p27Failed(reply, e); }
+  });
+  app.get('/v1/finance/fx-hedges', async (req, reply) => {
+    R(req);
+    try { return await fxTreasury.hedges(req.principal.orgId, qs(req)); } catch (e) { return p27Failed(reply, e); }
+  });
+  app.post('/v1/finance/fx-hedges', async (req, reply) => {
+    W(req);
+    try { const r = await fxTreasury.createHedge(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.fx_hedge_recorded', 'fx_hedge', r.id, { bank: r.bank, buy: r.buyCurrency, sell: r.sellCurrency, notional: r.notional, rate: r.rate, maturityOn: r.maturityOn }); return created(reply, r); } catch (e) { return p27Failed(reply, e); }
+  });
+  app.put('/v1/finance/fx-hedges/:id', async (req, reply) => {
+    W(req);
+    try { const r = await fxTreasury.updateHedge(req.principal.orgId, prm(req, 'id'), body(req)); await audit21(req, r.status === 'settled' ? 'finance.fx_hedge_settled' : 'finance.fx_hedge_cancelled', 'fx_hedge', r.id, { settledOn: r.settledOn, settledRate: r.settledRate, realised: r.realised }); return r; } catch (e) { return p27Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/procurement', async (req, reply) => {
+    R(req);
+    try {
+      const q = qs(req), o = req.principal.orgId;
+      if (q.format === 'xlsx') return xl(reply, 'plugsure-procurement', await procurement.reportXlsx(o, q));
+      const [spend, prices, scorecards, savings] = await Promise.all([procurement.spend(o, q), procurement.prices(o, q), procurement.scorecards(o, q), procurement.savings(o)]);
+      return { spend, prices, scorecards, savings };
+    } catch (e) { return p27Failed(reply, e); }
+  });
+  app.post('/v1/finance/procurement/savings', async (req, reply) => {
+    W(req);
+    try { const r = await procurement.createSaving(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.procurement_saving_recorded', 'procurement_saving', r.id, { supplier: r.supplier, category: r.category, expected: r.expected, currency: r.currency }); return created(reply, r); } catch (e) { return p27Failed(reply, e); }
+  });
+  app.post('/v1/finance/procurement/savings/:id/void', async (req, reply) => {
+    W(req);
+    try { const r = await procurement.voidSaving(req.principal.orgId, prm(req, 'id')); await audit21(req, 'finance.procurement_saving_voided', 'procurement_saving', r.id, {}); return r; } catch (e) { return p27Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/close-automation', async (req, reply) => {
+    R(req);
+    try { return await closeAuto.overview(req.principal.orgId, qs(req).month); } catch (e) { return p27Failed(reply, e); }
+  });
+  app.put('/v1/finance/close-automation/settings', async (req, reply) => {
+    W(req);
+    try { const r = await closeAuto.saveSettings(req.principal.orgId, body(req), userUuid(req)); await audit21(req, 'finance.close_automation_saved', 'organisation', null, r); return r; } catch (e) { return p27Failed(reply, e); }
+  });
+  app.put('/v1/finance/close-automation/owners', async (req, reply) => {
+    W(req);
+    try { const r = await closeAuto.saveAssignments(req.principal.orgId, body(req).assignments); await audit21(req, 'finance.close_owners_saved', 'organisation', null, { assignments: r.map((a) => ({ step: a.step, ownerId: a.ownerId, dueDay: a.dueDay })) }); return { assignments: r }; } catch (e) { return p27Failed(reply, e); }
+  });
+  app.post('/v1/finance/close-automation/run', async (req, reply) => {
+    W(req);
+    try { const r = await closeAuto.run(req.principal.orgId, body(req).month, userUuid(req)); await audit21(req, 'finance.close_run', 'close_run', r.id, { month: r.month, blocking: r.blocking }); return created(reply, r); } catch (e) { return p27Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/owner-finance', async (req, reply) => {
+    R(req);
+    try { return await ownerFinance.owners(req.principal.orgId, qs(req)); } catch (e) { return p27Failed(reply, e); }
+  });
+  app.get('/v1/finance/owners/:oid/finance', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-owner-finance', await ownerFinance.summaryXlsx(req.principal.orgId, prm(req, 'oid'), qs(req)));
+      return await ownerFinance.summary(req.principal.orgId, prm(req, 'oid'), qs(req));
+    } catch (e) { return p27Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {
