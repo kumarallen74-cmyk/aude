@@ -532,6 +532,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      accounts (Finance → Subscriptions), and record faktur masukan and file
      the month in Finance → PPN if you are a PKP. Finance today is the
      phone page for approvals ([FINANCE.md](FINANCE.md)).
+  20. (v1.27.0) Optionally: subscribe to a finance digest (Finance today;
+     for WhatsApp, name an approved one-parameter template in Finance →
+     Settings), set each site's electricity tariff (Finance → Tariffs), turn
+     on fleet invoicing automation (Finance → Fleet invoicing; payment links
+     need your own Xendit account), and route finance.fleet_invoice_link
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

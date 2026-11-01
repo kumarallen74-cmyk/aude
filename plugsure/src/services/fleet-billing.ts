@@ -948,12 +948,14 @@ export async function sendInvoice(orgId: string, id: string, overrideTo?: string
   if (!ch?.enabled || !ch.config?.host) throw new FleetBillingError(409, 'Set up the e-mail channel first (Govern → Alert routing → Channels).');
   let secret: string | null = null;
   try { secret = ch.secret ? unseal(ch.secret) : null; } catch { secret = null; }
+  // (v1.27.0) The open Xendit payment link, if Fleet automation made one.
+  const link = st.status === 'issued' ? (await one<{ url: string }>(`SELECT url FROM fleet_invoice_link WHERE invoice_id = $1 AND status = 'pending'`, [id]))?.url ?? null : null;
   const html = invoiceHtml(st);
   const idr = docTax(st).m;
   const file = st.number.replace(/[^\w.-]+/g, '_');
   const text = `${st.seller.name}\nInvoice ${st.number} — ${st.periodLabel}\nFleet: ${st.buyer.fleetName}\n${st.status === 'issued' ? `Amount due: ${idr(st.balanceMinor)} by ${dmy(st.dueDate)}` : `Invoice total: ${idr(st.totals.totalMinor)} (${st.status})`}${st.priorCreditMinor ? ` (after ${idr(st.priorCreditMinor)} of earlier credit notes)` : ''}\n\n` +
     `${st.totals.sessions} sessions, ${kwh(st.totals.energyWh)} kWh${st.totals.roamingSessions ? `, plus ${st.totals.roamingSessions} on partner networks` : ''}.\n` +
-    (st.paymentInstructions ? `\nHow to pay:\n${st.paymentInstructions}\n` : '') + `\nThe invoice and the session list are attached.`;
+    (link ? `\nPay online: ${link}\n` : '') + (st.paymentInstructions ? `\nHow to pay:\n${st.paymentInstructions}\n` : '') + `\nThe invoice and the session list are attached.`;
   const res = await sendEmail(ch.config, secret, to, {
     subject: `Invoice ${st.number} — ${st.buyer.fleetName} — ${st.periodLabel}`,
     text, html, kind: 'fleet-invoice',

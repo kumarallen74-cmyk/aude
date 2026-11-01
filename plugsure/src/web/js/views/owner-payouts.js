@@ -1,4 +1,4 @@
-import { $, esc, api, state, registerView, pageHead, table, tag, field, callout, kpi, toast, modal, fmt } from '../core.js';
+import { $, esc, api, state, registerView, pageHead, table, tag, field, callout, kpi, toast, modal, fmt, download, icon } from '../core.js';
 import { CURRENCIES } from '../money.js';
 
 /**
@@ -33,6 +33,7 @@ registerView('owner-payouts', {
       body.innerHTML = `<div class="grid k3">${kpi('Your share', esc(fmt.money(t.share, cur)), 'finalised statements')}${kpi('Paid', esc(fmt.money(t.paid, cur)), `recorded by ${esc(opName)}`)}${kpi('Still due', esc(fmt.money(t.outstanding, cur)), '', t.outstanding > 0 ? 'warn' : '')}</div>
         <div class="card section"><header><h3>By statement</h3></header><div data-st></div></div>
         <div class="card section"><header><h3>Your queries</h3></header><div data-q></div></div>
+        <div class="card section" data-docs><header><h3>Documents</h3></header><div class="body"><span class="spinner"></span></div></div>
         <div class="card section"><header><h3>Bank account</h3>${rq?.state === 'pending' ? '' : '<button class="btn sm right" type="button" data-change>Request a change</button>'}</header><div class="body">
           ${b.onFile ? `<p style="margin-top:0"><b>${esc(b.onFile.bankName)}</b> ${b.onFile.bankCode ? `<span class="mono">${esc(b.onFile.bankCode)}</span> ` : ''}<span class="mono">${esc(b.onFile.accountMasked)}</span> · ${esc(b.onFile.holderName)}</p>`
             : `<p style="margin-top:0">${esc(opName)} has no bank account on file for you yet.</p>`}
@@ -51,6 +52,27 @@ registerView('owner-payouts', {
         ],
         rows: p.statements, empty: 'No finalised statements yet. Each month is finalised after it ends.',
       });
+      // (v1.27.0) Payout advices, tax withheld, annual statements and payouts on their way.
+      api('/v1/owner-portal/documents').then((d) => {
+        const host = $('[data-docs]', body);
+        if (!host) return;
+        host.innerHTML = `<header><h3>Documents</h3><span class="right">${d.years.map((y) => `<button class="btn sm" type="button" data-year="${esc(y)}">${icon('download')} Annual statement ${esc(y)}</button>`).join(' ')}</span></header>
+          ${d.scheduled.length ? `<div class="body">${d.scheduled.map((x) => callout(x.ready ? 'info' : 'warn', `${esc(x.statement)}: ${esc(fmt.money(x.outstanding, x.currency))} — ${esc(x.note ?? '')}`)).join('')}</div>` : ''}
+          <div data-adv></div><div data-wh></div>`;
+        table($('[data-adv]', host), { columns: [
+          { label: 'Paid on', render: (a) => esc(a.paidOn ?? '') }, { label: 'Statement', render: (a) => `<span class="mono">${esc(a.statement)}</span><div class="cell-sub">${esc(a.reference)}</div>` },
+          { label: 'Amount', num: true, render: (a) => esc(fmt.money(a.amount, a.currency)) },
+          { label: '', render: (a) => `<button class="btn sm" type="button" data-adv-id="${esc(a.paymentId)}">${icon('download')} Advice</button>` },
+        ], rows: d.advices, empty: 'No payments yet.' });
+        if (d.withholdings.length) table($('[data-wh]', host), { columns: [
+          { label: 'Tax withheld', render: (w) => `${esc(w.period)}<div class="cell-sub">${esc(w.statement ?? '')} · ${w.ratePct}%</div>` },
+          { label: 'Amount', num: true, render: (w) => esc(fmt.money(w.amount, w.currency)) },
+          { label: 'Bukti potong', render: (w) => (w.bukti ? `<span class="mono">${esc(w.bukti)}</span><div class="cell-sub">${esc(w.buktiDate ?? '')}</div>` : tag('t-warn', 'not issued yet')) },
+        ], rows: d.withholdings, empty: '' });
+        const get = async (url, name) => { try { const res = await api(url, { raw: true }); download(name, await res.blob()); } catch (err) { toast(err.message, 'crit'); } };
+        host.querySelectorAll('[data-adv-id]').forEach((b2) => b2.addEventListener('click', () => get(`/v1/owner-portal/documents/advice/${b2.dataset.advId}`, `payout-advice-${b2.dataset.advId}.pdf`)));
+        host.querySelectorAll('[data-year]').forEach((b2) => b2.addEventListener('click', () => get(`/v1/owner-portal/documents/year/${b2.dataset.year}`, `annual-statement-${b2.dataset.year}.pdf`)));
+      }).catch((e) => { const host = $('[data-docs]', body); if (host) host.innerHTML = `<header><h3>Documents</h3></header><div class="body">${callout('crit', esc(e.message))}</div>`; });
       // (v1.23.0) Queries on a statement, answered by the operator; an agreed adjustment comes on the next statement.
       const QS = { open: ['t-info', 'waiting'], rejected: ['t-mute', 'statement stands'], resolved: ['t-ok', 'answered'], adjusted: ['t-ok', 'adjusted'], withdrawn: ['t-mute', 'withdrawn'] };
       table($('[data-q]', body), {

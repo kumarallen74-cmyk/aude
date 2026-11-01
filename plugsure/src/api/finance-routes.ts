@@ -40,6 +40,10 @@ import * as autoPay from '../services/owner-payout-automation.js';
 import * as subRev from '../services/subscription-revenue.js';
 import * as ppn from '../services/ppn-return.js';
 import * as finToday from '../services/finance-today.js';
+import * as digest from '../services/finance-digest.js';
+import * as tariffs from '../services/energy-tariffs.js';
+import * as ownerDocs from '../services/owner-docs.js';
+import * as fleetAuto from '../services/fleet-automation.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -1450,6 +1454,108 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, 'finance.owner_payouts_requested_automatically', 'organisation', req.principal.orgId, { requested: r.requested.length, failed: r.failed.length, statements: r.requested.map((x) => x.number) });
       return r;
     } catch (e) { return p15Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.27.0) digests, energy tariffs, owner documents, fleet automation
+
+  const p16Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof digest.DigestError || e instanceof tariffs.TariffError || e instanceof ownerDocs.OwnerDocsError || e instanceof fleetAuto.FleetAutomationError) return reply.status(e.statusCode).send({ error: e.message });
+    return p15Failed(reply, e);
+  };
+  const me = (req: FastifyRequest) => {
+    const u = userUuid(req);
+    if (!u) throw new digest.DigestError(422, 'Digests are for console users (not API keys).');
+    return u;
+  };
+
+  app.get('/v1/finance/digest', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const u = me(req);
+      return { subscription: await digest.subscription(req.principal.orgId, u), sends: await digest.sends(req.principal.orgId, u), organisation: await digest.orgSettings(req.principal.orgId), sections: digest.SECTIONS };
+    } catch (e) { return p16Failed(reply, e); }
+  });
+  app.put('/v1/finance/digest', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await digest.subscribe(req.principal.orgId, me(req), body(req)); } catch (e) { return p16Failed(reply, e); }
+  });
+  app.post('/v1/finance/digest/send', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await digest.send(req.principal.orgId, me(req)); } catch (e) { return p16Failed(reply, e); }
+  });
+  app.put('/v1/finance/digest/settings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await digest.saveOrgSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.digest_settings_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p16Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/tariffs', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await tariffs.list(req.principal.orgId); } catch (e) { return p16Failed(reply, e); }
+  });
+  app.put('/v1/finance/tariffs/sites/:sid', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await tariffs.save(req.principal.orgId, prm(req, 'sid'), body(req), userUuid(req));
+      await auditPay(req, 'finance.site_tariff_saved', 'site', prm(req, 'sid'), r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p16Failed(reply, e); }
+  });
+  app.get('/v1/finance/tariffs/sites/:sid/simulate', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await tariffs.simulate(req.principal.orgId, prm(req, 'sid'), qs(req)); } catch (e) { return p16Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/owners/:oid/documents', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try { return await ownerDocs.documents(req.principal.orgId, prm(req, 'oid')); } catch (e) { return p16Failed(reply, e); }
+  });
+  app.post('/v1/finance/owners/:oid/withholdings', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:write' });
+    try {
+      const r = await ownerDocs.recordWithholding(req.principal.orgId, prm(req, 'oid'), body(req), userUuid(req));
+      await auditPay(req, 'finance.owner_withholding_recorded', 'site_owner', prm(req, 'oid'), r as unknown as Record<string, unknown>);
+      return reply.status(201).send(r);
+    } catch (e) { return p16Failed(reply, e); }
+  });
+  app.get('/v1/finance/owners/:oid/documents/year/:year', async (req, reply) => {
+    assertCan(req.principal, { permission: 'payment:read' });
+    try {
+      const r = await ownerDocs.yearlyPdf(req.principal.orgId, prm(req, 'oid'), prm(req, 'year'));
+      return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="${r.filename}"`).send(r.body);
+    } catch (e) { return p16Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/fleet-automation', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:read' });
+    try { return await fleetAuto.preview(req.principal.orgId); } catch (e) { return p16Failed(reply, e); }
+  });
+  app.put('/v1/finance/fleet-automation', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    try {
+      const r = await fleetAuto.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'fleet_billing.automation_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p16Failed(reply, e); }
+  });
+  app.post('/v1/finance/fleet-automation/run', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    try {
+      const r = await fleetAuto.run(req.principal.orgId, new Date(), req.principal.userId ?? 'console');
+      await auditPay(req, 'fleet_billing.automation_run', 'organisation', req.principal.orgId, { issued: r.issued, sent: r.sent, held: r.held.length, failed: r.failed.length });
+      return r;
+    } catch (e) { return p16Failed(reply, e); }
+  });
+  app.post('/v1/fleet-invoices/:id/payment-link', async (req, reply) => {
+    assertCan(req.principal, { permission: 'invoice:write' });
+    try {
+      const r = await fleetAuto.createLink(req.principal.orgId, prm(req, 'id'), userUuid(req));
+      await auditPay(req, 'fleet_invoice.payment_link_created', 'fleet_invoice', prm(req, 'id'), r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p16Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

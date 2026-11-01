@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { writeAudit } from '../services/audit.js';
 import * as portal from '../services/owner-portal.js';
 import * as disputes from '../services/owner-disputes.js';
+import * as docs from '../services/owner-docs.js';
 
 /**
  * The Site Owner portal's money (v1.19.0), /v1/owner-portal: a Site Owner user (role site_owner, scope 'owner') sees
@@ -14,6 +15,7 @@ export async function registerOwnerPortalRoutes(app: FastifyInstance): Promise<v
     try { return await fn(); } catch (e) {
       if (e instanceof portal.OwnerPortalError) return reply.status(e.statusCode).send({ error: e.message });
       if (e instanceof disputes.DisputeError) return reply.status(e.statusCode).send({ error: e.message });
+      if (e instanceof docs.OwnerDocsError) return reply.status(e.statusCode).send({ error: e.message });
       throw e;
     }
   };
@@ -53,5 +55,16 @@ export async function registerOwnerPortalRoutes(app: FastifyInstance): Promise<v
     const r = await disputes.withdraw(req.principal.orgId, portal.portalOwner(req.principal), qid);
     await audit(req, 'owner.statement_query_withdrawn', qid, {}, 'owner_statement_dispute');
     return r;
+  }));
+
+  // (v1.27.0) Payout advices, tax withheld, yearly statements and scheduled payouts (services/owner-docs.ts).
+  app.get('/v1/owner-portal/documents', async (req, reply) => run(reply, () => docs.documents(req.principal.orgId, portal.portalOwner(req.principal))));
+  app.get('/v1/owner-portal/documents/advice/:pid', async (req, reply) => run(reply, async () => {
+    const r = await docs.payoutAdvicePdf(req.principal.orgId, portal.portalOwner(req.principal), String((req.params as Record<string, string>).pid ?? ''));
+    return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="${r.filename}"`).send(r.body);
+  }));
+  app.get('/v1/owner-portal/documents/year/:year', async (req, reply) => run(reply, async () => {
+    const r = await docs.yearlyPdf(req.principal.orgId, portal.portalOwner(req.principal), (req.params as Record<string, string>).year);
+    return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="${r.filename}"`).send(r.body);
   }));
 }

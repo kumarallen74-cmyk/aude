@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.26.0";
+export const API_VERSION = "1.27.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5776,6 +5776,11 @@ export type DriversRefundRequestsResponse = {
   policy?: Record<string, unknown>;
 };
 
+export type ElectricityTariffsResponse = {
+  sites?: Record<string, unknown>[];
+  catalogue?: Record<string, unknown>[];
+};
+
 export type EMailCreditNoteBody = {
   to?: string;
 };
@@ -6079,6 +6084,13 @@ export type FleetAccountStatementOfAccountResponse = {
 
 export type FleetAccountsWithCreditLimitOrDepositResponse = {
   accounts?: Record<string, unknown>[];
+};
+
+export type FleetInvoicingAutomationResponse = {
+  settings?: Record<string, unknown>;
+  month?: string;
+  toSend?: Record<string, unknown>[];
+  links?: Record<string, unknown>[];
 };
 
 export type GatewayFeeAuditResponse = {
@@ -6540,6 +6552,13 @@ export type LockMonthResponse = {
   locked?: boolean;
 };
 
+export type MakePaymentLinkForFleetInvoiceResponse = {
+  id?: string;
+  url?: string;
+  amount?: number;
+  status?: string;
+};
+
 export type MarkTaxObligationFiledBody = {
   obligation: "pph23_pay" | "pph23_report" | "ppn_pay" | "ppn_report" | "efaktur";
   period: string;
@@ -6605,6 +6624,13 @@ export type MyDisputesBothSidesResponse = {
     /** Deprecated: the v1.6 name of `claimed_minor`, present while the amount is in IDR. */
     claimed_idr?: number | null;
   }[];
+};
+
+export type MyFinanceDigestResponse = {
+  subscription?: Record<string, unknown>;
+  sends?: Record<string, unknown>[];
+  organisation?: Record<string, unknown>;
+  sections?: string[];
 };
 
 export type MyHubCDRsBothSidesResponse = {
@@ -7356,6 +7382,16 @@ export type RecordTaxRegistrationInCountryBody = {
   rateBps?: number | null;
 };
 
+export type RecordTaxWithheldFromOwnerShareBody = {
+  statementId: string;
+  ratePct: number;
+  base?: number;
+  amount?: number;
+  bukti?: string;
+  buktiDate?: string;
+  note?: string;
+};
+
 export type RefundTransfersThroughDuitkuDisbursementResponse = {
   transfers: RefundTransfer[];
 };
@@ -7648,6 +7684,13 @@ export type RotateWebhookSigningSecretResponse = {
   secret: string;
 };
 
+export type RunFleetInvoicingAutomationNowResponse = {
+  issued?: string[];
+  sent?: string[];
+  held?: Record<string, unknown>[];
+  failed?: Record<string, unknown>[];
+};
+
 export type SaveAlertChannelBody = {
   enabled?: boolean;
   config?: {
@@ -7812,6 +7855,11 @@ export type SendMonthCloseEMailNowResponse = {
   reference?: string | null;
 };
 
+export type SendMyDigestNowResponse = {
+  results?: Record<string, unknown>[];
+  text?: string;
+};
+
 export type SendPaymentReminderNowBody = {
   channel?: "email" | "whatsapp";
   to?: string;
@@ -7912,6 +7960,13 @@ export type SetControlsThresholdsBody = {
   } | null;
 };
 
+export type SetDigestWhatsAppTemplateBody = {
+  whatsappTemplate?: {
+    name?: string;
+    lang?: string;
+  } | null;
+};
+
 export type SetDriverRefundPolicyBody = {
   enabled?: boolean;
   autoApproveUpTo?: number;
@@ -7940,6 +7995,15 @@ export type SetFleetAccountCreditLimitOrPrepayBody = {
   currency?: string;
   block?: boolean;
   autoApply?: boolean;
+};
+
+export type SetFleetInvoicingAutomationBody = {
+  autoIssue?: boolean;
+  issueDay?: number;
+  autoSend?: boolean;
+  requireEfaktur?: boolean;
+  paymentLinks?: boolean;
+  linkDays?: number;
 };
 
 export type SetMonthBudgetBody = {
@@ -8035,6 +8099,16 @@ export type SetSiteElectricityCostPerKWhResponse = {
   siteId?: string;
   ratePerKwh?: number;
   currency?: string;
+};
+
+export type SetSiteElectricityTariffBody = {
+  tariffClass: string;
+  powerKva: number;
+  ratePeak?: number;
+  rateOffpeak?: number;
+  peakFrom?: number;
+  peakTo?: number;
+  fixedMonthly?: number;
 };
 
 export type SetSiteOwnerBankDetailsBody = {
@@ -8194,6 +8268,15 @@ export type SimulateQrisPaymentResponse = {
   charge: CheckoutQrisCharge;
 };
 
+export type SimulateTariffsForSiteResponse = {
+  load?: Record<string, unknown>;
+  revenuePerKwh?: number;
+  options?: Record<string, unknown>[];
+  cheapest?: string | null;
+  shift?: Record<string, unknown> | null;
+  recommendation?: string | null;
+};
+
 export type SiteDriverQueueResponse = {
   settings: {
     enabled?: boolean;
@@ -8236,6 +8319,13 @@ export type SiteInvestmentsAndPaybackResponse = {
 
 export type SiteOwnerBankDetailsResponse = {
   account: OwnerBankAccount;
+};
+
+export type SiteOwnerDocumentsResponse = {
+  advices?: Record<string, unknown>[];
+  withholdings?: Record<string, unknown>[];
+  years?: string[];
+  scheduled?: Record<string, unknown>[];
 };
 
 export type SiteOwnersBankDetailChangeRequestsResponse = {
@@ -8298,6 +8388,15 @@ export type StatementsOfAccountSentResponse = {
 export type StopSessionRemotelyBody = {
   /** The OCPP transaction id of the running session. */
   transactionId: number | string;
+};
+
+export type SubscribeToFinanceDigestBody = {
+  frequency?: "off" | "daily" | "weekly";
+  channels?: ("email" | "whatsapp")[];
+  sections?: string[];
+  hour?: number;
+  weekday?: number;
+  phone?: string;
 };
 
 export type SubscriptionAndMembershipRevenueResponse = {
@@ -10416,6 +10515,17 @@ export class Operations {
   }
 
   /**
+   * Electricity tariffs
+   *
+   * (v1.27.0) Each site's electricity tariff (class, kVA, peak and off-peak rates per kWh, peak hours, fixed monthly charge) and the catalogue of indicative PLN classes.
+   *
+   * `GET /v1/finance/tariffs` · needs `payment:read`
+   */
+  electricityTariffs(options?: RequestOptions): Promise<ElectricityTariffsResponse> {
+    return this.transport.request<ElectricityTariffsResponse>({ method: "GET", path: "/v1/finance/tariffs", accept: "json" }, options);
+  }
+
+  /**
    * E-mail a credit note
    *
    * Sends the credit note (PDF) to the account's billing e-mail (or `to`) through the organisation's e-mail channel.
@@ -10877,6 +10987,17 @@ export class Operations {
    */
   fleetAccountsWithCreditLimitOrDeposit(options?: RequestOptions): Promise<FleetAccountsWithCreditLimitOrDepositResponse> {
     return this.transport.request<FleetAccountsWithCreditLimitOrDepositResponse>({ method: "GET", path: "/v1/fleet-credit", accept: "json" }, options);
+  }
+
+  /**
+   * Fleet invoicing automation
+   *
+   * (v1.27.0) The settings (issue on a day, send, require the e-Faktur number, payment links), the month to invoice, issued invoices to send or held (and why), and the payment links.
+   *
+   * `GET /v1/finance/fleet-automation` · needs `invoice:read`
+   */
+  fleetInvoicingAutomation(options?: RequestOptions): Promise<FleetInvoicingAutomationResponse> {
+    return this.transport.request<FleetInvoicingAutomationResponse>({ method: "GET", path: "/v1/finance/fleet-automation", accept: "json" }, options);
   }
 
   /**
@@ -12276,6 +12397,20 @@ export class Operations {
   }
 
   /**
+   * Make a payment link for a fleet invoice
+   *
+   * (v1.27.0) A Xendit invoice on the operator's own Xendit account for the balance (the open one if any); paid → the invoice marked paid. Audited.
+   *
+   * `POST /v1/fleet-invoices/{id}/payment-link` · needs `invoice:write`
+   */
+  makePaymentLinkForFleetInvoice(params: {
+    /** The fleet invoice id. */
+    id: string;
+  }, options?: RequestOptions): Promise<MakePaymentLinkForFleetInvoiceResponse> {
+    return this.transport.request<MakePaymentLinkForFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/payment-link", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Mark a tax obligation filed
    *
    * (v1.23.0) The obligation and period, the date filed or paid, the reference (NTPN, BPE, receipt) and optionally the amount. 409 when already marked (void it first). Audited as finance.tax_filed.
@@ -12394,6 +12529,17 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-invoices/{id}/html", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * My finance digest
+   *
+   * (v1.27.0) The caller's digest subscription (frequency off, daily or weekly; channels e-mail and/or WhatsApp; sections; hour; weekday), the last sends, and the organisation's WhatsApp template for digests. Console users only.
+   *
+   * `GET /v1/finance/digest` · needs `payment:read`
+   */
+  myFinanceDigest(options?: RequestOptions): Promise<MyFinanceDigestResponse> {
+    return this.transport.request<MyFinanceDigestResponse>({ method: "GET", path: "/v1/finance/digest", accept: "json" }, options);
   }
 
   /**
@@ -13269,6 +13415,21 @@ export class Operations {
   }
 
   /**
+   * Record tax withheld from an owner's share
+   *
+   * (v1.27.0) On one of the owner's finalised statements: ratePct (up to 30), base (default the share), amount (default base × rate), the bukti potong number and date. Shown to the owner in the portal. Audited.
+   *
+   * `POST /v1/finance/owners/{oid}/withholdings` · needs `payment:write`
+   */
+  recordTaxWithheldFromOwnerShare(params: {
+    /** The site owner id. */
+    oid: string;
+    body: RecordTaxWithheldFromOwnerShareBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/owners/{oid}/withholdings", pathParams: { oid: params.oid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Refund transfers through Duitku Disbursement
    *
    * (v1.15.0) The organisation's refund transfers, newest first (at most 300); open=true: only those not settled (awaiting approval, sending, sent).
@@ -14010,6 +14171,17 @@ export class Operations {
   }
 
   /**
+   * Run fleet invoicing automation now
+   *
+   * (v1.27.0) What the worker does hourly: issue the month on the day, then send what is ready (with a payment link). Audited.
+   *
+   * `POST /v1/finance/fleet-automation/run` · needs `invoice:write`
+   */
+  runFleetInvoicingAutomationNow(options?: RequestOptions): Promise<RunFleetInvoicingAutomationNowResponse> {
+    return this.transport.request<RunFleetInvoicingAutomationNowResponse>({ method: "POST", path: "/v1/finance/fleet-automation/run", accept: "json" }, options);
+  }
+
+  /**
    * Save an alert channel
    *
    * Sets the e-mail (SMTP), WhatsApp (Cloud API) or SMS (Twilio, Zenziva or your own gateway) sender. `secret` is write-only: sealed at rest, never returned and never written to the audit log; omit it to keep the stored one. WhatsApp and SMS always need one; SMTP needs a password when a username is set. For WhatsApp, `webhookSecret` is the Meta app secret used to check delivery-status webhooks (write-only too); the first save creates the webhook path and verify token. Audited.
@@ -14143,6 +14315,17 @@ export class Operations {
     body?: SendMonthCloseEMailNowBody;
   }, options?: RequestOptions): Promise<SendMonthCloseEMailNowResponse> {
     return this.transport.request<SendMonthCloseEMailNowResponse>({ method: "POST", path: "/v1/finance/accounts/{id}/close-email/send", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Send my digest now
+   *
+   * (v1.27.0) The caller's digest, now, on their channels; the result per channel and the text.
+   *
+   * `POST /v1/finance/digest/send` · needs `payment:read`
+   */
+  sendMyDigestNow(options?: RequestOptions): Promise<SendMyDigestNowResponse> {
+    return this.transport.request<SendMyDigestNowResponse>({ method: "POST", path: "/v1/finance/digest/send", accept: "json" }, options);
   }
 
   /**
@@ -14327,6 +14510,19 @@ export class Operations {
   }
 
   /**
+   * Set the digest WhatsApp template
+   *
+   * (v1.27.0) whatsappTemplate { name, lang } (an approved template with one parameter, the digest text), or null. Audited.
+   *
+   * `PUT /v1/finance/digest/settings` · needs `payment:write`
+   */
+  setDigestWhatsAppTemplate(params: {
+    body: SetDigestWhatsAppTemplateBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/digest/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the driver refund policy
    *
    * (v1.24.0) enabled (drivers can ask in the app); autoApproveUpTo (minor unit; unused balance and failed charges up to it are approved at once; 0: review all); windowDays (1–365). Audited.
@@ -14380,6 +14576,19 @@ export class Operations {
     body: SetFleetAccountCreditLimitOrPrepayBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/fleet-accounts/{id}/credit", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set fleet invoicing automation
+   *
+   * (v1.27.0) autoIssue with issueDay (1–28), autoSend, requireEfaktur, paymentLinks (needs the operator's own Xendit account), linkDays. Audited.
+   *
+   * `PUT /v1/finance/fleet-automation` · needs `invoice:write`
+   */
+  setFleetInvoicingAutomation(params: {
+    body: SetFleetInvoicingAutomationBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/fleet-automation", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14531,6 +14740,21 @@ export class Operations {
     body: SetSiteElectricityCostPerKWhBody;
   }, options?: RequestOptions): Promise<SetSiteElectricityCostPerKWhResponse> {
     return this.transport.request<SetSiteElectricityCostPerKWhResponse>({ method: "PUT", path: "/v1/finance/sites/{sid}/energy-rate", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set a site's electricity tariff
+   *
+   * (v1.27.0) tariffClass, powerKva, ratePeak and rateOffpeak (default: the catalogue's), peakFrom/peakTo (default 17–22), fixedMonthly. Audited.
+   *
+   * `PUT /v1/finance/tariffs/sites/{sid}` · needs `payment:write`
+   */
+  setSiteElectricityTariff(params: {
+    /** The site id. */
+    sid: string;
+    body: SetSiteElectricityTariffBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/tariffs/sites/{sid}", pathParams: { sid: params.sid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14757,6 +14981,25 @@ export class Operations {
   }
 
   /**
+   * Simulate tariffs for a site
+   *
+   * (v1.27.0) The site's load by hour of day over the last months (peak share), the energy cost per month and per kWh under its tariff and each catalogue class (losses from recorded bills), the margin against the revenue per kWh, the price per kWh for a target margin, and the saving from moving part of the peak load off-peak.
+   *
+   * `GET /v1/finance/tariffs/sites/{sid}/simulate` · needs `payment:read`
+   */
+  simulateTariffsForSite(params: {
+    /** The site id. */
+    sid: string;
+    query?: {
+      months?: number;
+      targetMarginPct?: number;
+      shiftPct?: number;
+    };
+  }, options?: RequestOptions): Promise<SimulateTariffsForSiteResponse> {
+    return this.transport.request<SimulateTariffsForSiteResponse>({ method: "GET", path: "/v1/finance/tariffs/sites/{sid}/simulate", pathParams: { sid: params.sid }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
    * The site's driver queue
    *
    * The queue policy (queueEnabled and friends on the site), then every driver waiting or holding an offer, in order, and the places that ended in the last 24 hours (served, missed, left, expired, removed). Drivers are shown as a masked phone number or their fleet card. waiting drivers have a position: 1 + the drivers ahead of them who could take a connector they could. stats.medianWaitMinutes is the median time from joining to the offer for drivers served in the last 24 hours.
@@ -14786,6 +15029,22 @@ export class Operations {
   }
 
   /**
+   * A site owner's annual statement
+   *
+   * (v1.27.0) The year's statements with share, tax withheld, paid and due, and the bukti potong numbers (PDF).
+   *
+   * `GET /v1/finance/owners/{oid}/documents/year/{year}` · needs `payment:read`
+   */
+  siteOwnerAnnualStatement(params: {
+    /** The site owner id. */
+    oid: string;
+    /** YYYY. */
+    year: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/owners/{oid}/documents/year/{year}", pathParams: { oid: params.oid, year: params.year }, accept: "binary" }, options);
+  }
+
+  /**
    * A site owner's bank details
    *
    * Where the owner is paid: bank, code, account holder; the account number masked (it is stored sealed). 404 when none are saved.
@@ -14797,6 +15056,20 @@ export class Operations {
     oid: string;
   }, options?: RequestOptions): Promise<SiteOwnerBankDetailsResponse> {
     return this.transport.request<SiteOwnerBankDetailsResponse>({ method: "GET", path: "/v1/finance/owners/{oid}/bank-account", pathParams: { oid: params.oid }, accept: "json" }, options);
+  }
+
+  /**
+   * A site owner's documents
+   *
+   * (v1.27.0) The owner's payout advices, tax withheld from its share (with bukti potong numbers), the years with statements, and its statements in automatic payouts.
+   *
+   * `GET /v1/finance/owners/{oid}/documents` · needs `payment:read`
+   */
+  siteOwnerDocuments(params: {
+    /** The site owner id. */
+    oid: string;
+  }, options?: RequestOptions): Promise<SiteOwnerDocumentsResponse> {
+    return this.transport.request<SiteOwnerDocumentsResponse>({ method: "GET", path: "/v1/finance/owners/{oid}/documents", pathParams: { oid: params.oid }, accept: "json" }, options);
   }
 
   /**
@@ -14921,6 +15194,19 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Response> {
     return this.transport.request<Response>({ method: "GET", path: "/v1/events/frames", query: params?.query, accept: "stream" }, options);
+  }
+
+  /**
+   * Subscribe to the finance digest
+   *
+   * (v1.27.0) frequency (off, daily, weekly), channels (email, whatsapp), sections (figures, approvals, overdue, cash, anomalies), hour (0–23, billing time zone), weekday (1 Monday – 7 Sunday), phone (for WhatsApp).
+   *
+   * `PUT /v1/finance/digest` · needs `payment:read`
+   */
+  subscribeToFinanceDigest(params: {
+    body: SubscribeToFinanceDigestBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/digest", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

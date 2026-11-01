@@ -1447,6 +1447,21 @@ async function yearEndSection(host, canWrite, year = new Date().getFullYear() - 
     } }] }));
 }
 
+// (v1.27.0) The organisation's WhatsApp template for finance digests.
+async function digestSettings(el, canWrite) {
+  let d;
+  try { d = await api('/v1/finance/digest'); } catch { el.innerHTML = ''; return; }
+  const t = d.organisation.whatsappTemplate, dis = canWrite ? '' : ' disabled';
+  el.innerHTML = `<div class="card section"><header><h3>Finance digests</h3></header><div class="body">
+    <p class="cell-sub" style="margin-top:0">Each person subscribes to their own digest in Finance today. For WhatsApp, name an approved template with one parameter (the digest's text).</p>
+    <div class="form">${field('WhatsApp template', `<input name="dg_t" value="${esc(t?.name ?? '')}" placeholder="finance_digest"${dis}>`)}${field('Language', `<input name="dg_l" value="${esc(t?.lang ?? 'id')}"${dis}>`)}</div>
+    ${canWrite ? '<div class="row" style="margin-top:10px"><button class="btn primary" type="button" data-dgs>Save</button></div>' : ''}</div></div>`;
+  $('[data-dgs]', el)?.addEventListener('click', async () => {
+    const name = $('[name="dg_t"]', el).value.trim();
+    try { await api('/v1/finance/digest/settings', { method: 'PUT', body: { whatsappTemplate: name ? { name, lang: $('[name="dg_l"]', el).value.trim() } : null } }); toast('Saved.', 'ok'); } catch (e) { toast(e.message, 'crit'); }
+  });
+}
+
 async function exportSettings(el, canWrite) {
   let w;
   try { w = await api('/v1/finance/warehouse'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
@@ -1754,7 +1769,7 @@ async function autoPayoutsSection(host, canWrite) {
     { label: 'Owner', render: (r) => esc(r.owner) },
     { label: 'Automatic', render: (r) => (r.automatic == null ? '<span class="cell-sub">default</span>' : r.automatic ? tag('t-ok', 'on') : tag('t-info', 'off')) },
     { label: 'Minimum', num: true, render: (r) => (r.minAmount == null ? '<span class="cell-sub">default</span>' : esc(fmt.money(r.minAmount, LEGACY_CURRENCY))) },
-    { label: '', render: (r) => (r.hold ? `${tag('t-warn', 'held')}<div class="cell-sub wrap">${esc(r.holdReason)}</div>` : '') },
+    { label: '', render: (r) => `${r.hold ? `${tag('t-warn', 'held')}<div class="cell-sub wrap">${esc(r.holdReason)}</div>` : ''}<button class="btn sm" type="button" data-odoc="${esc(r.ownerId)}">Documents</button>` },
   ], rows: a.rules, empty: 'No site owners.', onRow: canWrite ? (r) => modal({ title: r.owner, subtitle: 'Payout rule', body: `<div class="form">
       ${field('Automatic', `<select name="au"><option value="default"${r.automatic == null ? ' selected' : ''}>Default</option><option value="on"${r.automatic === true ? ' selected' : ''}>On</option><option value="off"${r.automatic === false ? ' selected' : ''}>Off</option></select>`)}
       ${field('Minimum (empty for the default)', `<input name="mn" type="number" min="0" value="${r.minAmount ?? ''}">`)}
@@ -1764,6 +1779,7 @@ async function autoPayoutsSection(host, canWrite) {
       const au = v('au').value;
       try { await api(`/v1/finance/owner-payouts/automation/owners/${r.ownerId}`, { method: 'PUT', body: { automatic: au === 'default' ? null : au === 'on', minAmount: v('mn').value === '' ? null : Number(v('mn').value), hold: v('hd').checked, holdReason: v('hr').value.trim() } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
     } }] }) : undefined });
+  el.querySelectorAll('[data-odoc]').forEach((b) => b.addEventListener('click', (ev) => { ev.stopPropagation(); const r = a.rules.find((x) => x.ownerId === b.dataset.odoc); ownerDocsDrawer(r.ownerId, r.owner, canWrite); }));
   $('[data-aps]', el)?.addEventListener('click', async () => {
     try { await api('/v1/finance/owner-payouts/automation', { method: 'PUT', body: { enabled: $('[name="ap_on"]', el).checked, delayDays: Number($('[name="ap_d"]', el).value), minAmount: Number($('[name="ap_m"]', el).value) } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); }
   });
@@ -1771,6 +1787,132 @@ async function autoPayoutsSection(host, canWrite) {
     e.currentTarget.disabled = true;
     try { const r = await api('/v1/finance/owner-payouts/automation/run', { method: 'POST' }); toast(`${r.requested.length} payout(s) requested; they wait for approval.${r.failed.length ? ` ${r.failed.length} failed: ${r.failed[0].error}` : ''}`, r.failed.length ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
   });
+}
+
+// ─────────────────────────────────────────── (v1.27.0) electricity tariffs and simulation
+
+async function tariffsSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let t;
+  try { t = await api('/v1/finance/tariffs'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const reload = () => tariffsSection(host, canWrite);
+  el.innerHTML = `${callout('info', 'Set each site\'s electricity tariff, then simulate: when the site\'s cars charge (peak 17:00–22:00 or off-peak), the energy cost under each PLN class, the margin, and the price per kWh for your target margin. The catalogue\'s rates are indicative: your bills and PLN\'s current tariff decide.')}
+    <div class="card section" data-tl></div>`;
+  table($('[data-tl]', el), { columns: [
+    { label: 'Site', render: (r) => esc(r.site) },
+    { label: 'Tariff', render: (r) => (r.tariff ? `<b>${esc(r.tariff.tariffClass)}</b> · ${esc(fmt.num(r.tariff.powerKva))} kVA<div class="cell-sub">peak ${esc(fmt.num(r.tariff.ratePeak))} · off-peak ${esc(fmt.num(r.tariff.rateOffpeak))} per kWh</div>` : '<span class="cell-sub">not set</span>') },
+    { label: '', render: (r) => `${canWrite ? `<button class="btn sm" type="button" data-tset="${esc(r.siteId)}">Set</button> ` : ''}<button class="btn sm" type="button" data-tsim="${esc(r.siteId)}"${r.tariff ? '' : ' disabled'}>Simulate</button>` },
+  ], rows: t.sites, empty: 'No sites.' });
+  el.querySelectorAll('[data-tset]').forEach((b) => b.addEventListener('click', () => {
+    const r = t.sites.find((x) => x.siteId === b.dataset.tset); const cur = r.tariff ?? {};
+    modal({ title: `Tariff · ${r.site}`, body: `<div class="form">
+        ${field('Class', `<select name="cls">${t.catalogue.map((c) => `<option value="${esc(c.id)}"${cur.tariffClass === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}${cur.tariffClass && !t.catalogue.some((c) => c.id === cur.tariffClass) ? `<option selected>${esc(cur.tariffClass)}</option>` : ''}</select>`)}
+        ${field('Connected power (kVA)', `<input name="kva" type="number" step="0.1" value="${cur.powerKva ?? ''}">`)}
+        ${field('Peak rate per kWh (empty: the catalogue\'s)', `<input name="rp" type="number" step="0.01" value="${cur.ratePeak ?? ''}">`)}
+        ${field('Off-peak rate per kWh', `<input name="ro" type="number" step="0.01" value="${cur.rateOffpeak ?? ''}">`)}
+        ${field('Peak from / to (hour)', `<div class="row" style="gap:6px"><input name="pf" type="number" min="0" max="23" value="${cur.peakFrom ?? 17}" style="width:80px"><input name="pt" type="number" min="1" max="24" value="${cur.peakTo ?? 22}" style="width:80px"></div>`)}
+        ${field('Fixed monthly charge', `<input name="fx" type="number" min="0" value="${cur.fixedMonthly ?? 0}">`)}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+        const v = (n) => $(`[name="${n}"]`, mc.el).value;
+        try { await api(`/v1/finance/tariffs/sites/${r.siteId}`, { method: 'PUT', body: { tariffClass: v('cls'), powerKva: Number(v('kva')), ratePeak: v('rp') === '' ? undefined : Number(v('rp')), rateOffpeak: v('ro') === '' ? undefined : Number(v('ro')), peakFrom: Number(v('pf')), peakTo: Number(v('pt')), fixedMonthly: Number(v('fx')) } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); return false; }
+      } }] });
+  }));
+  el.querySelectorAll('[data-tsim]').forEach((b) => b.addEventListener('click', () => {
+    const r = t.sites.find((x) => x.siteId === b.dataset.tsim);
+    let target = 30, shift = 20;
+    drawer({ title: r.site, subtitle: 'Tariff simulation', tabs: [{ id: 'sim', label: 'Simulation', async render(body, ctx) {
+      const s = await api(`/v1/finance/tariffs/sites/${r.siteId}/simulate?months=3&targetMarginPct=${target}&shiftPct=${shift}`);
+      const m = (n) => fmt.money(Math.round(n), s.currency);
+      const max = Math.max(1, ...s.load.hours);
+      body.innerHTML = `<div class="filters" style="margin-top:0">${field('Target margin %', `<input type="number" data-tg value="${target}" min="0" max="90" style="width:90px">`)}${field('Move off-peak %', `<input type="number" data-sh value="${shift}" min="0" max="100" style="width:90px">`)}<button class="btn" type="button" data-go style="align-self:flex-end">Recalculate</button></div>
+        <div class="grid k4">${kpi('kWh a month', esc(fmt.num(Math.round(s.load.kwhPerMonth))), `${s.load.sessions} sessions in ${s.months} months`)}${kpi('At peak', `${s.load.peakSharePct}%`, `${s.load.peakFrom}:00–${s.load.peakTo}:00`)}${kpi('Revenue per kWh', esc(m(s.revenuePerKwh)), 'before tax')}${kpi('Losses', `×${s.load.lossFactor}`, 'from recorded bills')}</div>
+        <div class="card section"><header><h3>When cars charge</h3></header><div class="body"><div style="display:flex;align-items:flex-end;gap:2px;height:110px">${s.load.hours.map((h, i) => `<div title="${i}:00 · ${fmt.num(Math.round(h))} kWh" style="flex:1;height:${Math.max(2, Math.round((h / max) * 100))}px;background:${i >= s.load.peakFrom && i < s.load.peakTo ? 'var(--warn)' : 'var(--accent, #0b7a5a)'};border-radius:2px 2px 0 0"></div>`).join('')}</div><div class="row" style="justify-content:space-between" ><span class="cell-sub">00:00</span><span class="cell-sub">12:00</span><span class="cell-sub">23:00</span></div></div></div>
+        ${s.recommendation ? callout('info', esc(s.recommendation)) : ''}
+        ${s.shift ? callout(s.shift.savingPerMonth > 0 ? 'ok' : 'info', `${esc(s.shift.label)}: ${esc(m(s.shift.monthlyCost))} a month, saving ${esc(m(s.shift.savingPerMonth))}.`) : ''}
+        <div class="card section" data-opts></div>`;
+      table($('[data-opts]', body), { columns: [
+        { label: 'Tariff', render: (o) => `${o.current ? '<b>' : ''}${esc(o.label)}${o.current ? '</b>' : ''}${o.id === s.cheapest ? ` ${tag('t-ok', 'cheapest')}` : ''}${o.note ? `<div class="cell-sub">${esc(o.note)}</div>` : ''}` },
+        { label: 'A month', num: true, render: (o) => esc(m(o.monthlyCost)) },
+        { label: 'Per kWh', num: true, render: (o) => esc(m(o.costPerKwh)) },
+        { label: 'Margin', num: true, render: (o) => (o.marginPct == null ? '—' : `<span style="color:${o.marginPct < s.targetMarginPct ? 'var(--warn)' : 'inherit'}">${o.marginPct}%</span>`) },
+        { label: `Price for ${s.targetMarginPct}%`, num: true, render: (o) => esc(m(o.priceForTarget)) },
+      ], rows: s.options, empty: '' });
+      $('[data-go]', body).addEventListener('click', () => { target = Number($('[data-tg]', body).value); shift = Number($('[data-sh]', body).value); ctx.show('sim'); });
+    } }] });
+  }));
+}
+
+// ─────────────────────────────────────────── (v1.27.0) fleet invoicing automation
+
+async function fleetAutoSection(host) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  if (!state.can('invoice:read')) { el.innerHTML = callout('info', 'Fleet invoicing needs the invoice:read permission.'); return; }
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let p;
+  try { p = await api('/v1/finance/fleet-automation'); } catch (e) { el.innerHTML = callout('crit', esc(e.message)); return; }
+  const canW = state.can('invoice:write'), dis = canW ? '' : ' disabled', st = p.settings;
+  const reload = () => fleetAutoSection(host);
+  el.innerHTML = `<div class="card"><header><h3>Fleet invoicing automation</h3></header><div class="body">
+      <p class="cell-sub" style="margin-top:0">On the day you choose, last month is invoiced for every fleet account with charges; issued invoices are e-mailed with a Xendit payment link, and a paid link marks the invoice paid. Reminders for unpaid invoices are Collections' dunning.</p>
+      <div class="form"><label class="check"><input type="checkbox" name="fa_i"${st.autoIssue ? ' checked' : ''}${dis}><span>Issue last month's invoices automatically</span></label>
+        ${field('On day of the month', `<input name="fa_d" type="number" min="1" max="28" value="${st.issueDay}"${dis}>`)}
+        <label class="check"><input type="checkbox" name="fa_s"${st.autoSend ? ' checked' : ''}${dis}><span>E-mail issued invoices to the fleet's billing address</span></label>
+        <label class="check"><input type="checkbox" name="fa_e"${st.requireEfaktur ? ' checked' : ''}${dis}><span>Hold invoices with PPN to a buyer with an NPWP until the e-Faktur number is set</span></label>
+        <label class="check"><input type="checkbox" name="fa_l"${st.paymentLinks ? ' checked' : ''}${dis}${p.xendit ? '' : ' disabled'}><span>Add a Xendit payment link${p.xendit ? '' : ' (needs your own Xendit account)'}</span></label></div>
+      ${canW ? `<div class="row" style="gap:8px;margin-top:10px"><button class="btn primary" type="button" data-fas>Save</button><button class="btn" type="button" data-far>Run now</button></div>` : ''}
+    </div></div>
+    <div class="card section"><header><h3>Issued, not sent yet</h3></header><div data-fts></div></div>
+    <div class="card section"><header><h3>Payment links</h3></header><div data-ftl></div></div>`;
+  table($('[data-fts]', el), { columns: [
+    { label: 'Invoice', render: (i) => `<span class="mono">${esc(i.number)}</span><div class="cell-sub">${esc(i.account)} · ${esc(i.period)}</div>` },
+    { label: 'Total', num: true, render: (i) => esc(fmt.money(i.total, i.currency)) },
+    { label: '', render: (i) => (i.ready ? tag('t-ok', 'ready to send') : `<span class="cell-sub wrap">${esc(i.hold)}</span>`) },
+  ], rows: p.toSend, empty: 'Every issued invoice has been sent.' });
+  table($('[data-ftl]', el), { columns: [
+    { label: 'Invoice', render: (l) => `<span class="mono">${esc(l.number)}</span>${l.error ? `<div class="cell-sub" style="color:var(--crit)">${esc(l.error)}</div>` : ''}` },
+    { label: 'Amount', num: true, render: (l) => esc(fmt.money(l.amount, l.currency)) },
+    { label: 'Status', render: (l) => tag(l.status === 'paid' ? 't-ok' : l.status === 'pending' ? 't-info' : 't-mute', l.status) },
+    { label: '', render: (l) => (l.status === 'pending' ? `<a href="${esc(l.url)}" target="_blank" rel="noopener">link</a>` : '') },
+  ], rows: p.links, empty: 'No payment links yet.' });
+  $('[data-fas]', el)?.addEventListener('click', async () => {
+    const c = (n) => $(`[name="${n}"]`, el).checked;
+    try { await api('/v1/finance/fleet-automation', { method: 'PUT', body: { autoIssue: c('fa_i'), issueDay: Number($('[name="fa_d"]', el).value), autoSend: c('fa_s'), requireEfaktur: c('fa_e'), paymentLinks: c('fa_l') } }); toast('Saved.', 'ok'); reload(); } catch (e) { toast(e.message, 'crit'); }
+  });
+  $('[data-far]', el)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { const r = await api('/v1/finance/fleet-automation/run', { method: 'POST' }); toast(`${r.issued.length} issued, ${r.sent.length} sent, ${r.held.length} held${r.failed.length ? `, ${r.failed.length} failed` : ''}.`, r.failed.length ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+  });
+}
+
+// (v1.27.0) A site owner's documents, for the operator: advices, tax withheld (record it), annual statements.
+function ownerDocsDrawer(ownerId, ownerName, canWrite) {
+  drawer({ title: ownerName, subtitle: 'Documents', tabs: [{ id: 'docs', label: 'Documents', async render(body, ctx) {
+    const d = await api(`/v1/finance/owners/${ownerId}/documents`);
+    body.innerHTML = `<div class="row" style="gap:6px;flex-wrap:wrap">${d.years.map((y) => `<button class="btn sm" type="button" data-oy="${esc(y)}">${icon('download')} Annual statement ${esc(y)}</button>`).join('')}${canWrite && d.statements.length ? '<button class="btn sm primary" type="button" data-ow>Record tax withheld</button>' : ''}</div>
+      <div class="card section"><header><h3>Tax withheld</h3></header><div data-owh></div></div><div class="card section"><header><h3>Payments</h3></header><div data-oad></div></div>`;
+    table($('[data-owh]', body), { columns: [
+      { label: 'Period', render: (w) => `${esc(w.period)}<div class="cell-sub">${esc(w.statement ?? '')} · ${w.ratePct}%</div>` }, { label: 'Withheld', num: true, render: (w) => esc(fmt.money(w.amount, w.currency)) },
+      { label: 'Bukti potong', render: (w) => (w.bukti ? `<span class="mono">${esc(w.bukti)}</span>` : tag('t-warn', 'not issued')) },
+    ], rows: d.withholdings, empty: 'None recorded.' });
+    table($('[data-oad]', body), { columns: [
+      { label: 'Paid on', render: (a) => esc(a.paidOn ?? '') }, { label: 'Statement', render: (a) => `<span class="mono">${esc(a.statement)}</span><div class="cell-sub">${esc(a.reference)}</div>` },
+      { label: 'Amount', num: true, render: (a) => esc(fmt.money(a.amount, a.currency)) },
+    ], rows: d.advices, empty: 'No payments recorded.' });
+    body.querySelectorAll('[data-oy]').forEach((b) => b.addEventListener('click', async () => {
+      try { const res = await api(`/v1/finance/owners/${ownerId}/documents/year/${b.dataset.oy}`, { raw: true }); download(`annual-statement-${b.dataset.oy}.pdf`, await res.blob()); } catch (e) { toast(e.message, 'crit'); }
+    }));
+    $('[data-ow]', body)?.addEventListener('click', () => modal({ title: 'Tax withheld', subtitle: ownerName, body: `<div class="form">
+        ${field('Statement', `<select name="st">${d.statements.map((s) => `<option value="${esc(s.statementId)}">${esc(s.period)} · ${esc(s.number)} · ${esc(fmt.money(s.share, s.currency))}</option>`).join('')}</select>`)}
+        ${field('Rate %', '<input name="rt" type="number" step="0.01" value="10">')}${field('Amount (empty: share × rate)', '<input name="am" type="number" min="0">')}
+        ${field('Bukti potong number', '<input name="bk">')}${field('Bukti potong date', '<input name="bd" type="date">')}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) {
+        const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+        try { await api(`/v1/finance/owners/${ownerId}/withholdings`, { method: 'POST', body: { statementId: v('st'), ratePct: Number(v('rt')), amount: v('am') === '' ? undefined : Number(v('am')), bukti: v('bk') || undefined, buktiDate: v('bd') || undefined } }); toast('Recorded.', 'ok'); ctx.show('docs'); } catch (e) { toast(e.message, 'crit'); return false; }
+      } }] }));
+  } }] });
 }
 
 registerView('finance', {
@@ -1786,7 +1928,7 @@ registerView('finance', {
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
       { id: 'payables', label: 'Payables' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'forecast', label: 'Forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
-      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
+      { id: 'bank', label: 'Bank' }, { id: 'tax', label: 'Tax' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'controls', label: 'Controls' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
       'What the payment gateway collected, charged, refunded and settled to the bank, matched to PlugSure\'s payments. Synced from the gateway every 15 minutes; reconciled every 6 hours.',
@@ -2121,11 +2263,12 @@ registerView('finance', {
         <div class="section" data-acct-sw></div>
         <div data-p10></div>
         <div data-p11></div>
-        <div data-p13></div>`;
+        <div data-p13></div><div data-p16></div>`;
       accountingSection($('[data-acct-sw]', body), base(), canWrite, st.accountingPackage);
       phase10Settings($('[data-p10]', body), canWrite);
       phase11Settings($('[data-p11]', body), canWrite);
       exportSettings($('[data-p13]', body), canWrite);
+      digestSettings($('[data-p16]', body), canWrite);
       $('[data-jdl]', body).addEventListener('click', () => $('[data-journal]', bodyAll).click());
       $('[data-save]', body)?.addEventListener('click', async () => {
         const journalAccounts = Object.fromEntries(Object.keys(r.defaults).map((k) => [k, { code: $(`[name="code_${k}"]`, body).value.trim(), name: $(`[name="name_${k}"]`, body).value.trim() }]));
@@ -2158,7 +2301,8 @@ registerView('finance', {
       pnl: () => pnlSection(body, canWrite), settlements: () => settlementsSection(body, base(), canWrite),
       yearend: () => yearEndSection(body, canWrite),
       roaming: () => roamingSection(body, canWrite), controls: () => controlsSection(body),
-      subscriptions: () => subscriptionsSection(body, canWrite), ppn: () => ppnSection(body, canWrite), autopay: () => autoPayoutsSection(body, canWrite) };
+      subscriptions: () => subscriptionsSection(body, canWrite), ppn: () => ppnSection(body, canWrite), autopay: () => autoPayoutsSection(body, canWrite),
+      tariffs: () => tariffsSection(body, canWrite), fleetauto: () => fleetAutoSection(body) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

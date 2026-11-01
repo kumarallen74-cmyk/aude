@@ -39,7 +39,32 @@ registerView('finance-today', {
               <div class="cell-sub">Asked by ${esc(a.requestedBy ?? '—')}${a.firstApprovedBy ? ` · first approval ${esc(a.firstApprovedBy)}` : ''}</div>
               ${canWrite && a.canDecide ? `<div class="ft-actions"><button class="btn primary" type="button" data-ok="${i}">Approve</button><button class="btn" type="button" data-no="${i}">Reject</button></div>`
                 : `<div class="cell-sub" style="margin-top:6px">${a.mine ? 'You asked for this: someone else approves it.' : canWrite ? 'You already gave the first approval.' : 'View only.'}</div>`}
-            </div>`).join('') : '<div class="empty-state" style="padding:18px">Nothing is waiting. 🎉</div>'}</div></div>`;
+            </div>`).join('') : '<div class="empty-state" style="padding:18px">Nothing is waiting. 🎉</div>'}</div></div>
+        <div class="card section" data-dg><header><h3>Your digest</h3></header><div class="body"><span class="spinner"></span></div></div>`;
+      api('/v1/finance/digest').then((d) => {
+        const c = $('[data-dg]', host); if (!c) return;
+        const sub = d.subscription;
+        const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        c.innerHTML = `<header><h3>Your digest</h3></header><div class="body"><p class="cell-sub" style="margin-top:0">These figures and approvals, sent to you every day or week.</p><div class="form">
+          ${field('How often', `<select name="dq">${[['off', 'Off'], ['daily', 'Every day'], ['weekly', 'Every week']].map(([v, l]) => `<option value="${v}"${sub.frequency === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}
+          ${field('At (hour)', `<input name="dh" type="number" min="0" max="23" value="${sub.hour}">`)}
+          ${field('On (weekly)', `<select name="dw">${days.map((x, i) => `<option value="${i + 1}"${sub.weekday === i + 1 ? ' selected' : ''}>${x}</option>`).join('')}</select>`)}
+          <label class="check"><input type="checkbox" name="de"${sub.channels.includes('email') ? ' checked' : ''}><span>E-mail</span></label>
+          <label class="check"><input type="checkbox" name="dwa"${sub.channels.includes('whatsapp') ? ' checked' : ''}${d.organisation.whatsappTemplate ? '' : ' disabled'}><span>WhatsApp${d.organisation.whatsappTemplate ? '' : ' (no template set in Finance → Settings)'}</span></label>
+          ${field('WhatsApp number', `<input name="dp" inputmode="tel" value="${esc(sub.phone ?? '')}" placeholder="62811…">`)}</div>
+          <div class="ft-actions"><button class="btn primary" type="button" data-dsave>Save</button><button class="btn" type="button" data-dsend>Send me one now</button></div>
+          ${sub.lastSentAt ? `<p class="cell-sub">Last sent ${esc(fmt.ago(sub.lastSentAt))}.</p>` : ''}</div>`;
+        const v = (n) => $(`[name="${n}"]`, c);
+        $('[data-dsave]', c).addEventListener('click', async () => {
+          const channels = [v('de').checked ? 'email' : null, v('dwa').checked ? 'whatsapp' : null].filter(Boolean);
+          try { await api('/v1/finance/digest', { method: 'PUT', body: { frequency: v('dq').value, hour: Number(v('dh').value), weekday: Number(v('dw').value), channels: channels.length ? channels : ['email'], phone: v('dp').value.trim() || undefined } }); toast('Saved.', 'ok'); } catch (e) { toast(e.message, 'crit'); }
+        });
+        $('[data-dsend]', c).addEventListener('click', async (ev) => {
+          ev.currentTarget.disabled = true;
+          try { const r = await api('/v1/finance/digest/send', { method: 'POST' }); const bad = r.results.filter((x) => !x.ok); toast(bad.length ? bad.map((x) => `${x.channel}: ${x.error}`).join('; ') : 'Sent.', bad.length ? 'warn' : 'ok'); } catch (e) { toast(e.message, 'crit'); }
+          ev.currentTarget.disabled = false;
+        });
+      }).catch(() => { const c = $('[data-dg]', host); if (c) c.remove(); });
       host.querySelectorAll('[data-ok]').forEach((b) => b.addEventListener('click', async () => {
         const a = t.approvals[Number(b.dataset.ok)];
         b.disabled = true;
