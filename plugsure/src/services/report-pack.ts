@@ -8,7 +8,7 @@ import { benchmark } from './finance-benchmark.js';
 import { payables } from './supplier-bills.js';
 import { channels } from './finance-digest.js';
 import { sendEmail } from './notify-transports.js';
-import { PdfDoc, Flow } from './pdf.js';
+import { PdfDoc, Flow, SLIDE } from './pdf.js';
 import { xlsx } from './xlsx.js';
 
 /**
@@ -21,6 +21,13 @@ import { xlsx } from './xlsx.js';
  *   scorecard   the KPIs against their targets (green, amber, red)
  *   sites       the five sites with the most revenue, and the three with the lowest margin
  *   payables    what is owed to suppliers, overdue, and due in the next 14 days
+ *   (v1.36.0) the board sections, each left out when its module is not in use:
+ *   risk        insurance renewals and open claims, compliance deadlines overdue and due, the auditor's open requests,
+ *               open and lost chargebacks, grant conditions due or breached
+ *   lenders     the month's covenant tests
+ *   sustainability  MWh charged, the green share, the emissions avoided
+ *   grants      received, deferred, still to claim, repayable
+ *   The trend (the last twelve packs' revenue, result and cash) and a slide deck (16:9 PDF) come with it.
  *
  * The figures are a snapshot taken when the pack is drafted (refreshed on demand while it is a draft), so the pack
  * says what was reviewed. Each section has commentary. A pack is drafted, submitted for review, and approved by a
@@ -32,7 +39,7 @@ export class PackError extends Error {
   constructor(public statusCode: number, message: string) { super(message); }
 }
 
-export const SECTIONS = ['summary', 'results', 'cash', 'scorecard', 'sites', 'payables'] as const;
+export const SECTIONS = ['summary', 'results', 'cash', 'scorecard', 'sites', 'payables', 'risk', 'lenders', 'sustainability', 'grants'] as const;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const zone = () => config.billing.timeZone;
@@ -95,6 +102,7 @@ export async function compose(orgId: string, month: string, currency: string, no
       lowestMargin: sites.filter((s) => s.metrics.marginPct != null).sort((a, b) => (a.metrics.marginPct ?? 0) - (b.metrics.marginPct ?? 0)).slice(0, 3)
         .map((s) => ({ id: s.id, name: s.name, revenue: s.revenue, marginPct: s.metrics.marginPct })),
     },
+    board: await board(orgId, month, currency),
     payables: {
       total: ap1?.total ?? 0, overdue: ap1?.overdue ?? 0,
       dueSoon: ap.dueSoon.filter((b) => b.currency === currency).reduce((a, b) => a + b.balance, 0),
@@ -104,6 +112,43 @@ export async function compose(orgId: string, month: string, currency: string, no
   };
 }
 export type PackData = Awaited<ReturnType<typeof compose>>;
+
+/** (v1.36.0) The board sections. A module that fails or is not in use leaves its section out (null). */
+async function board(orgId: string, month: string, currency: string) {
+  const safe = async <T>(f: () => Promise<T>): Promise<T | null> => { try { return await f(); } catch { return null; } };
+  const [carbon, insurance, compliance, chargebacks, grants, lenders] = await Promise.all([
+    safe(async () => (await import('./carbon.js')).month(orgId, month)),
+    safe(async () => (await import('./insurance.js')).overview(orgId)),
+    safe(async () => (await import('./compliance-calendar.js')).overview(orgId, { from: `${month.slice(0, 4)}-01-01`, to: `${month.slice(0, 4)}-12-31` })),
+    safe(async () => (await import('./chargebacks.js')).list(orgId)),
+    safe(async () => (await import('./grants.js')).overview(orgId)),
+    safe(async () => (await import('./lenders.js')).covenants(orgId)),
+  ]);
+  const ins = insurance && (insurance.policies.length || insurance.claims.length) ? insurance : null;
+  const cmp = compliance && (compliance.tasks.length || compliance.pbc.length) ? compliance : null;
+  const cb = chargebacks && chargebacks.chargebacks.length ? chargebacks : null;
+  const gr = grants && grants.grants.length ? grants : null;
+  const risk = ins || cmp || cb || gr ? {
+    insurance: ins ? { renewing: ins.renewing.length, openClaims: ins.claims.filter((c) => !['paid', 'closed', 'rejected'].includes(c.status)).length, recoveryPct: ins.totals[currency]?.recoveryPct ?? null } : null,
+    compliance: cmp ? { overdue: cmp.stats.overdue, dueIn30: cmp.stats.dueIn30, onTimePct: cmp.stats.onTimePct, pbcOpen: cmp.stats.pbcOpen } : null,
+    chargebacks: cb ? { open: cb.totals[currency]?.open ?? 0, openAmount: cb.totals[currency]?.openAmount ?? 0, lostAmount: cb.totals[currency]?.lostAmount ?? 0, winRatePct: cb.winRatePct } : null,
+    grants: gr ? { conditionsDue: gr.conditionsDue.length, breached: gr.grants.reduce((a, g) => a + g.breached, 0) } : null,
+  } : null;
+  const tests = (lenders ?? []).map((c) => { const t = c.tests.find((x) => x.month === month); return { kind: c.kind, lender: c.lender ?? null, threshold: c.threshold, direction: c.direction, value: t?.value ?? null, passed: t ? t.passed : null, headroomPct: t?.headroomPct ?? null, tested: !!t }; });
+  return {
+    risk,
+    lenders: tests.length ? tests : null,
+    sustainability: carbon && carbon.mwh > 0 ? { mwh: carbon.mwh, greenPct: carbon.greenPct, recMwh: carbon.recMwh, avoidedTonnes: carbon.avoidedTonnes } : null,
+    grants: gr && gr.totals[currency] ? gr.totals[currency] : null,
+  };
+}
+
+/** (v1.36.0) The last twelve packs' revenue, result and cash, oldest first. */
+export async function trend(orgId: string, upTo?: string) {
+  const rows = await outsideRequestScope(() => many<any>(
+    `SELECT month, currency, data->'results'->'month' AS r, (data->'cash'->>'atMonthEnd')::numeric AS cash FROM report_pack WHERE org_id = $1 AND ($2::text IS NULL OR month <= $2::text) ORDER BY month DESC LIMIT 12`, [orgId, upTo ?? null]));
+  return rows.reverse().map((x) => ({ month: x.month, currency: x.currency, revenue: Number(x.r?.revenue ?? 0), result: Number(x.r?.result ?? 0), cash: x.cash == null ? null : Number(x.cash) }));
+}
 
 const packView = (r: any) => ({
   id: String(r.id), month: r.month, currency: r.currency, status: r.status, data: r.data as PackData, commentary: r.commentary ?? {},
@@ -116,7 +161,7 @@ const PACK_SELECT = `SELECT p.*, c.name AS created_by_name, s.name AS submitted_
 
 export async function list(orgId: string) {
   const rows = await outsideRequestScope(() => many<any>(`${PACK_SELECT} WHERE p.org_id = $1 ORDER BY p.month DESC LIMIT 36`, [orgId]));
-  return { packs: rows.map((r) => { const v = packView(r); return { ...v, data: undefined, result: v.data?.results?.month?.result ?? null }; }), settings: await settings(orgId) };
+  return { packs: rows.map((r) => { const v = packView(r); return { ...v, data: undefined, result: v.data?.results?.month?.result ?? null }; }), settings: await settings(orgId), trend: await trend(orgId) };
 }
 
 async function packRow(orgId: string, id: string) {
@@ -236,6 +281,144 @@ export async function pdf(orgId: string, id: string): Promise<Buffer> {
   f.row('Due in the next 14 days', money(d.payables.dueSoon, cur));
   f.row('Bills awaiting approval', String(d.payables.awaitingApproval));
   note('payables');
+  const bd = d.board;
+  if (bd?.risk) {
+    f.heading('Risk and compliance');
+    for (const [label, value] of riskRows(bd.risk, cur)) f.row(label, value);
+    note('risk');
+  }
+  if (bd?.lenders) {
+    f.heading('Lenders');
+    f.table([{ label: 'Covenant', width: 3 }, { label: 'Threshold', width: 1.6, align: 'right' }, { label: p.month, width: 1.6, align: 'right' }, { label: 'Headroom', width: 1.4, align: 'right' }, { label: '', width: 1.2 }],
+      bd.lenders.map((t) => ({ cells: [`${t.lender ?? 'Overall'} · ${t.kind}`, `${t.direction === 'min' ? '>=' : '<='} ${t.kind === 'min_cash' ? money(t.threshold, cur) : t.threshold}`, t.value == null ? '—' : t.kind === 'min_cash' ? money(t.value, cur) : String(t.value), t.headroomPct == null ? '—' : `${t.headroomPct}%`, !t.tested ? 'not tested' : t.passed === false ? 'BREACH' : t.passed ? 'met' : '—'] })));
+    note('lenders');
+  }
+  if (bd?.sustainability) {
+    f.heading('Sustainability');
+    f.row('Energy charged', `${bd.sustainability.mwh.toLocaleString('en-US', { maximumFractionDigits: 3 })} MWh`); f.row('Green share (RECs retired)', `${bd.sustainability.greenPct}%`); f.row('Emissions avoided', `${bd.sustainability.avoidedTonnes.toLocaleString('en-US', { maximumFractionDigits: 3 })} t CO2e`);
+    note('sustainability');
+  }
+  if (bd?.grants) {
+    f.heading('Grants');
+    f.row('Received', money(bd.grants.received, cur)); f.row('Deferred (to be released)', money(bd.grants.deferred, cur)); f.row('Still to claim', money(bd.grants.toClaim, cur)); f.row('Repayable to grantors', money(bd.grants.repayable, cur));
+    note('grants');
+  }
+  return doc.toBuffer();
+}
+
+type Board = NonNullable<PackData['board']>;
+function riskRows(r: NonNullable<Board['risk']>, cur: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  if (r.insurance) out.push(['Insurance: policies to renew / open claims', `${r.insurance.renewing} / ${r.insurance.openClaims}`]);
+  if (r.compliance) out.push(['Compliance: overdue / due in 30 days', `${r.compliance.overdue} / ${r.compliance.dueIn30}`], ['Auditor requests open', String(r.compliance.pbcOpen)]);
+  if (r.chargebacks) out.push(['Chargebacks open', `${r.chargebacks.open} (${money(r.chargebacks.openAmount, cur)})`], ['Chargebacks lost or accepted', money(r.chargebacks.lostAmount, cur)]);
+  if (r.grants) out.push(['Grant conditions due in 30 days / breached', `${r.grants.conditionsDue} / ${r.grants.breached}`]);
+  return out;
+}
+
+/** (v1.36.0) The pack as 16:9 slides: title, results, trend, scorecard, sites, risk, lenders, sustainability and grants. */
+export async function slides(orgId: string, id: string): Promise<Buffer> {
+  const p = await get(orgId, id);
+  const org = await outsideRequestScope(() => one<{ name: string }>(`SELECT name FROM organisation WHERE id = $1`, [orgId]));
+  const d = p.data, cur = p.currency, c = p.commentary as Record<string, string>;
+  const tr = (await trend(orgId, p.month)).filter((t) => t.currency === cur);
+  const doc = new PdfDoc({ title: `Board pack ${p.month}`, author: org?.name ?? 'PlugSure CSMS', subject: 'Board pack', created: new Date(), size: SLIDE });
+  const W = doc.width, H = doc.height, M = 48;
+  const ink: [number, number, number] = [0.07, 0.09, 0.13], muted: [number, number, number] = [0.4, 0.43, 0.48], accent: [number, number, number] = [0.06, 0.45, 0.33];
+  const RAG: Record<string, [number, number, number]> = { green: [0.1, 0.55, 0.3], amber: [0.85, 0.55, 0.05], red: [0.8, 0.15, 0.15] };
+  let first = true, page = 0;
+  const slide = (title: string, section?: string) => {
+    if (!first) doc.addPage();
+    first = false; page++;
+    doc.rect(0, 0, W, 6, { fill: accent });
+    doc.text(M, 52, title, { size: 24, bold: true, color: ink });
+    doc.text(W - M, 52, `${org?.name ?? ''} · ${p.month}`, { size: 10, color: muted, align: 'right' });
+    doc.text(W - M, H - 22, String(page), { size: 9, color: muted, align: 'right' });
+    if (section && c[section]) {
+      const f = new Flow(doc); f.y = H - 92;
+      doc.line(M, H - 104, W - M, H - 104);
+      f.para(c[section]!.slice(0, 600), { size: 10.5, color: ink, width: W - 2 * M, x: M });
+    }
+  };
+  const tile = (x: number, y: number, w: number, label: string, value: string, sub = '', color = ink) => {
+    doc.rect(x, y, w, 96, { fill: [0.965, 0.97, 0.975], stroke: [0.88, 0.9, 0.92] });
+    doc.text(x + 16, y + 26, label.toUpperCase(), { size: 9, bold: true, color: muted });
+    doc.text(x + 16, y + 60, value, { size: 22, bold: true, color });
+    if (sub) doc.text(x + 16, y + 82, sub, { size: 9.5, color: muted });
+  };
+  const tiles = (items: Array<[string, string, string?, [number, number, number]?]>, y = 96) => {
+    const n = items.length, gap = 16, w = (W - 2 * M - gap * (n - 1)) / n;
+    items.forEach(([l, v, s, col], i) => tile(M + i * (w + gap), y, w, l, v, s ?? '', col ?? ink));
+  };
+  // Title
+  doc.rect(0, 0, W, H, { fill: [0.04, 0.2, 0.16] });
+  doc.text(M, H / 2 - 30, org?.name ?? '', { size: 16, color: [0.75, 0.9, 0.84] });
+  doc.text(M, H / 2 + 10, `Board pack · ${p.month}`, { size: 36, bold: true, color: [1, 1, 1] });
+  doc.text(M, H / 2 + 44, `${p.status === 'approved' || p.status === 'sent' ? `Approved by ${p.approvedBy ?? '—'}` : `Status: ${p.status.replace('_', ' ')}`} · figures of ${d.composedAt.slice(0, 10)} · ${cur}`, { size: 11, color: [0.75, 0.9, 0.84] });
+  first = false; page = 1;
+  // Results
+  slide('Results', 'summary');
+  const res = d.results.month.result;
+  tiles([['Revenue', money(d.results.month.revenue, cur), `YTD ${money(d.results.yearToDate.revenue, cur)}`], ['Expenses', money(d.results.month.expenses, cur), `YTD ${money(d.results.yearToDate.expenses, cur)}`],
+    ['Result', money(res, cur), `YTD ${money(d.results.yearToDate.result, cur)}`, res < 0 ? RAG.red : RAG.green], ['Cash', money(d.cash.atMonthEnd, cur), `lowest in 13 weeks ${money(d.cash.lowest13Weeks, cur)}`]]);
+  if (c.results) { const f = new Flow(doc); f.y = 230; f.para(c.results.slice(0, 600), { size: 11, width: W - 2 * M, x: M }); }
+  // Trend
+  if (tr.length > 1) {
+    slide('Twelve months', 'cash');
+    const x0 = M + 60, y0 = 110, cw = W - 2 * M - 60, ch = 250;
+    const vals = tr.flatMap((t) => [t.revenue, t.result]);
+    const max = Math.max(1, ...vals), min = Math.min(0, ...vals), span = max - min;
+    const yOf = (v: number) => y0 + ch - ((v - min) / span) * ch;
+    doc.line(x0, yOf(0), x0 + cw, yOf(0), { color: [0.7, 0.72, 0.75] });
+    doc.text(x0 - 8, yOf(max), money(max, cur), { size: 8, color: muted, align: 'right' });
+    if (min < 0) doc.text(x0 - 8, yOf(min), money(min, cur), { size: 8, color: muted, align: 'right' });
+    const bw = cw / tr.length;
+    tr.forEach((t, i) => {
+      const x = x0 + i * bw + bw * 0.15, w2 = bw * 0.33;
+      const bar = (v: number, xx: number, col: [number, number, number]) => { const a = yOf(Math.max(0, v)), b = yOf(Math.min(0, v)); doc.rect(xx, a, w2, Math.max(1, b - a), { fill: col }); };
+      bar(t.revenue, x, [0.55, 0.75, 0.68]); bar(t.result, x + w2 + 2, t.result < 0 ? RAG.red! : accent);
+      doc.text(x + w2, y0 + ch + 16, t.month.slice(2), { size: 8, color: muted, align: 'center' });
+    });
+    doc.rect(x0, y0 + ch + 30, 10, 10, { fill: [0.55, 0.75, 0.68] }); doc.text(x0 + 16, y0 + ch + 39, 'Revenue', { size: 9, color: muted });
+    doc.rect(x0 + 90, y0 + ch + 30, 10, 10, { fill: accent }); doc.text(x0 + 106, y0 + ch + 39, 'Result', { size: 9, color: muted });
+  }
+  // Scorecard
+  if (d.scorecard.kpis.length) {
+    slide('Scorecard', 'scorecard');
+    const f = new Flow(doc); f.y = 90;
+    f.table([{ label: 'KPI', width: 4 }, { label: 'Actual', width: 2, align: 'right' }, { label: 'Target', width: 2, align: 'right' }, { label: '', width: 1 }],
+      d.scorecard.kpis.slice(0, 12).map((k) => ({ cells: [k.label, kpiVal(k, k.actual, cur), kpiVal(k, k.target, cur), k.rag ? k.rag.toUpperCase() : ''] })), { size: 10 });
+  }
+  // Sites
+  if (d.sites.top.length) {
+    slide('Sites', 'sites');
+    const f = new Flow(doc); f.y = 90;
+    f.table([{ label: 'Top sites by revenue', width: 4 }, { label: 'Revenue', width: 2, align: 'right' }, { label: 'kWh', width: 1.4, align: 'right' }, { label: 'Margin', width: 1.2, align: 'right' }, { label: 'Utilisation', width: 1.4, align: 'right' }],
+      d.sites.top.map((s) => ({ cells: [s.name, money(s.revenue, cur), Math.round(s.kwh).toLocaleString('en-US'), pct(s.marginPct), pct(s.utilisationPct)] })), { size: 10 });
+  }
+  const bd = d.board;
+  if (bd?.risk) {
+    slide('Risk and compliance', 'risk');
+    const r = bd.risk, items: Array<[string, string, string?, [number, number, number]?]> = [];
+    if (r.compliance) items.push(['Deadlines overdue', String(r.compliance.overdue), `${r.compliance.dueIn30} due in 30 days`, r.compliance.overdue ? RAG.red : RAG.green]);
+    if (r.insurance) items.push(['Insurance', `${r.insurance.renewing} to renew`, `${r.insurance.openClaims} open claim(s)`, r.insurance.renewing ? RAG.amber : ink]);
+    if (r.chargebacks) items.push(['Chargebacks open', String(r.chargebacks.open), `${money(r.chargebacks.lostAmount, cur)} lost`, r.chargebacks.open ? RAG.amber : ink]);
+    if (r.grants) items.push(['Grant conditions', `${r.grants.conditionsDue} due`, `${r.grants.breached} breached`, r.grants.breached ? RAG.red : ink]);
+    if (items.length) tiles(items);
+  }
+  if (bd?.lenders) {
+    slide('Lenders', 'lenders');
+    const f = new Flow(doc); f.y = 90;
+    f.table([{ label: 'Covenant', width: 3.4 }, { label: 'Threshold', width: 1.6, align: 'right' }, { label: p.month, width: 1.6, align: 'right' }, { label: 'Headroom', width: 1.4, align: 'right' }, { label: '', width: 1.4 }],
+      bd.lenders.map((t) => ({ cells: [`${t.lender ?? 'Overall'} · ${t.kind}`, `${t.direction === 'min' ? '>=' : '<='} ${t.kind === 'min_cash' ? money(t.threshold, cur) : t.threshold}`, t.value == null ? '—' : t.kind === 'min_cash' ? money(t.value, cur) : String(t.value), t.headroomPct == null ? '—' : `${t.headroomPct}%`, !t.tested ? 'not tested' : t.passed === false ? 'BREACH' : t.passed ? 'met' : '—'] })), { size: 10 });
+  }
+  if (bd?.sustainability || bd?.grants) {
+    slide(bd?.sustainability && bd?.grants ? 'Sustainability and grants' : bd?.sustainability ? 'Sustainability' : 'Grants', bd?.sustainability ? 'sustainability' : 'grants');
+    const items: Array<[string, string, string?, [number, number, number]?]> = [];
+    if (bd.sustainability) items.push(['Energy charged', `${bd.sustainability.mwh.toLocaleString('en-US', { maximumFractionDigits: 1 })} MWh`], ['Green share', `${bd.sustainability.greenPct}%`, `${bd.sustainability.recMwh.toLocaleString('en-US', { maximumFractionDigits: 1 })} MWh of RECs`, accent], ['Avoided', `${bd.sustainability.avoidedTonnes.toLocaleString('en-US', { maximumFractionDigits: 1 })} t`, 'CO2e against petrol cars']);
+    if (bd.grants) items.push(['Grants deferred', money(bd.grants.deferred, cur), `${money(bd.grants.received, cur)} received`]);
+    tiles(items.slice(0, 4));
+  }
   return doc.toBuffer();
 }
 
@@ -251,6 +434,11 @@ export async function workbook(orgId: string, id: string): Promise<Buffer> {
     { name: 'Scorecard', rows: [['KPI', 'Actual', 'Target', 'Colour'], ...d.scorecard.kpis.map((k) => [k.label, k.actual, k.target, k.rag ?? ''])], widths: [24, 16, 16, 10] },
     { name: 'Sites', rows: [['Site', 'Revenue', 'kWh', 'Margin %', 'Utilisation %'], ...d.sites.top.map((s) => [s.name, s.revenue, s.kwh, s.marginPct, s.utilisationPct])], widths: [32, 16, 12, 12, 14], formats: [null, 'money', 'int', null, null] },
     { name: 'Payables', rows: [['', p.currency], ['Owed', d.payables.total], ['Overdue', d.payables.overdue], ['Due in 14 days', d.payables.dueSoon], [], ['Supplier', 'Owed'], ...d.payables.topSuppliers.map((s) => [s.supplier, s.total])], widths: [32, 18], formats: [null, 'money'] },
+    ...(d.board ? [{ name: 'Board', rows: [['', p.currency],
+      ...(d.board.risk ? riskRows(d.board.risk, p.currency).map(([l, v]) => [l, v]) : []),
+      ...(d.board.lenders ?? []).map((t) => [`Covenant ${t.lender ?? 'Overall'} ${t.kind} (${t.direction === 'min' ? '>=' : '<='} ${t.threshold})`, t.tested ? `${t.value ?? '—'} ${t.passed === false ? 'BREACH' : 'met'}` : 'not tested']),
+      ...(d.board.sustainability ? [['MWh charged', d.board.sustainability.mwh], ['Green share %', d.board.sustainability.greenPct], ['Avoided t CO2e', d.board.sustainability.avoidedTonnes]] : []),
+      ...(d.board.grants ? [['Grants received', d.board.grants.received], ['Grants deferred', d.board.grants.deferred], ['Grants to claim', d.board.grants.toClaim], ['Grants repayable', d.board.grants.repayable]] : [])], widths: [48, 24] }] : []),
   ]);
 }
 

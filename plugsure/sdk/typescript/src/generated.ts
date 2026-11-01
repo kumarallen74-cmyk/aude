@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.35.0";
+export const API_VERSION = "1.36.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -5091,6 +5091,50 @@ export type AddEvidenceOrCommentToDisputeResponse = {
   notes: Record<string, unknown>[];
 };
 
+export type AddGrantBody = {
+  grantor?: string;
+  programme?: string;
+  reference?: string;
+  kind?: "capital" | "revenue" | "per_kwh";
+  currency?: string;
+  awarded?: number;
+  ratePerKwh?: number;
+  releaseMonths?: number;
+  periodFrom?: string;
+  periodTo?: string;
+  awardedOn?: string;
+  siteId?: string;
+  capexProjectId?: string;
+  status?: "applied" | "awarded" | "active" | "completed" | "rejected" | "clawed_back";
+  note?: string;
+};
+
+export type AddGrantConditionBody = {
+  description: string;
+  dueOn?: string;
+};
+
+export type AddLandlordDealBody = {
+  siteId?: string;
+  supplierId?: string;
+  reference?: string;
+  currency?: string;
+  basis?: "fixed" | "share" | "higher_of" | "fixed_plus_share";
+  fixed?: number;
+  sharePct?: number;
+  shareOf?: "revenue" | "margin";
+  minimum?: number;
+  escalationPct?: number;
+  rentFreeMonths?: number;
+  rechargePerKwh?: number;
+  billing?: "monthly" | "quarterly";
+  startOn?: string;
+  endOn?: string;
+  leaseId?: string;
+  status?: "active" | "ended";
+  note?: string;
+};
+
 export type AddLineToClaimBody = {
   spentOn: string;
   category: "fuel" | "travel" | "meals" | "parking" | "tools" | "supplies" | "phone" | "other";
@@ -5592,6 +5636,10 @@ export type BindClientCertificateResponse = {
   fingerprint: string | null;
 };
 
+export type BlockTokenBody = {
+  reason?: string;
+};
+
 export type BudgetsVsActualsForMonthResponse = {
   month?: string;
   alertPct?: number;
@@ -5844,11 +5892,50 @@ export type ChangeFleetAccountCardsResponse = {
   unknown: string[];
 };
 
+export type ChangeGrantBody = {
+  grantor?: string;
+  programme?: string;
+  reference?: string;
+  kind?: "capital" | "revenue" | "per_kwh";
+  currency?: string;
+  awarded?: number;
+  ratePerKwh?: number;
+  releaseMonths?: number;
+  periodFrom?: string;
+  periodTo?: string;
+  awardedOn?: string;
+  siteId?: string;
+  capexProjectId?: string;
+  status?: "applied" | "awarded" | "active" | "completed" | "rejected" | "clawed_back";
+  note?: string;
+};
+
 export type ChangeHomeCountryReportingTimeZoneOrDefaultLanguageBody = {
   homeCountry?: "ID" | "MY" | "SG";
   /** IANA zone, e.g. Asia/Singapore. */
   timezone?: string;
   defaultLocale?: "id" | "en";
+};
+
+export type ChangeLandlordDealBody = {
+  siteId?: string;
+  supplierId?: string;
+  reference?: string;
+  currency?: string;
+  basis?: "fixed" | "share" | "higher_of" | "fixed_plus_share";
+  fixed?: number;
+  sharePct?: number;
+  shareOf?: "revenue" | "margin";
+  minimum?: number;
+  escalationPct?: number;
+  rentFreeMonths?: number;
+  rechargePerKwh?: number;
+  billing?: "monthly" | "quarterly";
+  startOn?: string;
+  endOn?: string;
+  leaseId?: string;
+  status?: "active" | "ended";
+  note?: string;
 };
 
 export type ChangeLoanBody = {
@@ -6004,6 +6091,16 @@ export type CheckSiteOwnerBankAccountByNameResponse = {
     error?: string | null;
   };
   account: OwnerBankAccount;
+};
+
+export type ClaimGrantBody = {
+  periodFrom?: string;
+  periodTo?: string;
+  kwh?: number;
+  amount?: number;
+  submit?: boolean;
+  reference?: string;
+  note?: string;
 };
 
 export type ClaimWarrantyBody = {
@@ -6473,6 +6570,10 @@ export type DisputeWithItsNotesResponse = {
     claimed_idr?: number | null;
   };
   notes: Record<string, unknown>[];
+};
+
+export type DraftLandlordStatementBody = {
+  month: string;
 };
 
 export type DraftPayrollRunBody = {
@@ -8387,6 +8488,28 @@ export type RecordBalanceResponse = {
   balance?: number;
 };
 
+export type RecordChargebackBody = {
+  paymentId?: string;
+  paymentRef?: string;
+  provider: string;
+  caseRef: string;
+  reason: "fraud" | "not_received" | "not_as_described" | "duplicate" | "amount" | "cancelled" | "other";
+  reasonCode?: string;
+  currency?: string;
+  amount?: number;
+  fee?: number;
+  receivedOn?: string;
+  respondBy?: string;
+  note?: string;
+};
+
+export type RecordClawbackBody = {
+  amount: number;
+  onDate?: string;
+  note: string;
+  conditionId?: string;
+};
+
 export type RecordCreditNoteAsRefundedBody = {
   refundedAt?: string;
   reference?: string;
@@ -9031,6 +9154,11 @@ export type ReopenLockedMonthResponse = {
   locked?: boolean;
 };
 
+export type RepayClawbackBody = {
+  repaidOn?: string;
+  cashAccountId?: string;
+};
+
 export type ReplaceAlertContactResponse = {
   contact: {
     id: string;
@@ -9663,6 +9791,12 @@ export type SetFleetInvoicingAutomationBody = {
   requireEfaktur?: boolean;
   paymentLinks?: boolean;
   linkDays?: number;
+};
+
+export type SetGrantConditionBody = {
+  status: "pending" | "met" | "breached" | "waived";
+  metOn?: string;
+  note?: string;
 };
 
 export type SetKpiTargetsBody = {
@@ -10368,6 +10502,12 @@ export type UpdateCarbonCreditsBody = {
   note?: string;
 };
 
+export type UpdateChargebackBody = {
+  status: "evidence_submitted" | "won" | "lost" | "accepted";
+  on?: string;
+  note?: string;
+};
+
 export type UpdateChargePointProfileResponse = {
   ok: true;
 };
@@ -10382,6 +10522,15 @@ export type UpdateClaimBody = {
 
 export type UpdateConsoleUserResponse = {
   ok: true;
+};
+
+export type UpdateGrantClaimBody = {
+  status: "submitted" | "approved" | "rejected" | "paid";
+  on?: string;
+  paid?: number;
+  cashAccountId?: string;
+  reference?: string;
+  note?: string;
 };
 
 export type UpdateSiteOwnerBody = OwnerInput & {
@@ -11120,6 +11269,47 @@ export class Operations {
     body: FirmwareImageUrlRequest;
   }, options?: RequestOptions): Promise<FirmwareImageCreated> {
     return this.transport.request<FirmwareImageCreated>({ method: "POST", path: "/v1/firmware/images", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a grant
+   *
+   * (v1.36.0) grantor, programme, kind (capital: releaseMonths, by default the linked capex project's asset life, else 96 months; per_kwh: ratePerKwh), currency, awarded, period, site or capex project. Audited.
+   *
+   * `POST /v1/finance/grants`
+   */
+  addGrant(params: {
+    body: AddGrantBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a grant condition
+   *
+   * (v1.36.0) description, dueOn. Pending conditions raise finance.grant_condition_due from 14 days ahead. Audited.
+   *
+   * `POST /v1/finance/grants/{id}/conditions`
+   */
+  addGrantCondition(params: {
+    /** The id. */
+    id: string;
+    body: AddGrantConditionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/{id}/conditions", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a landlord deal
+   *
+   * (v1.36.0) The site, the landlord (a supplier), the basis (fixed, share of revenue or margin, higher of a share and a minimum, fixed plus share), escalation, rent-free months, energy recharge, billing, term, the lease holding the fixed rent. Audited.
+   *
+   * `POST /v1/finance/landlords`
+   */
+  addLandlordDeal(params: {
+    body: AddLandlordDealBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/landlords", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11938,6 +12128,21 @@ export class Operations {
   }
 
   /**
+   * Block a token
+   *
+   * (v1.36.0) Block a token behind chargebacks (reason). Audited.
+   *
+   * `POST /v1/finance/chargebacks/tokens/{tid}/block`
+   */
+  blockToken(params: {
+    /** The token. */
+    tid: string;
+    body: BlockTokenBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/chargebacks/tokens/{tid}/block", pathParams: { tid: params.tid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Budgets vs actuals for a month
    *
    * (v1.20.0) The organisation's lines per currency (revenue, energy cost, gateway fees, owner share) and each site's (revenue, energy cost), budget beside actual with the variance (amount and %). alertPct: the off-track threshold.
@@ -12357,6 +12562,21 @@ export class Operations {
   }
 
   /**
+   * Change a grant
+   *
+   * (v1.36.0) As adding (the kind is fixed once a claim is paid). Audited.
+   *
+   * `PUT /v1/finance/grants/{id}`
+   */
+  changeGrant(params: {
+    /** The id. */
+    id: string;
+    body: ChangeGrantBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/grants/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change the home country, reporting time zone or default language
    *
    * Fields left out keep their value. The time zone is one of a country the organisation is in (home or a site's). Malaysia and Singapore as home country need MULTI_COUNTRY. 422 with `errors` per field. Audited.
@@ -12367,6 +12587,21 @@ export class Operations {
     body: ChangeHomeCountryReportingTimeZoneOrDefaultLanguageBody;
   }, options?: RequestOptions): Promise<OrgSettings> {
     return this.transport.request<OrgSettings>({ method: "PUT", path: "/v1/org/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a landlord deal
+   *
+   * (v1.36.0) As adding; the terms are fixed once a statement is issued. Audited.
+   *
+   * `PUT /v1/finance/landlords/{id}`
+   */
+  changeLandlordDeal(params: {
+    /** The id. */
+    id: string;
+    body: ChangeLandlordDealBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/landlords/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12505,6 +12740,50 @@ export class Operations {
   }
 
   /**
+   * Chargeback
+   *
+   * (v1.36.0) The case.
+   *
+   * `GET /v1/finance/chargebacks/{id}`
+   */
+  chargeback(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/chargebacks/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Chargeback evidence
+   *
+   * (v1.36.0) A PDF for the provider from the payment and its charging session (personal details masked). Audited.
+   *
+   * `GET /v1/finance/chargebacks/{id}/evidence`
+   */
+  chargebackEvidence(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/chargebacks/{id}/evidence", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
+   * Chargebacks
+   *
+   * (v1.36.0) Cases with the payment, session and token (masked), status and deadline; per currency open, won, lost and fees; the win rate. format=xlsx.
+   *
+   * `GET /v1/finance/chargebacks`
+   */
+  chargebacks(params?: {
+    query?: {
+      status?: string;
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/chargebacks", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Chargers and their V2G certificates
    *
    * **Permissions checked:** `charge_point:read`.
@@ -12620,6 +12899,21 @@ export class Operations {
     oid: string;
   }, options?: RequestOptions): Promise<CheckSiteOwnerBankAccountByNameResponse> {
     return this.transport.request<CheckSiteOwnerBankAccountByNameResponse>({ method: "POST", path: "/v1/finance/owners/{oid}/bank-account/check", pathParams: { oid: params.oid }, accept: "json" }, options);
+  }
+
+  /**
+   * Claim a grant
+   *
+   * (v1.36.0) amount (at most what is left of the award), or for a per-kWh grant periodFrom and periodTo (the kWh charged and the amount follow); submit. Audited.
+   *
+   * `POST /v1/finance/grants/{id}/claims`
+   */
+  claimGrant(params: {
+    /** The id. */
+    id: string;
+    body: ClaimGrantBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/{id}/claims", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13532,6 +13826,21 @@ export class Operations {
   }
 
   /**
+   * Draft a landlord statement
+   *
+   * (v1.36.0) For a month (a quarterly deal: the quarter from it) that has ended; refreshed while draft. Audited.
+   *
+   * `POST /v1/finance/landlords/{id}/statements`
+   */
+  draftLandlordStatement(params: {
+    /** The id. */
+    id: string;
+    body: DraftLandlordStatementBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/landlords/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Draft the month's withholding slips
    *
    * (v1.32.0) One slip per payee and kind from the month's approved bills; drafts follow the bills, issued slips stay as issued (the answer counts those whose bills changed). Audited.
@@ -14194,6 +14503,17 @@ export class Operations {
   }
 
   /**
+   * Fraud signals
+   *
+   * (v1.36.0) Over 90 days: tokens and drivers with two or more chargebacks, payments refunded and charged back, bursts of failed payments at a connector, the chargeback rate per method.
+   *
+   * `GET /v1/finance/chargebacks/fraud`
+   */
+  fraudSignals(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/chargebacks/fraud", accept: "json" }, options);
+  }
+
+  /**
    * Gateway fee audit
    *
    * (v1.19.0) Every payment's fee (excluding VAT) against the rate agreed for its method (Finance settings, contractRates): expected = 0 up to freeUpTo, else max(min, amount × pct / 100 + fixed); an overcharge counts above 1 rupiah. By month and method; methods without a rate are listed, not judged. format=csv: the overcharged payments with the gateway's ids, for the claim (audited as finance.fee_audit_exported).
@@ -14744,6 +15064,35 @@ export class Operations {
   }
 
   /**
+   * Grant
+   *
+   * (v1.36.0) With its conditions, claims and clawbacks.
+   *
+   * `GET /v1/finance/grants/{id}`
+   */
+  grant(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/grants/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Grants and incentives
+   *
+   * (v1.36.0) Grants with what was awarded, claimed, received, released and deferred, clawed back; conditions and claims; per currency the totals; conditions due within 30 days. format=xlsx for the register.
+   *
+   * `GET /v1/finance/grants`
+   */
+  grantsAndIncentives(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/grants", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Group consolidation
    *
    * (v1.28.0) For the caller's organisation and its subsidiaries (parent_org_id), a month (default last month): per entity revenue, energy, shared costs, depreciation, contribution, owners' shares, PlugSure fees, operating result and KPIs; the group per currency less eliminations, and in the reporting currency; eliminations recorded and suggested. grouped is false when the organisation has no subsidiaries.
@@ -15014,6 +15363,20 @@ export class Operations {
   }
 
   /**
+   * Issue a landlord statement
+   *
+   * (v1.36.0) The total becomes the landlord's supplier bill (rent, awaiting approval). Audited.
+   *
+   * `POST /v1/finance/landlords/statements/{sid}/issue`
+   */
+  issueLandlordStatement(params: {
+    /** The statement. */
+    sid: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/landlords/statements/{sid}/issue", pathParams: { sid: params.sid }, accept: "json" }, options);
+  }
+
+  /**
    * Issue a recharge
    *
    * (v1.31.0) A draft recharge, by the entity that charges. Audited.
@@ -15113,6 +15476,52 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<KpiBenchmarkingResponse> {
     return this.transport.request<KpiBenchmarkingResponse>({ method: "GET", path: "/v1/finance/benchmark", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Landlord deal
+   *
+   * (v1.36.0) With the last six months' amounts, its statements and the periods due.
+   *
+   * `GET /v1/finance/landlords/{id}`
+   */
+  landlordDeal(params: {
+    /** The id. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/landlords/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Landlord deals
+   *
+   * (v1.36.0) Deals per site with last month's amount and statements not yet drafted; the statements. format=xlsx.
+   *
+   * `GET /v1/finance/landlords`
+   */
+  landlordDeals(params?: {
+    query?: {
+      format?: "json" | "xlsx";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/landlords", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Landlord statement
+   *
+   * (v1.36.0) Its months and total. format=pdf for the landlord.
+   *
+   * `GET /v1/finance/landlords/statements/{sid}`
+   */
+  landlordStatement(params: {
+    /** The statement. */
+    sid: string;
+    query?: {
+      format?: "json" | "pdf";
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/landlords/statements/{sid}", pathParams: { sid: params.sid }, query: params.query, accept: "json" }, options);
   }
 
   /**
@@ -17082,6 +17491,34 @@ export class Operations {
   }
 
   /**
+   * Record a chargeback
+   *
+   * (v1.36.0) paymentId or paymentRef, provider, caseRef, reason, reasonCode, amount (default what was captured), fee, receivedOn, respondBy (the date on the gateway's notice; default 7 calendar days, Xendit's window). Audited.
+   *
+   * `POST /v1/finance/chargebacks`
+   */
+  recordChargeback(params: {
+    body: RecordChargebackBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/chargebacks", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Record a clawback
+   *
+   * (v1.36.0) amount (at most what was received), onDate, note, conditionId. From the deferred balance first; the rest an expense; owed until repaid. Audited.
+   *
+   * `POST /v1/finance/grants/{id}/clawbacks`
+   */
+  recordClawback(params: {
+    /** The id. */
+    id: string;
+    body: RecordClawbackBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/{id}/clawbacks", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a credit note as refunded
    *
    * For a credit note settled by refund: the date the money was paid back (default today) and a reference. Audited.
@@ -17954,6 +18391,21 @@ export class Operations {
   }
 
   /**
+   * Repay a clawback
+   *
+   * (v1.36.0) repaidOn, cashAccountId. Audited.
+   *
+   * `POST /v1/finance/grants/clawbacks/{cid}/repay`
+   */
+  repayClawback(params: {
+    /** The id. */
+    cid: string;
+    body: RepayClawbackBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/clawbacks/{cid}/repay", pathParams: { cid: params.cid }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Replace an alert contact
    *
    * Replaces the contact's name, e-mail, WhatsApp number and active flag (fields left out are cleared or defaulted). Audited.
@@ -18086,7 +18538,7 @@ export class Operations {
   /**
    * Report pack
    *
-   * (v1.32.0) The pack with its figures and commentary; format=pdf or xlsx for the files.
+   * (v1.32.0) The pack with its figures and commentary; format=pdf or xlsx for the files; (v1.36.0) format=slides for the board deck (16:9 PDF).
    *
    * `GET /v1/finance/report-packs/{id}`
    */
@@ -18094,7 +18546,7 @@ export class Operations {
     /** The id. */
     id: string;
     query?: {
-      format?: "json" | "pdf" | "xlsx";
+      format?: "json" | "pdf" | "xlsx" | "slides";
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/report-packs/{id}", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
@@ -19141,6 +19593,21 @@ export class Operations {
     body: SetFleetInvoicingAutomationBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/fleet-automation", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Set a grant condition
+   *
+   * (v1.36.0) status pending, met (metOn), breached or waived (a note). Audited.
+   *
+   * `POST /v1/finance/grants/conditions/{cid}`
+   */
+  setGrantCondition(params: {
+    /** The id. */
+    cid: string;
+    body: SetGrantConditionBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/conditions/{cid}", pathParams: { cid: params.cid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20379,6 +20846,21 @@ export class Operations {
   }
 
   /**
+   * Update a chargeback
+   *
+   * (v1.36.0) status evidence_submitted, won, lost or accepted; on; note. Audited.
+   *
+   * `POST /v1/finance/chargebacks/{id}`
+   */
+  updateChargeback(params: {
+    /** The id. */
+    id: string;
+    body: UpdateChargebackBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/chargebacks/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Update a charge point profile
    *
    * Changes only the fields sent (text fields are cut to 200 characters). Moving to another site needs charge_point:write at the target site and is limited to sites of the same organisation. Audited as charge_point.updated.
@@ -20436,6 +20918,21 @@ export class Operations {
     body: FleetAccountInput;
   }, options?: RequestOptions): Promise<FleetAccountDetail> {
     return this.transport.request<FleetAccountDetail>({ method: "PUT", path: "/v1/fleet-accounts/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Update a grant claim
+   *
+   * (v1.36.0) status submitted, approved, rejected or paid (paid: what was received, cashAccountId), on. Audited.
+   *
+   * `POST /v1/finance/grants/claims/{cid}`
+   */
+  updateGrantClaim(params: {
+    /** The id. */
+    cid: string;
+    body: UpdateGrantClaimBody;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/claims/{cid}", pathParams: { cid: params.cid }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20806,6 +21303,20 @@ export class Operations {
     body: VoidFleetInvoiceBody;
   }, options?: RequestOptions): Promise<VoidFleetInvoiceResponse> {
     return this.transport.request<VoidFleetInvoiceResponse>({ method: "POST", path: "/v1/fleet-invoices/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a landlord statement
+   *
+   * (v1.36.0) Only while its bill is draft, rejected or void. Audited.
+   *
+   * `POST /v1/finance/landlords/statements/{sid}/void`
+   */
+  voidLandlordStatement(params: {
+    /** The statement. */
+    sid: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/landlords/statements/{sid}/void", pathParams: { sid: params.sid }, accept: "json" }, options);
   }
 
   /**

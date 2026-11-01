@@ -219,6 +219,10 @@ export function startWorkers(): () => void {
   // (v1.35.0) insurance renewals and compliance deadlines.
   const insuranceRenewals = once('insurance-renewals', async () => { await (await import('./insurance.js')).sweep(); });
   const complianceReminders = once('compliance-reminders', async () => { await (await import('./compliance-calendar.js')).sweep(); });
+  // (v1.36.0) grant conditions, landlord statements, chargeback deadlines and rate.
+  const grantConditions = once('grant-conditions', async () => { await (await import('./grants.js')).sweep(); });
+  const landlordStatements = once('landlord-statements', async () => { await (await import('./landlord-deals.js')).sweep(); });
+  const chargebackChecks = once('chargeback-checks', async () => { await (await import('./chargebacks.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -350,6 +354,9 @@ export function startWorkers(): () => void {
     every(covenantTests, 12 * 60 * 60_000, 'covenant-tests'),
     every(insuranceRenewals, 24 * 60 * 60_000, 'insurance-renewals'),
     every(complianceReminders, 12 * 60 * 60_000, 'compliance-reminders'),
+    every(grantConditions, 24 * 60 * 60_000, 'grant-conditions'),
+    every(landlordStatements, 24 * 60 * 60_000, 'landlord-statements'),
+    every(chargebackChecks, 6 * 60 * 60_000, 'chargeback-checks'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

@@ -1,11 +1,21 @@
 PlugSure CSMS
-Version:   1.35.0
-Package:   plugsure-v1.35.0
-Prepared:  2026-11-01  (v1.34.0 + finance phase 24 — see RELEASE-NOTES-v1.35.0.md)
+Version:   1.36.0
+Package:   plugsure-v1.36.0
+Prepared:  2026-11-01  (v1.35.0 + finance phase 25 — see RELEASE-NOTES-v1.36.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (724 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (749 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.35.0 = v1.34.0 + finance phase 24: carbon and green energy (RECs bought and retired against a month's
+Status:    v1.36.0 = v1.35.0 + finance phase 25: grants and incentives (capital grants deferred and released over
+           their period, revenue and per-kWh grants claimed from the kWh charged, conditions with alerts, clawbacks),
+           landlord deals (fixed rent, a share of revenue or margin, the higher of a share and a minimum guarantee,
+           escalation, rent-free months, energy recharges; statements issued as the landlord's bills; rent accrued until
+           billed), chargebacks and fraud (cases with deadlines and an evidence pack from the charging session, won or
+           lost in the ledger; repeat tokens, refunds charged back, card-testing bursts, the chargeback rate) and the
+           board pack (risk, lenders, sustainability and grants sections, a twelve-month trend, 16:9 slides).
+           Migration 104 (additive).
+
+v1.35.0 (2026-11-01):
+           v1.35.0 = v1.34.0 + finance phase 24: carbon and green energy (RECs bought and retired against a month's
            charging, the green share, the emissions avoided against petrol cars, carbon credits estimated, verified,
            issued and sold, the report), insurance (policies per site or charger with the premium prepaid and spread over
            the term, renewal alerts, claims with the excess and what was recovered), pricing profitability (margin by

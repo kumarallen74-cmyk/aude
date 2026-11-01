@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.35.0 (1 November 2026), the current release:** finance phase 24: renewable energy certificates and carbon credits with the emissions avoided, insurance policies and claims with the premium spread over the term, pricing profitability by tariff, connector, time band and site with the price elasticity and a what-if, and a compliance calendar with evidence files and the auditor's PBC list. Notes: [`RELEASE-NOTES-v1.35.0.md`](RELEASE-NOTES-v1.35.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+**v1.36.0 (1 November 2026), the current release:** finance phase 25: grants and incentives with deferred release and clawbacks, landlord rent deals with minimum guarantees and statements issued as bills, chargebacks with evidence packs and fraud signals, and the board pack with risk, lenders, sustainability and grants sections, a trend and slides. Notes: [`RELEASE-NOTES-v1.36.0.md`](RELEASE-NOTES-v1.36.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
+
+**v1.35.0 (1 November 2026):** finance phase 24: renewable energy certificates and carbon credits with the emissions avoided, insurance policies and claims with the premium spread over the term, pricing profitability by tariff, connector, time band and site with the price elasticity and a what-if, and a compliance calendar with evidence files and the auditor's PBC list. Notes: [`RELEASE-NOTES-v1.35.0.md`](RELEASE-NOTES-v1.35.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
 **v1.34.0 (1 November 2026):** finance phase 23: spare parts inventory at the moving average cost, maintenance work orders costed per charger and per kWh with warranty claims, revenue assurance finding sessions not billed or billed out of line, and loans with covenant tests and a lender pack. Notes: [`RELEASE-NOTES-v1.34.0.md`](RELEASE-NOTES-v1.34.0.md); guide: [`deploy/FINANCE.md`](deploy/FINANCE.md).
 
