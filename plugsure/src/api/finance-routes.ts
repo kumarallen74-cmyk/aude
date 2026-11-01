@@ -65,6 +65,10 @@ import * as wtax from '../services/withholding-tax.js';
 import { config } from '../config.js';
 import * as pack from '../services/report-pack.js';
 import * as closeV2 from '../services/period-close.js';
+import * as payroll from '../services/payroll.js';
+import * as ccredit from '../services/customer-credit.js';
+import * as capex from '../services/capex-projects.js';
+import * as cforecast from '../services/cash-forecast.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -2631,6 +2635,225 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await audit21(req, 'finance.close_step_revoked', 'organisation', null, { month: r.month, step: prm(req, 'step') });
       return r;
     } catch (e) { return p21Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.33.0) payroll, customer credit and deposits, capex projects, cash forecast
+
+  const p22Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof payroll.PayrollError || e instanceof ccredit.CustomerCreditError || e instanceof capex.ProjectError || e instanceof cforecast.CashForecastError) return reply.status(e.statusCode).send({ error: e.message });
+    return p21Failed(reply, e);
+  };
+
+  app.get('/v1/finance/payroll', async (req, reply) => {
+    R(req);
+    try {
+      const r = await payroll.rules(req.principal.orgId);
+      return { employees: await payroll.employees(req.principal.orgId), runs: await payroll.runs(req.principal.orgId), settings: { kesCap: r.kesCap, jpCap: r.jpCap } };
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.put('/v1/finance/payroll/settings', async (req, reply) => {
+    W(req);
+    try {
+      if (!canApprove(req)) return reply.status(403).send({ error: 'Only a Finance Manager (finance:approve) changes the payroll rules.' });
+      const r = await payroll.saveRules(req.principal.orgId, body(req), userUuid(req));
+      await audit21(req, 'finance.payroll_rules_saved', 'organisation', null, r);
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/payroll/employees', async (req, reply) => {
+    W(req);
+    try {
+      const r = await payroll.saveEmployee(req.principal.orgId, null, body(req), userUuid(req));
+      await audit21(req, 'finance.employee_saved', 'employee', r.id, { number: r.number, name: r.name });
+      return reply.status(201).send(r);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.put('/v1/finance/payroll/employees/:id', async (req, reply) => {
+    W(req);
+    try {
+      const r = await payroll.saveEmployee(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.employee_saved', 'employee', r.id, { number: r.number, name: r.name, endOn: r.endOn, bankChanged: body(req).bank !== undefined });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/payroll/runs', async (req, reply) => {
+    W(req);
+    try {
+      const r = await payroll.draft(req.principal.orgId, body(req), userUuid(req));
+      await audit21(req, 'finance.payroll_drafted', 'payroll_run', r.id, { month: r.month, currency: r.currency, net: r.totals.net });
+      return reply.status(201).send(r);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.get('/v1/finance/payroll/runs/:id', async (req, reply) => {
+    R(req);
+    try {
+      const f = qs(req).format;
+      if (f === 'xlsx') { const r = await payroll.get(req.principal.orgId, prm(req, 'id')); return xl(reply, `payroll-${r.month}-${r.currency}`, await payroll.runXlsx(req.principal.orgId, r.id)); }
+      if (f === 'transfers') {
+        W(req);
+        const r = await payroll.get(req.principal.orgId, prm(req, 'id'));
+        const csv = await payroll.transferCsv(req.principal.orgId, r.id);
+        await audit21(req, 'finance.payroll_transfers_exported', 'payroll_run', r.id, { month: r.month });
+        return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="payroll-transfers-${r.month}.csv"`).send(csv);
+      }
+      return await payroll.get(req.principal.orgId, prm(req, 'id'));
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.put('/v1/finance/payroll/runs/:id/lines/:lid', async (req, reply) => {
+    W(req);
+    try { return await payroll.adjust(req.principal.orgId, prm(req, 'id'), prm(req, 'lid'), body(req)); } catch (e) { return p22Failed(reply, e); }
+  });
+  app.get('/v1/finance/payroll/runs/:id/payslips/:lid', async (req, reply) => {
+    R(req);
+    try {
+      const p = await payroll.payslip(req.principal.orgId, prm(req, 'id'), prm(req, 'lid'));
+      return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="${p.name}"`).send(p.pdf);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  for (const [action, fn, audit] of [['submit', 'submit', 'finance.payroll_submitted'], ['approve', 'approve', 'finance.payroll_approved'], ['pay', 'pay', 'finance.payroll_paid'], ['void', 'void', 'finance.payroll_voided']] as const) {
+    app.post(`/v1/finance/payroll/runs/:id/${action}`, async (req, reply) => {
+      W(req);
+      try {
+        const o = req.principal.orgId, id = prm(req, 'id');
+        const r = fn === 'submit' ? await payroll.submit(o, id, userUuid(req)) : fn === 'approve' ? await payroll.approve(o, id, who(req)) : fn === 'pay' ? await payroll.pay(o, id, body(req)) : await payroll.voidRun(o, id, body(req).reason);
+        await audit21(req, audit, 'payroll_run', r.id, { month: r.month, status: r.status, net: r.totals?.net ?? null });
+        return r;
+      } catch (e) { return p22Failed(reply, e); }
+    });
+  }
+
+  app.get('/v1/finance/credit', async (req, reply) => {
+    R(req);
+    try { return await ccredit.overview(req.principal.orgId); } catch (e) { return p22Failed(reply, e); }
+  });
+  app.get('/v1/finance/credit/accounts/:id', async (req, reply) => {
+    R(req);
+    try {
+      const o = req.principal.orgId, id = prm(req, 'id');
+      const f = await ccredit.factors(o, id);
+      return { factors: f, score: ccredit.scoreOf(f), reviews: await ccredit.reviews(o, id), deposits: await ccredit.deposits(o, id) };
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/credit/accounts/:id/reviews', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ccredit.openReview(req.principal.orgId, prm(req, 'id'), userUuid(req));
+      await audit21(req, 'finance.credit_review_opened', 'fleet_account', r.accountId, { score: r.score, grade: r.grade, suggestedLimit: r.suggestedLimit });
+      return reply.status(201).send(r);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/credit/reviews/:id/decide', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ccredit.decide(req.principal.orgId, prm(req, 'id'), body(req), who(req));
+      await audit21(req, 'finance.credit_review_decided', 'fleet_account', r.accountId, { review: r.id, status: r.status, newLimit: r.newLimit, hold: r.hold, nextReviewOn: r.nextReviewOn });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/credit/accounts/:id/hold', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ccredit.setHold(req.principal.orgId, prm(req, 'id'), body(req), canApprove(req));
+      await audit21(req, r.hold ? 'finance.credit_hold_set' : 'finance.credit_hold_released', 'fleet_account', r.accountId, { reason: body(req).reason ?? null, cardsBlocked: r.cardsBlocked });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.get('/v1/finance/customer-deposits', async (req, reply) => {
+    R(req);
+    try { return await ccredit.deposits(req.principal.orgId); } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/credit/accounts/:id/deposits', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ccredit.record(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.customer_deposit_recorded', 'customer_deposit', r.id, { kind: r.kind, amount: r.amount, currency: r.currency, account: r.accountId });
+      return reply.status(201).send(r);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/customer-deposits/:id/void', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ccredit.voidDeposit(req.principal.orgId, prm(req, 'id'), body(req).reason);
+      await audit21(req, 'finance.customer_deposit_voided', 'customer_deposit', r.id, { reason: String(body(req).reason ?? '').slice(0, 300) });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/projects', async (req, reply) => {
+    R(req);
+    try {
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-capex-projects', await capex.listXlsx(req.principal.orgId));
+      return await capex.list(req.principal.orgId);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/projects', async (req, reply) => {
+    W(req);
+    try {
+      const r = await capex.save(req.principal.orgId, null, body(req), userUuid(req));
+      await audit21(req, 'finance.capex_project_saved', 'capex_project', r.id, { number: r.number, name: r.name, budget: r.budget, currency: r.currency });
+      return reply.status(201).send(r);
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/projects/unlink', async (req, reply) => {
+    W(req);
+    try {
+      const r = await capex.link(req.principal.orgId, null, body(req));
+      await audit21(req, 'finance.capex_project_unlinked', 'organisation', null, body(req));
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.get('/v1/finance/projects/:id', async (req, reply) => {
+    R(req);
+    try { return await capex.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p22Failed(reply, e); }
+  });
+  app.put('/v1/finance/projects/:id', async (req, reply) => {
+    W(req);
+    try {
+      const r = await capex.save(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.capex_project_saved', 'capex_project', r.id, { number: r.number, budget: r.budget, status: r.status });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/projects/:id/link', async (req, reply) => {
+    W(req);
+    try {
+      const r = await capex.link(req.principal.orgId, prm(req, 'id'), body(req));
+      await audit21(req, 'finance.capex_project_linked', 'capex_project', prm(req, 'id'), body(req));
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/projects/:id/complete', async (req, reply) => {
+    W(req);
+    try {
+      const r = await capex.complete(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await audit21(req, 'finance.capex_project_completed', 'capex_project', r.id, { capitalised: r.capitalised, asset: r.asset?.tag ?? null });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/projects/:id/cancel', async (req, reply) => {
+    W(req);
+    try {
+      const r = await capex.cancel(req.principal.orgId, prm(req, 'id'), body(req));
+      await audit21(req, 'finance.capex_project_cancelled', 'capex_project', r.id, { reason: String(body(req).reason ?? '').slice(0, 300), actual: r.actual });
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/cash-forecast', async (req, reply) => {
+    R(req);
+    try { return await cforecast.forecast(req.principal.orgId, qs(req)); } catch (e) { return p22Failed(reply, e); }
+  });
+  app.put('/v1/finance/cash-forecast/settings', async (req, reply) => {
+    W(req);
+    try {
+      const r = await cforecast.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await audit21(req, 'finance.cash_forecast_settings_saved', 'organisation', null, r);
+      return r;
+    } catch (e) { return p22Failed(reply, e); }
+  });
+  app.post('/v1/finance/cash-forecast/snapshot', async (req, reply) => {
+    W(req);
+    try { return await cforecast.snapshot(req.principal.orgId); } catch (e) { return p22Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

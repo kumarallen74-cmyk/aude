@@ -39,7 +39,7 @@ export class LedgerError extends Error {
 
 export const TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense', 'other'] as const;
 type AccountType = typeof TYPES[number];
-export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany'] as const;
+export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects'] as const;
 type Source = typeof SOURCES[number];
 
 export const SEED: Array<[string, string, AccountType]> = [
@@ -48,17 +48,18 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['1410', 'VAT input on gateway fees', 'asset'], ['1420', 'PPN input', 'asset'], ['1600', 'Fixed assets at cost', 'asset'], ['1690', 'Accumulated depreciation', 'asset'],
   ['1650', 'Right-of-use assets', 'asset'], ['1659', 'Accumulated depreciation, right-of-use assets', 'asset'],
   ['2100', 'Supplier payables', 'liability'], ['2120', 'Site owners\' shares payable', 'liability'], ['2140', 'Withholding tax payable', 'liability'],
-  ['2150', 'PPh 23 payable', 'liability'], ['2151', 'PPh 21 payable', 'liability'], ['2152', 'PPh 26 payable', 'liability'], ['2160', 'Expense claims payable', 'liability'], ['2300', 'Intercompany payables', 'liability'],
+  ['2150', 'PPh 23 payable', 'liability'], ['2151', 'PPh 21 payable', 'liability'], ['2152', 'PPh 26 payable', 'liability'], ['2160', 'Expense claims payable', 'liability'],
+  ['2170', 'Salaries payable', 'liability'], ['2180', 'BPJS payable', 'liability'], ['2190', 'Other payroll deductions', 'liability'], ['2200', 'Customer deposits', 'liability'], ['2300', 'Intercompany payables', 'liability'],
   ['2400', 'Lease liabilities', 'liability'], ['2410', 'Accrued lease payments', 'liability'],
   ['3100', 'Share capital', 'equity'], ['3200', 'Retained earnings', 'equity'],
-  ['4100', 'Charging revenue (collected)', 'revenue'], ['4190', 'Refunds to drivers', 'revenue'], ['4900', 'Intercompany recharge income', 'revenue'],
-  ['5100', 'Energy cost', 'expense'], ['6110', 'Payment gateway fees', 'expense'], ['6200', 'Maintenance', 'expense'], ['6210', 'Rent', 'expense'],
+  ['4100', 'Charging revenue (collected)', 'revenue'], ['4190', 'Refunds to drivers', 'revenue'], ['4900', 'Intercompany recharge income', 'revenue'], ['4200', 'Fleet charging paid from deposits', 'revenue'],
+  ['5100', 'Energy cost', 'expense'], ['6100', 'Salaries and wages', 'expense'], ['6105', 'Employer BPJS', 'expense'], ['6110', 'Payment gateway fees', 'expense'], ['6200', 'Maintenance', 'expense'], ['6210', 'Rent', 'expense'],
   ['6220', 'Installation', 'expense'], ['6230', 'Equipment (expensed)', 'expense'], ['6240', 'Connectivity', 'expense'], ['6250', 'Services', 'expense'], ['6290', 'Other supplier costs', 'expense'],
   ['6310', 'Fuel', 'expense'], ['6320', 'Travel', 'expense'], ['6330', 'Meals', 'expense'], ['6340', 'Parking', 'expense'], ['6350', 'Tools', 'expense'],
   ['6360', 'Supplies', 'expense'], ['6370', 'Phone', 'expense'], ['6390', 'Other staff expenses', 'expense'],
   ['6400', 'Depreciation expense', 'expense'], ['6410', 'Depreciation, right-of-use assets', 'expense'], ['6420', 'Lease expense (short-term and low-value)', 'expense'],
   ['6500', 'Bad-debt expense', 'expense'], ['6900', 'Intercompany recharge expense', 'expense'],
-  ['7100', 'Gain on disposal', 'other'], ['7200', 'Interest on lease liabilities', 'other'], ['7300', 'Interest income', 'other'], ['8100', 'Loss on disposal', 'other'], ['8200', 'Deposit penalties', 'other'],
+  ['7100', 'Gain on disposal', 'other'], ['7200', 'Interest on lease liabilities', 'other'], ['7300', 'Interest income', 'other'], ['8100', 'Loss on disposal', 'other'], ['8200', 'Deposit penalties', 'other'], ['8300', 'Capex written off', 'other'],
 ];
 export const BILL_ACCOUNT: Record<string, string> = { energy: '5100', maintenance: '6200', rent: '6210', installation: '6220', equipment: '6230', connectivity: '6240', services: '6250', other: '6290' };
 /** (v1.32.0) The payable a bill's withholding is posted to, by kind. */
@@ -204,7 +205,8 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
        FROM supplier_bill b JOIN supplier s ON s.id = b.supplier_id WHERE b.org_id = $1 AND b.status IN ('approved', 'paid') AND to_char(b.bill_date, 'YYYY-MM') = $2`, [orgId, month])) {
     const L = (billLines[b.currency] ??= []);
     const d = `${b.supplier} ${b.number}`;
-    L.push({ account: b.capitalised ? '1600' : BILL_ACCOUNT[b.category] ?? '6290', debit: Number(b.subtotal_minor), credit: 0, description: d });
+    // (v1.33.0) A bill on a capex project is assets under construction until the project is completed.
+    L.push({ account: b.capitalised ? '1600' : b.capex_project_id ? '1610' : BILL_ACCOUNT[b.category] ?? '6290', debit: Number(b.subtotal_minor), credit: 0, description: d });
     if (Number(b.vat_minor)) L.push({ account: '1420', debit: Number(b.vat_minor), credit: 0, description: d });
     L.push({ account: '2100', debit: 0, credit: Number(b.subtotal_minor) + Number(b.vat_minor) - Number(b.wht_minor), description: d });
     if (Number(b.wht_minor)) L.push({ account: WHT_ACCOUNT[b.wht_kind] ?? '2150', debit: 0, credit: Number(b.wht_minor), description: d });
@@ -269,6 +271,42 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
     if (net < 0) L.push({ account: '1100', debit: 0, credit: -net, description: 'Intercompany settlement' });
   }
   for (const [c, L] of Object.entries(icLines)) add('intercompany', c, `Intercompany, ${month}`, L);
+  // (v1.33.0) Payroll: approved or paid runs of the month; the payment against the bank.
+  const payLines: Record<string, Line[]> = {};
+  for (const r of await Q(`SELECT r.*, a.kind AS acct_kind, to_char(r.paid_on, 'YYYY-MM') AS pm FROM payroll_run r LEFT JOIN cash_account a ON a.id = r.cash_account_id
+      WHERE r.org_id = $1 AND r.status IN ('approved', 'paid') AND (r.month = $2 OR to_char(r.paid_on, 'YYYY-MM') = $2)`, [orgId, month])) {
+    const L = (payLines[r.currency] ??= []);
+    const t = r.totals ?? {};
+    const d = `Payroll ${r.month}`;
+    if (r.month === month) {
+      L.push({ account: '6100', debit: Number(t.wages ?? 0), credit: 0, description: d }, { account: '6105', debit: Number(t.employerBpjs ?? 0), credit: 0, description: d },
+        { account: '2170', debit: 0, credit: Number(t.net ?? 0), description: d }, { account: '2151', debit: 0, credit: Number(t.pph21 ?? 0), description: d },
+        { account: '2180', debit: 0, credit: Number(t.employerBpjs ?? 0) + Number(t.employeeBpjs ?? 0), description: d }, { account: '2190', debit: 0, credit: Number(t.deductions ?? 0), description: d });
+    }
+    if (r.status === 'paid' && r.pm === month) L.push({ account: '2170', debit: Number(t.net ?? 0), credit: 0, description: `Paid ${d}` }, { account: r.acct_kind === 'cash' ? '1050' : '1100', debit: 0, credit: Number(t.net ?? 0), description: `Paid ${d}` });
+  }
+  for (const [c, L] of Object.entries(payLines)) add('payroll', c, `Payroll, ${month}`, L);
+  // (v1.33.0) Customer security deposits: received and returned through the bank; applied to an invoice as fleet revenue.
+  const cdLines: Record<string, Line[]> = {};
+  for (const x of await Q(`SELECT d.*, a.name AS account_name, c.kind AS acct_kind FROM customer_deposit d JOIN fleet_account a ON a.id = d.fleet_account_id LEFT JOIN cash_account c ON c.id = d.cash_account_id
+      WHERE d.org_id = $1 AND d.voided_at IS NULL AND to_char(d.on_date, 'YYYY-MM') = $2`, [orgId, month])) {
+    const L = (cdLines[x.currency] ??= []);
+    const amt = Number(x.amount_minor), bank = x.acct_kind === 'cash' ? '1050' : '1100', d = `Deposit ${x.account_name}`;
+    if (x.kind === 'received') L.push({ account: bank, debit: amt, credit: 0, description: d }, { account: '2200', debit: 0, credit: amt, description: d });
+    else if (x.kind === 'returned') L.push({ account: '2200', debit: amt, credit: 0, description: d }, { account: bank, debit: 0, credit: amt, description: d });
+    else L.push({ account: '2200', debit: amt, credit: 0, description: d }, { account: '4200', debit: 0, credit: amt, description: d });
+  }
+  for (const [c, L] of Object.entries(cdLines)) add('customer_deposits', c, `Customer deposits, ${month}`, L);
+  // (v1.33.0) Capex projects completed (assets under construction into fixed assets) or cancelled (written off).
+  const prLines: Record<string, Line[]> = {};
+  for (const p of await Q(`SELECT p.*, (SELECT COALESCE(sum(b.subtotal_minor), 0) FROM supplier_bill b WHERE b.capex_project_id = p.id AND b.status IN ('approved', 'paid') AND NOT b.capitalise)::bigint AS auc
+      FROM capex_project p WHERE p.org_id = $1 AND p.status IN ('completed', 'cancelled') AND to_char(p.completed_on, 'YYYY-MM') = $2`, [orgId, month])) {
+    const L = (prLines[p.currency] ??= []);
+    const amt = Number(p.auc), d = `${p.number} ${p.name}`;
+    if (!amt) continue;
+    L.push({ account: p.status === 'completed' ? '1600' : '8300', debit: amt, credit: 0, description: d }, { account: '1610', debit: 0, credit: amt, description: d });
+  }
+  for (const [c, L] of Object.entries(prLines)) add('projects', c, `Capex projects, ${month}`, L);
   return out.filter((d) => balanced(d.lines));
 }
 

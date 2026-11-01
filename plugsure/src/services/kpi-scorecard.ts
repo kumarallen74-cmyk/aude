@@ -17,7 +17,8 @@ import { sendEmail } from './notify-transports.js';
  *   utilisationPct   charging time ÷ (connectors × the month's hours)                      higher is better
  *   collectionDays   revenue-weighted days from the charge to the money                    lower is better
  *   cash             the cash position at the month's end (banks, cash, gateways)          higher is better
- *   opex             supplier bills dated in the month and expense claims approved in it   lower is better
+ *   opex             supplier bills dated in the month (not on capex projects), expense      lower is better
+ *                    claims approved in it and (v1.33.0) the payroll's cost
  *
  * Each KPI is green when it meets the target, amber within the band (default 10%) and red beyond it; with no target it
  * is shown without a colour. The scorecard has six months of each KPI. On a day of the month (1–28) the last month's
@@ -92,11 +93,12 @@ export async function actuals(orgId: string, month: string, currency: string, no
     const p = await position(orgId, { date: end }, now);
     out.cash = p.totals[currency]?.total ?? 0;
   }
-  const opex = await outsideRequestScope(() => one<{ bills: string; claims: string }>(
-    `SELECT (SELECT COALESCE(sum(subtotal_minor), 0) FROM supplier_bill WHERE org_id = $1 AND currency = $3 AND status IN ('approved', 'paid') AND to_char(bill_date, 'YYYY-MM') = $2)::bigint AS bills,
+  const opex = await outsideRequestScope(() => one<{ bills: string; claims: string; payroll: string }>(
+    `SELECT (SELECT COALESCE(sum(subtotal_minor), 0) FROM supplier_bill WHERE org_id = $1 AND currency = $3 AND status IN ('approved', 'paid') AND to_char(bill_date, 'YYYY-MM') = $2 AND capex_project_id IS NULL)::bigint AS bills,
+            (SELECT COALESCE(sum((totals->>'cost')::bigint), 0) FROM payroll_run WHERE org_id = $1 AND currency = $3 AND status IN ('approved', 'paid') AND month = $2)::bigint AS payroll,
             (SELECT COALESCE(sum(l.amount_minor), 0) FROM expense_claim c JOIN expense_claim_line l ON l.claim_id = c.id AND l.removed_at IS NULL
               WHERE c.org_id = $1 AND c.currency = $3 AND c.status IN ('approved', 'reimbursed') AND to_char(c.approved_at AT TIME ZONE $4, 'YYYY-MM') = $2)::bigint AS claims`, [orgId, month, currency, zone()]));
-  out.opex = Number(opex?.bills ?? 0) + Number(opex?.claims ?? 0);
+  out.opex = Number(opex?.bills ?? 0) + Number(opex?.claims ?? 0) + Number(opex?.payroll ?? 0);
   return out;
 }
 

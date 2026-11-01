@@ -40,7 +40,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'supplier', 'cash_account', 'cash_balance', 'cash_transfer', 'supplier_bill', 'supplier_payment', 'fixed_asset', 'fixed_asset_run',
       'purchase_order', 'purchase_order_line', 'goods_receipt', 'lease', 'lease_run', 'deposit', 'finance_check_finding',
       'gl_account', 'gl_entry', 'gl_line', 'expense_claim', 'expense_claim_line', 'expense_receipt', 'cash_count', 'intercompany_recharge', 'intercompany_settlement', 'kpi_target', 'kpi_scorecard_send',
-      'bank_feed', 'bank_match_rule', 'tax_slip', 'report_pack', 'close_signoff']]);
+      'bank_feed', 'bank_match_rule', 'tax_slip', 'report_pack', 'close_signoff',
+      'employee', 'payroll_run', 'payroll_line', 'credit_review', 'customer_deposit', 'capex_project', 'cash_forecast_run']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -137,5 +138,6 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     kpi_target: 'INSERT,SELECT,UPDATE',
     kpi_scorecard_send: 'INSERT,SELECT,UPDATE',
     bank_feed: 'INSERT,SELECT,UPDATE', bank_match_rule: 'INSERT,SELECT,UPDATE', tax_slip: 'INSERT,SELECT,UPDATE', report_pack: 'INSERT,SELECT,UPDATE', close_signoff: 'INSERT,SELECT,UPDATE',
+    employee: 'INSERT,SELECT,UPDATE', payroll_run: 'INSERT,SELECT,UPDATE', payroll_line: 'INSERT,SELECT,UPDATE', credit_review: 'INSERT,SELECT,UPDATE', customer_deposit: 'INSERT,SELECT,UPDATE', capex_project: 'INSERT,SELECT,UPDATE', cash_forecast_run: 'INSERT,SELECT,UPDATE',
   });
 });

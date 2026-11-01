@@ -9,6 +9,8 @@ import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { cashMoves as depositMoves, maturities as depositMaturities } from './treasury.js';
 import { paymentsDue as leasePayments } from './leases.js';
 import { cashMoves as claimMoves } from './expense-claims.js';
+import { cashMoves as payrollMoves } from './payroll.js';
+import { cashMoves as customerDepositMoves } from './customer-credit.js';
 
 /**
  * Cash position and bank balances (v1.29.0).
@@ -193,6 +195,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
     // (v1.31.0) expense claims reimbursed out of the account.
     claimMoves(orgId, upTo),
   ]);
+  // (v1.33.0) payrolls paid, and customer security deposits received and returned.
+  const [payMoves, custMoves] = await Promise.all([payrollMoves(orgId, upTo), customerDepositMoves(orgId, upTo)]);
   return {
     accounts,
     manual: manual.map((m) => ({ account_id: m.account_id, d: m.d, balance: Number(m.balance_minor) })),
@@ -202,6 +206,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
       ...pays.map((p) => ({ account_id: p.a, d: p.d, amount: -Number(p.amount_minor) })),
       ...deps,
       ...claims,
+      ...payMoves,
+      ...custMoves,
     ],
   };
 }
@@ -267,10 +273,11 @@ export async function position(orgId: string, q: Record<string, unknown> = {}, n
 
 // ─────────────────────────────────────────── 13 weeks
 
-export async function weeks(orgId: string, now = new Date()) {
+/** (v1.33.0) The committed flows from today over `days` (the 13-week view's, and the cash forecast's). */
+export async function knownFlows(orgId: string, days: number, now = new Date()) {
   const t = today(now);
   const pos = await position(orgId, {}, now);
-  const end = addDays(t, 13 * 7 - 1);
+  const end = addDays(t, days - 1);
   const flows: Array<{ day: string; currency: string; kind: string; label: string; amount: number }> = [];
   const seen = new Set<string>();
   const notes: string[] = [];
@@ -289,6 +296,11 @@ export async function weeks(orgId: string, now = new Date()) {
   for (const m of await depositMaturities(orgId, t, end)) flows.push({ day: m.day, currency: m.currency, kind: 'deposit_maturity', label: m.label, amount: m.amount });
   for (const l of await leasePayments(orgId, t, end)) flows.push({ day: l.day, currency: l.currency, kind: 'lease', label: l.label, amount: -l.amount });
   for (const b of await dueBills(orgId, t, end)) flows.push({ day: b.due, currency: b.currency, kind: 'supplier_bill', label: `Bill ${b.number} · ${b.supplier}${b.overdue ? ' (overdue)' : ''}`, amount: -b.amount });
+  return { t, end, pos, flows, notes };
+}
+
+export async function weeks(orgId: string, now = new Date()) {
+  const { t, end, pos, flows, notes } = await knownFlows(orgId, 13 * 7, now);
   const currencies = [...new Set([...Object.keys(pos.totals), ...flows.map((f) => f.currency)])].sort();
   const out = currencies.map((currency) => {
     const opening = pos.totals[currency]?.total ?? 0;

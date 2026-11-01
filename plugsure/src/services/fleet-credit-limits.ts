@@ -68,6 +68,8 @@ export async function position(orgId: string, accountId: string) {
     openInvoices, openInvoiceCount: inv?.n ?? 0, notInvoiced, notInvoicedSessions: unbilled?.n ?? 0, deposit, owed, available, usedPct,
     over: available != null && (available < 0 || (a.credit_mode === 'prepaid' && available <= 0 && owed > 0)),
     cards: { total: cards?.total ?? 0, blockedForCredit: cards?.blocked ?? 0 },
+    // (v1.33.0) A credit hold from a review blocks the cards whatever the mode.
+    hold: a.credit_hold_at ? { at: new Date(a.credit_hold_at).toISOString(), reason: a.credit_hold_reason ?? null } : null,
     entries: entries.map((e) => ({ id: String(e.id), kind: e.kind, amount: Number(e.amount_minor), currency: e.currency, invoice: e.invoice_number ?? null, reference: e.reference ?? null, note: e.note ?? null, by: e.by_name ?? null, at: new Date(e.created_at).toISOString() })),
   };
 }
@@ -154,7 +156,7 @@ export async function check(orgId: string, accountId: string): Promise<{ level: 
     } else await outsideRequestScope(() => resolveAlertsFor(orgId, KIND, 'fleet_account', accountId)).catch(() => 0);
   }
   let blocked = 0, unblocked = 0;
-  if (p.mode !== 'none' && p.block && p.over) {
+  if ((p.mode !== 'none' && p.block && p.over) || p.hold) {
     blocked = (await outsideRequestScope(() => query(
       `UPDATE token SET status = 'Blocked', credit_blocked_at = now(), updated_at = now() WHERE fleet_account_id = $1 AND org_id = $2 AND status = 'Accepted'`, [accountId, orgId]))).rowCount ?? 0;
   } else {
@@ -170,7 +172,7 @@ export async function check(orgId: string, accountId: string): Promise<{ level: 
 /** The worker: every account with a credit mode, or cards still blocked for credit. */
 export async function sweep(): Promise<number> {
   const accts = await outsideRequestScope(() => many<{ id: string; org_id: string }>(
-    `SELECT id, org_id FROM fleet_account a WHERE archived_at IS NULL AND (credit_mode <> 'none' OR EXISTS (SELECT 1 FROM token t WHERE t.fleet_account_id = a.id AND t.credit_blocked_at IS NOT NULL))`));
+    `SELECT id, org_id FROM fleet_account a WHERE archived_at IS NULL AND (credit_mode <> 'none' OR credit_hold_at IS NOT NULL OR EXISTS (SELECT 1 FROM token t WHERE t.fleet_account_id = a.id AND t.credit_blocked_at IS NOT NULL))`));
   let n = 0;
   for (const a of accts) {
     try { const r = await check(a.org_id, a.id); n += r.blocked + r.unblocked + r.applied; } catch (e) { logger.warn({ account: a.id, err: (e as Error).message }, 'fleet credit check failed'); }
