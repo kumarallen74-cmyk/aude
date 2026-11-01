@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.42.0";
+export const API_VERSION = "1.43.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11563,6 +11563,32 @@ export class Operations {
   }
 
   /**
+   * Add a demand-response programme
+   *
+   * (v1.43.0) name, kind (webhook | openadr3), siteIds, incentiveMinorPerKwh, currency, enabled; openadr3: vtnUrl, tokenUrl, programRef, clientId, clientSecret (kept encrypted). Audited.
+   *
+   * `POST /v1/dr/programs` · needs `smartcharging:write`
+   */
+  addDemandResponseProgramme(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/programs", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a dynamic pricing rule
+   *
+   * (v1.43.0) name, kind (time: dayMask, hourFrom, hourTo in the site's zone; peak: the grid's peak hours of the site's energy tariff; occupancy: threshold % of connectors in use; solar: threshold kW of solar output), adjustPct (−50 to 50), siteId (empty: every site), enabled, sortOrder. Matching rules add up. Audited.
+   *
+   * `POST /v1/dynamic-pricing/rules` · needs `tariff:write`
+   */
+  addDynamicPricingRule(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dynamic-pricing/rules", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add an employee
    *
    * (v1.33.0) Numbered EMP-0001…; the bank account is sealed. Audited.
@@ -11573,6 +11599,21 @@ export class Operations {
     body: AddEmployeeBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/employees", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add an event by hand
+   *
+   * (v1.43.0) For a call or an e-mail from the grid operator: startsAt, endsAt, limitKw or reducePct, siteIds (default: the programme's), note. Audited.
+   *
+   * `POST /v1/dr/programs/{id}/manual-event` · needs `smartcharging:write`
+   */
+  addEventByHand(params: {
+    /** The programme. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/programs/{id}/manual-event", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13175,6 +13216,36 @@ export class Operations {
   }
 
   /**
+   * Change or archive a dynamic pricing rule
+   *
+   * (v1.43.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/dynamic-pricing/rules/{id}` · needs `tariff:write`
+   */
+  changeOrArchiveDynamicPricingRule(params: {
+    /** The rule. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/dynamic-pricing/rules/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a programme
+   *
+   * (v1.43.0) The fields above (the kind cannot change), or archive: true. Audited.
+   *
+   * `PUT /v1/dr/programs/{id}` · needs `smartcharging:write`
+   */
+  changeOrArchiveProgramme(params: {
+    /** The programme. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/dr/programs/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a report e-mail schedule
    *
    * (v1.21.0) The same fields; archived: true removes it. Audited.
@@ -13264,6 +13335,32 @@ export class Operations {
     body: ChangePolicyBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/finance/insurance/policies/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change the public status page
+   *
+   * (v1.43.0) The fields above. A slug belongs to one organisation. Audited.
+   *
+   * `PUT /v1/status-page` · needs `site:write`
+   */
+  changePublicStatusPage(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/status-page", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change SCIM provisioning
+   *
+   * (v1.43.0) enabled, roleMap [{group, role}] (never an administrator or a site-limited role). A changed map is applied to every provisioned user at once. Audited.
+   *
+   * `PUT /v1/scim` · needs `user:write`
+   */
+  changeScimProvisioning(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/scim", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14261,6 +14358,33 @@ export class Operations {
   }
 
   /**
+   * Demand-response events and what they delivered
+   *
+   * (v1.43.0) Events (days, programId): upcoming, active, completed, cancelled or opted out; per site the baseline and actual energy measured by the load manager, the reduction (kWh, average kW) and the incentive.
+   *
+   * `GET /v1/dr/events` · needs `smartcharging:read`
+   */
+  demandResponseEventsAndWhatTheyDelivered(params?: {
+    query?: {
+      days?: number;
+      programId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dr/events", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Demand-response programmes
+   *
+   * (v1.43.0) Each programme: webhook (the grid operator or aggregator posts events) or openadr3 (PlugSure polls an OpenADR 3 server), its sites, the incentive per kWh, the last poll and its error.
+   *
+   * `GET /v1/dr/programs` · needs `smartcharging:read`
+   */
+  demandResponseProgrammes(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dr/programs", accept: "json" }, options);
+  }
+
+  /**
    * A deposit
    *
    * (v1.30.0) The deposit with its interest to date and at maturity.
@@ -14642,6 +14766,30 @@ export class Operations {
    */
   driversRefundRequests(options?: RequestOptions): Promise<DriversRefundRequestsResponse> {
     return this.transport.request<DriversRefundRequestsResponse>({ method: "GET", path: "/v1/finance/driver-refunds", accept: "json" }, options);
+  }
+
+  /**
+   * Dynamic pricing on/off and its band
+   *
+   * (v1.43.0) enabled; floorPct (50–100, default 80) and capPct (100–200, default 130): every price stays inside; includeTime: the per-minute time fee moves too. Energy only otherwise; session, admin and idle fees and the PLN formula rate never move; an increase is held at the regulated energy ceiling. Audited.
+   *
+   * `PUT /v1/dynamic-pricing/settings` · needs `tariff:write`
+   */
+  dynamicPricingOnOffAndItsBand(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/dynamic-pricing/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Dynamic pricing: settings, rules, each site now
+   *
+   * (v1.43.0) The settings (enabled, floorPct, capPct, includeTime), the rules, and each site's price factor now with the rules behind it.
+   *
+   * `GET /v1/dynamic-pricing` · needs `tariff:read`
+   */
+  dynamicPricingSettingsRulesEachSiteNow(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dynamic-pricing", accept: "json" }, options);
   }
 
   /**
@@ -16030,6 +16178,21 @@ export class Operations {
    */
   importSiteInvestments(options?: RequestOptions): Promise<ImportSiteInvestmentsResponse> {
     return this.transport.request<ImportSiteInvestmentsResponse>({ method: "POST", path: "/v1/finance/assets/import-investments", accept: "json" }, options);
+  }
+
+  /**
+   * Incidents and planned maintenance
+   *
+   * (v1.43.0) Open ones, and those closed in the last days (default 60).
+   *
+   * `GET /v1/status-page/incidents` · needs `site:read`
+   */
+  incidentsAndPlannedMaintenance(params?: {
+    query?: {
+      days?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/status-page/incidents", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -17612,6 +17775,31 @@ export class Operations {
   }
 
   /**
+   * A new key for a webhook programme
+   *
+   * (v1.43.0) Returns the key once (pdr_…) and the URL to post events to; only its hash is kept and the previous key stops working. Audited.
+   *
+   * `POST /v1/dr/programs/{id}/key` · needs `smartcharging:write`
+   */
+  newKeyForWebhookProgramme(params: {
+    /** The programme. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/programs/{id}/key", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * A new SCIM token
+   *
+   * (v1.43.0) Returns the token once (pscim_…) and the endpoint; only its hash is kept and the previous token stops working at once. Audited.
+   *
+   * `POST /v1/scim/token` · needs `user:write`
+   */
+  newScimToken(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/scim/token", accept: "json" }, options);
+  }
+
+  /**
    * One charger's health
    *
    * (v1.42.0) Its parts (outages and hours offline, faults by code, reboots, failed starts, a fault now), the score, the risk and reasons, and the daily history (90 days).
@@ -17709,6 +17897,19 @@ export class Operations {
   }
 
   /**
+   * Open an incident or schedule maintenance
+   *
+   * (v1.43.0) kind (incident | maintenance), title, impact (minor | major | critical), status, siteIds, message (public), scheduledFrom and scheduledTo (maintenance), notify (default true: e-mail the subscribers). Audited.
+   *
+   * `POST /v1/status-page/incidents` · needs `site:write`
+   */
+  openIncidentOrScheduleMaintenance(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/status-page/incidents", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Open a work order
    *
    * (v1.34.0) Numbered WO-00001…. Audited.
@@ -17770,6 +17971,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<OperatorsStatementsToPlugSureResponse> {
     return this.transport.request<OperatorsStatementsToPlugSureResponse>({ method: "GET", path: "/v1/finance/operator-statements", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Opt out of an event
+   *
+   * (v1.43.0) The event no longer limits charging; recorded with who and why (note). Audited.
+   *
+   * `POST /v1/dr/events/{id}/opt-out` · needs `smartcharging:write`
+   */
+  optOutOfEvent(params: {
+    /** The event. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/events/{id}/opt-out", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18083,6 +18299,20 @@ export class Operations {
   }
 
   /**
+   * Poll an OpenADR programme now
+   *
+   * (v1.43.0) Fetch the programme's events from its OpenADR 3 server now (otherwise every 5 minutes).
+   *
+   * `POST /v1/dr/programs/{id}/poll` · needs `smartcharging:write`
+   */
+  pollOpenADRProgrammeNow(params: {
+    /** The programme. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/programs/{id}/poll", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Post solar, battery and grid readings
    *
    * (v1.42.0) For the site's inverter, EMS or gateway: Authorization: Bearer <site key> (or x-site-key). One reading or {readings: [...]} (≤ 500): ts, solarW, batteryW (+ discharging), batterySocPct, gridW (+ import). A reading already kept is ignored. The answer carries the battery's set-point for the next interval (batteryW: + discharge, − charge). At most 120 posts a minute per site.
@@ -18095,6 +18325,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy/sites/{siteId}/readings", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Post an update to an incident
+   *
+   * (v1.43.0) status and message (an update, public), title, impact, notify. Audited.
+   *
+   * `PUT /v1/status-page/incidents/{id}` · needs `site:write`
+   */
+  postUpdateToIncident(params: {
+    /** The incident. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/status-page/incidents/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18274,6 +18519,31 @@ export class Operations {
     siteId: string;
   }, options?: RequestOptions): Promise<ProvisionDefaultChargingProfilesResponse> {
     return this.transport.request<ProvisionDefaultChargingProfilesResponse>({ method: "POST", path: "/v1/sites/{siteId}/power/provision-defaults", pathParams: { siteId: params.siteId }, accept: "json" }, options);
+  }
+
+  /**
+   * A public status page's data
+   *
+   * (v1.43.0) No credentials. Overall state, each site's state (operational, degraded, outage, maintenance; with connector counts if shown), open incidents, planned maintenance, the last 14 days. Cached 30 s. 404 when there is no such page or it is off.
+   *
+   * `GET /v1/status/{slug}`
+   */
+  publicStatusPageData(params: {
+    /** The page. */
+    slug: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/status/{slug}", pathParams: { slug: params.slug }, accept: "json" }, options);
+  }
+
+  /**
+   * The public status page's settings
+   *
+   * (v1.43.0) enabled, slug (the page is at /status/<slug>; on an approved own console address also /status), title, intro, siteIds (empty: all), showCounts, and the number of confirmed subscribers.
+   *
+   * `GET /v1/status-page` · needs `site:read`
+   */
+  publicStatusPageSettings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/status-page", accept: "json" }, options);
   }
 
   /**
@@ -20392,6 +20662,17 @@ export class Operations {
   }
 
   /**
+   * SCIM provisioning settings
+   *
+   * (v1.43.0) enabled, the token's last four characters, the group → role map (empty: the SAML one is used), the endpoint (…/scim/v2) to give the identity provider, the roles a group may give, and how many users and groups it manages.
+   *
+   * `GET /v1/scim` · needs `user:read`
+   */
+  scimProvisioningSettings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/scim", accept: "json" }, options);
+  }
+
+  /**
    * Score the chargers now
    *
    * (v1.42.0) What the daily run does, for this organisation now: keep each charger's day, raise charger.health_at_risk or resolve it.
@@ -20480,6 +20761,21 @@ export class Operations {
     body: SendCommandToPartnerBody;
   }, options?: RequestOptions): Promise<RoamingCommandSent> {
     return this.transport.request<RoamingCommandSent>({ method: "POST", path: "/v1/roaming/commands", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Send a demand-response event (grid operator / aggregator)
+   *
+   * (v1.43.0) Authorization: Bearer <programme key>. id (the event's own ID: a repeat updates it), start, end or durationMinutes, limitKw (the grid limit for its sites together) or reducePct (1–100), siteIds (default: the programme's), status: cancelled to call it off, note. At most 24 hours, 30 days ahead. 201 new, 200 updated. At most 60 a minute per programme.
+   *
+   * `POST /v1/dr/programs/{id}/events`
+   */
+  sendDemandResponseEventGridOperatorAggregator(params: {
+    /** The programme. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dr/programs/{id}/events", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -22024,6 +22320,21 @@ export class Operations {
   }
 
   /**
+   * Subscribe to a status page by e-mail
+   *
+   * (v1.43.0) No credentials. email: a confirmation link is sent; nothing else until it is followed. The same answer whether the address is new or not. At most 5 a minute per address.
+   *
+   * `POST /v1/status/{slug}/subscribe`
+   */
+  subscribeToStatusPageByEMail(params: {
+    /** The page. */
+    slug: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/status/{slug}/subscribe", pathParams: { slug: params.slug }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Subscription and membership revenue
    *
    * (v1.26.0) For a month (default this month), per currency: billed (paid, or invoiced to a fleet), recognised pro rata over each charge's period, deferred at the start and end, MRR and ARR, subscribers (new, cancelled, expired, churn), per plan, and the month's journal (billed into deferred revenue, recognised out of it). format=xlsx for a workbook.
@@ -23324,6 +23635,20 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<WhatsappSupportInboxResponse> {
     return this.transport.request<WhatsappSupportInboxResponse>({ method: "GET", path: "/v1/whatsapp/conversations", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * What a site's rules would do
+   *
+   * (v1.43.0) The factor hour by hour over the next 7 days (time and peak rules), the factor now, a sample price per kWh rated as a session would be (so a regulated ceiling shows), and the last 30 days' energy revenue under the time and peak rules.
+   *
+   * `GET /v1/dynamic-pricing/sites/{siteId}/preview` · needs `tariff:read`
+   */
+  whatSiteRulesWouldDo(params: {
+    /** The site. */
+    siteId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dynamic-pricing/sites/{siteId}/preview", pathParams: { siteId: params.siteId }, accept: "json" }, options);
   }
 
   /**

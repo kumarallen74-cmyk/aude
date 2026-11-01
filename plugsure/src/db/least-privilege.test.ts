@@ -48,7 +48,9 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'tax_audit_case', 'budget_plan', 'budget_plan_line', 'fx_hedge', 'procurement_saving', 'close_assignment', 'close_run',
       'corporate_tax_year', 'tax_fiscal_correction', 'tax_payment', 'payment_run', 'payment_run_item', 'corp_card', 'card_txn', 'card_statement',
       'customer_contract', 'contract_obligation', 'contract_billing', 'tp_policy', 'dq_run', 'finance_scenario',
-      'site_energy_asset', 'site_energy_settings', 'site_energy_reading', 'charger_health', 'report_definition', 'org_saml_provider', 'saml_login_tx', 'saml_user_link']]);
+      'site_energy_asset', 'site_energy_settings', 'site_energy_reading', 'charger_health', 'report_definition', 'org_saml_provider', 'saml_login_tx', 'saml_user_link',
+      'scim_config', 'scim_user', 'scim_group', 'scim_group_member', 'dynamic_price_settings', 'dynamic_price_rule', 'site_price_now',
+      'dr_program', 'dr_event', 'dr_event_site', 'status_page', 'status_incident', 'status_subscriber']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -154,5 +156,9 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     landlord_statement: 'INSERT,SELECT,UPDATE', chargeback: 'INSERT,SELECT,UPDATE', tax_audit_case: 'INSERT,SELECT,UPDATE', budget_plan: 'INSERT,SELECT,UPDATE', budget_plan_line: 'INSERT,SELECT,UPDATE', fx_hedge: 'INSERT,SELECT,UPDATE', procurement_saving: 'INSERT,SELECT,UPDATE', close_assignment: 'INSERT,SELECT,UPDATE', close_run: 'INSERT,SELECT,UPDATE', corporate_tax_year: 'INSERT,SELECT,UPDATE', tax_fiscal_correction: 'INSERT,SELECT,UPDATE', tax_payment: 'INSERT,SELECT,UPDATE', payment_run: 'INSERT,SELECT,UPDATE', payment_run_item: 'INSERT,SELECT,UPDATE', corp_card: 'INSERT,SELECT,UPDATE', card_txn: 'INSERT,SELECT,UPDATE', card_statement: 'INSERT,SELECT,UPDATE', customer_contract: 'INSERT,SELECT,UPDATE', contract_obligation: 'INSERT,SELECT,UPDATE', contract_billing: 'INSERT,SELECT,UPDATE', tp_policy: 'INSERT,SELECT,UPDATE', dq_run: 'INSERT,SELECT,UPDATE', finance_scenario: 'INSERT,SELECT,UPDATE',
     site_energy_asset: 'INSERT,SELECT,UPDATE', site_energy_settings: 'INSERT,SELECT,UPDATE', site_energy_reading: 'DELETE,INSERT,SELECT', charger_health: 'INSERT,SELECT,UPDATE',
     report_definition: 'INSERT,SELECT,UPDATE', org_saml_provider: 'INSERT,SELECT,UPDATE', saml_login_tx: 'DELETE,INSERT,SELECT,UPDATE', saml_user_link: 'INSERT,SELECT,UPDATE',
+    scim_config: 'INSERT,SELECT,UPDATE', scim_user: 'INSERT,SELECT,UPDATE', scim_group: 'DELETE,INSERT,SELECT,UPDATE', scim_group_member: 'DELETE,INSERT,SELECT,UPDATE',
+    dynamic_price_settings: 'INSERT,SELECT,UPDATE', dynamic_price_rule: 'INSERT,SELECT,UPDATE', site_price_now: 'INSERT,SELECT,UPDATE',
+    dr_program: 'INSERT,SELECT,UPDATE', dr_event: 'INSERT,SELECT,UPDATE', dr_event_site: 'INSERT,SELECT,UPDATE',
+    status_page: 'INSERT,SELECT,UPDATE', status_incident: 'INSERT,SELECT,UPDATE', status_subscriber: 'DELETE,INSERT,SELECT,UPDATE',
   });
 });

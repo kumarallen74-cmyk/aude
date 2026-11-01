@@ -746,6 +746,9 @@ input{font-family:inherit}
   };
   // Substring patterns for interpolated / multi-fragment strings.
   var PATTERNS = [
+    // (v1.43.0) Dynamic pricing on the connector page.
+    [/^Harga dinamis saat ini lebih tinggi (\d+)% dari tarif\. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang\.$/g,'The price right now is $1% above the tariff. It applies to the whole session if you start now.'],
+    [/^Harga dinamis saat ini lebih rendah (\d+)% dari tarif\. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang\.$/g,'The price right now is $1% below the tariff. It applies to the whole session if you start now.'],
     // Cost during the charge. Before the single-word "menit" and "dibayar" patterns below.
     [/^Biaya sejauh ini (Rp [\d.]+) dari (Rp [\d.]+) dibayar$/g,'Cost so far $1 of $2 paid'],
     // Partner networks for app drivers: the card hold.
@@ -2105,6 +2108,7 @@ VIEWS.connector=async(v)=>{
        <div class="spec"><div class="k">Daya maksimum</div><div class="v">${c.maxPowerKw} <small>kW ${c.current}</small></div></div>
        <div class="spec"><div class="k">Harga energi</div><div class="v">${c.energyPriceMinor!=null?rate(c.energyPriceMinor):'—'} <small>/kWh</small></div></div>
      </div>
+     ${c.dynamicPrice?`<div class="small muted" style="margin:6px 0 4px">${c.dynamicPrice.factorPct>100?'Harga dinamis saat ini lebih tinggi':'Harga dinamis saat ini lebih rendah'} ${Math.abs(Math.round(c.dynamicPrice.factorPct-100))}% dari tarif. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang.</div>`:''}
      ${!c.available?`<div class="banner b-warn">${svg(I.warn)}<div>${esc(c.blockedReason||'Konektor ini belum bisa dipakai saat ini.')}</div></div>`:''}
      <div id="resbox"></div>
      <div id="chargebox"></div>`;

@@ -14,6 +14,9 @@ import './views/finance-today.js';
 import './views/energy-storage.js';
 import './views/charger-health.js';
 import './views/report-builder.js';
+import './views/dynamic-pricing.js';
+import './views/grid-events.js';
+import './views/status-page.js';
 import './views/chargers.js';
 import './views/onboard.js';
 import './views/onboarding.js';
@@ -551,7 +554,12 @@ async function route() {
   document.title = `${titleOf(def)} — ${titleSuffix()}`;
   try { cleanupView?.(); } catch {}
   cleanupView = null;
-  const target = $('#view');
+  // (v1.43.0) A fresh #view for every page: a view that listens on its root (root.addEventListener) would otherwise
+  // keep listening after the operator moved on, and its handler would run on the next page's buttons too (an "Edit"
+  // on one page opening another page's form; a row's × asking to delete a sandbox).
+  const stale = $('#view');
+  const target = stale.cloneNode(false);
+  stale.replaceWith(target);
   target.innerHTML = '<div class="skeleton" style="width:30%;height:22px;margin-bottom:14px"></div><div class="skeleton" style="height:160px"></div>';
   try {
     const r = await def.render(target, params);

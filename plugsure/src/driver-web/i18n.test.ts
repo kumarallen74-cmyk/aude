@@ -27,6 +27,9 @@ const MESSAGES = [
   'Charger ini sementara tidak beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.',
   'Charger ini tidak lagi beroperasi; sesi tidak dapat dimulai. Pembayaran yang tidak terpakai akan dikembalikan.',
   'Charger ini sementara tidak dapat dipesan. Biaya reservasi dikembalikan.',
+  // dynamic pricing (v1.43.0)
+  'Harga dinamis saat ini lebih tinggi 15% dari tarif. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang.',
+  'Harga dinamis saat ini lebih rendah 20% dari tarif. Harga ini berlaku untuk seluruh sesi yang dimulai sekarang.',
   // cost during the charge
   'biaya sejauh ini', 'Biaya sejauh ini Rp 23.415 dari Rp 50.000 dibayar', 'Termasuk pajak Rp 2.870', 'Hemat Rp 4.200',
   'Biaya parkir Rp 12.000: mobil tidak mengisi selama 12 menit. Cabut untuk menghentikannya.',

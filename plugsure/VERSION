@@ -1,16 +1,21 @@
 PlugSure CSMS
-Version:   1.42.0
-Package:   plugsure-v1.42.0
-Prepared:  2026-11-01  (v1.41.1 + phase 30 — see RELEASE-NOTES-v1.42.0.md)
+Version:   1.43.0
+Package:   plugsure-v1.43.0
+Prepared:  2026-11-01  (v1.42.0 + phase 31 — see RELEASE-NOTES-v1.43.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (844 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (868 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html; SCIM 2.0 at /scim/v2
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.42.0 = v1.41.1 + phase 30: solar and battery storage at a site (assets, an energy box API, the load
-           manager counting measured solar and battery discharge, a battery set-point, peak shaving, results and
-           savings), charger health and failure prediction (a 30-day score, at-risk reasons, trend, a work order, a
-           daily alert), a custom report builder (datasets, columns, groups, filters, charts, Excel, saved and
-           e-mailed reports) and SAML 2.0 single sign-on for the console (per organisation, optional automatic
-           account set-up without administrator roles). Migration 109 (additive).
+Status:    v1.43.0 = v1.42.0 + phase 31: SCIM 2.0 provisioning (users and groups from the identity provider, roles by
+           group, deactivation ends every session, administrators never touched), dynamic pricing (time, peak-hour,
+           occupancy and solar rules inside a floor and cap, never past the regulated energy ceiling, fixed per session
+           and per pre-paid charge, shown in the driver app), grid demand response (webhook, OpenADR 3 or by hand; the
+           load manager holds the grid part, measures the reduction and the incentive) and a public status page (live
+           site states, incidents, maintenance, e-mail updates). Fix: a group can no longer give a site-limited role.
+           Migration 110 (additive).
+
+v1.42.0 (2026-11-01):
+           v1.42.0 = v1.41.1 + phase 30: solar and battery storage, charger health and failure prediction, a custom
+           report builder and SAML 2.0 single sign-on. Migration 109 (additive).
 
 v1.41.1 (2026-11-01):
            v1.41.1 = v1.41.0 + fixes from a whole-system review (every console page, tab and link for each role;

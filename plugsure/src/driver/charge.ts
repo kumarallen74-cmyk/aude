@@ -12,6 +12,7 @@ import { config, isRelaxedEnv } from '../config.js';
 import * as registry from '../ocpp/registry.js';
 import { remoteStartTransaction, remoteStopTransaction } from '../ocpp/commands.js';
 import { loadTariffForConnector } from '../services/tariff-store.js';
+import { factorNow as dynamicFactorNow, scaleTariff } from '../services/dynamic-pricing.js';
 import { v2xView, setDriverConsent, V2xError } from '../services/v2x.js';
 import { signedDataFor } from '../services/signed-metering.js';
 import { driverAllowanceWh, type PriceAdjustment } from '../services/tariff.js';
@@ -171,6 +172,10 @@ export interface QuoteResult {
   maxPrepaidMinor?: number;
   /** Prices are shown tax-inclusive (Singapore GST, Malaysia). */
   pricesIncludeTax?: boolean;
+  /** (v1.43.0) The site's dynamic price now, when it is not the standard price: the energy above is at this factor. */
+  dynamicPrice?: { factorPct: number; reason: string } | null;
+  /** The factor the allowance was computed with (kept on the payment). */
+  dynamicPriceBps?: number | null;
 }
 
 /** How much energy a given rupiah amount buys on this connector, worst-case reserved. */
@@ -196,7 +201,10 @@ export async function quotePrepaid(
   if (problem) return { ok: false, error: problem };
 
   const now = new Date();
-  const { tariff } = await loadTariffForConnector(c.connector_uuid, c.org_id, now);
+  // (v1.43.0) Dynamic pricing: the energy this amount buys is computed at the site's price factor now, and that factor
+  // is kept on the payment so its session is billed at the same one (dynamic-pricing.ts).
+  const dyn = await dynamicFactorNow(c.site_id, now);
+  const tariff = scaleTariff((await loadTariffForConnector(c.connector_uuid, c.org_id, now)).tariff, dyn?.bps, dyn?.includeTime);
   const baseCtx = {
     startedAt: now,
     endedAt: new Date(now.getTime() + 45 * 60_000),
@@ -261,6 +269,8 @@ export async function quotePrepaid(
     promotion: best.choice.promotion,
     codeProblem: b?.codeProblem ?? null,
     pricesIncludeTax: tariff.pricesIncludeTax === true || country.displayPricesInclTax,
+    dynamicPrice: dyn && dyn.bps !== 10_000 ? { factorPct: dyn.bps / 100, reason: dyn.reason } : null,
+    dynamicPriceBps: dyn?.bps ?? null,
     ...(await paymentSetupFor(c.org_id, p, country.code)),
   };
 }
@@ -423,10 +433,10 @@ export async function checkoutPrepaid(
   await query(
     `INSERT INTO payment_intent
         (id, org_id, provider, method, mode, state, amount_authorised_minor, allowance_wh, connector_uuid, claim_id_tag, claim_token_minted,
-         expires_at, integration_id, channel, currency)
-      VALUES ($1, $2, $3, $4, 'prepurchase', 'pending', $5, $6, $7, $8, true, now() + interval '30 minutes', $9, $10, $11)`,
+         expires_at, integration_id, channel, currency, dynamic_price_bps)
+      VALUES ($1, $2, $3, $4, 'prepurchase', 'pending', $5, $6, $7, $8, true, now() + interval '30 minutes', $9, $10, $11, $12)`,
     [intentId, c.org_id, acq.provider.name, pay.walletId ? 'ewallet' : pay.savedCardId ? 'card' : methodOf(String(pay.channel || 'QRIS').toUpperCase() as Channel), amountMinor, q.allowanceWh, c.connector_uuid, claimTag,
-     acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20), currency],
+     acq.resolved.integrationId, pay.savedCardId ? 'CARD' : pay.walletId ? null : String(pay.channel || 'QRIS').toUpperCase().slice(0, 20), currency, q.dynamicPriceBps ?? null],
   );
   // (v1.13.0) The account asked is recorded too: the fallback (Duitku), when the main acquirer did not answer.
   const prepare = (p: PreparedPayment) => query(

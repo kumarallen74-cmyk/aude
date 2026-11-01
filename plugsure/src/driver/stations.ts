@@ -1,6 +1,7 @@
 import { one, many } from '../db/pool.js';
 import * as registry from '../ocpp/registry.js';
 import { loadTariffForConnector, headlinePrices } from '../services/tariff-store.js';
+import { factorNow as dynamicFactorNow, factorsForSites, scaleTariff } from '../services/dynamic-pricing.js';
 import { plnEnergyRate, type Tariff } from '../services/tariff.js';
 import { connectorMaySellEnergy } from '../services/compliance.js';
 import { feeTaxerFor } from '../services/benefits.js';
@@ -76,6 +77,8 @@ export interface StationView {
   timezone: string | null;
   /** Prices include the tax (Singapore GST, Malaysia): the price shown is what the driver pays per kWh. */
   pricesIncludeTax: boolean;
+  /** (v1.43.0) The site's dynamic price factor now, when it is not 100 % (the headline price above includes it). */
+  dynamicPct?: number | null;
 }
 
 interface ConnectorRow {
@@ -255,19 +258,23 @@ export interface ListOptions {
 /** Fill in the headline price of these stations (one batch for all their connectors). */
 export async function priceStations(stations: StationView[]): Promise<void> {
   if (!stations.length) return;
-  let prices: Map<string, { rate: number | null; inclusive: boolean }>;
+  let prices: Map<string, { rate: number | null; inclusive: boolean; formula?: boolean }>;
   try {
     prices = await headlinePrices(stations.flatMap((s) => s.connectors.map((c) => c.connectorId)), new Date());
   } catch {
     return;
   }
+  const factors = await factorsForSites(stations.map((s) => s.siteId));
   for (const st of stations) {
     let priceFrom: number | null = null;
-    let inclusive = false;
+    let inclusive = false, formula = false;
     for (const c of st.connectors) {
       const p = prices.get(c.connectorId);
-      if (p?.rate != null && (priceFrom == null || p.rate < priceFrom)) { priceFrom = p.rate; inclusive = p.inclusive; }
+      if (p?.rate != null && (priceFrom == null || p.rate < priceFrom)) { priceFrom = p.rate; inclusive = p.inclusive; formula = p.formula === true; }
     }
+    const f = factors.get(st.siteId);
+    if (f && f !== 10_000 && priceFrom != null && !formula) priceFrom = Math.round(priceFrom * (f / 10_000) * 100) / 100;
+    st.dynamicPct = f && f !== 10_000 ? f / 100 : null;
     st.priceFromMinor = priceFrom == null ? null : rateToMinor(priceFrom, st.currency);
     st.priceFromMajor = priceFrom;
     st.pricesIncludeTax = inclusive;
@@ -296,13 +303,14 @@ export async function listStations(loc?: { lat: number; lon: number }, orgId: st
   }
 
   // Every connector's headline price in one go (it was two queries per connector).
-  let prices: Map<string, { rate: number | null; inclusive: boolean }>;
+  let prices: Map<string, { rate: number | null; inclusive: boolean; formula?: boolean }>;
   try {
     prices = opts.prices === false ? new Map() : await headlinePrices(rows.map((r) => r.connector_id), new Date());
   } catch {
     prices = new Map();
   }
 
+  const factors = opts.prices === false ? new Map<string, number>() : await factorsForSites([...bySite.keys()]);
   const stations: StationView[] = [];
   for (const { info, connectors } of bySite.values()) {
     const available = connectors.filter((c) => c.available).length;
@@ -311,11 +319,14 @@ export async function listStations(loc?: { lat: number; lon: number }, orgId: st
 
     // Cheapest headline price across the site's connectors, in the site's currency.
     let priceFrom: number | null = null;
-    let inclusive = false;
+    let inclusive = false, formula = false;
     for (const c of connectors) {
       const p = prices.get(c.connectorId);
-      if (p?.rate != null && (priceFrom == null || p.rate < priceFrom)) { priceFrom = p.rate; inclusive = p.inclusive; }
+      if (p?.rate != null && (priceFrom == null || p.rate < priceFrom)) { priceFrom = p.rate; inclusive = p.inclusive; formula = p.formula === true; }
     }
+    // (v1.43.0) The site's dynamic price now, as the detail and the charge will use it (never the PLN formula rate).
+    const dynF = factors.get(info.site_id);
+    if (dynF && dynF !== 10_000 && priceFrom != null && !formula) priceFrom = Math.round(priceFrom * (dynF / 10_000) * 100) / 100;
     const country = countryOf(info.country_code);
 
     stations.push({
@@ -339,6 +350,7 @@ export async function listStations(loc?: { lat: number; lon: number }, orgId: st
       countryCode: country.code,
       timezone: info.timezone,
       pricesIncludeTax: inclusive,
+      dynamicPct: dynF && dynF !== 10_000 ? dynF / 100 : null,
     });
   }
 
@@ -372,6 +384,7 @@ export async function connectorDetail(connectorUuid: string, principal?: DriverP
   | (ConnectorView & {
       station: { siteId: string; name: string; address: string | null; operator: string; spkluId: string | null };
       energyPriceMinor: number | null;
+      dynamicPrice: { factorPct: number; reason: string } | null;
       currency: CurrencyCode;
       countryCode: string;
       timezone: string | null;
@@ -428,8 +441,11 @@ export async function connectorDetail(connectorUuid: string, principal?: DriverP
   let energyPrice: number | null = null;
   let pricesIncludeTax = false;
   const fees: Array<{ kind: string; label: string; rate: number }> = [];
+  // (v1.43.0) Dynamic pricing: the price now at this site — what a charge started now is fixed at.
+  const dyn = await dynamicFactorNow(r.site_id);
+  const dynamicPrice = dyn && dyn.bps !== 10_000 ? { factorPct: dyn.bps / 100, reason: dyn.reason } : null;
   try {
-    const { tariff } = await loadTariffForConnector(r.connector_id, r.org_id, new Date());
+    const tariff = scaleTariff((await loadTariffForConnector(r.connector_id, r.org_id, new Date())).tariff, dyn?.bps, dyn?.includeTime);
     energyPrice = energyRateOf(tariff);
     pricesIncludeTax = tariff.pricesIncludeTax === true;
     const FEE_LABEL: Record<string, string> = {
@@ -457,6 +473,8 @@ export async function connectorDetail(connectorUuid: string, principal?: DriverP
       spkluId: r.spklu_id,
     },
     energyPriceMinor: energyPrice,
+    /** (v1.43.0) Not the standard price now: the factor and why (the energy price above already includes it). */
+    dynamicPrice,
     /** Every amount above is in this currency (rates per kWh / minute in major units; fees in minor units). */
     currency: country.currency,
     countryCode: country.code,

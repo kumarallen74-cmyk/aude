@@ -469,8 +469,9 @@ export async function listTariffs(orgId: string) {
  * the regulated default when nothing is assigned): two queries instead of two per connector.
  * `rate` is the cheapest explicit energy component, else the PLN formula rate, else null.
  */
-export async function headlinePrices(connectorIds: readonly string[], at: Date): Promise<Map<string, { rate: number | null; inclusive: boolean }>> {
-  const out = new Map<string, { rate: number | null; inclusive: boolean }>();
+export async function headlinePrices(connectorIds: readonly string[], at: Date): Promise<Map<string, { rate: number | null; inclusive: boolean; formula?: boolean }>> {
+  // formula: the headline is the PLN formula rate (no explicit energy rate), which dynamic pricing never scales.
+  const out = new Map<string, { rate: number | null; inclusive: boolean; formula?: boolean }>();
   if (!connectorIds.length) return out;
   const rows = await many<{ connector_uuid: string; country_code: string | null; tariff_id: string | null; pln_scheme: string | null; pln_base_rate: string | null;
     pln_multiplier: string | null; prices_include_tax: boolean | null }>(
@@ -514,7 +515,7 @@ export async function headlinePrices(connectorIds: readonly string[], at: Date):
     if (!r.tariff_id) {
       // Nothing assigned: the regulated default (ID: the PLN formula; MY/SG: no price).
       const t = defaultTariff(isCountry(r.country_code) ? r.country_code : 'ID');
-      out.set(r.connector_uuid, { rate: plnEnergyRate(t), inclusive: t.pricesIncludeTax === true });
+      out.set(r.connector_uuid, { rate: plnEnergyRate(t), inclusive: t.pricesIncludeTax === true, formula: true });
       continue;
     }
     const rate = explicit.get(r.tariff_id) ?? plnEnergyRate({
@@ -522,7 +523,7 @@ export async function headlinePrices(connectorIds: readonly string[], at: Date):
       plnBaseRate: r.pln_base_rate != null ? Number(r.pln_base_rate) : undefined,
       plnMultiplier: r.pln_multiplier != null ? Number(r.pln_multiplier) : undefined,
     });
-    out.set(r.connector_uuid, { rate, inclusive: r.prices_include_tax === true });
+    out.set(r.connector_uuid, { rate, inclusive: r.prices_include_tax === true, formula: !explicit.has(r.tariff_id) });
   }
   return out;
 }

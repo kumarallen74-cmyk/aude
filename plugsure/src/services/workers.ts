@@ -232,6 +232,9 @@ export function startWorkers(): () => void {
   // (v1.42.0) Charger health (daily) and the report builder's scheduled reports (hourly; each is due once per period).
   const chargerHealth = once('charger-health', async () => { await (await import('./charger-health.js')).sweep(); });
   const customReports = once('custom-reports', async () => { await (await import('./report-builder.js')).sendDue(); });
+  // (v1.43.0) Each site's dynamic price now (a session starting is fixed at it), and OpenADR 3 demand-response events.
+  const dynamicPrices = once('dynamic-pricing', async () => { await (await import('./dynamic-pricing.js')).sweep(); });
+  const openAdr = once('demand-response-poll', async () => { await (await import('./demand-response.js')).pollAll(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -373,6 +376,8 @@ export function startWorkers(): () => void {
     every(dataQuality, 24 * 60 * 60_000, 'finance-data-quality'),
     every(chargerHealth, 24 * 60 * 60_000, 'charger-health'),
     every(customReports, 60 * 60_000, 'custom-reports'),
+    every(dynamicPrices, 60_000, 'dynamic-pricing'),
+    every(openAdr, 5 * 60_000, 'demand-response-poll'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

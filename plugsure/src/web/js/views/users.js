@@ -731,6 +731,7 @@ registerView('users', {
       state.can('org:read') && { id: 'keys', label: 'API keys', render: renderKeys },
       state.can('user:read') && state.me?.features?.microsoftSignIn && { id: 'microsoft', label: 'Microsoft sign-in', render: renderMicrosoft },
       state.can('user:read') && { id: 'saml', label: 'Single sign-on (SAML)', render: renderSaml },
+      state.can('user:read') && { id: 'scim', label: 'Provisioning (SCIM)', render: renderScim },
     ].filter(Boolean);
 
     root.innerHTML = pageHead(
@@ -807,5 +808,56 @@ async function renderSaml(box) {
       ...(certs ? { certificates: certs } : {}),
     };
     try { await api('/v1/auth/saml', { method: 'PUT', body }); toast('Saved.', 'ok'); renderSaml(box); } catch (err) { toast(err.message, 'crit'); }
+  });
+}
+
+// ─────────────────────────────────────────── (v1.43.0) SCIM provisioning
+
+async function renderScim(box) {
+  const canWrite = state.can('user:write');
+  const r = await api('/v1/scim');
+  const roleOpts = (sel) => r.roles.map((x) => `<option value="${esc(x)}"${x === sel ? ' selected' : ''}>${esc(x.replace(/_/g, ' '))}</option>`).join('');
+  const mapRow = (m = { group: '', role: r.roles[0] }) => `<div class="row" data-map style="gap:6px;align-items:flex-end;flex-wrap:wrap">
+      ${field('Group (as the identity provider names it)', `<input name="g" value="${esc(m.group)}" placeholder="CSMS Operations"${canWrite ? '' : ' disabled'}>`)}
+      ${field('Role', `<select name="r"${canWrite ? '' : ' disabled'}>${roleOpts(m.role)}</select>`)}
+      ${canWrite ? `<button class="btn ghost icon" type="button" data-del title="Remove">${icon('x')}</button>` : ''}</div>`;
+  box.innerHTML = `<div class="card pad" style="max-width:900px">
+    <header class="row" style="gap:8px;align-items:center;margin-bottom:8px">${icon('users')}<h3 style="margin:0">Provisioning (SCIM 2.0)</h3> ${r.enabled ? tag('t-ok', 'on') : tag('t-mute', 'off')}</header>
+    <p class="cell-sub">Your identity provider (Okta, Microsoft Entra ID, Google Workspace, OneLogin…) creates, updates and deactivates console users, and their groups give their role. Someone who leaves loses access as soon as IT removes them: deactivated, and every session ended. Administrators are never changed by provisioning.</p>
+    <div class="card pad" style="background:var(--panel-2);margin:10px 0"><b>At your identity provider</b> — add a SCIM 2.0 app with:
+      <dl class="kv" style="margin-top:8px"><dt>SCIM base URL</dt><dd class="mono">${esc(r.endpoint)} <button class="btn ghost sm" type="button" data-copy="${esc(r.endpoint)}">Copy</button></dd>
+      <dt>Authentication</dt><dd>Bearer token ${r.tokenHint ? `(current one ends …${esc(r.tokenHint)})` : tag('t-warn', 'none yet')} ${canWrite ? `<button class="btn sm" type="button" data-token>${icon('key')} ${r.tokenHint ? 'New token' : 'Make a token'}</button>` : ''}</dd>
+      <dt>User name</dt><dd>the person's e-mail address</dd>
+      <dt>Managing now</dt><dd>${fmt.num(r.users)} user${r.users === 1 ? '' : 's'}, ${fmt.num(r.groups)} group${r.groups === 1 ? '' : 's'}${r.lastUsedAt ? ` · last call ${esc(fmt.ago(r.lastUsedAt))}` : ''}</dd></dl></div>
+    <form class="form stack" data-scim style="gap:12px">
+      <label class="row full" style="gap:8px"><input type="checkbox" name="enabled"${r.enabled ? ' checked' : ''}${canWrite ? '' : ' disabled'}> <b>Provisioning is on</b></label>
+      <div class="stack full" data-maps style="gap:8px"><b>Groups → roles</b><span class="cell-sub">The first group in this list that a person belongs to decides their role; no listed group, no role. ${r.roleMap.length ? '' : 'Empty: the SAML tab\'s list is used.'} A group never gives an administrator role or a site-limited one (Site Host / Landlord): give those in the Users tab.</span>${r.roleMap.map(mapRow).join('')}</div>
+      ${canWrite ? `<div class="row full" style="gap:8px"><button class="btn" type="button" data-addmap>${icon('plus')} Add a group</button><span class="grow"></span><button class="btn primary" type="submit">Save</button></div>` : ''}
+    </form></div>`;
+  box.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => copy(b.dataset.copy)));
+  const maps = $('[data-maps]', box);
+  $('[data-addmap]', box)?.addEventListener('click', () => maps.insertAdjacentHTML('beforeend', mapRow()));
+  maps.addEventListener('click', (e) => { const d = e.target.closest('[data-del]'); if (d) d.closest('[data-map]').remove(); });
+  $('[data-token]', box)?.addEventListener('click', () => {
+    modal({
+      title: r.tokenHint ? 'A new SCIM token?' : 'Make a SCIM token',
+      body: r.tokenHint ? '<p>The current token stops working at once: put the new one in your identity provider straight away.</p>' : '<p>The token is shown once. Put it in your identity provider\'s SCIM app.</p>',
+      actions: [{ label: 'Cancel' }, { label: r.tokenHint ? 'New token' : 'Make it', kind: 'primary', async onClick() {
+        try {
+          const t = await api('/v1/scim/token', { method: 'POST' });
+          modal({ title: 'The SCIM token', body: `${callout('warn', 'Shown once: copy it now.')}<p class="mono" style="word-break:break-all">${esc(t.token)}</p>`,
+            actions: [{ label: 'Copy', onClick: () => { copy(t.token); return false; } }, { label: 'Done', kind: 'primary' }], onClose: () => renderScim(box) });
+        } catch (e) { toast(e.message, 'crit'); return false; }
+      } }],
+    });
+  });
+  $('[data-scim]', box).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const roleMap = [...box.querySelectorAll('[data-map]')].map((m) => ({ group: $('[name=g]', m).value.trim(), role: $('[name=r]', m).value })).filter((m) => m.group);
+    try {
+      await api('/v1/scim', { method: 'PUT', body: { enabled: $('[name=enabled]', box).checked, roleMap } });
+      toast('Saved. The roles of everyone provisioned now follow this list.', 'ok');
+      renderScim(box);
+    } catch (err) { toast(err.message, 'crit'); }
   });
 }
