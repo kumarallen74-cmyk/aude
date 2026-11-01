@@ -557,6 +557,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      checks' first findings (Finance → Review). Route
      finance.deposit_maturing and finance.anomaly_confirmed
      ([FINANCE.md](FINANCE.md)).
+  24. (v1.31.0) Optionally post the opening balances as a manual journal
+     entry (Finance → Ledger) and sync each closed month; set the expense
+     policy (receipt amount, limits) and the petty cash float; set the
+     journal_entry and expense_claim rows of the approvals matrix; set the
+     KPI targets and the scorecard e-mail (Finance → Scorecard)
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

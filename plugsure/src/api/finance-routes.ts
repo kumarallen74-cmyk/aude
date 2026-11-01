@@ -56,6 +56,10 @@ import * as orders from '../services/purchase-orders.js';
 import * as leases from '../services/leases.js';
 import * as treasury from '../services/treasury.js';
 import * as checks from '../services/finance-checks.js';
+import * as ledger from '../services/general-ledger.js';
+import * as claims from '../services/expense-claims.js';
+import * as ic from '../services/intercompany.js';
+import * as scorecard from '../services/kpi-scorecard.js';
 
 /**
  * Commercial → Finance (v1.12.0): the payment gateway's side of the money, per gateway account.
@@ -2135,6 +2139,285 @@ export async function registerFinanceRoutes(app: FastifyInstance): Promise<void>
       await auditPay(req, `finance.anomaly_${r.status}`, 'finance_check_finding', r.id, { kind: r.kind, target: `${r.targetType}:${r.targetId}`, note: b.note });
       return r;
     } catch (e) { return p19Failed(reply, e); }
+  });
+
+  // ─────────────────────────────────────────── (v1.31.0) general ledger, expense claims and petty cash, intercompany, scorecard
+
+  const p20Failed = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof ledger.LedgerError || e instanceof claims.ExpenseError || e instanceof ic.IntercompanyError || e instanceof scorecard.ScorecardError) return reply.status(e.statusCode).send({ error: e.message });
+    return p19Failed(reply, e);
+  };
+  const who = (req: FastifyRequest) => ({ userId: userUuid(req), canApprove: canApprove(req) });
+
+  app.get('/v1/finance/ledger', async (req, reply) => {
+    R(req);
+    try {
+      const r = await ledger.reports(req.principal.orgId, qs(req));
+      if (qs(req).format === 'xlsx') return xl(reply, `plugsure-ledger-${r.month}-${r.currency}`, ledger.reportsXlsx(r));
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/ledger/sync/:month', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ledger.sync(req.principal.orgId, prm(req, 'month'), userUuid(req));
+      await auditPay(req, 'finance.ledger_synced', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.get('/v1/finance/ledger/accounts', async (req, reply) => {
+    R(req);
+    try { return { accounts: await ledger.chart(req.principal.orgId) }; } catch (e) { return p20Failed(reply, e); }
+  });
+  app.put('/v1/finance/ledger/accounts/:code', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ledger.saveAccount(req.principal.orgId, { ...body(req), code: prm(req, 'code') });
+      await auditPay(req, 'finance.ledger_account_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.get('/v1/finance/ledger/accounts/:code/lines', async (req, reply) => {
+    R(req);
+    try { return await ledger.accountLines(req.principal.orgId, prm(req, 'code'), qs(req)); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.get('/v1/finance/ledger/entries', async (req, reply) => {
+    R(req);
+    try { return await ledger.entries(req.principal.orgId, qs(req)); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/ledger/entries', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ledger.createManual(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.journal_entry_created', 'gl_entry', r.id, { number: r.number, total: r.total, currency: r.currency, status: r.status });
+      return reply.status(201).send(r);
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.get('/v1/finance/ledger/entries/:id', async (req, reply) => {
+    R(req);
+    try { return await ledger.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/ledger/entries/:id/submit', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ledger.submit(req.principal.orgId, prm(req, 'id'), userUuid(req));
+      await auditPay(req, 'finance.journal_entry_submitted', 'gl_entry', r.id, { number: r.number });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/ledger/entries/:id/approve', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ledger.approve(req.principal.orgId, prm(req, 'id'), who(req));
+      await auditPay(req, 'waitingForSecondApprover' in r ? 'finance.journal_entry_first_approval' : 'finance.journal_entry_posted', 'gl_entry', r.id, { number: r.number, total: r.total });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/ledger/entries/:id/reject', async (req, reply) => {
+    W(req);
+    try {
+      const reason = body(req).reason;
+      const r = await ledger.reject(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.journal_entry_rejected', 'gl_entry', r.id, { number: r.number, reason });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/ledger/entries/:id/reverse', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ledger.reverse(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await auditPay(req, 'finance.journal_entry_reversed', 'gl_entry', prm(req, 'id'), { reversal: r.number, date: r.date });
+      return reply.status(201).send(r);
+    } catch (e) { return p20Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/expenses', async (req, reply) => {
+    R(req);
+    try {
+      const r = await claims.list(req.principal.orgId, qs(req), userUuid(req));
+      if (qs(req).format === 'xlsx') return xl(reply, 'plugsure-expense-claims', claims.claimsXlsx(r.claims));
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.put('/v1/finance/expenses/policy', async (req, reply) => {
+    assertCan(req.principal, { permission: 'finance:approve' });
+    try {
+      const r = await claims.savePolicy(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.expense_policy_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses', async (req, reply) => {
+    R(req);
+    try {
+      const r = await claims.create(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.expense_claim_created', 'expense_claim', r.id, { number: r.number, total: r.total, currency: r.currency });
+      return reply.status(201).send(r);
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.get('/v1/finance/expenses/receipts/:rid', async (req, reply) => {
+    R(req);
+    try {
+      const f = await claims.receipt(req.principal.orgId, prm(req, 'rid'));
+      return reply.header('content-type', f.mime).header('content-disposition', `inline; filename="${f.filename.replace(/"/g, '')}"`).header('x-content-type-options', 'nosniff').send(f.data);
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.get('/v1/finance/expenses/:id', async (req, reply) => {
+    R(req);
+    try { return await claims.get(req.principal.orgId, prm(req, 'id')); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/lines', async (req, reply) => {
+    R(req);
+    try { return await claims.addLine(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req)); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/lines/:lid/remove', async (req, reply) => {
+    R(req);
+    try { return await claims.removeLine(req.principal.orgId, prm(req, 'id'), prm(req, 'lid'), userUuid(req)); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/lines/:lid/receipts', { bodyLimit: 5 * 1024 * 1024 }, async (req, reply) => {
+    R(req);
+    try {
+      const r = await claims.addReceipt(req.principal.orgId, prm(req, 'id'), prm(req, 'lid'), body(req), userUuid(req));
+      await auditPay(req, 'finance.expense_receipt_added', 'expense_claim', r.id, { line: prm(req, 'lid'), filename: body(req).filename });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/submit', async (req, reply) => {
+    R(req);
+    try {
+      const r = await claims.submit(req.principal.orgId, prm(req, 'id'), userUuid(req));
+      await auditPay(req, 'finance.expense_claim_submitted', 'expense_claim', r.id, { number: r.number, total: r.total });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/approve', async (req, reply) => {
+    W(req);
+    try {
+      const r = await claims.approve(req.principal.orgId, prm(req, 'id'), who(req));
+      await auditPay(req, 'waitingForSecondApprover' in r ? 'finance.expense_claim_first_approval' : 'finance.expense_claim_approved', 'expense_claim', r.id, { number: r.number, total: r.total });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/reject', async (req, reply) => {
+    W(req);
+    try {
+      const reason = body(req).reason;
+      const r = await claims.reject(req.principal.orgId, prm(req, 'id'), reason, userUuid(req));
+      await auditPay(req, 'finance.expense_claim_rejected', 'expense_claim', r.id, { number: r.number, reason });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/void', async (req, reply) => {
+    R(req);
+    try {
+      const r = await claims.voidClaim(req.principal.orgId, prm(req, 'id'), userUuid(req), canApprove(req));
+      await auditPay(req, 'finance.expense_claim_voided', 'expense_claim', r.id, { number: r.number });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/expenses/:id/reimburse', async (req, reply) => {
+    W(req);
+    try {
+      const r = await claims.reimburse(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await auditPay(req, 'finance.expense_claim_reimbursed', 'expense_claim', r.id, { number: r.number, total: r.total, account: r.cashAccount, on: r.reimbursedOn });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/petty-cash', async (req, reply) => {
+    R(req);
+    try { return { accounts: await claims.pettyCash(req.principal.orgId) }; } catch (e) { return p20Failed(reply, e); }
+  });
+  app.put('/v1/finance/petty-cash/:id/float', async (req, reply) => {
+    W(req);
+    try {
+      const r = await claims.setFloat(req.principal.orgId, prm(req, 'id'), body(req));
+      await auditPay(req, 'finance.petty_cash_float_set', 'cash_account', prm(req, 'id'), r);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/petty-cash/:id/counts', async (req, reply) => {
+    W(req);
+    try {
+      const r = await claims.count(req.principal.orgId, prm(req, 'id'), body(req), userUuid(req));
+      await auditPay(req, 'finance.petty_cash_counted', 'cash_account', prm(req, 'id'), r);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/intercompany', async (req, reply) => {
+    R(req);
+    try { return await ic.list(req.principal.orgId, qs(req)); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/intercompany/recharges', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ic.create(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.recharge_created', 'intercompany_recharge', r.id, { number: r.number, to: r.to, amount: r.amount, currency: r.currency, status: r.status });
+      return reply.status(201).send(r);
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/intercompany/allocate', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ic.allocate(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.recharges_allocated', 'organisation', req.principal.orgId, { basis: r.basis, total: r.total, recharges: r.recharges.length });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/intercompany/recharges/:id/issue', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ic.issue(req.principal.orgId, prm(req, 'id'));
+      await auditPay(req, 'finance.recharge_issued', 'intercompany_recharge', r.id, { number: r.number, to: r.to, amount: r.amount });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/intercompany/recharges/:id/void', async (req, reply) => {
+    W(req);
+    try {
+      const reason = body(req).reason;
+      const r = await ic.voidRecharge(req.principal.orgId, prm(req, 'id'), reason);
+      await auditPay(req, 'finance.recharge_voided', 'intercompany_recharge', r.id, { number: r.number, reason });
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/intercompany/settle', async (req, reply) => {
+    W(req);
+    try {
+      const r = await ic.settle(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.intercompany_settled', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+
+  app.get('/v1/finance/scorecard', async (req, reply) => {
+    R(req);
+    try { return await scorecard.scorecard(req.principal.orgId, qs(req)); } catch (e) { return p20Failed(reply, e); }
+  });
+  app.put('/v1/finance/scorecard/targets/:month', async (req, reply) => {
+    W(req);
+    try {
+      const r = await scorecard.setTargets(req.principal.orgId, prm(req, 'month'), body(req), userUuid(req));
+      await auditPay(req, 'finance.kpi_targets_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.put('/v1/finance/scorecard/settings', async (req, reply) => {
+    W(req);
+    try {
+      const r = await scorecard.saveSettings(req.principal.orgId, body(req), userUuid(req));
+      await auditPay(req, 'finance.scorecard_settings_saved', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
+  });
+  app.post('/v1/finance/scorecard/send', async (req, reply) => {
+    W(req);
+    try {
+      const r = await scorecard.send(req.principal.orgId, body(req).month);
+      await auditPay(req, 'finance.scorecard_sent', 'organisation', req.principal.orgId, r as unknown as Record<string, unknown>);
+      return r;
+    } catch (e) { return p20Failed(reply, e); }
   });
 
   app.put('/v1/finance/owners/:oid/bank-account', async (req, reply) => {

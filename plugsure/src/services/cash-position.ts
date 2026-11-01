@@ -8,6 +8,7 @@ import { dueBills } from './supplier-bills.js';
 import { persistAlert, resolveAlertsFor } from './alerts.js';
 import { cashMoves as depositMoves, maturities as depositMaturities } from './treasury.js';
 import { paymentsDue as leasePayments } from './leases.js';
+import { cashMoves as claimMoves } from './expense-claims.js';
 
 /**
  * Cash position and bank balances (v1.29.0).
@@ -175,7 +176,7 @@ interface Book {
 }
 
 async function book(orgId: string, upTo: string): Promise<Book> {
-  const [accounts, manual, statement, xfers, pays, deps] = await Promise.all([
+  const [accounts, manual, statement, xfers, pays, deps, claims] = await Promise.all([
     outsideRequestScope(() => many<any>(`${ACCOUNT_SELECT} WHERE a.org_id = $1 AND a.archived_at IS NULL ORDER BY a.currency, a.name`, [orgId])),
     outsideRequestScope(() => many<any>(`SELECT account_id::text, to_char(on_date, 'YYYY-MM-DD') AS d, balance_minor FROM cash_balance WHERE org_id = $1 AND on_date <= $2::date`, [orgId, upTo])),
     // The last balance of each day on a statement of the account (linked, or the same last digits when not linked).
@@ -189,6 +190,8 @@ async function book(orgId: string, upTo: string): Promise<Book> {
     outsideRequestScope(() => many<any>(`SELECT cash_account_id::text AS a, to_char(paid_on, 'YYYY-MM-DD') AS d, amount_minor FROM supplier_payment WHERE org_id = $1 AND voided_at IS NULL AND cash_account_id IS NOT NULL AND paid_on <= $2::date`, [orgId, upTo])),
     // (v1.30.0) deposits: placed out of the account, matured back into it.
     depositMoves(orgId, upTo),
+    // (v1.31.0) expense claims reimbursed out of the account.
+    claimMoves(orgId, upTo),
   ]);
   return {
     accounts,
@@ -198,6 +201,7 @@ async function book(orgId: string, upTo: string): Promise<Book> {
       ...xfers.flatMap((x) => [{ account_id: x.f, d: x.d, amount: -Number(x.amount_minor) }, { account_id: x.t, d: x.d, amount: Number(x.amount_minor) }]),
       ...pays.map((p) => ({ account_id: p.a, d: p.d, amount: -Number(p.amount_minor) })),
       ...deps,
+      ...claims,
     ],
   };
 }

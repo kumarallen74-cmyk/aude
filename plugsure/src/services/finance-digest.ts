@@ -130,7 +130,7 @@ export async function compose(orgId: string, userId: string, sections: string[],
   return lines.join('\n');
 }
 
-async function channels(orgId: string) {
+export async function channels(orgId: string) {
   const rows = await outsideRequestScope(() => many<{ kind: string; enabled: boolean; config: any; secret: string | null }>(
     `SELECT kind, enabled, config, secret FROM notification_channel WHERE org_id = $1 AND kind IN ('email', 'whatsapp') AND enabled`, [orgId]));
   const open = (k: string) => {
