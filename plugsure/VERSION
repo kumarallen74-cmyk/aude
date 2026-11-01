@@ -1,11 +1,20 @@
 PlugSure CSMS
-Version:   1.38.0
-Package:   plugsure-v1.38.0
-Prepared:  2026-11-01  (v1.37.0 + finance phase 27 — see RELEASE-NOTES-v1.38.0.md)
+Version:   1.39.0
+Package:   plugsure-v1.39.0
+Prepared:  2026-11-01  (v1.38.0 + finance phase 28 — see RELEASE-NOTES-v1.39.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (775 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (803 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.38.0 = v1.37.0 + finance phase 27: owner and partner finance (each site owner's results, statements,
+Status:    v1.39.0 = v1.38.0 + finance phase 28: statutory financial statements (balance sheet, profit or loss,
+           an indirect cash flow reconciled to cash, changes in equity and notes, with the year before, in Excel and
+           PDF), corporate income tax and deferred tax (PPh Badan from the books with automatic and recorded fiscal
+           corrections, Article 31E, credits, PPh 29, next year's PPh 25, deferred tax; finalised and journalled),
+           supplier payment runs (approved bills batched, approved by a second person, a bank bulk-transfer file,
+           paid) and corporate cards with a spend policy (imported transactions, policy flags, review rules,
+           receipts, statements, the cards journal). Migration 107 (additive).
+
+v1.38.0 (2026-11-01):
+           v1.38.0 = v1.37.0 + finance phase 27: owner and partner finance (each site owner's results, statements,
            payouts and what is owed, in the owner portal and the operator's view across owners, with a year pack),
            treasury FX and hedging (the exposure per currency from cash, receivables, payables, loans and hedges at
            the month's rate with its revaluation; forward contracts marked to market and settled net to the ledger),

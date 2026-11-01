@@ -619,6 +619,14 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      automation). Check what owners see (Finance → Owner finance; the
      owner portal's Payouts). Route finance.close_step_overdue
      ([FINANCE.md](FINANCE.md)).
+  32. (v1.39.0) Sync the ledger's months, then read last year's financial
+     statements (Finance → Financial statements). Record last year's fiscal
+     corrections, PPh 25 paid and PPh 22/23 withheld, and have a Finance
+     Manager finalise the corporate tax once the auditors agree (Finance →
+     Corporate tax). Add suppliers' bank accounts and pay bills in runs
+     (Finance → Payment runs); check the bank file against your bank's bulk
+     template first. Add company cards and import their transactions
+     (Finance → Cards) ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

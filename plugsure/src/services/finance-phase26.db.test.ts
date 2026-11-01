@@ -79,7 +79,8 @@ if (DB_OK) {
     await app?.close();
     const o = [org];
     await query(`DELETE FROM gl_line WHERE org_id = ANY($1::uuid[])`, [o]);
-    for (const t of ['budget_plan_line', 'budget_plan', 'finance_budget', 'tax_audit_case', 'promotion_redemption', 'promotion', 'loyalty_entry', 'loyalty_program', 'grant_claim', 'grant_programme', 'insurance_policy', 'landlord_deal',
+    // landlord_statement: another test's landlord sweep (it covers every active deal) may draft one for this deal.
+    for (const t of ['budget_plan_line', 'budget_plan', 'finance_budget', 'tax_audit_case', 'promotion_redemption', 'promotion', 'loyalty_entry', 'loyalty_program', 'grant_claim', 'grant_programme', 'insurance_policy', 'landlord_statement', 'landlord_deal',
       'work_order', 'supplier_bill', 'supplier', 'gl_entry', 'gl_account', 'site_energy_rate', 'finance_org_settings']) await query(`DELETE FROM ${t} WHERE org_id = ANY($1::uuid[])`, [o]);
     await query(`DELETE FROM cdr WHERE org_id = $1`, [org]);
     await query(`DELETE FROM charging_session WHERE org_id = $1`, [org]);

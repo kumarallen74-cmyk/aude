@@ -40,7 +40,7 @@ export class LedgerError extends Error {
 
 export const TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense', 'other'] as const;
 type AccountType = typeof TYPES[number];
-export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks', 'loyalty', 'fx'] as const;
+export const SOURCES = ['gateway', 'assets', 'leases', 'provision', 'bills', 'deposits', 'expenses', 'intercompany', 'payroll', 'customer_deposits', 'projects', 'inventory', 'maintenance', 'loans', 'carbon', 'insurance', 'grants', 'landlords', 'chargebacks', 'loyalty', 'fx', 'tax', 'cards'] as const;
 type Source = typeof SOURCES[number];
 
 export const SEED: Array<[string, string, AccountType]> = [
@@ -68,6 +68,9 @@ export const SEED: Array<[string, string, AccountType]> = [
   ['1190', 'Disputed funds (chargebacks)', 'asset'], ['1350', 'Grants receivable', 'asset'], ['2420', 'Accrued rent', 'liability'], ['2600', 'Deferred grant income', 'liability'], ['2610', 'Grants repayable', 'liability'],
   ['4400', 'Grant income', 'revenue'], ['6520', 'Chargeback losses', 'expense'], ['6700', 'Grant clawbacks', 'expense'],
   ['2250', 'Loyalty points liability', 'liability'], ['4150', 'Loyalty points deferred', 'revenue'],
+  ['1460', 'Prepaid income tax (PPh 25)', 'asset'], ['1465', 'Income tax withheld by others (PPh 22/23)', 'asset'], ['1470', 'Deferred tax assets', 'asset'], ['1480', 'Receivable from employees', 'asset'],
+  ['2165', 'Corporate cards payable', 'liability'], ['2700', 'Corporate income tax payable', 'liability'], ['2710', 'Deferred tax liabilities', 'liability'],
+  ['6380', 'Software and subscriptions', 'expense'], ['9100', 'Current income tax', 'other'], ['9110', 'Deferred income tax', 'other'],
 ];
 export const BILL_ACCOUNT: Record<string, string> = { energy: '5100', maintenance: '6200', rent: '6210', installation: '6220', equipment: '6230', connectivity: '6240', services: '6250', other: '6290' };
 /** (v1.32.0) The payable a bill's withholding is posted to, by kind. */
@@ -394,7 +397,7 @@ export async function drafts(orgId: string, month: string): Promise<Draft[]> {
   }
   for (const [c, L] of Object.entries(inLines)) add('insurance', c, `Insurance, ${month}`, L);
   // (v1.36.0) Grants, landlord rent accruals and chargebacks, each module's own journal (imported here: no cycles).
-  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks'], ['loyalty', './loyalty-accounting.js', 'Loyalty points'], ['fx', './fx-treasury.js', 'FX hedges settled']] as const) {
+  for (const [src, mod, label] of [['grants', './grants.js', 'Grants'], ['landlords', './landlord-deals.js', 'Landlord rent'], ['chargebacks', './chargebacks.js', 'Chargebacks'], ['loyalty', './loyalty-accounting.js', 'Loyalty points'], ['fx', './fx-treasury.js', 'FX hedges settled'], ['tax', './corporate-tax.js', 'Corporate income tax'], ['cards', './corporate-cards.js', 'Corporate cards']] as const) {
     const j: Record<string, Line[]> = await (await import(mod)).journal(orgId, month);
     for (const [c, L] of Object.entries(j)) if (L.length) add(src, c, `${label}, ${month}`, L);
   }
@@ -543,13 +546,14 @@ export async function reverse(orgId: string, id: string, b: Record<string, unkno
 
 // ─────────────────────────────────────────── reports
 
-async function balances(orgId: string, currency: string, from: string | null, to: string) {
+export async function balances(orgId: string, currency: string, from: string | null, to: string) {
   const rows = await outsideRequestScope(() => many<any>(
-    `SELECT l.account_code AS code, COALESCE(a.name, l.account_code) AS name, COALESCE(a.type, 'other') AS type, sum(l.debit) AS debit, sum(l.credit) AS credit
+    `SELECT l.account_code AS code, COALESCE(a.name, l.account_code) AS name, a.type AS type, sum(l.debit) AS debit, sum(l.credit) AS credit
        FROM gl_line l JOIN gl_entry e ON e.id = l.entry_id LEFT JOIN gl_account a ON a.org_id = l.org_id AND a.code = l.account_code
       WHERE e.org_id = $1 AND e.status = 'posted' AND e.currency = $2 AND e.month <= $4 AND ($3::text IS NULL OR e.month >= $3)
       GROUP BY 1, 2, 3 ORDER BY 1`, [orgId, currency, from, to]));
-  return rows.map((r) => ({ code: r.code as string, name: r.name as string, type: r.type as AccountType, debit: r2(Number(r.debit)), credit: r2(Number(r.credit)), balance: r2(Number(r.debit) - Number(r.credit)) }));
+  // (v1.39.0) An account not in the chart yet takes the type its code implies.
+  return rows.map((r) => ({ code: r.code as string, name: r.name as string, type: (r.type ?? typeByCode(r.code)) as AccountType, debit: r2(Number(r.debit)), credit: r2(Number(r.credit)), balance: r2(Number(r.debit) - Number(r.credit)) }));
 }
 
 export async function currencies(orgId: string) {
