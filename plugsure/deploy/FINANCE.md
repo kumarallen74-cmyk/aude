@@ -881,6 +881,42 @@ audit log (`finance.owner_payout_recorded`, `finance.platform_fee_recorded`,
   finance.cash_forecast_shortfall when the position is forecast below the
   accounts' minimums.
 
+## Inventory, maintenance, revenue assurance and lenders (v1.34.0)
+
+- **Inventory** (tab). Spare parts, consumables and tools by SKU, held at
+  depots and site stores. Receipts at their price (optionally against an
+  approved purchase order) re-average the cost; issues (to a work order),
+  transfers and counts move stock at the moving average cost, never below
+  zero at a location. Items at or below their reorder point raise
+  finance.stock_reorder. The ledger's inventory journal: receipts Dr 1700 /
+  Cr 2105 goods received not invoiced; issues Dr 6260 / Cr 1700; counts
+  against 6265. Mark the supplier's bill for the stock as *stock*
+  (`POST /v1/finance/bills/{id}/links`) so it clears 2105 instead of being
+  expensed.
+- **Maintenance** (tab). Work orders on a charger or site: corrective,
+  preventive or warranty. Their cost is labour (hours × rate), parts
+  issued, and contractors' bills linked to the order; a done order whose
+  contractor has not billed carries the estimate as an accrual (2110,
+  reversed the next month). Warranty claims on the supplier are accepted,
+  rejected or paid (6205). Costs per charger over a period, with the cost
+  per kWh delivered.
+- **Assurance** (tab). Each month's sessions checked daily against what
+  was billed: not billed (or a roaming session without a charge record),
+  billed at zero, energy billed or metered off by more than 2%, signed
+  meter values not verified, a price per kWh below half the site's median.
+  The expected amount uses the site's median price per kWh. Findings are
+  recovered (with the amount), written off or dismissed; one found again
+  keeps its review, and one no longer found is dismissed.
+- **Lenders** (tab). Loans with drawdowns, payments (principal, interest,
+  fees) and the schedule (annuity, equal principal or bullet, with grace
+  months); the ledger posts 2500, 7210 and 7215 and the cash position
+  counts them. Covenants (DSCR, interest cover, leverage, minimum cash) are
+  tested monthly or quarterly over the twelve months to the month's end
+  from the posted ledger (sync the months first): EBITDA = revenue −
+  expenses + depreciation. A breach raises finance.covenant_breach
+  (critical), less than 10% headroom a warning. The lender pack (PDF and
+  Excel) has the results, the covenant tests and the schedules.
+
 ## Reconciliation
 
 Every 6 hours, and on *Sync now*, PlugSure compares the last 35 days of

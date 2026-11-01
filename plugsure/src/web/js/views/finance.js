@@ -2633,6 +2633,213 @@ async function cashForecastSection(host, canWrite, sc = {}) {
   $('[data-fset]', el)?.addEventListener('click', async () => { const c = cur(); try { await api('/v1/finance/cash-forecast/settings', { method: 'PUT', body: { horizonDays: Number(c.horizonDays) < 30 ? 30 : Number(c.horizonDays), collectionsPct: Number(c.collectionsPct) } }); toast('Saved as the default.', 'ok'); } catch (err) { toast(err.message, 'crit'); } });
 }
 
+// ─────────────────────────────────────────── (v1.34.0) inventory
+
+async function inventorySection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/inventory'); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => inventorySection(host, canWrite);
+  const live = d.items.filter((i) => !i.archived), locs = d.locations.filter((l) => !l.archived);
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap">${canWrite ? `<button class="btn primary" type="button" data-imove>Record a move…</button><button class="btn" type="button" data-inew>${icon('plus')} Item</button><button class="btn" type="button" data-iloc>${icon('plus')} Location</button>` : ''}<button class="btn" type="button" data-ix>${icon('download')} Excel</button></div>
+    <div class="grid k4 section">${kpi('Stock value', Object.entries(d.value).map(([c, v]) => esc(fmt.money(v, c))).join(' + ') || '—', 'at the moving average cost')}${kpi('Items', String(live.length), `${locs.length} location(s)`)}${kpi('To reorder', String(d.reorder.length), 'at or below the reorder point', d.reorder.length ? 'warn' : '')}${kpi('Out of stock', String(live.filter((i) => i.onHand <= 0).length), 'items')}</div>
+    <div class="card section"><header><h3>Items</h3></header><div data-il></div></div><div class="card section"><header><h3>Recent moves</h3></header><div data-im></div></div>`;
+  table($('[data-il]', el), { columns: [
+    { label: 'Item', render: (i) => `<b>${esc(i.sku)}</b> ${esc(i.name)}<div class="cell-sub">${esc(i.category)}${i.supplier ? ` · ${esc(i.supplier)}` : ''}</div>` },
+    { label: 'On hand', num: true, render: (i) => `${fmt.num(i.onHand)} ${esc(i.unit)}${i.belowReorder ? ` ${tag('t-warn', 'reorder')}` : ''}` },
+    { label: 'Average cost', num: true, render: (i) => esc(fmt.money(i.avgCost, i.currency)) },
+    { label: 'Value', num: true, render: (i) => `<b>${esc(fmt.money(i.value, i.currency))}</b>` },
+    { label: 'Reorder at', num: true, render: (i) => (i.reorderPoint ? `${fmt.num(i.reorderPoint)} <span class="cell-sub">+${fmt.num(i.reorderQty)}</span>` : '') },
+  ], rows: d.items, empty: 'No items yet.' });
+  try {
+    const mv = await api('/v1/finance/inventory/moves');
+    table($('[data-im]', el), { columns: [{ label: 'Date', render: (m) => esc(m.date) }, { label: 'Move', render: (m) => `${esc(m.kind.replace('_', ' '))} · <b>${esc(m.sku)}</b><div class="cell-sub">${esc(m.location)}${m.workOrder ? ` · ${esc(m.workOrder)}` : ''}${m.note ? ` · ${esc(m.note)}` : ''}</div>` },
+      { label: 'Qty', num: true, render: (m) => fmt.num(m.qty) }, { label: 'Value', num: true, render: (m) => esc(fmt.money(m.value, m.currency)) }], rows: mv.moves.slice(0, 50), empty: 'No moves yet.' });
+  } catch { /* moves are optional */ }
+  $('[data-ix]', el).addEventListener('click', () => fetchFile('/v1/finance/inventory?format=xlsx', 'plugsure-stock.xlsx'));
+  $('[data-inew]', el)?.addEventListener('click', () => modal({ title: 'Add a stock item', body: `<div class="form">${field('SKU', '<input name="sku">')}${field('Name', '<input name="name">')}${field('Unit', '<input name="unit" value="pcs">')}${field('Category', '<select name="cat"><option value="part">Part</option><option value="consumable">Consumable</option><option value="tool">Tool</option></select>')}${field('Currency', `<input name="cur" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Reorder point', '<input name="rp" type="number" min="0" value="0">')}${field('Reorder quantity', '<input name="rq" type="number" min="0" value="0">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/inventory/items', { method: 'POST', body: { sku: v('sku'), name: v('name'), unit: v('unit'), category: v('cat'), currency: v('cur'), reorderPoint: v('rp'), reorderQty: v('rq') } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+  $('[data-iloc]', el)?.addEventListener('click', () => modal({ title: 'Add a stock location', body: `<div class="form one">${field('Name', '<input name="name" placeholder="e.g. Jakarta depot">')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) { try { await api('/v1/finance/inventory/locations', { method: 'POST', body: { name: $('[name="name"]', mc.el).value.trim() } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; } } }] }));
+  $('[data-imove]', el)?.addEventListener('click', () => {
+    if (!live.length || !locs.length) { toast('Add an item and a location first.', 'warn'); return; }
+    modal({ title: 'Record a stock move', size: 'lg', body: `<div class="form">${field('Kind', '<select name="k"><option value="receipt">Receipt</option><option value="issue">Issue</option><option value="transfer">Transfer</option><option value="adjust">Count (adjust)</option></select>')}${field('Item', `<select name="it">${live.map((i) => `<option value="${i.id}">${esc(i.sku)} ${esc(i.name)}</option>`).join('')}</select>`)}
+        ${field('Location', `<select name="loc">${locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>`)}${field('To (transfer)', `<select name="to"><option value=""></option>${locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>`, { opt: true })}
+        ${field('Quantity', '<input name="q" type="number" min="0" step="any">', { opt: true })}${field('Unit cost (receipt)', '<input name="uc" type="number" min="0">', { opt: true })}${field('Counted (count)', '<input name="cq" type="number" min="0" step="any">', { opt: true })}
+        ${field('Work order id (issue)', '<input name="wo">', { opt: true })}${field('Date', `<input name="on" type="date" value="${esc(zonedYmd(new Date()))}">`)}${field('Note', '<input name="note">', { opt: true })}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', async onClick(mc) {
+        const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+        try { await api('/v1/finance/inventory/moves', { method: 'POST', body: { kind: v('k'), itemId: v('it'), locationId: v('loc'), toLocationId: v('to') || undefined, qty: v('q') || undefined, unitCost: v('uc') || undefined, countedQty: v('cq') || undefined, workOrderId: v('wo') || undefined, onDate: v('on'), note: v('note') || undefined } }); toast('Recorded.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+      } }] });
+  });
+}
+
+// ─────────────────────────────────────────── (v1.34.0) maintenance
+
+const WO_ST = { open: ['t-warn', 'open'], in_progress: ['t-info', 'in progress'], done: ['t-ok', 'done'], cancelled: ['t-mute', 'cancelled'] };
+
+async function maintenanceSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d, c;
+  try { [d, c] = await Promise.all([api('/v1/finance/maintenance'), api('/v1/finance/maintenance/costs')]); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => maintenanceSection(host, canWrite);
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px">${canWrite ? `<button class="btn primary" type="button" data-wnew>${icon('plus')} Work order</button>` : ''}<button class="btn" type="button" data-wx>${icon('download')} Costs (Excel)</button></div>
+    <div class="grid k4 section">${Object.entries(c.totals).map(([cur, t]) => kpi(`Net cost · ${cur}`, esc(fmt.money(t.net, cur)), `${t.orders} order(s), ${esc(c.from)} to ${esc(c.to)}`)).join('') || kpi('Net cost', '—', 'no work orders')}${c.byKind.map((k) => kpi(k.kind, String(k.orders), 'orders')).join('')}</div>
+    <div class="card section"><header><h3>Work orders</h3></header><div data-wl></div></div>
+    <div class="card section"><header><h3>Cost per charger</h3><span class="cell-sub">labour, parts and contractors, less warranty recovered</span></header><div data-wc></div></div>`;
+  table($('[data-wl]', el), { columns: [
+    { label: 'Order', render: (w) => `<b>${esc(w.number)}</b> ${esc(w.title)}<div class="cell-sub">${esc([w.chargePoint ?? w.site, w.kind, `opened ${w.openedOn}`].filter(Boolean).join(' · '))}</div>` },
+    { label: 'Labour', num: true, render: (w) => esc(fmt.money(w.cost.labour, w.currency)) },
+    { label: 'Parts', num: true, render: (w) => esc(fmt.money(w.cost.parts, w.currency)) },
+    { label: 'Contractors', num: true, render: (w) => `${esc(fmt.money(w.cost.contractor, w.currency))}${w.cost.accrual ? `<div class="cell-sub">+${esc(fmt.money(w.cost.accrual, w.currency))} accrued</div>` : ''}` },
+    { label: 'Net', num: true, render: (w) => `<b>${esc(fmt.money(w.cost.net, w.currency))}</b>` },
+    { label: 'Status', render: (w) => tag(...WO_ST[w.status]) },
+    { label: '', render: (w) => `<button ${BTN} data-wopen="${w.id}">Open</button>` },
+  ], rows: d.workOrders, empty: 'No work orders yet.' });
+  table($('[data-wc]', el), { columns: [
+    { label: 'Charger', render: (x) => `<b>${esc(x.chargePoint ?? '(site)')}</b><div class="cell-sub">${esc(x.site ?? '')}</div>` },
+    { label: 'Orders', num: true, render: (x) => String(x.orders) },
+    { label: 'Net', num: true, render: (x) => esc(fmt.money(x.net, x.currency)) },
+    { label: 'kWh', num: true, render: (x) => (x.kwh == null ? '—' : fmt.num(x.kwh)) },
+    { label: 'Per kWh', num: true, render: (x) => (x.perKwh == null ? '—' : esc(fmt.money(x.perKwh, x.currency))) },
+  ], rows: c.chargers, empty: 'No costs in the period.' });
+  const form = (w) => modal({ title: w ? `${w.number} · ${w.title}` : 'Open a work order', size: 'lg', body: `<div class="form">${field('Title', `<input name="t" value="${esc(w?.title ?? '')}">`)}${field('Kind', `<select name="k">${['corrective', 'preventive', 'warranty'].map((k) => `<option${w?.kind === k ? ' selected' : ''}>${k}</option>`).join('')}</select>`)}
+      ${field('Charger id', `<input name="cp" value="${esc(w?.chargePointId ?? '')}">`, { opt: true })}${field('Status', `<select name="st">${['open', 'in_progress', 'done', 'cancelled'].map((k) => `<option value="${k}"${(w?.status ?? 'open') === k ? ' selected' : ''}>${k.replace('_', ' ')}</option>`).join('')}</select>`)}
+      ${field('Labour hours', `<input name="h" type="number" min="0" step="0.25" value="${w?.labourHours ?? 0}">`)}${field('Labour rate', `<input name="r" type="number" min="0" value="${w?.labourRate ?? 0}">`)}${field('Contractor estimate', `<input name="e" type="number" min="0" value="${w?.contractorEstimate ?? 0}">`)}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api(w ? `/v1/finance/maintenance/${w.id}` : '/v1/finance/maintenance', { method: w ? 'PUT' : 'POST', body: { title: v('t'), kind: v('k'), chargePointId: v('cp') || undefined, status: v('st'), labourHours: v('h'), labourRate: v('r'), contractorEstimate: v('e') } }); toast('Saved.', 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] });
+  $('[data-wnew]', el)?.addEventListener('click', () => form(null));
+  $('[data-wx]', el).addEventListener('click', () => fetchFile('/v1/finance/maintenance/costs?format=xlsx', 'plugsure-maintenance-costs.xlsx'));
+  el.addEventListener('click', async (e) => {
+    const o = e.target.closest('[data-wopen]');
+    if (!o) return;
+    let w;
+    try { w = await api(`/v1/finance/maintenance/${o.dataset.wopen}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const m = (x) => fmt.money(x, w.currency);
+    drawer({ title: `${w.number} · ${w.title}`, subtitle: `${w.kind} · ${WO_ST[w.status][1]}`, tabs: [{ id: 'cost', label: 'Cost', render(body) {
+      body.innerHTML = `<div class="grid k4">${kpi('Labour', esc(m(w.cost.labour)), `${w.labourHours} h`)}${kpi('Parts', esc(m(w.cost.parts)), `${w.parts.length} issue(s)`)}${kpi('Contractors', esc(m(w.cost.contractor + w.cost.accrual)), w.cost.accrual ? 'estimate accrued' : `${w.bills.length} bill(s)`)}${kpi('Net', esc(m(w.cost.net)), w.cost.recovered ? `${esc(m(w.cost.recovered))} recovered` : '')}</div>
+        <h4 style="margin:14px 0 6px">Parts</h4><div data-wp></div><h4 style="margin:14px 0 6px">Warranty claims</h4><div data-wcl></div>
+        <div class="row" style="gap:6px;margin-top:10px">${canWrite ? `<button ${BTN} data-wedit>Edit</button>` : ''}</div>`;
+      table($('[data-wp]', body), { columns: [{ label: 'Part', render: (p) => `${esc(p.sku)} ${esc(p.name)}` }, { label: 'Qty', num: true, render: (p) => `${fmt.num(p.qty)} ${esc(p.unit)}` }, { label: 'Value', num: true, render: (p) => esc(m(p.value)) }], rows: w.parts, empty: 'No parts issued.' });
+      table($('[data-wcl]', body), { columns: [{ label: 'Supplier', render: (c2) => esc(c2.supplier ?? '') }, { label: 'Amount', num: true, render: (c2) => esc(m(c2.amount)) }, { label: 'Status', render: (c2) => `${esc(c2.status)}${c2.paid ? ` · ${esc(m(c2.paid))}` : ''}` }], rows: w.claims, empty: 'No claims.' });
+      $('[data-wedit]', body)?.addEventListener('click', () => form(w));
+    } }] });
+  });
+}
+
+// ─────────────────────────────────────────── (v1.34.0) revenue assurance
+
+const RA_KIND = { unbilled: 'Not billed', roaming_no_cdr: 'Roaming, no charge record', zero_amount: 'Billed at zero', energy_mismatch: 'Energy billed differs', meter_mismatch: 'Meter values differ', signed_invalid: 'Signed values not verified', price_outlier: 'Price far below the site' };
+const RA_ST = { open: ['t-warn', 'open'], recovered: ['t-ok', 'recovered'], written_off: ['t-mute', 'written off'], dismissed: ['t-mute', 'dismissed'] };
+
+async function assuranceSection(host, canWrite, month = lastMonthYm()) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api(`/v1/finance/assurance?month=${month}`); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = (m = month) => assuranceSection(host, canWrite, m);
+  el.innerHTML = `<div class="filters" style="margin-top:0">${field('Month', `<input type="month" data-am value="${esc(month)}">`)}<div class="row" style="align-self:flex-end;gap:6px">${canWrite ? '<button class="btn primary" type="button" data-arun>Check now</button>' : ''}<button class="btn" type="button" data-ax>${icon('download')} Excel</button></div></div>
+    ${callout('info', 'Every session of the month against what was billed: sessions not billed, billed at zero, with energy, meter or price out of line, signed values not verified. Checked daily; a finding found again keeps its review.')}
+    <div class="grid k4 section">${Object.entries(d.summary).map(([c, s]) => kpi(`Open leakage · ${c}`, esc(fmt.money(s.leakage, c)), `${s.open} finding(s)`, s.leakage ? 'warn' : '')).join('') || kpi('Open leakage', '—', 'nothing found')}${Object.entries(d.summary).map(([c, s]) => kpi(`Recovered · ${c}`, esc(fmt.money(s.recovered, c)), `${esc(fmt.money(s.writtenOff, c))} written off`)).join('')}</div>
+    <div class="card section"><header><h3>By check</h3></header><div data-ak></div></div><div class="card section"><header><h3>Findings · ${esc(month)}</h3></header><div data-al></div></div>`;
+  table($('[data-ak]', el), { columns: [{ label: 'Check', render: (k) => esc(RA_KIND[k.kind]) }, { label: 'Open', num: true, render: (k) => String(k.open) }, { label: 'All', num: true, render: (k) => String(k.total) }], rows: d.byKind });
+  table($('[data-al]', el), { columns: [
+    { label: 'Finding', render: (f) => `<b>${esc(RA_KIND[f.kind])}</b><div class="cell-sub mono">${esc(f.sessionId.slice(0, 8))} · ${esc(f.site ?? '')}${f.energyWh != null ? ` · ${fmt.num(Math.round(f.energyWh / 100) / 10)} kWh` : ''}</div>` },
+    { label: 'Billed', num: true, render: (f) => esc(fmt.money(f.billed, f.currency)) },
+    { label: 'Expected', num: true, render: (f) => esc(fmt.money(f.expected, f.currency)) },
+    { label: 'Gap', num: true, render: (f) => `<b>${esc(fmt.money(f.gap, f.currency))}</b>` },
+    { label: 'Status', render: (f) => `${tag(...RA_ST[f.status])}${f.note ? `<div class="cell-sub">${esc(f.note)}</div>` : ''}` },
+    { label: '', render: (f) => (canWrite && f.status === 'open' ? `<button ${BTN} data-arev="${f.id}">Review…</button>` : '') },
+  ], rows: d.findings, empty: 'Nothing found for the month.' });
+  $('[data-am]', el).addEventListener('change', (e) => e.target.value && reload(e.target.value));
+  $('[data-ax]', el).addEventListener('click', () => fetchFile(`/v1/finance/assurance?month=${month}&format=xlsx`, `plugsure-revenue-assurance-${month}.xlsx`));
+  $('[data-arun]', el)?.addEventListener('click', async () => { try { const r = await api('/v1/finance/assurance/run', { method: 'POST', body: { month } }); toast(`${r.sessions} sessions checked; ${r.added} new finding(s).`, 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } });
+  el.addEventListener('click', (e) => {
+    const r = e.target.closest('[data-arev]');
+    if (!r) return;
+    const f = d.findings.find((x) => x.id === r.dataset.arev);
+    modal({ title: `Review · ${RA_KIND[f.kind]}`, subtitle: `Gap ${fmt.money(f.gap, f.currency)}`, body: `<div class="form">${field('Outcome', '<select name="s"><option value="recovered">Recovered</option><option value="written_off">Written off</option><option value="dismissed">Dismissed (not a leak)</option></select>')}${field('Recovered amount', `<input name="a" type="number" min="0" value="${Math.max(0, f.gap)}">`, { opt: true })}${field('Note', '<input name="n">', { opt: true })}</div>`,
+      actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', async onClick(mc) {
+        const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+        try { await api(`/v1/finance/assurance/findings/${f.id}`, { method: 'POST', body: { status: v('s'), recovered: v('s') === 'recovered' ? v('a') : undefined, note: v('n') } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+      } }] });
+  });
+}
+
+// ─────────────────────────────────────────── (v1.34.0) lenders
+
+async function lendersSection(host, canWrite) {
+  const el = document.createElement('div');
+  host.replaceChildren(el);
+  el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+  let d;
+  try { d = await api('/v1/finance/lenders'); } catch (err) { el.innerHTML = callout('crit', esc(err.message)); return; }
+  const reload = () => lendersSection(host, canWrite);
+  const KL = { dscr: 'Debt service cover', interest_cover: 'Interest cover', leverage: 'Leverage (debt ÷ EBITDA)', min_cash: 'Minimum cash' };
+  el.innerHTML = `<div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap">${canWrite ? `<button class="btn primary" type="button" data-lnew>${icon('plus')} Loan</button><button class="btn" type="button" data-cnew>${icon('plus')} Covenant</button><button class="btn" type="button" data-ctest>Test covenants</button>` : ''}<button class="btn" type="button" data-lpdf>${icon('download')} Lender pack (PDF)</button><button class="btn" type="button" data-lxls>${icon('download')} Lender pack (Excel)</button></div>
+    <div class="card section"><header><h3>Loans</h3></header><div data-ll></div></div><div class="card section"><header><h3>Covenants</h3><span class="cell-sub">twelve months to the month's end, from the posted ledger</span></header><div data-lc></div></div>`;
+  table($('[data-ll]', el), { columns: [
+    { label: 'Loan', render: (l) => `<b>${esc(l.lender)}</b>${l.reference ? ` <span class="cell-sub">${esc(l.reference)}</span>` : ''}<div class="cell-sub">${l.ratePct}% · ${l.termMonths} months · ${esc(l.repayment.replace('_', ' '))}</div>` },
+    { label: 'Facility', num: true, render: (l) => esc(fmt.money(l.facility, l.currency)) },
+    { label: 'Drawn', num: true, render: (l) => esc(fmt.money(l.drawn, l.currency)) },
+    { label: 'Balance', num: true, render: (l) => `<b>${esc(fmt.money(l.balance, l.currency))}</b>` },
+    { label: 'Status', render: (l) => tag(l.status === 'active' ? 't-info' : 't-mute', l.status) },
+    { label: '', render: (l) => `<button ${BTN} data-lopen="${l.id}">Open</button>` },
+  ], rows: d.loans, empty: 'No loans yet.' });
+  table($('[data-lc]', el), { columns: [
+    { label: 'Covenant', render: (c) => `<b>${esc(KL[c.kind])}</b><div class="cell-sub">${esc(c.lender ?? 'Overall')} · ${esc(c.frequency)}</div>` },
+    { label: 'Threshold', num: true, render: (c) => `${c.direction === 'min' ? '≥' : '≤'} ${c.kind === 'min_cash' ? esc(fmt.money(c.threshold, c.currency)) : c.threshold}` },
+    { label: 'Last test', num: true, render: (c) => { const t = c.tests[0]; return t ? `${t.value == null ? '—' : c.kind === 'min_cash' ? esc(fmt.money(t.value, c.currency)) : t.value} <span class="cell-sub">${esc(t.month)}</span>` : '<span class="cell-sub">not tested</span>'; } },
+    { label: '', render: (c) => { const t = c.tests[0]; return !t || t.passed == null ? '' : t.passed ? `${tag(t.headroomPct != null && t.headroomPct < 10 ? 't-warn' : 't-ok', 'met')}${t.headroomPct != null ? ` <span class="cell-sub">${t.headroomPct}% headroom</span>` : ''}` : tag('t-crit', 'breach'); } },
+  ], rows: d.covenants, empty: 'No covenants yet.' });
+  const month = lastMonthYm();
+  $('[data-lpdf]', el).addEventListener('click', () => fetchFile(`/v1/finance/lenders/pack?month=${month}&format=pdf`, `lender-pack-${month}.pdf`));
+  $('[data-lxls]', el).addEventListener('click', () => fetchFile(`/v1/finance/lenders/pack?month=${month}&format=xlsx`, `lender-pack-${month}.xlsx`));
+  $('[data-ctest]', el)?.addEventListener('click', async () => { try { const r = await api('/v1/finance/lenders/covenants/test', { method: 'POST', body: { month } }); toast(`${r.results.length} covenant(s) tested for ${r.month}; ${r.results.filter((x) => x.passed === false).length} breached.`, r.results.some((x) => x.passed === false) ? 'warn' : 'ok'); reload(); } catch (err) { toast(err.message, 'crit'); } });
+  $('[data-lnew]', el)?.addEventListener('click', () => modal({ title: 'Add a loan', size: 'lg', body: `<div class="form">${field('Lender', '<input name="l">')}${field('Reference', '<input name="ref">', { opt: true })}${field('Currency', `<input name="c" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Facility', '<input name="f" type="number" min="1">')}${field('Rate %', '<input name="r" type="number" step="0.01" min="0">')}${field('Start', '<input name="s" type="date">')}${field('Term (months)', '<input name="t" type="number" min="1" value="60">')}${field('Grace (months)', '<input name="g" type="number" min="0" value="0">')}${field('Repayment', '<select name="p"><option value="annuity">Annuity</option><option value="equal_principal">Equal principal</option><option value="bullet">Bullet</option></select>')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/lenders/loans', { method: 'POST', body: { lender: v('l'), reference: v('ref'), currency: v('c'), facility: Number(v('f')), ratePct: Number(v('r')), startOn: v('s'), termMonths: Number(v('t')), graceMonths: Number(v('g')), repayment: v('p') } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+  $('[data-cnew]', el)?.addEventListener('click', () => modal({ title: 'Add a covenant', body: `<div class="form">${field('Kind', `<select name="k">${Object.entries(KL).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`)}${field('Threshold', '<input name="th" type="number" step="any" min="0">')}${field('Currency', `<input name="c" maxlength="3" value="${esc(LEGACY_CURRENCY)}">`)}${field('Loan', `<select name="ln"><option value="">Overall</option>${d.loans.map((l) => `<option value="${l.id}">${esc(l.lender)}</option>`).join('')}</select>`)}${field('Tested', '<select name="fq"><option value="quarterly">Quarterly</option><option value="monthly">Monthly</option></select>')}</div>`,
+    actions: [{ label: 'Cancel' }, { label: 'Add', kind: 'primary', async onClick(mc) {
+      const v = (n) => $(`[name="${n}"]`, mc.el).value.trim();
+      try { await api('/v1/finance/lenders/covenants', { method: 'POST', body: { kind: v('k'), threshold: Number(v('th')), currency: v('c'), loanId: v('ln') || undefined, frequency: v('fq') } }); reload(); } catch (err) { toast(err.message, 'crit'); return false; }
+    } }] }));
+  el.addEventListener('click', async (e) => {
+    const o = e.target.closest('[data-lopen]');
+    if (!o) return;
+    let l;
+    try { l = await api(`/v1/finance/lenders/loans/${o.dataset.lopen}`); } catch (err) { toast(err.message, 'crit'); return; }
+    const m = (x) => fmt.money(x, l.currency);
+    const act = async (path, body, msg) => { try { await api(`/v1/finance/lenders/loans/${l.id}/${path}`, { method: 'POST', body }); toast(msg, 'ok'); reload(); return true; } catch (err) { toast(err.message, 'crit'); return false; } };
+    drawer({ title: l.lender, subtitle: `${l.currency} · ${l.ratePct}% · ${l.repayment.replace('_', ' ')}`, tabs: [
+      { id: 'sum', label: 'Loan', render(body) {
+        body.innerHTML = `<div class="grid k4">${kpi('Facility', esc(m(l.facility)), `${esc(m(l.undrawn))} undrawn`)}${kpi('Balance', esc(m(l.balance)), `${esc(m(l.repaid))} repaid`)}${kpi('Interest paid', esc(m(l.interestPaid)), '')}${kpi('Term', `${l.termMonths} mo`, `${l.graceMonths} grace · from ${esc(l.startOn)}`)}</div>
+          <div class="row" style="gap:6px;margin-top:10px">${canWrite && l.status === 'active' ? `<button ${BTN} data-ldd>Drawdown…</button><button ${BTN} data-lpy>Payment…</button>` : ''}</div>`;
+        $('[data-ldd]', body)?.addEventListener('click', () => modal({ title: 'Record a drawdown', body: `<div class="form">${field('Amount', `<input name="a" type="number" min="1" max="${l.undrawn}">`)}${field('Date', `<input name="d" type="date" value="${esc(zonedYmd(new Date()))}">`)}</div>`,
+          actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick: (mc) => act('drawdowns', { amount: Number($('[name="a"]', mc.el).value), onDate: $('[name="d"]', mc.el).value }, 'Recorded.') }] }));
+        $('[data-lpy]', body)?.addEventListener('click', () => { const nx = l.schedule.find((s) => s.due >= zonedYmd(new Date())); modal({ title: 'Record a payment', subtitle: nx ? `Next due ${nx.due}: interest ${m(nx.interest)}, principal ${m(nx.principal)}` : '', body: `<div class="form">${field('Principal', `<input name="p" type="number" min="0" value="${nx?.principal ?? 0}">`)}${field('Interest', `<input name="i" type="number" min="0" value="${nx?.interest ?? 0}">`)}${field('Fees', '<input name="f" type="number" min="0" value="0">')}${field('Date', `<input name="d" type="date" value="${esc(zonedYmd(new Date()))}">`)}</div>`,
+          actions: [{ label: 'Cancel' }, { label: 'Record', kind: 'primary', onClick: (mc) => act('payments', { principal: Number($('[name="p"]', mc.el).value), interest: Number($('[name="i"]', mc.el).value), fees: Number($('[name="f"]', mc.el).value), onDate: $('[name="d"]', mc.el).value }, 'Recorded.') }] }); });
+      } },
+      { id: 'sch', label: 'Schedule', render(body) {
+        body.innerHTML = '<div data-ls></div>';
+        table($('[data-ls]', body), { columns: [{ label: 'Due', render: (s) => esc(s.due) }, { label: 'Interest', num: true, render: (s) => esc(m(s.interest)) }, { label: 'Principal', num: true, render: (s) => esc(m(s.principal)) }, { label: 'Balance', num: true, render: (s) => esc(m(s.closing)) }], rows: l.schedule });
+      } },
+    ] });
+  });
+}
+
 // ─────────────────────────────────────────── (v1.30.0) purchase orders
 
 const PO_ST = { draft: ['t-mute', 'draft'], awaiting_approval: ['t-warn', 'awaiting approval'], approved: ['t-info', 'approved'], closed: ['t-ok', 'closed'], cancelled: ['t-mute', 'cancelled'], rejected: ['t-crit', 'rejected'] };
@@ -3207,7 +3414,7 @@ registerView('finance', {
     const canWrite = state.can('payment:write');
     const tabs = [
       { id: 'summary', label: 'Summary' }, { id: 'scorecard', label: 'Scorecard' }, { id: 'reports', label: 'Reports' }, { id: 'overview', label: 'Overview' }, { id: 'payments', label: 'Payments' }, { id: 'receivables', label: 'Receivables' },
-      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
+      { id: 'payables', label: 'Payables' }, { id: 'orders', label: 'Orders' }, { id: 'bills', label: 'Bills' }, { id: 'expenses', label: 'Expenses' }, { id: 'cash', label: 'Cash' }, { id: 'cashforecast', label: 'Cash forecast' }, { id: 'treasury', label: 'Treasury' }, { id: 'credit', label: 'Credit' }, { id: 'assurance', label: 'Assurance' }, { id: 'payroll', label: 'Payroll' }, { id: 'projects', label: 'Projects' }, { id: 'inventory', label: 'Inventory' }, { id: 'maintenance', label: 'Maintenance' }, { id: 'lenders', label: 'Lenders' }, { id: 'autopay', label: 'Auto payouts' }, { id: 'collections', label: 'Collections' }, { id: 'plans', label: 'Plans & provision' }, { id: 'forecast', label: 'Forecast' }, { id: 'rforecast', label: 'Revenue forecast' }, { id: 'fees', label: 'Fees' }, { id: 'reconciliation', label: 'Reconciliation' },
       { id: 'bank', label: 'Bank' }, { id: 'feeds', label: 'Bank feeds' }, { id: 'tax', label: 'Tax' }, { id: 'slips', label: 'Withholding' }, { id: 'ppn', label: 'PPN' }, { id: 'tariffs', label: 'Tariffs' }, { id: 'fleetauto', label: 'Fleet invoicing' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'margin', label: 'Margin' }, { id: 'budgets', label: 'Budgets' }, { id: 'investments', label: 'Investments' }, { id: 'assets', label: 'Assets' }, { id: 'leases', label: 'Leases' }, { id: 'benchmark', label: 'Benchmark' }, { id: 'pnl', label: 'Site P&L' }, { id: 'settlements', label: 'Settlements' }, { id: 'roaming', label: 'Roaming' }, { id: 'ledger', label: 'Ledger' }, { id: 'closesteps', label: 'Close steps' }, { id: 'close', label: 'Close' }, { id: 'yearend', label: 'Year end' }, { id: 'group', label: 'Group' }, { id: 'intercompany', label: 'Intercompany' }, { id: 'funds', label: 'Driver funds' }, { id: 'controls', label: 'Controls' }, { id: 'review', label: 'Review' }, { id: 'settings', label: 'Settings' },
     ];
     root.innerHTML = pageHead('Finance',
@@ -3588,7 +3795,8 @@ registerView('finance', {
       orders: () => ordersSection(body, canWrite), leases: () => leasesSection(body, canWrite), treasury: () => treasurySection(body, canWrite), review: () => reviewSection(body, canWrite),
       ledger: () => ledgerSection(body, canWrite), expenses: () => expensesSection(body, canWrite), intercompany: () => intercompanySection(body, canWrite), scorecard: () => scorecardSection(body, canWrite),
       feeds: () => feedsSection(body, canWrite), slips: () => slipsSection(body, canWrite), reports: () => reportsSection(body, canWrite), closesteps: () => closeStepsSection(body, canWrite),
-      payroll: () => payrollSection(body, canWrite), credit: () => creditSection(body, canWrite), projects: () => projectsSection(body, canWrite), cashforecast: () => cashForecastSection(body, canWrite) };
+      payroll: () => payrollSection(body, canWrite), credit: () => creditSection(body, canWrite), projects: () => projectsSection(body, canWrite), cashforecast: () => cashForecastSection(body, canWrite),
+      inventory: () => inventorySection(body, canWrite), maintenance: () => maintenanceSection(body, canWrite), assurance: () => assuranceSection(body, canWrite), lenders: () => lendersSection(body, canWrite) };
     const show = async (id) => {
       current = id;
       $$('[data-tab]', bodyAll).forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === id)));

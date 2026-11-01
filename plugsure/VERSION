@@ -1,11 +1,20 @@
 PlugSure CSMS
-Version:   1.33.0
-Package:   plugsure-v1.33.0
-Prepared:  2026-11-01  (v1.32.0 + finance phase 22 — see RELEASE-NOTES-v1.33.0.md)
+Version:   1.34.0
+Package:   plugsure-v1.34.0
+Prepared:  2026-11-01  (v1.33.0 + finance phase 23 — see RELEASE-NOTES-v1.34.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (668 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
+API:       OpenAPI 3.1 at /openapi.json (696 operations, 11 webhook events; TypeScript SDK at /sdk/), reference at /api-docs.html
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.33.0 = v1.32.0 + finance phase 22: payroll (employees, BPJS with the caps, PPh 21 by the TER rates and the
+Status:    v1.34.0 = v1.33.0 + finance phase 23: inventory and spare parts (items, locations, receipts at the moving
+           average cost, issues to work orders, transfers, counts, reorder alerts, the inventory journal through goods
+           received not invoiced), maintenance costs (work orders with labour, parts and contractor bills, accruals until
+           billed, warranty claims, cost per charger and per kWh), revenue assurance (sessions not billed, billed at zero,
+           with energy, meter or price out of line, reviewed and recovered) and lender reporting (loans with drawdowns,
+           payments and schedules, covenants tested from the ledger with breach alerts, the lender pack). Migration 102
+           (additive).
+
+v1.33.0 (2026-11-01):
+           v1.33.0 = v1.32.0 + finance phase 22: payroll (employees, BPJS with the caps, PPh 21 by the TER rates and the
            year's Pasal 17 calculation in December, runs approved by a second person and paid, payslips, the bank transfer
            list, the ledger), customer credit (fleet customers scored from their payment history and graded A to E,
            reviews decided by a Finance Manager with the limit, a hold that blocks the cards and the next review) and

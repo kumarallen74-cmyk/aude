@@ -213,6 +213,9 @@ export function startWorkers(): () => void {
   const creditReviews = once('credit-reviews', async () => { await (await import('./customer-credit.js')).sweep(); });
   const capexBudget = once('capex-budget', async () => { await (await import('./capex-projects.js')).sweep(); });
   const cashForecast = once('cash-forecast', async () => { await (await import('./cash-forecast.js')).sweep(); });
+  const stockReorder = once('stock-reorder', async () => { await (await import('./inventory.js')).sweep(); });
+  const revenueAssurance = once('revenue-assurance', async () => { await (await import('./revenue-assurance.js')).sweep(); });
+  const covenantTests = once('covenant-tests', async () => { await (await import('./lenders.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
   // Webhook outbox: send what is due; trim old rows.
@@ -339,6 +342,9 @@ export function startWorkers(): () => void {
     every(creditReviews, 24 * 60 * 60_000, 'credit-reviews'),
     every(capexBudget, 24 * 60 * 60_000, 'capex-budget'),
     every(cashForecast, 6 * 60 * 60_000, 'cash-forecast'),
+    every(stockReorder, 24 * 60 * 60_000, 'stock-reorder'),
+    every(revenueAssurance, 24 * 60 * 60_000, 'revenue-assurance'),
+    every(covenantTests, 12 * 60 * 60_000, 'covenant-tests'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

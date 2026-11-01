@@ -579,6 +579,15 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      capex projects (Finance → Projects). Set the cash forecast's horizon and
      route finance.cash_forecast_shortfall, finance.credit_review_due and
      finance.capex_over_budget ([FINANCE.md](FINANCE.md)).
+  27. (v1.34.0) Set up the stock locations and items (Finance → Inventory)
+     and record the opening stock as receipts; mark suppliers' bills for
+     stock as stock so they clear goods received not invoiced. Record work
+     orders for maintenance (Finance → Maintenance). Review the first
+     revenue assurance month (Finance → Assurance). Add the loans and the
+     lenders' covenants (Finance → Lenders) and sync the ledger's months so
+     the tests have figures. Route finance.stock_reorder,
+     finance.revenue_findings and finance.covenant_breach
+     ([FINANCE.md](FINANCE.md)).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The
