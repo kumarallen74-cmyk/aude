@@ -45,7 +45,7 @@ export function accessScore(a: Access): { score: number; accessible: boolean; ch
 const of = (r: any) => {
   const a: Access = { accessibleBays: Number(r?.accessible_bays ?? 0), stepFree: r?.step_free ?? null, bayWidthM: num(r?.bay_width_m), cableReachM: num(r?.cable_reach_m), maxScreenHeightCm: r?.max_screen_height_cm ?? null };
   return { amenities: (r?.amenities ?? []) as string[], ...a, open24h: r?.open_24h ?? null, hours: r?.hours ?? null, notes: r?.notes ?? null,
-    verifiedOn: r?.verified_at ? new Date(r.verified_at).toISOString().slice(0, 10) : null, ...accessScore(a) };
+    verifiedOn: r?.verified_at instanceof Date ? `${r.verified_at.getFullYear()}-${String(r.verified_at.getMonth() + 1).padStart(2, '0')}-${String(r.verified_at.getDate()).padStart(2, '0')}` : r?.verified_at ? String(r.verified_at).slice(0, 10) : null, ...accessScore(a) };
 };
 
 async function siteOf(orgId: string, siteId: string) {

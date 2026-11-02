@@ -216,9 +216,11 @@ try {
   check('APNs key: still accepted in the console; a send refused with a key replaced within the 30 s cache never marks the new key refused',
     keyNow.data.brand?.apnsCheckOk === true, { apnsCheckOk: keyNow.data.brand?.apnsCheckOk, detail: keyNow.data.brand?.apnsCheckDetail, refusedHits });
   // ─────────────────────────────────────────── dismissed, and closed on the phone
+  // The worker that sends (and drops a 410) runs every 5 s; under a loaded CI runner its passes have taken 10 s and
+  // more, so this waits as long as the other multi-pass waits above (45 s), not 15 s.
   const C = await session(2, 60, 1000, null);
   await reg(phones[2]!, { ref: C.c, token: LA_C });
-  const gone = await until(() => db.query(`SELECT state, last_error FROM live_activity WHERE charge_id = $1`, [C.c]).then((r) => r.rows[0]), (r) => r?.state === 'gone', 15_000);
+  const gone = await until(() => db.query(`SELECT state, last_error FROM live_activity WHERE charge_id = $1`, [C.c]).then((r) => r.rows[0]), (r) => r?.state === 'gone', 45_000);
   check('gone: an activity Apple says no longer exists (410) is dropped', gone?.state === 'gone' && /410/.test(gone.last_error), gone);
   const closed = await reg(phones[1]!, { ref: B.c }, '/d/v1/live-activities/ended');
   const bRow = (await db.query(`SELECT state FROM live_activity WHERE charge_id = $1 OR session_id = $2`, [B.c, B.s])).rows[0];

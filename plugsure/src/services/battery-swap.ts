@@ -33,6 +33,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const num = (v: unknown) => (v == null || v === '' ? null : Number(v));
 const pct = (v: unknown) => { const n = num(v); return n != null && Number.isFinite(n) && n >= 0 && n <= 100 ? Math.round(n * 10) / 10 : null; };
 const str = (v: unknown, max: number) => { const s = String(v ?? '').trim(); return s ? s.slice(0, max) : null; };
+/** A DATE column as YYYY-MM-DD: node-postgres parses DATE as local midnight, so read the local parts (toISOString would shift it a day east of UTC). */
+const ymd = (v: any) => (v == null ? null : typeof v === 'string' ? v.slice(0, 10) : v instanceof Date ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}` : String(v).slice(0, 10)) as string;
 const today = () => new Date().toISOString().slice(0, 10);
 const addMonth = (d: string) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCMonth(x.getUTCMonth() + 1); return x.toISOString().slice(0, 10); };
 
@@ -203,7 +205,7 @@ export async function riders(orgId: string) {
     WHERE s.org_id = $1 AND (s.status = 'active' OR s.created_at > now() - interval '90 days') ORDER BY s.status, s.created_at DESC LIMIT 1000`, [orgId]));
   return rows.map((s) => ({
     id: String(s.id), rider: s.display_name ?? null, phone: s.phone ? `…${String(s.phone).slice(-4)}` : null, plan: s.plan_name, status: s.status,
-    periodStart: s.period_start.toISOString?.().slice(0, 10) ?? String(s.period_start), periodEnd: s.period_end.toISOString?.().slice(0, 10) ?? String(s.period_end),
+    periodStart: ymd(s.period_start), periodEnd: ymd(s.period_end),
     swaps: Number(s.swaps), swapsIncluded: s.swaps_included ?? null, pack: s.pack ?? null,
   }));
 }
@@ -241,8 +243,8 @@ async function decide(orgId: string, sub: any | null) {
   const st = await settings(orgId);
   if (!st.enabled) return { outcome: 'refused' as const, amountMinor: 0, reason: 'Battery swap is not enabled.' };
   if (!sub) return { outcome: 'refused' as const, amountMinor: 0, reason: 'Unknown rider code.' };
-  if (sub.status !== 'active' || String(sub.period_end.toISOString?.().slice(0, 10) ?? sub.period_end) < today()) return { outcome: 'refused' as const, amountMinor: 0, reason: 'The rider\'s plan is not active.' };
-  const from = sub.period_start.toISOString?.().slice(0, 10) ?? String(sub.period_start);
+  if (sub.status !== 'active' || ymd(sub.period_end) < today()) return { outcome: 'refused' as const, amountMinor: 0, reason: 'The rider\'s plan is not active.' };
+  const from = ymd(sub.period_start);
   if (sub.swaps_included == null || (await usedThisPeriod(sub.id, from)) < Number(sub.swaps_included)) return { outcome: 'included' as const, amountMinor: 0, reason: null };
   const bal = await credit.balance(orgId, sub.app_driver_id, st.currency);
   if (bal.totalMinor < st.pricePerSwapMinor) return { outcome: 'refused' as const, amountMinor: st.pricePerSwapMinor, reason: 'Not enough credit for a swap.' };
@@ -371,7 +373,7 @@ export async function driverSwap(appDriverId: string, brandOrg: string | null) {
   const st = await settings(orgId);
   const sub = await S(() => one<any>(`SELECT s.*, p.name AS plan_name, p.swaps_included, p.monthly_minor FROM swap_subscription s JOIN swap_plan p ON p.id = s.plan_id
     WHERE s.org_id = $1 AND s.app_driver_id = $2 AND s.status = 'active'`, [orgId, appDriverId]));
-  const from = sub ? sub.period_start.toISOString?.().slice(0, 10) ?? String(sub.period_start) : null;
+  const from = sub ? ymd(sub.period_start) : null;
   const pack = await S(() => one<any>(`SELECT serial, soc FROM swap_battery WHERE org_id = $1 AND rider_id = $2 AND status = 'with_rider' LIMIT 1`, [orgId, appDriverId]));
   const cabs = (await cabinets(orgId)).filter((c) => c.status === 'active').map((c) => ({ id: c.id, name: c.name, site: c.site, ready: c.ready, online: c.online }));
   const recent = (await S(() => many<any>(`SELECT e.at, e.outcome, e.amount_minor, c.name AS cab FROM swap_event e JOIN swap_cabinet c ON c.id = e.cabinet_id
@@ -379,7 +381,7 @@ export async function driverSwap(appDriverId: string, brandOrg: string | null) {
   return {
     enabled: true, currency: st.currency, pricePerSwapMinor: st.pricePerSwapMinor,
     plans: (await plans(orgId, false)).map((p) => ({ id: p.id, name: p.name, monthlyMinor: p.monthlyMinor, swapsIncluded: p.swapsIncluded })),
-    subscription: sub ? { id: String(sub.id), plan: sub.plan_name, riderCode: sub.rider_code, periodEnd: sub.period_end.toISOString?.().slice(0, 10) ?? String(sub.period_end),
+    subscription: sub ? { id: String(sub.id), plan: sub.plan_name, riderCode: sub.rider_code, periodEnd: ymd(sub.period_end),
       swapsIncluded: sub.swaps_included ?? null, swapsUsed: await usedThisPeriod(sub.id, from!) } : null,
     pack: pack ? { serial: pack.serial, soc: num(pack.soc) } : null,
     balanceMinor: (await credit.balance(orgId, appDriverId, st.currency)).totalMinor, cabinets: cabs, recent,
@@ -411,7 +413,7 @@ export async function sweep(): Promise<{ renewed: number; lapsed: number; offlin
   const due = await S(() => many<any>(`SELECT s.*, p.monthly_minor, p.currency, p.archived_at FROM swap_subscription s JOIN swap_plan p ON p.id = s.plan_id
     WHERE s.status = 'active' AND s.period_end <= current_date LIMIT 500`));
   for (const s of due) {
-    const end = s.period_end.toISOString?.().slice(0, 10) ?? String(s.period_end);
+    const end = ymd(s.period_end);
     if (!s.archived_at && await payFromCredit(s.org_id, s.app_driver_id, s.currency, Number(s.monthly_minor))) {
       await S(() => query(`UPDATE swap_subscription SET period_start = $2, period_end = $3, paid_minor = paid_minor + $4 WHERE id = $1`, [s.id, end, addMonth(end), Number(s.monthly_minor)]));
       renewed++;

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.50.0",
+    "version": "1.51.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Governance → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Governance → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Governance → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Governance → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -82299,6 +82299,1271 @@
           },
           "409": {
             "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/advertising/settings": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Advertising settings",
+        "operationId": "advertisingSettings",
+        "description": "(v1.51.0) On or off, the tax on advertising invoices (basis points) and the default slot length.",
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Change the advertising settings",
+        "operationId": "changeAdvertisingSettings",
+        "description": "(v1.51.0) enabled, taxBps (0–5000), slotSeconds (5–120). Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/advertisers": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Advertisers",
+        "operationId": "advertisers",
+        "description": "(v1.51.0) Each advertiser with its campaigns (and active ones).",
+        "responses": {
+          "200": {
+            "description": "{advertisers}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Add an advertiser",
+        "operationId": "addAdvertiser",
+        "description": "(v1.51.0) name, contactName, email, phone, taxId, address. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The advertiser.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/advertisers/{id}": {
+      "put": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Change or archive an advertiser",
+        "operationId": "changeOrArchiveAdvertiser",
+        "description": "(v1.51.0) The fields above, or archive: true. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The advertiser.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The advertiser.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-screens": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Ad screens",
+        "operationId": "adScreens",
+        "description": "(v1.51.0) Each charger or kiosk screen: its site, charger, orientation, online (its player called within 30 minutes) and plays in 7 days.\n\n**Permissions checked:** `site:read`.",
+        "responses": {
+          "200": {
+            "description": "{screens}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Add an ad screen",
+        "operationId": "addAdScreen",
+        "description": "(v1.51.0) siteId, chargePointId (a charger's screen), name, kind (charger, kiosk), orientation. Its player's key is shown once. Audited.\n\n**Permissions checked:** `site:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The screen, with its key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/ad-screens/{id}": {
+      "put": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Change, re-key or archive an ad screen",
+        "operationId": "changeReKeyOrArchiveAdScreen",
+        "description": "(v1.51.0) The fields above, status (active, off), rotateKey: true (shown once) or archive: true. Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The screen.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The screen.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/ad-campaigns": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Ad campaigns",
+        "operationId": "adCampaigns",
+        "description": "(v1.51.0) Campaigns (ended ones for 60 days; status=all: every one) with their plays, spend, creatives and those to review.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{campaigns}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Add an ad campaign",
+        "operationId": "addAdCampaign",
+        "description": "(v1.51.0) advertiserId, name, startsOn, endsOn, siteIds (empty: every site with a screen), pricing (cpm: per thousand plays; flat: per month, prorated), rateMinor, budgetMinor (CPM: stops once spent), weight (1–10, its share of the rotation). Starts as a draft. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The campaign.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-campaigns/{id}": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "An ad campaign",
+        "operationId": "adCampaign",
+        "description": "(v1.51.0) With its creatives, plays by day and by site, and the charging sessions at its screens while it runs.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The campaign.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The campaign.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Change an ad campaign",
+        "operationId": "changeAdCampaign",
+        "description": "(v1.51.0) The fields above, while it has not ended. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The campaign.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The campaign.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-campaigns/{id}/status": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Start, pause or end an ad campaign",
+        "operationId": "startPauseOrEndAdCampaign",
+        "description": "(v1.51.0) status: active (needs an approved creative, an end date not past and budget left), paused (reason), ended. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The campaign.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The campaign.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-campaigns/{id}/proof.xlsx": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Proof of play",
+        "operationId": "proofOfPlay",
+        "description": "(v1.51.0) Plays by day, site, screen and creative, as a spreadsheet.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The campaign.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An .xlsx file.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-campaigns/{id}/creatives": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Upload a creative",
+        "operationId": "uploadCreative",
+        "description": "(v1.51.0) dataUrl (a JPEG, PNG or WebP image, or an MP4 video, up to 30 MB; the content must match the type), name, seconds (3–120; default the slot), orientation. It plays once approved. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The campaign.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "{id, name, review}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-creatives/{id}/file": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "A creative's file",
+        "operationId": "creativeFile",
+        "description": "(v1.51.0) The image or video, to review it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The creative.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-creatives/{id}/review": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Approve or reject a creative",
+        "operationId": "approveOrRejectCreative",
+        "description": "(v1.51.0) review (approved, rejected), note (required to reject). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The creative.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{id, review}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-creatives/{id}/remove": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Remove a creative",
+        "operationId": "removeCreative",
+        "description": "(v1.51.0) It stops playing; its plays are kept. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The creative.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{id, removed}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-invoices": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Advertising invoices",
+        "operationId": "advertisingInvoices",
+        "description": "(v1.51.0) Drafted, issued, paid and void invoices to advertisers.",
+        "responses": {
+          "200": {
+            "description": "{invoices}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/advertisers/{id}/invoices": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Draft an advertising invoice",
+        "operationId": "draftAdvertisingInvoice",
+        "description": "(v1.51.0) month: the advertiser's campaigns (CPM by plays, flat by the days run), the tax and the total; a draft is refreshed. Last month is drafted automatically.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The advertiser.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The invoice.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-invoices/{id}": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Issue, mark paid or void an advertising invoice",
+        "operationId": "issueMarkPaidOrVoidAdvertisingInvoice",
+        "description": "(v1.51.0) action: issue (a draft for a month that is over; refreshed and numbered), paid (reference), void (not paid). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The invoice.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The invoice.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-invoices/{id}/invoice.xlsx": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "An advertising invoice as a spreadsheet",
+        "operationId": "advertisingInvoiceAsSpreadsheet",
+        "description": "(v1.51.0) Its lines, tax and total.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The invoice.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An .xlsx file.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-player/{key}": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "A screen's playlist (the player's API)",
+        "operationId": "screenPlaylistPlayerApi",
+        "description": "(v1.51.0) The approved creatives of the campaigns running today at the screen's site (its orientation first), with their seconds, weight and file URL; refresh every refreshSeconds. Authenticated by the screen's key in the path.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "The screen's key.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{screen, playlist, refreshSeconds}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-player/{key}/creatives/{id}": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "A creative's file (the player's API)",
+        "operationId": "creativeFilePlayerApi",
+        "description": "(v1.51.0) The image or video to play. Authenticated by the screen's key in the path.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "The screen's key.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The creative.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/ad-player/{key}/plays": {
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "A screen reports its plays (the player's API)",
+        "operationId": "screenReportsItsPlaysPlayerApi",
+        "description": "(v1.51.0) plays: [{creativeId, count (1–2000), day (today or yesterday, optional)}]: the proof of play counted for billing. Authenticated by the screen's key in the path.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "The screen's key.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{counted}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
           },
           "422": {
             "$ref": "#/components/responses/E422"

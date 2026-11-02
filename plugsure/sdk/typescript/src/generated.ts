@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.50.0";
+export const API_VERSION = "1.51.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11429,6 +11429,74 @@ export class Operations {
   }
 
   /**
+   * An ad campaign
+   *
+   * (v1.51.0) With its creatives, plays by day and by site, and the charging sessions at its screens while it runs.
+   *
+   * `GET /v1/ad-campaigns/{id}`
+   */
+  adCampaign(params: {
+    /** The campaign. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/ad-campaigns/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Ad campaigns
+   *
+   * (v1.51.0) Campaigns (ended ones for 60 days; status=all: every one) with their plays, spend, creatives and those to review.
+   *
+   * `GET /v1/ad-campaigns`
+   */
+  adCampaigns(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/ad-campaigns", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Add an ad campaign
+   *
+   * (v1.51.0) advertiserId, name, startsOn, endsOn, siteIds (empty: every site with a screen), pricing (cpm: per thousand plays; flat: per month, prorated), rateMinor, budgetMinor (CPM: stops once spent), weight (1–10, its share of the rotation). Starts as a draft. Audited.
+   *
+   * `POST /v1/ad-campaigns`
+   */
+  addAdCampaign(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-campaigns", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add an ad screen
+   *
+   * (v1.51.0) siteId, chargePointId (a charger's screen), name, kind (charger, kiosk), orientation. Its player's key is shown once. Audited.
+   *
+   * `POST /v1/ad-screens` · needs `site:write`
+   */
+  addAdScreen(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-screens", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add an advertiser
+   *
+   * (v1.51.0) name, contactName, email, phone, taxId, address. Audited.
+   *
+   * `POST /v1/advertisers`
+   */
+  addAdvertiser(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/advertisers", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add an auditor request
    *
    * (v1.35.0) audit, ref, item, requestedOn, dueOn, ownerId, note. Audited.
@@ -12194,6 +12262,64 @@ export class Operations {
   }
 
   /**
+   * Ad screens
+   *
+   * (v1.51.0) Each charger or kiosk screen: its site, charger, orientation, online (its player called within 30 minutes) and plays in 7 days.
+   *
+   * `GET /v1/ad-screens` · needs `site:read`
+   */
+  adScreens(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/ad-screens", accept: "json" }, options);
+  }
+
+  /**
+   * Advertisers
+   *
+   * (v1.51.0) Each advertiser with its campaigns (and active ones).
+   *
+   * `GET /v1/advertisers`
+   */
+  advertisers(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/advertisers", accept: "json" }, options);
+  }
+
+  /**
+   * An advertising invoice as a spreadsheet
+   *
+   * (v1.51.0) Its lines, tax and total.
+   *
+   * `GET /v1/ad-invoices/{id}/invoice.xlsx`
+   */
+  advertisingInvoiceAsSpreadsheet(params: {
+    /** The invoice. */
+    id: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/ad-invoices/{id}/invoice.xlsx", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * Advertising invoices
+   *
+   * (v1.51.0) Drafted, issued, paid and void invoices to advertisers.
+   *
+   * `GET /v1/ad-invoices`
+   */
+  advertisingInvoices(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/ad-invoices", accept: "json" }, options);
+  }
+
+  /**
+   * Advertising settings
+   *
+   * (v1.51.0) On or off, the tax on advertising invoices (basis points) and the default slot length.
+   *
+   * `GET /v1/advertising/settings`
+   */
+  advertisingSettings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/advertising/settings", accept: "json" }, options);
+  }
+
+  /**
    * Agree a payment plan
    *
    * (v1.28.0) The invoice's balance in count (2–24) instalments from firstDue, monthly or every everyDays (7–92), with graceDays (0–60) before an instalment defaults the plan. One active plan per invoice. Audited.
@@ -12389,6 +12515,21 @@ export class Operations {
     body: ApproveOrRejectBudgetVersionBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/budget-plans/{id}/decide", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Approve or reject a creative
+   *
+   * (v1.51.0) review (approved, rejected), note (required to reject). Audited.
+   *
+   * `POST /v1/ad-creatives/{id}/review`
+   */
+  approveOrRejectCreative(params: {
+    /** The creative. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-creatives/{id}/review", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13401,6 +13542,34 @@ export class Operations {
   }
 
   /**
+   * Change an ad campaign
+   *
+   * (v1.51.0) The fields above, while it has not ended. Audited.
+   *
+   * `PUT /v1/ad-campaigns/{id}`
+   */
+  changeAdCampaign(params: {
+    /** The campaign. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/ad-campaigns/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change the advertising settings
+   *
+   * (v1.51.0) enabled, taxBps (0–5000), slotSeconds (5–120). Audited.
+   *
+   * `PUT /v1/advertising/settings`
+   */
+  changeAdvertisingSettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/advertising/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change an API key’s name or rate limit
    *
    * Sets the key’s own rate limit (requests a minute; null returns it to the installation default) or renames it. A new limit applies from the key’s next request. Revoked keys cannot be changed (404). Audited as api_key.updated.
@@ -13738,6 +13907,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive an advertiser
+   *
+   * (v1.51.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/advertisers/{id}`
+   */
+  changeOrArchiveAdvertiser(params: {
+    /** The advertiser. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/advertisers/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a candidate site
    *
    * (v1.45.0) The fields above, or archive: true. Audited.
@@ -14067,6 +14251,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/status-page", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, re-key or archive an ad screen
+   *
+   * (v1.51.0) The fields above, status (active, off), rotateKey: true (shown once) or archive: true. Audited.
+   *
+   * `PUT /v1/ad-screens/{id}` · needs `site:write`
+   */
+  changeReKeyOrArchiveAdScreen(params: {
+    /** The screen. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/ad-screens/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15159,6 +15358,36 @@ export class Operations {
   }
 
   /**
+   * A creative's file
+   *
+   * (v1.51.0) The image or video, to review it.
+   *
+   * `GET /v1/ad-creatives/{id}/file`
+   */
+  creativeFile(params: {
+    /** The creative. */
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/ad-creatives/{id}/file", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
+   * A creative's file (the player's API)
+   *
+   * (v1.51.0) The image or video to play. Authenticated by the screen's key in the path.
+   *
+   * `GET /v1/ad-player/{key}/creatives/{id}`
+   */
+  creativeFilePlayerApi(params: {
+    /** The screen's key. */
+    key: string;
+    /** The creative. */
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/ad-player/{key}/creatives/{id}", pathParams: { key: params.key, id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
    * Curtail or release a site
    *
    * Curtailing (for a genset or grid outage) sends 0 W station limits to every charger at the site; releasing restores the normal allocation. The change is saved first and dispatched right after the response, so a dispatch failure never undoes it. Audited as site.curtailed or site.curtailment_lifted.
@@ -15837,6 +16066,21 @@ export class Operations {
     year: string;
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/year-end/{year}/pack", pathParams: { year: params.year }, accept: "binary" }, options);
+  }
+
+  /**
+   * Draft an advertising invoice
+   *
+   * (v1.51.0) month: the advertiser's campaigns (CPM by plays, flat by the days run), the tax and the total; a draft is refreshed. Last month is drafted automatically.
+   *
+   * `POST /v1/advertisers/{id}/invoices`
+   */
+  draftAdvertisingInvoice(params: {
+    /** The advertiser. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/advertisers/{id}/invoices", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18054,6 +18298,21 @@ export class Operations {
     sid: string;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/landlords/statements/{sid}/issue", pathParams: { sid: params.sid }, accept: "json" }, options);
+  }
+
+  /**
+   * Issue, mark paid or void an advertising invoice
+   *
+   * (v1.51.0) action: issue (a draft for a month that is over; refreshed and numbered), paid (reference), void (not paid). Audited.
+   *
+   * `POST /v1/ad-invoices/{id}`
+   */
+  issueMarkPaidOrVoidAdvertisingInvoice(params: {
+    /** The invoice. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-invoices/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20525,6 +20784,20 @@ export class Operations {
   }
 
   /**
+   * Proof of play
+   *
+   * (v1.51.0) Plays by day, site, screen and creative, as a spreadsheet.
+   *
+   * `GET /v1/ad-campaigns/{id}/proof.xlsx`
+   */
+  proofOfPlay(params: {
+    /** The campaign. */
+    id: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/ad-campaigns/{id}/proof.xlsx", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
    * Propose a payment run
    *
    * (v1.39.0) From a bank account (cashAccountId; its currency), payOn and dueBy: every approved bill with a balance due by then and not in another open run (supplierIds to limit it). Audited.
@@ -21725,6 +21998,20 @@ export class Operations {
    */
   removeConsoleLogo(options?: RequestOptions): Promise<ConsoleBrandResult> {
     return this.transport.request<ConsoleBrandResult>({ method: "DELETE", path: "/v1/console-brand/logo", accept: "json" }, options);
+  }
+
+  /**
+   * Remove a creative
+   *
+   * (v1.51.0) It stops playing; its plays are kept. Audited.
+   *
+   * `POST /v1/ad-creatives/{id}/remove`
+   */
+  removeCreative(params: {
+    /** The creative. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-creatives/{id}/remove", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -22962,6 +23249,35 @@ export class Operations {
    */
   scoreChargersNow(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/charger-health/run", accept: "json" }, options);
+  }
+
+  /**
+   * A screen's playlist (the player's API)
+   *
+   * (v1.51.0) The approved creatives of the campaigns running today at the screen's site (its orientation first), with their seconds, weight and file URL; refresh every refreshSeconds. Authenticated by the screen's key in the path.
+   *
+   * `GET /v1/ad-player/{key}`
+   */
+  screenPlaylistPlayerApi(params: {
+    /** The screen's key. */
+    key: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/ad-player/{key}", pathParams: { key: params.key }, accept: "json" }, options);
+  }
+
+  /**
+   * A screen reports its plays (the player's API)
+   *
+   * (v1.51.0) plays: [{creativeId, count (1–2000), day (today or yesterday, optional)}]: the proof of play counted for billing. Authenticated by the screen's key in the path.
+   *
+   * `POST /v1/ad-player/{key}/plays`
+   */
+  screenReportsItsPlaysPlayerApi(params: {
+    /** The screen's key. */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-player/{key}/plays", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -24593,6 +24909,21 @@ export class Operations {
   }
 
   /**
+   * Start, pause or end an ad campaign
+   *
+   * (v1.51.0) status: active (needs an approved creative, an end date not past and budget left), paused (reason), ended. Audited.
+   *
+   * `POST /v1/ad-campaigns/{id}/status`
+   */
+  startPauseOrEndAdCampaign(params: {
+    /** The campaign. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-campaigns/{id}/status", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Start a session remotely
    *
    * Sends RemoteStartTransaction for an RFID tag or driver account, optionally capped by energy, duration or amount. Refused with 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` (e.g. a field technician) may only start with a technician or VIP card (403 otherwise). Audited.
@@ -25739,6 +26070,21 @@ export class Operations {
     body: UploadConsoleLogoBody;
   }, options?: RequestOptions): Promise<UploadConsoleLogoResponse> {
     return this.transport.request<UploadConsoleLogoResponse>({ method: "PUT", path: "/v1/console-brand/logo", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Upload a creative
+   *
+   * (v1.51.0) dataUrl (a JPEG, PNG or WebP image, or an MP4 video, up to 30 MB; the content must match the type), name, seconds (3–120; default the slot), orientation. It plays once approved. Audited.
+   *
+   * `POST /v1/ad-campaigns/{id}/creatives`
+   */
+  uploadCreative(params: {
+    /** The campaign. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/ad-campaigns/{id}/creatives", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
