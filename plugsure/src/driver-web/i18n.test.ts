@@ -35,6 +35,10 @@ const MESSAGES = [
   'Pakai kredit Rp 30.000', 'Saldo kredit Rp 65.000. Yang tidak terpakai kembali menjadi kredit.', '±12,5 kWh · kredit Rp 30.000',
   'Ajak teman ke PlugSure Demo: Anda dapat Rp 20.000, teman Anda Rp 10.000 setelah pengisian pertamanya.', 'Laporan PS-12 terkirim.', 'Kredit Rp 50.000 ditambahkan.',
   'Kode diterima. Kredit Rp 10.000 masuk setelah pengisian pertama Anda.', 'Nilai Anda: 5/5. Terima kasih.',
+  // personal data (v1.48.0)
+  'Data pribadi', 'Persetujuan', 'Promosi dan penawaran', 'Kabar promo lewat aplikasi, WhatsApp atau e-mail', 'Membantu memperbaiki aplikasi dari cara Anda memakainya',
+  'Menampilkan stasiun terdekat dan rencana perjalanan', 'Permintaan data', 'Minta salinan data', 'Perbaiki data', 'Jelaskan permintaan Anda (opsional)', 'Kirim permintaan',
+  'Operator menjawab dalam batas waktu yang diatur UU PDP. Untuk menghapus akun, pakai Akun → Hapus akun.', 'Persetujuan disimpan.', 'Permintaan PDP-0004 terkirim.',
   // the survey after a charge (v1.47.0)
   'Nilai pengisian ini', 'Seberapa besar kemungkinan Anda merekomendasikan kami kepada teman?', 'Tidak mungkin', 'Sangat mungkin', 'Ketersediaan', 'Kebersihan', 'Ada yang rusak',
   'Ceritakan lebih lanjut (opsional)', 'Kirim nilai', 'Terima kasih atas penilaian Anda.', 'Terima kasih. Laporan PS-7 dibuat; tim kami akan menghubungi Anda.',

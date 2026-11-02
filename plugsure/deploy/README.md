@@ -698,6 +698,16 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      [ENERGY-PRICES.md](ENERGY-PRICES.md)); switch surveys on (Operate →
      Surveys, [SURVEYS.md](SURVEYS.md)). Workers added: card terminals (1 min),
      energy prices (hourly).
+  41. (v1.48.0) Optional, per operator: add hotels, give the PMS its address
+     and the staff their valet link, route hotel.post_failed (Commercial →
+     Hotels, [HOTELS.md](HOTELS.md)); track new sites in Assets & energy →
+     Installations ([INSTALLATIONS.md](INSTALLATIONS.md); documents are kept
+     under STORAGE_DIR/install, back it up); name the data protection
+     officer, set retention and route privacy.request_due (Govern → Privacy,
+     [PRIVACY.md](PRIVACY.md)); give fleet vehicles a card and battery size
+     for battery health and route vehicle.battery_anomaly
+     ([BATTERY-HEALTH.md](BATTERY-HEALTH.md)). Workers added: hotels (1 min),
+     battery health (15 min), privacy (hourly), installations (6 h).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.47.0";
+export const API_VERSION = "1.48.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11602,6 +11602,21 @@ export class Operations {
   }
 
   /**
+   * Add a document
+   *
+   * (v1.48.0) kind (survey, drawing, permit, grid, photo, commissioning, contract, other), name, dataUrl (PDF, JPEG, PNG, Word, Excel or DWG; at most 15 MB; the type is checked). Audited.
+   *
+   * `POST /v1/installations/{id}/documents` · needs `site:write`
+   */
+  addDocument(params: {
+    /** The project. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/installations/{id}/documents", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a dynamic pricing rule
    *
    * (v1.43.0) name, kind (time: dayMask, hourFrom, hourTo in the site's zone; peak: the grid's peak hours of the site's energy tariff; occupancy: threshold % of connectors in use; solar: threshold kW of solar output), adjustPct (−50 to 50), siteId (empty: every site), enabled, sortOrder. Matching rules add up. Audited.
@@ -11734,6 +11749,19 @@ export class Operations {
     body: AddGrantConditionBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/grants/{id}/conditions", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a hotel
+   *
+   * (v1.48.0) siteId, name, posting (pms, statement), pmsUrl (charges are POSTed there, signed with pmsSecret). The key the PMS posts check-ins with is shown once. Audited.
+   *
+   * `POST /v1/hotels` · needs `site:write`
+   */
+  addHotel(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/hotels", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12012,6 +12040,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/macros", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a task
+   *
+   * (v1.48.0) title, stage (default the current one), required, dueOn, assigneeId.
+   *
+   * `POST /v1/installations/{id}/tasks` · needs `site:write`
+   */
+  addTask(params: {
+    /** The project. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/installations/{id}/tasks", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13515,6 +13558,21 @@ export class Operations {
   }
 
   /**
+   * Change an installation project
+   *
+   * (v1.48.0) The fields above.
+   *
+   * `PUT /v1/installations/{id}` · needs `site:write`
+   */
+  changeInstallationProject(params: {
+    /** The project. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/installations/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a landlord deal
    *
    * (v1.36.0) As adding; the terms are fixed once a statement is issued. Audited.
@@ -13819,6 +13877,19 @@ export class Operations {
   }
 
   /**
+   * Change the privacy settings
+   *
+   * (v1.48.0) dpoName, dpoEmail, responseHours (24–2160), plateRetentionDays, surveyCommentDays, supportCaseDays. Audited.
+   *
+   * `PUT /v1/privacy/settings` · needs `org:write`
+   */
+  changePrivacySettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/privacy/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change the public status page
    *
    * (v1.43.0) The fields above. A slug belongs to one organisation. Audited.
@@ -13844,6 +13915,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/anpr/cameras/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, re-key or archive a hotel
+   *
+   * (v1.48.0) The fields above, rotatePmsKey: true (a new key, shown once), or archive: true (no guest in house). Audited.
+   *
+   * `PUT /v1/hotels/{id}` · needs `site:write`
+   */
+  changeReKeyOrArchiveHotel(params: {
+    /** The hotel. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/hotels/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13887,6 +13973,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/scim", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change a stay, or check out
+   *
+   * (v1.48.0) room, departureOn, plate; or action: check_out (the guest card stops; a session still running is still charged to the stay). Audited.
+   *
+   * `PUT /v1/hotel-stays/{id}` · needs `site:write`
+   */
+  changeStayOrCheckOut(params: {
+    /** The stay. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/hotel-stays/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13960,6 +14061,23 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/support/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, tick or remove a task
+   *
+   * (v1.48.0) done, title, required, dueOn, assigneeId, or remove: true.
+   *
+   * `PUT /v1/installations/{id}/tasks/{taskId}` · needs `site:write`
+   */
+  changeTickOrRemoveTask(params: {
+    /** The project. */
+    id: string;
+    /** The task. */
+    taskId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/installations/{id}/tasks/{taskId}", pathParams: { id: params.id, taskId: params.taskId }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14142,6 +14260,36 @@ export class Operations {
     body: CheckDayForRevenueDropsBody;
   }, options?: RequestOptions): Promise<CheckDayForRevenueDropsResponse> {
     return this.transport.request<CheckDayForRevenueDropsResponse>({ method: "POST", path: "/v1/finance/revenue-alerts/check", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Check a guest in
+   *
+   * (v1.48.0) room, guestName, reservationRef, arrivalOn, departureOn, plate. The stay gets its own guest card (charging is started with it). One guest in house per room. Audited.
+   *
+   * `POST /v1/hotels/{id}/stays` · needs `site:write`
+   */
+  checkGuestIn(params: {
+    /** The hotel. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/hotels/{id}/stays", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A check-in, check-out or room move (the hotel's PMS)
+   *
+   * (v1.48.0) event: check_in {room, guestName, reservationRef, arrivalOn, departureOn, plate}, check_out {reservationRef or room}, room_move {reservationRef or room, newRoom}. A repeated check-in with the same reservation is the same stay. Authenticated by the hotel's key in the path.
+   *
+   * `POST /v1/hotels/pms/{key}`
+   */
+  checkInCheckOutOrRoomMoveHotelPms(params: {
+    /** The hotel's PMS key. */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/hotels/pms/{key}", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14347,6 +14495,21 @@ export class Operations {
   }
 
   /**
+   * Complete or reject a request
+   *
+   * (v1.48.0) action: complete — access/export: the copy is ready (export.json); correction: name, email; erasure: the account is deleted as the app's own deletion does (refused while a charge is unpaid or running); objection: purposes withdrawn — or reject with outcome (why). Audited.
+   *
+   * `POST /v1/privacy/requests/{id}/close` · needs `org:write`
+   */
+  completeOrRejectRequest(params: {
+    /** The request. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/privacy/requests/{id}/close", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Compliance calendar
    *
    * (v1.35.0) Tasks due from–to (default this year) and those overdue, with owner, status and files; the counts open, overdue, due within 30 days, done on time; the auditor's requests. format=xlsx.
@@ -14421,6 +14584,21 @@ export class Operations {
   }
 
   /**
+   * Consent records
+   *
+   * (v1.48.0) purpose: how many drivers have each consent now, and the latest 500 grants and withdrawals.
+   *
+   * `GET /v1/privacy/consents` · needs `org:read`
+   */
+  consentRecords(params?: {
+    query?: {
+      purpose?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/privacy/consents", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Copy a month's budget forward
    *
    * (v1.20.0) Every line of `from` to the next `months` months (1–12), replacing them. Audited as finance.budget_copied.
@@ -14431,6 +14609,20 @@ export class Operations {
     body: CopyMonthBudgetForwardBody;
   }, options?: RequestOptions): Promise<CopyMonthBudgetForwardResponse> {
     return this.transport.request<CopyMonthBudgetForwardResponse>({ method: "POST", path: "/v1/finance/budgets/copy", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * The copy of a person's data
+   *
+   * (v1.48.0) For a completed access or export request: the account, charges, payments, saved cards, support cases, surveys, credit and consents, as JSON. Audited.
+   *
+   * `GET /v1/privacy/requests/{id}/export.json` · needs `org:write`
+   */
+  copyOfPersonData(params: {
+    /** The request. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/privacy/requests/{id}/export.json", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -14821,6 +15013,21 @@ export class Operations {
   }
 
   /**
+   * Data subject requests
+   *
+   * (v1.48.0) Open requests (status=all: every one), soonest due first: kind (access, export, correction, erasure, objection), the person, when due, verified, the outcome.
+   *
+   * `GET /v1/privacy/requests` · needs `org:read`
+   */
+  dataSubjectRequests(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/privacy/requests", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Decide a credit review
    *
    * (v1.33.0) decision approve (newLimit, default the suggestion; hold true or false; nextReviewOn) or reject (note). finance:approve. Audited.
@@ -15105,6 +15312,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<DisputeWithItsNotesResponse> {
     return this.transport.request<DisputeWithItsNotesResponse>({ method: "GET", path: "/v1/roaming/hub/clearing/disputes/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * A document
+   *
+   * (v1.48.0) The file.
+   *
+   * `GET /v1/installations/documents/{docId}` · needs `site:read`
+   */
+  document(params: {
+    /** The document. */
+    docId: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/installations/documents/{docId}", pathParams: { docId: params.docId }, accept: "binary" }, options);
   }
 
   /**
@@ -16293,6 +16514,17 @@ export class Operations {
   }
 
   /**
+   * Fleet battery health
+   *
+   * (v1.48.0) Each fleet vehicle: estimated usable capacity and state of health (the median of the last 90 days), degradation per year, the latest flags; and the fleet's median, how many are under 80 % and how many were flagged.
+   *
+   * `GET /v1/battery-health` · needs `smartcharging:read`
+   */
+  fleetBatteryHealth(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-health", accept: "json" }, options);
+  }
+
+  /**
    * Fleet invoicing automation
    *
    * (v1.27.0) The settings (issue on a day, send, require the e-Faktur number, payment links), the month to invoice, issued invoices to send or held (and why), and the payment links.
@@ -17073,6 +17305,85 @@ export class Operations {
   }
 
   /**
+   * A hotel's charges
+   *
+   * (v1.48.0) month: each session charged to a room — kWh, amount, posted to the folio, on the statement, or not posted (with the error).
+   *
+   * `GET /v1/hotels/{id}/charges` · needs `site:read`
+   */
+  hotelCharges(params: {
+    /** The hotel. */
+    id: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/hotels/{id}/charges", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * A hotel's guests
+   *
+   * (v1.48.0) In house (status=all: also checked out), with their charges so far.
+   *
+   * `GET /v1/hotels/{id}/stays` · needs `site:read`
+   */
+  hotelGuests(params: {
+    /** The hotel. */
+    id: string;
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/hotels/{id}/stays", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * A hotel's monthly statement
+   *
+   * (v1.48.0) month (default this month): the charges billed to the hotel, kWh and the total.
+   *
+   * `GET /v1/hotels/{id}/statement` · needs `site:read`
+   */
+  hotelMonthlyStatement(params: {
+    /** The hotel. */
+    id: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/hotels/{id}/statement", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * A hotel's monthly statement as a spreadsheet
+   *
+   * (v1.48.0) month (default this month).
+   *
+   * `GET /v1/hotels/{id}/statement.xlsx` · needs `site:read`
+   */
+  hotelMonthlyStatementAsSpreadsheet(params: {
+    /** The hotel. */
+    id: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/hotels/{id}/statement.xlsx", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
+  }
+
+  /**
+   * Hotels
+   *
+   * (v1.48.0) Each hotel: its site, how charges are billed (pms: to the guest's folio; statement: to the hotel monthly), guests in house.
+   *
+   * `GET /v1/hotels` · needs `site:read`
+   */
+  hotels(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/hotels", accept: "json" }, options);
+  }
+
+  /**
    * Hour-by-hour demand forecast
    *
    * (v1.45.0) siteId (default: every site together), days (1–14, default 7): the hour-of-week heatmap (occupancy, sessions, kWh) and the forecast for each coming hour (the profile × the trend).
@@ -17184,6 +17495,35 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/status-page/incidents", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * An installation project
+   *
+   * (v1.48.0) The project, its tasks by stage, documents, stage history and its capex project's budget and spend.
+   *
+   * `GET /v1/installations/{id}` · needs `site:read`
+   */
+  installationProject(params: {
+    /** The project. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/installations/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Installation projects
+   *
+   * (v1.48.0) Open projects (and those live in the last 90 days; status=all: every one) by stage — survey, design, permit, grid, install, commission, live, cancelled — with days in stage, open tasks, documents and whether past the target date.
+   *
+   * `GET /v1/installations` · needs `site:read`
+   */
+  installationProjects(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/installations", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -18611,6 +18951,21 @@ export class Operations {
   }
 
   /**
+   * Move a project on, or cancel it
+   *
+   * (v1.48.0) action: advance (the stage's required tasks done; live needs the site linked) or cancel (note: why); note. The next stage's usual tasks are added. Audited.
+   *
+   * `POST /v1/installations/{id}/stage` · needs `site:write`
+   */
+  moveProjectOnOrCancelIt(params: {
+    /** The project. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/installations/{id}/stage", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * My commission terms per currency
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -18905,6 +19260,20 @@ export class Operations {
    */
   newScimToken(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/scim/token", accept: "json" }, options);
+  }
+
+  /**
+   * A new valet link
+   *
+   * (v1.48.0) The staff page at /valet/{token}, shown once; the old link stops working. Audited.
+   *
+   * `POST /v1/hotels/{id}/valet` · needs `site:write`
+   */
+  newValetLink(params: {
+    /** The hotel. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/hotels/{id}/valet", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -19422,6 +19791,17 @@ export class Operations {
   }
 
   /**
+   * The personal data inventory
+   *
+   * (v1.48.0) Each category of personal data held: what, where, why, the legal basis, the retention and how many records.
+   *
+   * `GET /v1/privacy/inventory` · needs `org:read`
+   */
+  personalDataInventory(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/privacy/inventory", accept: "json" }, options);
+  }
+
+  /**
    * Petty cash
    *
    * (v1.31.0) Cash accounts of kind cash: balance, float, the top-up to the float, the last count (total, difference, note).
@@ -19562,6 +19942,20 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/telematics/connections/{id}/poll", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Post a charge to the folio again
+   *
+   * (v1.48.0) A charge the PMS did not accept is tried again.
+   *
+   * `POST /v1/hotel-charges/{id}/retry` · needs `site:write`
+   */
+  postChargeToFolioAgain(params: {
+    /** The charge. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/hotel-charges/{id}/retry", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -19712,6 +20106,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/fleet-accounts/{id}/statement.html", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
+  }
+
+  /**
+   * Privacy settings
+   *
+   * (v1.48.0) The data protection officer, the response time for requests (hours, default 72) and the retention of plates, survey comments and closed support cases (days; none: kept).
+   *
+   * `GET /v1/privacy/settings` · needs `org:read`
+   */
+  privacySettings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/privacy/settings", accept: "json" }, options);
   }
 
   /**
@@ -20140,6 +20545,19 @@ export class Operations {
   }
 
   /**
+   * Record a data subject request
+   *
+   * (v1.48.0) kind, channel (email, console, other), appDriverId or subjectPhone or subjectEmail, subjectName, details. Due after the response time. Audited.
+   *
+   * `POST /v1/privacy/requests` · needs `org:write`
+   */
+  recordDataSubjectRequest(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/privacy/requests", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a deposit top-up or adjustment
    *
    * (v1.24.0) Prepaid accounts: kind topup (amount above 0, the bank reference) or adjustment (a non-zero amount and a note). Audited.
@@ -20252,6 +20670,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/history", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Record how the person's identity was checked
+   *
+   * (v1.48.0) verification (how), appDriverId (the account it is about). Audited.
+   *
+   * `POST /v1/privacy/requests/{id}/verify` · needs `org:write`
+   */
+  recordHowPersonIdentityWasChecked(params: {
+    /** The request. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/privacy/requests/{id}/verify", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20863,6 +21296,20 @@ export class Operations {
    */
   removeConsoleLogo(options?: RequestOptions): Promise<ConsoleBrandResult> {
     return this.transport.request<ConsoleBrandResult>({ method: "DELETE", path: "/v1/console-brand/logo", accept: "json" }, options);
+  }
+
+  /**
+   * Remove a document
+   *
+   * (v1.48.0) Hidden from the project (the file is kept). Audited.
+   *
+   * `DELETE /v1/installations/documents/{docId}` · needs `site:write`
+   */
+  removeDocument(params: {
+    /** The document. */
+    docId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "DELETE", path: "/v1/installations/documents/{docId}", pathParams: { docId: params.docId }, accept: "json" }, options);
   }
 
   /**
@@ -23566,6 +24013,19 @@ export class Operations {
   }
 
   /**
+   * Start an installation project
+   *
+   * (v1.48.0) name, address, candidateId (Demand & planning), capexProjectId, siteId, ownerId, chargersPlanned, kwPlanned, targetLiveOn, notes. It starts at survey with that stage's usual tasks. Audited.
+   *
+   * `POST /v1/installations` · needs `site:write`
+   */
+  startInstallationProject(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/installations", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Start a session remotely
    *
    * Sends RemoteStartTransaction for an RFID tag or driver account, optionally capped by energy, duration or amount. Refused with 409 when the charge point is suspended, awaiting adoption or decommissioned, or when the connector’s meter verification (tera) has lapsed or awaits calibration. A caller without `session:write` (e.g. a field technician) may only start with a technician or VIP card (403 otherwise). Audited.
@@ -24689,6 +25149,35 @@ export class Operations {
   }
 
   /**
+   * The valet page (data)
+   *
+   * (v1.48.0) The hotel's connectors with their state and who is charging, and the rooms in house (guest initial only). Authenticated by the link's token.
+   *
+   * `GET /v1/valet/{token}`
+   */
+  valetPageData(params: {
+    /** The valet link token. */
+    token: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/valet/{token}", pathParams: { token: params.token }, accept: "json" }, options);
+  }
+
+  /**
+   * The valet: start or stop charging for a room
+   *
+   * (v1.48.0) action: start {stayId, connectorId} (the car plugged in; started with the stay's guest card) or stop {sessionId}. Recorded in the audit log.
+   *
+   * `POST /v1/valet/{token}`
+   */
+  valetStartOrStopChargingForRoom(params: {
+    /** The valet link token. */
+    token: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/valet/{token}", pathParams: { token: params.token }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Validate a tariff
    *
    * Checks a tariff definition against the regulatory ceilings for a connector power, without saving it.
@@ -24699,6 +25188,20 @@ export class Operations {
     body: ValidateTariffBody;
   }, options?: RequestOptions): Promise<ValidateTariffResponse> {
     return this.transport.request<ValidateTariffResponse>({ method: "POST", path: "/v1/tariffs/validate", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A vehicle's battery health
+   *
+   * (v1.48.0) The monthly medians and each session's estimate: state of charge at the start and end (and where from), kWh, the capacity, the peak power and flags.
+   *
+   * `GET /v1/battery-health/{vehicleId}` · needs `smartcharging:read`
+   */
+  vehicleBatteryHealth(params: {
+    /** The fleet vehicle. */
+    vehicleId: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-health/{vehicleId}", pathParams: { vehicleId: params.vehicleId }, accept: "json" }, options);
   }
 
   /**
