@@ -723,6 +723,12 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      Dealers: terms, a portal link for each dealer's sales staff; issue and
      settle the monthly statements, [DEALERS.md](DEALERS.md)). Worker added:
      dealers (6 h, drafts last month's statements).
+  44. (v1.51.0) Optional, per operator: advertising on charger and kiosk
+     screens (Commercial → Advertising: turn it on, add screens and give each
+     player its address, advertisers and campaigns; review creatives; issue
+     the monthly invoices, [ADVERTISING.md](ADVERTISING.md)). Creatives are
+     kept under STORAGE_DIR/ads: back it up. Worker added: advertising
+     (hourly).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

@@ -9,7 +9,9 @@ See [`docs/PLUGSURE-ARCHITECTURE.md`](docs/PLUGSURE-ARCHITECTURE.md) for the ful
 architecture and product specification, including the Indonesian regulatory analysis this
 codebase implements.
 
-**v1.50.0 (2 November 2026), the current release:** phase 38: EV dealer partnerships (welcome charging credit for car buyers, the dealer's portal, commission on buyers' charging, monthly dealer statements). Migration 117. Notes: [`RELEASE-NOTES-v1.50.0.md`](RELEASE-NOTES-v1.50.0.md); guide: [`deploy/DEALERS.md`](deploy/DEALERS.md).
+**v1.51.0 (2 November 2026), the current release:** phase 39: advertising on charger and kiosk screens (a player API for the screens, campaigns per thousand plays or flat per month, creatives reviewed before they play, proof of play, monthly advertiser invoices). Migration 118. Notes: [`RELEASE-NOTES-v1.51.0.md`](RELEASE-NOTES-v1.51.0.md); guide: [`deploy/ADVERTISING.md`](deploy/ADVERTISING.md).
+
+**v1.50.0 (2 November 2026):** phase 38: EV dealer partnerships (welcome charging credit for car buyers, the dealer's portal, commission on buyers' charging, monthly dealer statements). Migration 117. Notes: [`RELEASE-NOTES-v1.50.0.md`](RELEASE-NOTES-v1.50.0.md); guide: [`deploy/DEALERS.md`](deploy/DEALERS.md).
 
 **v1.49.0 (2 November 2026):** phase 37: two-wheeler battery swap (cabinets with their own API, packs, riders' plans paid from credit), mobile and roadside charging (vans dispatched to cars), warranty and RMA for chargers, and accessibility and site amenities shown and filtered in the driver app. Migration 116. Notes: [`RELEASE-NOTES-v1.49.0.md`](RELEASE-NOTES-v1.49.0.md); guides: [`deploy/BATTERY-SWAP.md`](deploy/BATTERY-SWAP.md), [`deploy/ROADSIDE.md`](deploy/ROADSIDE.md), [`deploy/WARRANTY-RMA.md`](deploy/WARRANTY-RMA.md), [`deploy/AMENITIES.md`](deploy/AMENITIES.md).
 

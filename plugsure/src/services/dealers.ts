@@ -33,7 +33,8 @@ const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const str = (v: unknown, max: number) => { const s = String(v ?? '').trim(); return s ? s.slice(0, max) : null; };
-const d10 = (v: any) => (v == null ? null : typeof v === 'string' ? v.slice(0, 10) : new Date(v).toISOString().slice(0, 10));
+/** A DATE column as YYYY-MM-DD: node-postgres parses DATE as local midnight, so read the local parts (toISOString would shift it a day east of UTC). */
+const d10 = (v: any) => (v == null ? null : typeof v === 'string' ? v.slice(0, 10) : v instanceof Date ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}` : String(v).slice(0, 10));
 const today = () => new Date().toISOString().slice(0, 10);
 const lastMonth = () => { const t = new Date(); t.setUTCDate(1); t.setUTCMonth(t.getUTCMonth() - 1); return t.toISOString().slice(0, 7); };
 /** The commission on charging (minor units, rounded half up). */

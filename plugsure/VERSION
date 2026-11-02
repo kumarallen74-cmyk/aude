@@ -1,11 +1,16 @@
 PlugSure CSMS
-Version:   1.50.0
-Package:   plugsure-v1.50.0
-Prepared:  2026-11-02  (v1.49.0 + phase 38 — see RELEASE-NOTES-v1.50.0.md)
+Version:   1.51.0
+Package:   plugsure-v1.51.0
+Prepared:  2026-11-02  (v1.50.0 + phase 39 — see RELEASE-NOTES-v1.51.0.md)
 Stack:     Node 22 (ESM) · TypeScript · PostgreSQL 16 · OCPP 1.6J + 2.0.1 + 2.1 · OCPI 2.2.1 (CPO + eMSP + hub)
-API:       OpenAPI 3.1 at /openapi.json (1068 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html; SCIM 2.0 at /scim/v2
+API:       OpenAPI 3.1 at /openapi.json (1093 operations, 11 webhook events; TypeScript SDK at /sdk/plugsure-csms-sdk.tgz), reference at /api-docs.html; SCIM 2.0 at /scim/v2
 Pilot:     upgrade from v1.5.0 with docs/UPGRADE-v1.5-to-v1.9.md; rollback deploy/README.md §7.
-Status:    v1.50.0 = v1.49.0 + phase 38: EV dealer partnerships (welcome credit codes for car buyers, redeemed in the app
+Status:    v1.51.0 = v1.50.0 + phase 39: advertising on charger and kiosk screens (screens with a player API,
+           advertisers, campaigns per thousand plays or flat per month, creatives reviewed before they play, proof of
+           play, monthly invoices). Migration 118 (additive). Fixes dates shown a day early in phases 37 and 38.
+
+v1.50.0 (2026-11-02):
+           v1.50.0 = v1.49.0 + phase 38: EV dealer partnerships (welcome credit codes for car buyers, redeemed in the app
            by the buyer's number; the dealer's portal; commission on buyers' charging; monthly dealer statements).
            Migration 117 (additive).
 
