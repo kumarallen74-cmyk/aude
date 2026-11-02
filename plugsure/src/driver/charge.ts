@@ -66,6 +66,7 @@ interface ConnFull {
   tax_overrides: Record<string, unknown> | null;
   in_maintenance: boolean;
   listed: boolean;
+  is_private?: boolean;
   /** Suspended by the operator (v1.4.1): stays on the map, but sells nothing. */
   suspended: boolean;
 }
@@ -79,7 +80,9 @@ async function connFull(connectorUuid: string): Promise<ConnFull | null> {
             (SELECT co.currency FROM country co WHERE co.code = s.country_code) AS currency,
             (c.maintenance_reason IS NOT NULL) AS in_maintenance,
             (cp.status NOT IN ('pending_adoption', 'decommissioned') AND s.archived_at IS NULL) AS listed,
-            (cp.status = 'suspended') AS suspended
+            (cp.status = 'suspended') AS suspended,
+            -- (v1.46.0) A residential or workplace charger: its members' cards only, never sold in the app.
+            EXISTS (SELECT 1 FROM private_group_charger pg WHERE pg.charge_point_id = cp.id) AS is_private
        FROM connector c
        JOIN evse e ON e.id = c.evse_uuid
        JOIN charge_point cp ON cp.id = e.charge_point_id
@@ -100,6 +103,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function sellProblem(c: ConnFull): string | null {
   if (!c.listed) return 'Charger ini tidak lagi beroperasi.';
   if (c.suspended) return 'Charger ini sementara tidak beroperasi.';
+  if (c.is_private) return 'Charger ini khusus untuk penghuni atau karyawan.';
   // Tera (meter verification) gates Indonesian connectors only (the country's regulatory profile).
   if (!profileFor(c.country_code).connectorMaySell(c.tera_status).allowed) return 'Konektor ini sedang tidak dapat menjual energi.';
   if (c.in_maintenance) return 'Konektor ini sedang dalam perawatan.';

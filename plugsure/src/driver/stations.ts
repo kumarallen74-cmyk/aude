@@ -123,7 +123,9 @@ const CONNECTOR_COLUMNS = `
  */
 // Developer sandbox tenants never appear in the public driver app.
 const PUBLICLY_LISTED = `cp.status NOT IN ('pending_adoption', 'decommissioned') AND s.archived_at IS NULL`
-  + ` AND NOT EXISTS (SELECT 1 FROM organisation so WHERE so.id = s.org_id AND so.sandbox_of_org_id IS NOT NULL)`;
+  + ` AND NOT EXISTS (SELECT 1 FROM organisation so WHERE so.id = s.org_id AND so.sandbox_of_org_id IS NOT NULL)`
+  // (v1.46.0) Residential and workplace chargers are for their members only: never on the public map.
+  + ` AND NOT EXISTS (SELECT 1 FROM private_group_charger pg WHERE pg.charge_point_id = cp.id)`;
 
 function toConnectorView(r: ConnectorRow): ConnectorView {
   const online = registry.isOnline(r.ocpp_identity);

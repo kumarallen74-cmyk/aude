@@ -14,7 +14,7 @@ import { config } from '../config.js';
  * persistent volume in production (see deploy/README.md).
  */
 
-export type Bucket = 'firmware' | 'diagnostics';
+export type Bucket = 'firmware' | 'diagnostics' | 'field';
 
 export function bucketDir(bucket: Bucket): string {
   return resolve(config.storage.dir, bucket);
@@ -97,4 +97,14 @@ export async function fileSize(path: string): Promise<number | null> {
 export function publicUrl(pathname: string, requestOrigin?: string): string {
   const base = config.console.publicBaseUrl || requestOrigin || '';
   return `${base}${pathname}`;
+}
+
+/** (v1.45.0+) Write a small buffer (a work-order photo or signature) into the bucket; returns its path and hash. */
+export async function saveBuffer(bucket: Bucket, fileName: string, data: Buffer): Promise<{ path: string; size: number; sha256: string }> {
+  const dir = bucketDir(bucket);
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${Date.now()}-${randomBytes(6).toString('hex')}-${safeFileName(fileName, 'file.bin')}`);
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(path, data, { flag: 'wx' });
+  return { path, size: data.length, sha256: createHash('sha256').update(data).digest('hex') };
 }

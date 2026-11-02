@@ -733,6 +733,9 @@ export async function authorizeIdTag(
       LIMIT 1`,
     [chargePointId, idTag, normaliseEmaid(idTag)],
   );
+  // (v1.46.0) A residential or workplace charger: its members' cards only (no roaming, prepaid or app tokens).
+  const priv = await (await import('../services/private-charging.js')).privateCheck(chargePointId, row && row.kind === 'rfid' ? row.id : null);
+  if (priv === 'refused') return { status: 'Blocked' };
   // Not one of the operator's own cards: it may be a roaming partner's driver (OCPI).
   if (!row) return (await authorizeRoaming(chargePointId, idTag)) ?? { status: 'Invalid' };
   // Contracts work only while the operator has Plug & Charge switched on.
