@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.45.0";
+export const API_VERSION = "1.46.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11644,6 +11644,19 @@ export class Operations {
   }
 
   /**
+   * Add a field checklist
+   *
+   * (v1.46.0) name, kind (corrective, preventive, warranty; none for any), items [{id, label, required}] (1–60), requireSignature, requirePhoto. Audited.
+   *
+   * `POST /v1/field/templates` · needs `charge_point:write`
+   */
+  addFieldChecklist(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/field/templates", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a firmware image by URL
    *
    * Registers firmware hosted at a public HTTPS URL; chargers download it from there. URLs that resolve to private or internal addresses are refused. The declared SHA-256 is stored unverified until you call verify. Audited as firmware.image_added.
@@ -11739,6 +11752,21 @@ export class Operations {
   }
 
   /**
+   * Add a member
+   *
+   * (v1.46.0) unitId, name, tokenId or cardUid (an RFID card; added if new), plate (for the plate cameras). A card is in at most one active membership. Audited.
+   *
+   * `POST /v1/private-groups/{id}/members` · needs `site:write`
+   */
+  addMember(params: {
+    /** The group. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/private-groups/{id}/members", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a note or a promise to pay
    *
    * (v1.20.0) A promise to pay in the future pauses the reminders until that date. Audited as finance.collection_note_added.
@@ -11753,6 +11781,19 @@ export class Operations {
     body: AddNoteOrPromiseToPayBody;
   }, options?: RequestOptions): Promise<AddNoteOrPromiseToPayResponse> {
     return this.transport.request<AddNoteOrPromiseToPayResponse>({ method: "POST", path: "/v1/finance/collections/{kind}/{ref}/notes", pathParams: { kind: params.kind, ref: params.ref }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a number-plate camera
+   *
+   * (v1.46.0) siteId, name, direction, gatePolicy (none, known — fleet vehicles and members — or everyone), gateUrl (POSTed to open the barrier), gateAuthorization (an Authorization header, kept sealed). The camera's key is shown once. Audited.
+   *
+   * `POST /v1/anpr/cameras` · needs `site:write`
+   */
+  addNumberPlateCamera(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/anpr/cameras", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11801,6 +11842,21 @@ export class Operations {
   }
 
   /**
+   * Add a photo to a field job
+   *
+   * (v1.46.0) dataUrl (JPEG, PNG or WebP, at most 3 MB), caption, opId. The same photo twice is kept once.
+   *
+   * `POST /v1/field/jobs/{id}/photos`
+   */
+  addPhotoToFieldJob(params: {
+    /** The work order. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/field/jobs/{id}/photos", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a policy
    *
    * (v1.35.0) Insurer, number, kind, site or charger, cover, premium, excess, term, when paid and from which account. Audited.
@@ -11811,6 +11867,19 @@ export class Operations {
     body: AddPolicyBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/insurance/policies", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a residential or workplace group
+   *
+   * (v1.46.0) siteId, name, kind, billing, rateMinor (per kWh; none: the tariff's), monthlyFeeMinor (per unit), currency, managerName, managerEmail. Audited.
+   *
+   * `POST /v1/private-groups` · needs `site:write`
+   */
+  addResidentialOrWorkplaceGroup(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/private-groups", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11915,6 +11984,21 @@ export class Operations {
     body: AddTrustAnchorBody;
   }, options?: RequestOptions): Promise<PncTrustAnchor> {
     return this.transport.request<PncTrustAnchor>({ method: "POST", path: "/v1/pnc/trust-anchors", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a unit (apartment, team or cost centre)
+   *
+   * (v1.46.0) code (unique in the group), name, billingEmail.
+   *
+   * `POST /v1/private-groups/{id}/units` · needs `site:write`
+   */
+  addUnitApartmentTeamOrCostCentre(params: {
+    /** The group. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/private-groups/{id}/units", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12700,6 +12784,35 @@ export class Operations {
   }
 
   /**
+   * The building manager: add or remove a member, add a unit
+   *
+   * (v1.46.0) action: add_member (unitId, name, cardUid, plate), remove_member (memberId), add_unit (code, name). Authenticated by the link's token; recorded in the audit log.
+   *
+   * `POST /v1/building/{token}`
+   */
+  buildingManagerAddOrRemoveMemberAddUnit(params: {
+    /** The manager's link token. */
+    token: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/building/{token}", pathParams: { token: params.token }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * The building manager's page (data)
+   *
+   * (v1.46.0) The group, its chargers (status now), units and members (cards masked), this month's usage and the statements. Authenticated by the link's token.
+   *
+   * `GET /v1/building/{token}`
+   */
+  buildingManagerPageData(params: {
+    /** The manager's link token. */
+    token: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/building/{token}", pathParams: { token: params.token }, accept: "json" }, options);
+  }
+
+  /**
    * Cancel a capex project
    *
    * (v1.33.0) reason, cancelledOn; what was spent is written off in the ledger. Audited.
@@ -13325,6 +13438,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a field checklist
+   *
+   * (v1.46.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/field/templates/{id}` · needs `charge_point:write`
+   */
+  changeOrArchiveFieldChecklist(params: {
+    /** The template. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/field/templates/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a fleet vehicle
    *
    * (v1.44.0) The fields above, or archive: true. Audited.
@@ -13337,6 +13465,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/fleet-vehicles/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a group
+   *
+   * (v1.46.0) The fields above, or archive: true (its chargers become public again). Audited.
+   *
+   * `PUT /v1/private-groups/{id}` · needs `site:write`
+   */
+  changeOrArchiveGroup(params: {
+    /** The group. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/private-groups/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13430,6 +13573,40 @@ export class Operations {
   }
 
   /**
+   * Change or archive a unit
+   *
+   * (v1.46.0) The fields above, or archive: true.
+   *
+   * `PUT /v1/private-groups/{id}/units/{unitId}` · needs `site:write`
+   */
+  changeOrArchiveUnit(params: {
+    /** The group. */
+    id: string;
+    /** The unit. */
+    unitId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/private-groups/{id}/units/{unitId}", pathParams: { id: params.id, unitId: params.unitId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or remove a member
+   *
+   * (v1.46.0) The fields above, or archive: true (the card no longer starts the group's chargers). Audited.
+   *
+   * `PUT /v1/private-groups/{id}/members/{memberId}` · needs `site:write`
+   */
+  changeOrRemoveMember(params: {
+    /** The group. */
+    id: string;
+    /** The member. */
+    memberId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/private-groups/{id}/members/{memberId}", pathParams: { id: params.id, memberId: params.memberId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a payroll line
    *
    * (v1.33.0) overtime, bonus, deduction (draft only); the line and totals are recomputed.
@@ -13472,6 +13649,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/status-page", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, re-key or archive a camera
+   *
+   * (v1.46.0) The fields above, enabled, rotateKey: true (a new key, shown once), or archive: true. Audited.
+   *
+   * `PUT /v1/anpr/cameras/{id}` · needs `site:write`
+   */
+  changeReKeyOrArchiveCamera(params: {
+    /** The camera. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/anpr/cameras/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13766,6 +13958,20 @@ export class Operations {
    */
   checkIOSNotificationsKeyWithAppleAgain(options?: RequestOptions): Promise<DriverAppView> {
     return this.transport.request<DriverAppView>({ method: "POST", path: "/v1/driver-app/apns/check", accept: "json" }, options);
+  }
+
+  /**
+   * Check the job's charger now
+   *
+   * (v1.46.0) Asks the charger for its status and a heartbeat, then returns what it says: online, each connector's status, open alerts.
+   *
+   * `POST /v1/field/jobs/{id}/check` · needs `charge_point:command`
+   */
+  checkJobChargerNow(params: {
+    /** The work order. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/field/jobs/{id}/check", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -14932,6 +15138,21 @@ export class Operations {
   }
 
   /**
+   * Draft a month's statements
+   *
+   * (v1.46.0) month (YYYY-MM, a past or the current month): a statement per unit from its members' sessions on the group's chargers; drafts are recalculated, issued ones are kept. Audited.
+   *
+   * `POST /v1/private-groups/{id}/statements` · needs `site:write`
+   */
+  draftMonthStatements(params: {
+    /** The group. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/private-groups/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Draft the month's withholding slips
    *
    * (v1.32.0) One slip per payee and kind from the month's approved bills; drafts follow the bills, issued slips stay as issued (the answer counts those whose bills changed). Audited.
@@ -15464,6 +15685,59 @@ export class Operations {
    */
   fetchPkiRootCertificates(options?: RequestOptions): Promise<FetchPkiRootCertificatesResponse> {
     return this.transport.request<FetchPkiRootCertificatesResponse>({ method: "POST", path: "/v1/pnc/trust-anchors/sync", accept: "json" }, options);
+  }
+
+  /**
+   * Field checklists
+   *
+   * (v1.46.0) Checklist templates.
+   *
+   * `GET /v1/field/templates` · needs `charge_point:read`
+   */
+  fieldChecklists(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/field/templates", accept: "json" }, options);
+  }
+
+  /**
+   * A field job
+   *
+   * (v1.46.0) The work order with its checklist (as recorded, else from its template), photos, the signature, the parts issued to it, and the charger now (online, connectors, open alerts).
+   *
+   * `GET /v1/field/jobs/{id}` · needs `charge_point:read`
+   */
+  fieldJob(params: {
+    /** The work order. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/field/jobs/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * A field job's signature
+   *
+   * (v1.46.0) The PNG.
+   *
+   * `GET /v1/field/jobs/{id}/signature` · needs `charge_point:read`
+   */
+  fieldJobSignature(params: {
+    /** The work order. */
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/field/jobs/{id}/signature", pathParams: { id: params.id }, accept: "binary" }, options);
+  }
+
+  /**
+   * A field photo
+   *
+   * (v1.46.0) The image.
+   *
+   * `GET /v1/field/photos/{id}` · needs `charge_point:read`
+   */
+  fieldPhoto(params: {
+    /** The photo. */
+    id: string;
+  }, options?: RequestOptions): Promise<ArrayBuffer> {
+    return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/field/photos/{id}", pathParams: { id: params.id }, accept: "binary" }, options);
   }
 
   /**
@@ -16423,6 +16697,23 @@ export class Operations {
   }
 
   /**
+   * A group's statements
+   *
+   * (v1.46.0) month (YYYY-MM; default every month): each unit's statement — sessions, kWh, energy, the monthly fee, the amount and status (draft, issued, paid, void).
+   *
+   * `GET /v1/private-groups/{id}/statements` · needs `site:read`
+   */
+  groupStatements(params: {
+    /** The group. */
+    id: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/private-groups/{id}/statements", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
    * Group trend
    *
    * (v1.28.0) Twelve months of the group's net revenue and operating result per currency.
@@ -16750,6 +17041,22 @@ export class Operations {
     sid: string;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/landlords/statements/{sid}/issue", pathParams: { sid: params.sid }, accept: "json" }, options);
+  }
+
+  /**
+   * Issue, mark paid or void a statement
+   *
+   * (v1.46.0) action: issue (a draft), paid (an issued one), void. Audited.
+   *
+   * `POST /v1/private-statements/{id}/{action}` · needs `site:write`
+   */
+  issueMarkPaidOrVoidStatement(params: {
+    /** The statement. */
+    id: string;
+    /** issue, paid or void. */
+    action: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/private-statements/{id}/{action}", pathParams: { id: params.id, action: params.action }, accept: "json" }, options);
   }
 
   /**
@@ -17930,6 +18237,23 @@ export class Operations {
   }
 
   /**
+   * A month's statements as a spreadsheet
+   *
+   * (v1.46.0) month (default this month): one row per unit, and every session.
+   *
+   * `GET /v1/private-groups/{id}/statements.xlsx` · needs `site:read`
+   */
+  monthStatementsAsSpreadsheet(params: {
+    /** The group. */
+    id: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/private-groups/{id}/statements.xlsx", pathParams: { id: params.id }, query: params.query, accept: "text" }, options);
+  }
+
+  /**
    * My commission terms per currency
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -17980,6 +18304,21 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/roaming/hub/clearing/fee-invoices/{id}/html", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * My field jobs
+   *
+   * (v1.46.0) The work orders assigned to me or to no one: open and in progress, and the ones done in the last 7 days. Soonest scheduled, then most urgent, first. mine=true for only mine.
+   *
+   * `GET /v1/field/jobs` · needs `charge_point:read`
+   */
+  myFieldJobs(params?: {
+    query?: {
+      mine?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/field/jobs", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -18173,6 +18512,20 @@ export class Operations {
   }
 
   /**
+   * A new link for the building manager
+   *
+   * (v1.46.0) The manager's page at /building/{token}, shown once; the old link stops working. Audited.
+   *
+   * `POST /v1/private-groups/{id}/portal` · needs `site:write`
+   */
+  newLinkForBuildingManager(params: {
+    /** The group. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/private-groups/{id}/portal", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * A new SCIM token
    *
    * (v1.43.0) Returns the token once (pscim_…) and the endpoint; only its hash is kept and the previous token stops working at once. Audited.
@@ -18181,6 +18534,17 @@ export class Operations {
    */
   newScimToken(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/scim/token", accept: "json" }, options);
+  }
+
+  /**
+   * Number-plate cameras
+   *
+   * (v1.46.0) Each camera: site, direction (entry, exit, both), gate policy, last seen, key prefix.
+   *
+   * `GET /v1/anpr/cameras` · needs `site:read`
+   */
+  numberPlateCameras(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/anpr/cameras", accept: "json" }, options);
   }
 
   /**
@@ -18450,6 +18814,23 @@ export class Operations {
   }
 
   /**
+   * Parking visits
+   *
+   * (v1.46.0) siteId, status (open, closed, paid, waived), plate (its start): each car's stay — in and out, charging minutes, overstay and the fee. Newest first; at most 300.
+   *
+   * `GET /v1/parking/visits` · needs `site:read`
+   */
+  parkingVisits(params?: {
+    query?: {
+      siteId?: string;
+      status?: string;
+      plate?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/parking/visits", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Payables
    *
    * Refunds due on payments this account took (with the gateway's refund window and days left), (v1.15.0) for an operator's own account the PlugSure Hub settlement positions it owes, and site owners' shares on statements finalised in the last 120 days of the operators whose payments it took, with what was paid against each (recorded with POST /v1/finance/statements/:sid/payments).
@@ -18661,6 +19042,51 @@ export class Operations {
     body: PlaceTimeDepositBody;
   }, options?: RequestOptions): Promise<PlaceTimeDepositResponse> {
     return this.transport.request<PlaceTimeDepositResponse>({ method: "POST", path: "/v1/finance/treasury/deposits", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Plan a field job
+   *
+   * (v1.46.0) assigneeId (a user; null for no one), scheduledFor, templateId. Audited.
+   *
+   * `PUT /v1/field/jobs/{id}/plan` · needs `charge_point:write`
+   */
+  planFieldJob(params: {
+    /** The work order. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/field/jobs/{id}/plan", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A plate read (the camera)
+   *
+   * (v1.46.0) The camera (or its software) posts each read: plate, confidence (0–100; below 60 is only recorded), direction (entry, exit; else from any open visit), at. An entry opens a visit, an exit closes it with the fee, and the barrier opens per the camera's policy. Authenticated by the camera's key in the path.
+   *
+   * `POST /v1/anpr/events/{key}`
+   */
+  plateReadCamera(params: {
+    /** The camera's key. */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/anpr/events/{key}", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Plate reads
+   *
+   * (v1.46.0) The latest reads (limit, default 100): camera, plate, confidence, what matched and what was done.
+   *
+   * `GET /v1/anpr/events` · needs `site:read`
+   */
+  plateReads(params?: {
+    query?: {
+      limit?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/anpr/events", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -20548,6 +20974,31 @@ export class Operations {
   }
 
   /**
+   * Residential and workplace groups
+   *
+   * (v1.46.0) Each group of private chargers: its site, kind (residential, workplace), billing (per_unit, cost_centre, none), chargers, units and members.
+   *
+   * `GET /v1/private-groups` · needs `site:read`
+   */
+  residentialAndWorkplaceGroups(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/private-groups", accept: "json" }, options);
+  }
+
+  /**
+   * A residential or workplace group
+   *
+   * (v1.46.0) The group, its chargers, its units (with this month's sessions, kWh and amount) and members.
+   *
+   * `GET /v1/private-groups/{id}` · needs `site:read`
+   */
+  residentialOrWorkplaceGroup(params: {
+    /** The group. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/private-groups/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Resolve an alert
    *
    * Closes an open alert. Contacts who were notified get a "resolved" notice if their rule asks for one. Audited.
@@ -21795,6 +22246,21 @@ export class Operations {
   }
 
   /**
+   * Set a group's chargers
+   *
+   * (v1.46.0) chargePointIds: chargers at the group's site, in no other group. They leave the public map, and only the group's members' cards start them. Audited.
+   *
+   * `PUT /v1/private-groups/{id}/chargers` · needs `site:write`
+   */
+  setGroupChargers(params: {
+    /** The group. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/private-groups/{id}/chargers", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set the KPI targets
    *
    * (v1.31.0) targets by KPI (empty leaves it), copyFrom (a month whose targets to start from). Audited.
@@ -22214,6 +22680,22 @@ export class Operations {
   }
 
   /**
+   * Settle a parking visit
+   *
+   * (v1.46.0) action: paid or waived (a closed visit with a fee). Audited.
+   *
+   * `POST /v1/parking/visits/{id}/{action}` · needs `site:write`
+   */
+  settleParkingVisit(params: {
+    /** The visit. */
+    id: string;
+    /** paid or waived. */
+    action: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/parking/visits/{id}/{action}", pathParams: { id: params.id, action: params.action }, accept: "json" }, options);
+  }
+
+  /**
    * Settle a refund transfer whose result Duitku never confirmed
    *
    * (v1.15.0) For a transfer sent (or stuck sending) without a confirmed result, after checking Duitku's dashboard: succeeded records the refund refunded; failed makes it due again. Audited as refund.transfer_resolved.
@@ -22349,6 +22831,21 @@ export class Operations {
     body: SignOffCloseStepBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/close/{month}/steps/{step}/sign-off", pathParams: { month: params.month, step: params.step }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Sign off a field job
+   *
+   * (v1.46.0) name (who signs: the site contact or the customer) and dataUrl (a PNG of the signature). Audited.
+   *
+   * `POST /v1/field/jobs/{id}/signature`
+   */
+  signOffFieldJob(params: {
+    /** The work order. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/field/jobs/{id}/signature", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -22520,6 +23017,21 @@ export class Operations {
   }
 
   /**
+   * A site's parking rules
+   *
+   * (v1.46.0) graceMinutes (free after charging ends), feePerHourMinor (each started hour beyond the grace; 0 for none), maxMinutes (an alert when a car stays longer), plateAutostart (a known car's plate starts the charger it plugs into). Audited.
+   *
+   * `PUT /v1/sites/{siteId}/parking` · needs `site:write`
+   */
+  siteParkingRules(params: {
+    /** The site. */
+    siteId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/sites/{siteId}/parking", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Site P&L for a month
    *
    * (v1.23.0) Per site: revenue, energy cost, shared costs allocated (by category), depreciation of its investments, and its contribution; totals per currency; costs with no site to go to. month: YYYY-MM, default last month.
@@ -22610,6 +23122,17 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/energy/sites/{siteId}/settings", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Spare parts for the field app
+   *
+   * (v1.46.0) Stock items and locations.
+   *
+   * `GET /v1/field/parts` · needs `charge_point:read`
+   */
+  sparePartsForFieldApp(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/field/parts", accept: "json" }, options);
   }
 
   /**
@@ -23704,6 +24227,21 @@ export class Operations {
   }
 
   /**
+   * Use a spare part on a field job
+   *
+   * (v1.46.0) itemId, qty, locationId (the van or store): issued from stock to the work order (its cost goes on the job). Audited.
+   *
+   * `POST /v1/field/jobs/{id}/parts`
+   */
+  useSparePartOnFieldJob(params: {
+    /** The work order. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/field/jobs/{id}/parts", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Validate a tariff
    *
    * Checks a tariff definition against the regulatory ceilings for a connector power, without saving it.
@@ -24335,6 +24873,21 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<string> {
     return this.transport.request<string>({ method: "GET", path: "/v1/finance/tax/slips/{month}/ebupot", pathParams: { month: params.month }, accept: "text" }, options);
+  }
+
+  /**
+   * Work a field job
+   *
+   * (v1.46.0) action: take (assign it to me), arrive (on site; it is now in progress), checklist (items [{id, done, note}]), notes (notes, labourHours), finish (labourHours, notes; needs the required checklist items, a photo and a signature if the template asks; resolution). opId makes a queued offline change apply once. Needs charge_point:command (technicians) or charge_point:write. Audited.
+   *
+   * `PUT /v1/field/jobs/{id}`
+   */
+  workFieldJob(params: {
+    /** The work order. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/field/jobs/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**

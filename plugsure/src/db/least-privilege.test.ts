@@ -52,7 +52,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'scim_config', 'scim_user', 'scim_group', 'scim_group_member', 'dynamic_price_settings', 'dynamic_price_rule', 'site_price_now',
       'dr_program', 'dr_event', 'dr_event_site', 'status_page', 'status_incident', 'status_subscriber',
       'fleet_vehicle', 'session_departure', 'diagnostic_run',
-      'support_settings', 'support_case', 'support_message', 'support_macro', 'site_candidate', 'credit_settings', 'gift_card_batch', 'gift_card', 'referral_code', 'referral', 'driver_credit_entry', 'telematics_connection', 'vehicle_telemetry']]);
+      'support_settings', 'support_case', 'support_message', 'support_macro', 'site_candidate', 'credit_settings', 'gift_card_batch', 'gift_card', 'referral_code', 'referral', 'driver_credit_entry', 'telematics_connection', 'vehicle_telemetry',
+      'field_template', 'work_order_photo', 'field_op', 'private_group', 'private_group_charger', 'private_unit', 'private_member', 'private_statement', 'anpr_camera', 'parking_visit', 'plate_event']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -164,5 +165,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     status_page: 'INSERT,SELECT,UPDATE', status_incident: 'INSERT,SELECT,UPDATE', status_subscriber: 'DELETE,INSERT,SELECT,UPDATE',
     fleet_vehicle: 'INSERT,SELECT,UPDATE', session_departure: 'INSERT,SELECT,UPDATE', diagnostic_run: 'INSERT,SELECT,UPDATE',
     support_settings: 'INSERT,SELECT,UPDATE', support_case: 'INSERT,SELECT,UPDATE', support_message: 'INSERT,SELECT,UPDATE', support_macro: 'INSERT,SELECT,UPDATE', site_candidate: 'INSERT,SELECT,UPDATE', credit_settings: 'INSERT,SELECT,UPDATE', gift_card_batch: 'INSERT,SELECT,UPDATE', gift_card: 'INSERT,SELECT,UPDATE', referral_code: 'INSERT,SELECT,UPDATE', referral: 'INSERT,SELECT,UPDATE', driver_credit_entry: 'INSERT,SELECT,UPDATE', telematics_connection: 'INSERT,SELECT,UPDATE', vehicle_telemetry: 'INSERT,SELECT,UPDATE',
+    // (v1.46.0, 113) a private group's chargers are replaced as a set.
+    field_template: 'INSERT,SELECT,UPDATE', work_order_photo: 'INSERT,SELECT,UPDATE', field_op: 'INSERT,SELECT,UPDATE', private_group: 'INSERT,SELECT,UPDATE', private_group_charger: 'DELETE,INSERT,SELECT,UPDATE',
+    private_unit: 'INSERT,SELECT,UPDATE', private_member: 'INSERT,SELECT,UPDATE', private_statement: 'INSERT,SELECT,UPDATE', anpr_camera: 'INSERT,SELECT,UPDATE', parking_visit: 'INSERT,SELECT,UPDATE', plate_event: 'INSERT,SELECT,UPDATE',
   });
 });

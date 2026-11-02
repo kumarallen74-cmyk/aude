@@ -856,6 +856,12 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     try { return await (await import('../services/driver-credit.js')).applyReferral(p.appDriverId, p.deviceId ?? null, (req.body as any)?.code); } catch (e) { return creditFail(reply, e); }
   }));
 
+  // ───────────────────────────────────────────────────────── (v1.46.0) the trip planner
+
+  app.post('/d/v1/trips/plan', async (req, reply) => {
+    try { return await (await import('./trips.js')).plan((req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>, brandOrg(req)); } catch (e) { return creditFail(reply, e); }
+  });
+
   // ───────────────────────────────────────────────────────── (v1.45.0) reporting a problem
 
   app.get('/d/v1/support/cases', async (req, reply) => {

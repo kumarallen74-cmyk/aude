@@ -35,6 +35,10 @@ const MESSAGES = [
   'Pakai kredit Rp 30.000', 'Saldo kredit Rp 65.000. Yang tidak terpakai kembali menjadi kredit.', '±12,5 kWh · kredit Rp 30.000',
   'Ajak teman ke PlugSure Demo: Anda dapat Rp 20.000, teman Anda Rp 10.000 setelah pengisian pertamanya.', 'Laporan PS-12 terkirim.', 'Kredit Rp 50.000 ditambahkan.',
   'Kode diterima. Kredit Rp 10.000 masuk setelah pengisian pertama Anda.', 'Nilai Anda: 5/5. Terima kasih.',
+  // the trip planner (v1.46.0)
+  'Rencanakan perjalanan', 'Lokasi saya', 'Pilih stasiun', 'atau koordinat (lat, lon)', 'Baterai sekarang (%)', 'Jarak tempuh penuh (km)', 'Konektor mobil', 'Semua jenis', 'Cadangan saat tiba (%)',
+  'Tanpa berhenti mengisi', 'Tidak ada stasiun dalam jangkauan', 'Perkiraan jarak lewat jalan; berhenti di stasiun nyata.', '±529 km · 3 kali isi daya', 'Tiba dengan baterai 22%',
+  'Biaya isi sekitar Rp 120.000', 'Km 212 dari awal', 'Tiba 18% · isi sampai 80%', '24 menit mengisi · 37,2 kWh', 'Setelah 95 km, sisa jarak tempuh 195 km di atas cadangan 15%.',
   // queue waits (v1.44.0)
   'Perkiraan 15 menit', 'Prioritas',
   // dynamic pricing (v1.43.0)

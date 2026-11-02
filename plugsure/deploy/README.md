@@ -679,6 +679,16 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      & referrals, [DRIVER-CREDIT.md](DRIVER-CREDIT.md)); connect fleet
      telematics (Depot charging → Telematics). Workers added: support SLAs
      (5 min), driver credit (15 min), telematics polling (5 min).
+  39. (v1.46.0) Optional, per operator: give technicians the field
+     technician role and add checklists (Maintain → Field,
+     [FIELD-APP.md](FIELD-APP.md); photos are kept under STORAGE_DIR/field,
+     back it up); set up residential and workplace groups and send managers
+     their link (Assets & energy → Private charging,
+     [PRIVATE-CHARGING.md](PRIVATE-CHARGING.md)); add plate cameras, the
+     site's parking rules and route parking.overstay (Assets & energy →
+     Plates & parking, [PLATES-PARKING.md](PLATES-PARKING.md)). The trip
+     planner needs nothing ([TRIP-PLANNER.md](TRIP-PLANNER.md)). Worker added:
+     parking (5 min).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

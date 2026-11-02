@@ -68,6 +68,11 @@ export function registerCoreListeners(): void {
   // operator remote-start limits enforced — both react to session events.
   registerPrepaidEnforcement();
   registerOperatorLimits();
+  // (v1.46.0) Plate start: a known car that just arrived starts charging when it plugs in (services/anpr.ts).
+  bus.on('connector.status_changed', (e) => {
+    if (e.status !== 'Preparing') return;
+    void import('./anpr.js').then((m) => m.onConnectorStatus(e)).catch((err) => logger.warn({ err: (err as Error).message }, 'plate autostart check failed'));
+  });
   // Outage history from connect/disconnect (raised in the socket-owning process).
   registerUptimeListeners();
   // Outbound webhooks: events are written to the outbox where they are raised.
@@ -239,6 +244,8 @@ export function startWorkers(): () => void {
   const supportSla = once('support-sla', async () => { await (await import('./support-desk.js')).slaSweep(); });
   const creditSweep = once('driver-credit', async () => { const m = await import('./driver-credit.js'); await m.sweep(); await m.qualifyReferrals(); });
   const telematicsPoll = once('telematics-poll', async () => { await (await import('./telematics.js')).pollDue(); });
+  // (v1.46.0) Parking overstays (and linking plate-started sessions to their visits).
+  const parkingSweep = once('parking', async () => { await (await import('./anpr.js')).sweep(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -385,6 +392,7 @@ export function startWorkers(): () => void {
     every(supportSla, 5 * 60_000, 'support-sla'),
     every(creditSweep, 15 * 60_000, 'driver-credit'),
     every(telematicsPoll, 5 * 60_000, 'telematics-poll'),
+    every(parkingSweep, 5 * 60_000, 'parking'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

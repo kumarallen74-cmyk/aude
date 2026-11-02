@@ -22,6 +22,8 @@ export const ALERT_KINDS: Record<string, string> = {
   'fleet.vehicle_not_ready': 'Fleet vehicle not ready in time',
   // (v1.45.0) The support desk (services/support-desk.ts): a case past its first-answer or resolution time.
   'support.sla_breach': 'Support case past its SLA',
+  // (v1.46.0) Plates & parking (services/anpr.ts): a car past the site's longest stay.
+  'parking.overstay': 'Car parked past the longest stay',
   'charge_point.device_event': 'Hardware monitor alarm',
   'session.stuck': 'Session stuck',
   'session.orphaned': 'Orphaned session',
