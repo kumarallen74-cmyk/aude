@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.48.0",
+    "version": "1.49.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Governance → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Governance → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Governance → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Governance → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -79725,6 +79725,1850 @@
           "smartcharging:read"
         ]
       }
+    },
+    "/v1/battery-swap": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Battery swap overview",
+        "operationId": "batterySwapOverview",
+        "description": "(v1.49.0) The settings, each cabinet (online, packs ready and charging, swaps in 24 hours) and the figures: swaps, refusals, credit paid, energy, riders, monthly fees, packs by status.\n\n**Permissions checked:** `site:read`.",
+        "responses": {
+          "200": {
+            "description": "{settings, cabinets, kpis}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/battery-swap/settings": {
+      "put": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Battery swap settings",
+        "operationId": "batterySwapSettings",
+        "description": "(v1.49.0) enabled, pricePerSwapMinor (without a plan, or beyond it; paid from the rider's credit), minSocOut (a pack is ready at this charge, 50–100), retireSoh (below it a pack is flagged, 40–95). Audited.\n\n**Permissions checked:** `site:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/cabinets": {
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Add a swap cabinet",
+        "operationId": "addSwapCabinet",
+        "description": "(v1.49.0) siteId, code, name, slots. The key its controller posts with is shown once. Audited.\n\n**Permissions checked:** `site:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The cabinet, with its key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/cabinets/{id}": {
+      "put": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Change, re-key or archive a swap cabinet",
+        "operationId": "changeReKeyOrArchiveSwapCabinet",
+        "description": "(v1.49.0) The fields above, status (active, maintenance), rotateKey: true (a new key, shown once) or archive: true. Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The cabinet.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The cabinet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/packs": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Swap battery packs",
+        "operationId": "swapBatteryPacks",
+        "description": "(v1.49.0) Every pack: where it is (a cabinet and slot, a rider, maintenance), its charge, health, temperature, cycles and fault; status filters (retired: the retired ones).\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{packs, byStatus, retireSoh}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Register a battery pack",
+        "operationId": "registerBatteryPack",
+        "description": "(v1.49.0) serial, model, capacityWh. It starts in maintenance until a cabinet reports it. Audited.\n\n**Permissions checked:** `site:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pack.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/packs/{id}": {
+      "put": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Change a battery pack",
+        "operationId": "changeBatteryPack",
+        "description": "(v1.49.0) model, capacityWh, fault; status maintenance or retired (or back from maintenance into a cabinet). Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The pack.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pack.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/plans": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Swap plans",
+        "operationId": "swapPlans",
+        "description": "(v1.49.0) Each plan: the monthly fee, the swaps included (null: unlimited) and its subscribers.\n\n**Permissions checked:** `site:read`.",
+        "responses": {
+          "200": {
+            "description": "{plans}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Add a swap plan",
+        "operationId": "addSwapPlan",
+        "description": "(v1.49.0) name, monthlyMinor, swapsIncluded (null: unlimited; a plan of 0 with 0 included is pay per swap). Audited.\n\n**Permissions checked:** `site:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/plans/{id}": {
+      "put": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Change or archive a swap plan",
+        "operationId": "changeOrArchiveSwapPlan",
+        "description": "(v1.49.0) The fields above, or archive: true (no new subscribers; current ones lapse at their renewal). Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The plan.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/battery-swap/riders": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Swap riders",
+        "operationId": "swapRiders",
+        "description": "(v1.49.0) Subscriptions: the rider (last digits of the phone), plan, period, swaps used and the pack they hold.\n\n**Permissions checked:** `site:read`.",
+        "responses": {
+          "200": {
+            "description": "{riders}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/battery-swap/swaps": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "The swap log",
+        "operationId": "swapLog",
+        "description": "(v1.49.0) The last 500 swaps (cabinetId filters): the packs in and out, their charge, the energy, included, paid or refused (and why).\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "cabinetId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{swaps}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/swap/cabinets/{key}": {
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "A swap cabinet reports (the cabinet's API)",
+        "operationId": "swapCabinetReportsCabinetApi",
+        "description": "(v1.49.0) type status {slots: [{slot, serial, soc, soh, tempC, fault}]}: the packs in its slots; type authorize {riderCode}: may this rider swap (allowed, outcome, amountMinor, reason)?; type swap {reference, riderCode, batteryIn: {serial, soc, slot}, batteryOut: {serial, soc}}: a swap done, idempotent by reference — 402 when refused (no active plan, not enough credit). Authenticated by the cabinet's key in the path.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "The cabinet's key.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "402": {
+            "$ref": "#/components/responses/E402"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/roadside": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Roadside charging",
+        "operationId": "roadsideCharging",
+        "description": "(v1.49.0) The settings, the open requests (status=all: also the last day's), the vans, and the last 30 days: done, revenue, kWh, cancelled, the median time to arrive.\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{settings, requests, kpis, vans}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/roadside/settings": {
+      "put": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Roadside settings",
+        "operationId": "roadsideSettings",
+        "description": "(v1.49.0) enabled, calloutMinor, perKwhMinor, radiusKm (from each van's base), maxKwh (the most a request asks for), phone (the dispatch desk, shown in the app). Audited.\n\n**Permissions checked:** `session:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:write"
+        ]
+      }
+    },
+    "/v1/roadside/requests": {
+      "post": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Take a roadside request",
+        "operationId": "takeRoadsideRequest",
+        "description": "(v1.49.0) lat, lon, address, name, phone, vehicle, plate, connector (CCS2, Type 2, CHAdeMO, GB/T), soc, kwh, note. Quoted at the call-out fee plus the kWh at the price; refused outside every van's radius. Audited.\n\n**Permissions checked:** `session:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:write"
+        ]
+      }
+    },
+    "/v1/roadside/requests/{id}": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "A roadside request",
+        "operationId": "roadsideRequest",
+        "description": "(v1.49.0) The request and, while open, the vans that can take it, nearest first (distance, ETA, energy left).\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The request.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request, with candidates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/roadside/requests/{id}/status": {
+      "post": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Move a roadside request on",
+        "operationId": "moveRoadsideRequestOn",
+        "description": "(v1.49.0) status: assigned (vanId; sets the ETA), requested (unassign), en_route, charging, done (kwhDelivered; paid from the driver's credit as far as it goes, the rest collectedBy cash, qris, card_terminal or invoice), cancelled (reason). Audited.\n\n**Permissions checked:** `session:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The request.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:write"
+        ]
+      }
+    },
+    "/v1/roadside/vans": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Roadside vans",
+        "operationId": "roadsideVans",
+        "description": "(v1.49.0) Each van: its battery and charger, energy left, base and last position, technician, status.\n\n**Permissions checked:** `session:read`.",
+        "responses": {
+          "200": {
+            "description": "{vans}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Add a roadside van",
+        "operationId": "addRoadsideVan",
+        "description": "(v1.49.0) name, plate, kwhCapacity, kwOutput, baseLat, baseLon, technicianId. Audited.\n\n**Permissions checked:** `session:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The van.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:write"
+        ]
+      }
+    },
+    "/v1/roadside/vans/{id}": {
+      "put": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Change a van, or report its position",
+        "operationId": "changeVanOrReportItsPosition",
+        "description": "(v1.49.0) The fields above and status (available, off_duty), archive: true; or only {lat, lon, kwhLeft}: a position report from the technician's phone or the van's tracker.\n\n**Permissions checked:** `session:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The van.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The van.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:write"
+        ]
+      }
+    },
+    "/v1/warranty/chargers": {
+      "get": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "Chargers' warranties",
+        "operationId": "chargersWarranties",
+        "description": "(v1.49.0) Every charger with its warranty now (the one ending last): covered, expiring (60 days or less), expired or none; the supplier, what it covers and open RMA cases. state filters.\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{chargers, counts}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      }
+    },
+    "/v1/warranty/chargers/{id}": {
+      "get": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "A charger's warranties and RMA cases",
+        "operationId": "chargerWarrantiesAndRmaCases",
+        "description": "(v1.49.0) Every warranty (and extension) and every RMA case of the charger.\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The charger.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{warranties, rma}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      }
+    },
+    "/v1/warranties": {
+      "post": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "Record a charger warranty",
+        "operationId": "recordChargerWarranty",
+        "description": "(v1.49.0) chargePointId, supplierId, startsOn, endsOn, covers (parts, labour, shipping, on_site), terms, reference, extended. Audited.\n\n**Permissions checked:** `charge_point:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The warranty.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write"
+        ]
+      }
+    },
+    "/v1/warranties/{id}": {
+      "put": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "Change or remove a warranty",
+        "operationId": "changeOrRemoveWarranty",
+        "description": "(v1.49.0) The fields above, or remove: true. Audited.\n\n**Permissions checked:** `charge_point:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The warranty.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The warranty.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write"
+        ]
+      }
+    },
+    "/v1/rma": {
+      "get": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "RMA cases",
+        "operationId": "rmaCases",
+        "description": "(v1.49.0) Open cases and those closed in the last 60 days (status=all: every one), with the figures: open, waiting on the manufacturer, the median turnaround, rejected and out-of-warranty cost (12 months).\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chargePointId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{cases, kpis}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "Open an RMA case",
+        "operationId": "openRmaCase",
+        "description": "(v1.49.0) chargePointId, part, partSerial, fault, supplierId (default: the warranty's), workOrderId. In warranty or not is worked out from the charger's warranty today. Audited.\n\n**Permissions checked:** `charge_point:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The case.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write"
+        ]
+      }
+    },
+    "/v1/rma/{id}": {
+      "get": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "An RMA case",
+        "operationId": "rmaCase",
+        "description": "(v1.49.0) The case with its history.\n\n**Permissions checked:** `charge_point:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The case.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The case.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Chargers"
+        ],
+        "summary": "Update or move an RMA case",
+        "operationId": "updateOrMoveRmaCase",
+        "description": "(v1.49.0) vendorRef, trackingOut, trackingBack, replacementSerial, costMinor, outcome, note; status: requested, approved (needs vendorRef), shipped (trackingOut), replaced (replacementSerial; updateChargerSerial: true for a whole charger), closed, rejected (outcome). Audited.\n\n**Permissions checked:** `charge_point:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The case.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The case.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "charge_point:write"
+        ]
+      }
+    },
+    "/v1/site-amenities": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Sites' amenities and accessibility",
+        "operationId": "sitesAmenitiesAndAccessibility",
+        "description": "(v1.49.0) Every site: its amenities, accessibility (bays, step-free, bay width, cable reach, screen height; the score of 5 and accessible or not), hours and open reports.\n\n**Permissions checked:** `site:read`.",
+        "responses": {
+          "200": {
+            "description": "{sites, amenities, summary}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/sites/{id}/amenities": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "A site's amenities and accessibility",
+        "operationId": "siteAmenitiesAndAccessibility",
+        "description": "(v1.49.0) As above, for one site.\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site's amenities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Set a site's amenities and accessibility",
+        "operationId": "setSiteAmenitiesAndAccessibility",
+        "description": "(v1.49.0) amenities (toilet, prayer_room, food, shop, wifi, covered, lit, security, lounge, free_parking), accessibleBays, stepFree, bayWidthM, cableReachM, maxScreenHeightCm, open24h, hours, notes, verified: true (checked today). Shown in the driver app. Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The site's amenities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
+    },
+    "/v1/accessibility-reports": {
+      "get": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Drivers' accessibility reports",
+        "operationId": "driversAccessibilityReports",
+        "description": "(v1.49.0) Open reports from the app (status=all: every one): the site, what is wrong (blocked_bay, no_step_free, cable_short, screen_high, amenity_wrong, other) and the details.\n\n**Permissions checked:** `site:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{reports}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:read"
+        ]
+      }
+    },
+    "/v1/accessibility-reports/{id}/resolve": {
+      "post": {
+        "tags": [
+          "Sites"
+        ],
+        "summary": "Resolve an accessibility report",
+        "operationId": "resolveAccessibilityReport",
+        "description": "(v1.49.0) status (resolved, dismissed) and resolution (what was done). Audited.\n\n**Permissions checked:** `site:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The report.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{id, status}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "site:write"
+        ]
+      }
     }
   },
   "webhooks": {
@@ -99484,6 +101328,16 @@
       },
       "E401": {
         "description": "Missing or invalid API key",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "E402": {
+        "description": "Error",
         "content": {
           "application/json": {
             "schema": {

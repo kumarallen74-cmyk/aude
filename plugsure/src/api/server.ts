@@ -90,6 +90,7 @@ import { registerPhase33Routes, isPublicPhase33Route } from './phase33-routes.js
 import { registerPhase34Routes, isPublicPhase34Route } from './phase34-routes.js';
 import { registerPhase35Routes, isPublicPhase35Route } from './phase35-routes.js';
 import { registerPhase36Routes, isPublicPhase36Route } from './phase36-routes.js';
+import { registerPhase37Routes, isPublicPhase37Route } from './phase37-routes.js';
 import { registerBrandRoutes } from './brand-routes.js';
 import { registerConsoleBrandRoutes } from './console-brand-routes.js';
 import { resolve as resolveIntegration } from '../integrations/store.js';
@@ -333,6 +334,8 @@ export async function buildApi(): Promise<FastifyInstance> {
     if (isPublicPhase35Route(route, req.method)) return;
     // (v1.48.0) The hotels' PMS webhook and the valet page (their own keys).
     if (isPublicPhase36Route(route, req.method)) return;
+    // (v1.49.0) The swap cabinets' API (each cabinet's own key).
+    if (isPublicPhase37Route(route, req.method)) return;
     try {
       const auth = await authenticate(req.headers as Record<string, unknown>);
       req.principal = auth.principal;
@@ -1998,6 +2001,7 @@ export async function buildApi(): Promise<FastifyInstance> {
   await registerPhase34Routes(app);
   await registerPhase35Routes(app);
   await registerPhase36Routes(app);
+  await registerPhase37Routes(app);
   await registerBrandRoutes(app);
   await registerConsoleBrandRoutes(app);
   await registerMicrosoftRoutes(app);

@@ -708,6 +708,17 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      for battery health and route vehicle.battery_anomaly
      ([BATTERY-HEALTH.md](BATTERY-HEALTH.md)). Workers added: hotels (1 min),
      battery health (15 min), privacy (hourly), installations (6 h).
+  42. (v1.49.0) Optional, per operator: battery swap (Assets & energy →
+     Battery swap: turn it on, add cabinets and give each controller its
+     address, add plans; route swap.cabinet_offline and
+     swap.battery_attention, [BATTERY-SWAP.md](BATTERY-SWAP.md)); roadside
+     charging (Operate → Roadside: prices, radius, vans; route
+     roadside.unassigned to the dispatch desk, [ROADSIDE.md](ROADSIDE.md));
+     charger warranties and RMA cases (Maintain → Warranty & RMA; route
+     warranty.expiring and rma.stale, [WARRANTY-RMA.md](WARRANTY-RMA.md));
+     sites' amenities and accessibility (Assets & energy → Amenities &
+     access; route access.report, [AMENITIES.md](AMENITIES.md)). Workers
+     added: battery swap (5 min), roadside (1 min), warranty (6 h).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

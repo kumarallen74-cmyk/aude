@@ -39,6 +39,13 @@ const MESSAGES = [
   'Data pribadi', 'Persetujuan', 'Promosi dan penawaran', 'Kabar promo lewat aplikasi, WhatsApp atau e-mail', 'Membantu memperbaiki aplikasi dari cara Anda memakainya',
   'Menampilkan stasiun terdekat dan rencana perjalanan', 'Permintaan data', 'Minta salinan data', 'Perbaiki data', 'Jelaskan permintaan Anda (opsional)', 'Kirim permintaan',
   'Operator menjawab dalam batas waktu yang diatur UU PDP. Untuk menghapus akun, pakai Akun → Hapus akun.', 'Persetujuan disimpan.', 'Permintaan PDP-0004 terkirim.',
+  // amenities, battery swap, roadside charging (v1.49.0)
+  'Ramah difabel', 'Musholla', 'Makanan & minuman', 'Terang malam hari', 'Parkir gratis', 'Laporkan masalah aksesibilitas atau fasilitas', 'Tidak ada jalur tanpa tangga',
+  'Terima kasih. Laporan Anda kami terima.', 'Tukar baterai motor', 'Tunjukkan atau ketik kode ini di kabinet penukaran.', 'Penukaran tanpa batas', 'per penukaran, dari kredit',
+  'Pilih paket untuk mulai menukar baterai. Biaya bulanan dibayar dari kredit Anda.', 'Bayar per penukaran', 'Termasuk paket', 'Berhenti berlangganan? Penukaran berhenti sekarang.',
+  '3 dari 30 penukaran bulan ini', '60 penukaran per bulan', '4 siap', 'Isi daya darurat', 'Mencari kendaraan terdekat…', 'Dalam perjalanan ke Anda', 'Dibayar di tempat:',
+  'Mobil kehabisan baterai? Kendaraan pengisi daya kami datang ke lokasi Anda.', 'Minta bantuan di lokasi saya', '. Sisanya dibayar di tempat.',
+  'Izinkan akses lokasi agar petugas bisa menemukan Anda.', 'Contoh: depan minimarket, jalur kiri',
   // the survey after a charge (v1.47.0)
   'Nilai pengisian ini', 'Seberapa besar kemungkinan Anda merekomendasikan kami kepada teman?', 'Tidak mungkin', 'Sangat mungkin', 'Ketersediaan', 'Kebersihan', 'Ada yang rusak',
   'Ceritakan lebih lanjut (opsional)', 'Kirim nilai', 'Terima kasih atas penilaian Anda.', 'Terima kasih. Laporan PS-7 dibuat; tim kami akan menghubungi Anda.',
