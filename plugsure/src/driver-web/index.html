@@ -689,6 +689,20 @@ input{font-family:inherit}
     'Baterai sekarang (%)':'Battery now (%)','Jarak tempuh penuh (km)':'Range when full (km)','Konektor mobil':'Car connector','Cadangan saat tiba (%)':'Reserve on arrival (%)','Rencanakan':'Plan',
     'Tanpa berhenti mengisi':'No charging stop needed','Tidak ada stasiun dalam jangkauan':'No station within reach','Perkiraan jarak lewat jalan; berhenti di stasiun nyata.':'The road distance is an estimate; the stops are real stations.',
     'Pilih tujuan dengan benar.':'Choose a valid destination.','Stasiun tidak ditemukan.':'Station not found.','Semua jenis':'Any type',
+    // (v1.49.0) amenities and accessibility, battery swap, roadside charging
+    'Ramah difabel':'Accessible','Musholla':'Prayer room','Makanan & minuman':'Food & drink','Toko':'Shop','Teduh':'Shade','Terang malam hari':'Lit at night','Keamanan':'Security','Ruang tunggu':'Lounge','Parkir gratis':'Free parking','Fasilitas':'Amenities',
+    'Laporkan masalah aksesibilitas atau fasilitas':'Report an accessibility or amenity problem','Tempat parkir terhalang':'Bay blocked','Tidak ada jalur tanpa tangga':'No step-free route','Kabel terlalu pendek':'Cable too short',
+    'Layar terlalu tinggi':'Screen too high','Fasilitas tidak sesuai':'Amenity not as listed','Terima kasih. Laporan Anda kami terima.':'Thank you. We have received your report.',
+    'Tukar baterai motor':'Motorbike battery swap','Kode pengendara':'Rider code','Tunjukkan atau ketik kode ini di kabinet penukaran.':'Show or type this code at the swap cabinet.','Penukaran tanpa batas':'Unlimited swaps',
+    'Berlaku sampai':'Valid until','Di luar paket:':'Beyond the plan:','per penukaran, dari kredit':'per swap, from credit','Baterai Anda:':'Your battery:',
+    'Pilih paket untuk mulai menukar baterai. Biaya bulanan dibayar dari kredit Anda.':'Choose a plan to start swapping batteries. The monthly fee is paid from your credit.','Saldo kredit:':'Credit balance:',
+    'Bayar per penukaran':'Pay per swap','/bulan':'/month','Belum ada paket.':'No plans yet.','Kabinet':'Cabinets','Belum ada kabinet.':'No cabinets yet.','Riwayat penukaran':'Swap history','Ditolak':'Refused','Termasuk paket':'In the plan',
+    'Berhenti berlangganan':'Cancel the plan','Paket aktif.':'Plan active.','Berhenti berlangganan? Penukaran berhenti sekarang.':'Cancel the plan? Swaps stop now.',
+    'Isi daya darurat':'Roadside charging','Mencari kendaraan terdekat…':'Finding the nearest van…','Kendaraan ditugaskan':'Van assigned','Dalam perjalanan ke Anda':'On the way to you','Dibatalkan':'Cancelled',
+    'Kendaraan:':'Van:','Perkiraan tiba':'Expected at','Perkiraan biaya':'Estimated cost','Dibayar di tempat:':'Paid on site:','Hubungi petugas':'Call the crew','Batalkan permintaan ini?':'Cancel this request?',
+    'Mobil kehabisan baterai? Kendaraan pengisi daya kami datang ke lokasi Anda.':'Battery flat? Our charging van comes to you.','Biaya panggilan':'Call-out fee','per kWh':'per kWh','Energi yang dibutuhkan (kWh)':'Energy needed (kWh)',
+    'Tidak tahu':'Not sure','Mobil dan pelat nomor':'Car and plate','Patokan lokasi':'Landmark','Contoh: depan minimarket, jalur kiri':'For example: in front of the minimarket, left lane','Minta bantuan di lokasi saya':'Request help at my location',
+    '. Sisanya dibayar di tempat.':'. The rest is paid on site.','Izinkan akses lokasi agar petugas bisa menemukan Anda.':'Allow location access so the crew can find you.',
     // (v1.48.0) personal data
     'Data pribadi':'Personal data','Persetujuan':'Consents','Promosi dan penawaran':'Promotions and offers','Kabar promo lewat aplikasi, WhatsApp atau e-mail':'Promotions in the app, on WhatsApp or by e-mail',
     'Analitik':'Analytics','Membantu memperbaiki aplikasi dari cara Anda memakainya':'Helps improve the app from how you use it','Menampilkan stasiun terdekat dan rencana perjalanan':'Shows nearby stations and trip plans',
@@ -776,6 +790,8 @@ input{font-family:inherit}
     // Bidirectional charging. Before the generic word patterns below.
     [/^Kredit (Rp [\d.]+) per kWh\. Baterai tidak turun di bawah (\d+)%, dan tidak dalam satu jam sebelum Anda pergi\.$/g,'Credit $1 per kWh. The battery never goes below $2%, nor in the hour before you leave.'],
     [/^Sedang mengembalikan ([\d.,]+) kW$/g,'Giving back $1 kW'],[/^Dikembalikan ([\d.,]+) kWh · kredit (Rp [\d.]+)$/g,'Given back $1 kWh · credit $2'],[/^Baterai sudah di batas (\d+)%$/g,'The battery is at its $1% floor'],
+    // (v1.49.0) Battery swap and cabinets.
+    [/^(\d+) dari (\d+) penukaran bulan ini$/g,'$1 of $2 swaps this month'],[/^(\d+) penukaran per bulan$/g,'$1 swaps a month'],[/^(\d+) siap$/g,'$1 ready'],
     // (v1.48.0) Personal data requests.
     [/^Permintaan (PDP-\d+) terkirim\.$/g,'Request $1 sent.'],
     // (v1.47.0) The survey. Before the generic word patterns below.
@@ -1506,6 +1522,7 @@ function handleHash(){
   if(h.startsWith('rr/')&&UUIDISH.test(h.slice(3))){ clear(); go('rreceipt',{cdrId:h.slice(3),_back:()=>go('history')}); return true; }
   if(h==='home'||h==='history'||h==='account'){ clear(); go(h); return true; }
   if(h==='privacy'){ clear(); go('privacy',{_back:()=>go('account')}); return true; }
+  if(h==='swap'||h==='roadside'){ clear(); go(h,{_back:()=>go('account')}); return true; }
   if(h==='trip'){ clear(); go('trip',{_back:()=>go('stations')}); return true; }
   if(h.startsWith('help/')&&/^\d{1,12}$/.test(h.slice(5))){ clear(); go('case',{id:h.slice(5),_back:()=>go('account')}); return true; }
   // Back from an e-wallet app or the card page (paid.html): the payment screen it left.
@@ -1770,6 +1787,7 @@ function stationRow(s){
         <span class="dot"></span><b>${esc(s.fastest)}</b>
         ${s.distanceKm!=null?`<span class="dot"></span>${s.distanceKm} km`:''}
       </div>
+      ${amenLine(s)}
     </div>
     ${s.priceFromMinor!=null?`<div class="pricetag"><div class="p">${s.priceFromMajor!=null?rate(s.priceFromMajor,s.priceCurrency||s.currency):rp(s.priceFromMinor,s.priceCurrency||s.currency)}</div><div class="u">/kWh</div></div>`:''}
   </button>`;
@@ -1779,7 +1797,7 @@ function stationRow(s){
 VIEWS.stations=async(v)=>{
   v.className='view';
   try{ LS.setItem('ps_stn_mode','list'); }catch(e){}
-  v.innerHTML=topbar('Stasiun','Charger di sekitar Anda',{theme:1})+stnSeg('list')+`<button class="helprow" id="tripbtn" style="width:100%;margin:0 0 10px">${svg(I.map)}<span>Rencanakan perjalanan</span></button><div id="stn">
+  v.innerHTML=topbar('Stasiun','Charger di sekitar Anda',{theme:1})+stnSeg('list')+`<button class="helprow" id="tripbtn" style="width:100%;margin:0 0 10px">${svg(I.map)}<span>Rencanakan perjalanan</span></button>${amenFilterHtml()}<div id="stn">
     <div class="skel" style="height:76px;margin-bottom:10px"></div>
     <div class="skel" style="height:76px;margin-bottom:10px"></div>
     <div class="skel" style="height:76px"></div></div>`;
@@ -1789,7 +1807,9 @@ VIEWS.stations=async(v)=>{
   await new Promise(res=>{ if(!navigator.geolocation)return res(); const t=setTimeout(res,2500);
     navigator.geolocation.getCurrentPosition(p=>{clearTimeout(t);loc={lat:p.coords.latitude,lon:p.coords.longitude};res();},()=>{clearTimeout(t);res();},{timeout:2400}); });
   const q=loc?`?lat=${loc.lat}&lon=${loc.lon}`:'';
-  const [{stations},roam]=await Promise.all([api('/v1/stations'+q),fetchRoaming(loc)]);
+  const af=(state.amf||[]).length?(q?'&':'?')+'amenities='+encodeURIComponent(state.amf.join(',')):'';
+  v.querySelectorAll('[data-amf]').forEach(b=>b.onclick=()=>{ haptic(); const k=b.dataset.amf; state.amf=(state.amf||[]).includes(k)?state.amf.filter(x=>x!==k):[...(state.amf||[]),k]; VIEWS.stations(v); });
+  const [{stations},roam]=await Promise.all([api('/v1/stations'+q+af),af?Promise.resolve([]):fetchRoaming(loc)]);
   const box=$('#stn'); if(!box) return;
   box.innerHTML=(stations.map(stationRow).join('')||(roam.length?'':`<div class="center-empty">${svg(I.pin)}<div>Belum ada stasiun terdaftar.</div></div>`))+roamSectionHtml(roam);
   box.querySelectorAll('[data-stn]').forEach(b=>b.onclick=()=>openStation(b.dataset.stn,stations));
@@ -1844,9 +1864,12 @@ VIEWS.station=async(v)=>{
   v.className='view';
   v.innerHTML=topbar(s.name,s.operator,{back:1,right:favBtnHtml({siteId:s.siteId})})+
     `${s.address?`<div class="card soft small muted" style="display:flex;gap:9px;align-items:flex-start">${svg(I.pin,'')}<div>${esc(s.address)}</div></div>`:''}
+     ${amenCardHtml(s)}
      <div class="seclabel">Konektor</div>
      <div id="cons"></div>
-     <div id="qbox"></div>`;
+     <div id="qbox"></div>
+     <button class="helprow" id="accrep" style="width:100%;margin-top:14px">${svg(I.warn)}<span>Laporkan masalah aksesibilitas atau fasilitas</span></button><div id="accbox"></div>`;
+  $('#accrep').onclick=()=>accessReport($('#accbox'),s.siteId);
   const cons=$('#cons');
   cons.innerHTML=s.connectors.map(c=>{
     const cls=c.status==='Available'?'sp-ok':c.status==='Charging'||c.status==='Occupied'||c.status==='Reserved'?'sp-busy':c.status==='Blocked'||c.status==='Faulted'||c.status==='Maintenance'?'sp-block':'sp-off';
@@ -2959,7 +2982,12 @@ VIEWS.account=async(v)=>{
       $('#seeroam').onclick=()=>go(isWide()?'home':'stations'); }).catch(()=>{});
   }
   if(me.account){ const pv=el('<button class="cta ghost" id="privacy" style="margin-top:16px">Data pribadi</button>');
-    body.appendChild(pv); pv.onclick=()=>{ haptic(); go('privacy',{_back:()=>go('account')}); }; }
+    body.appendChild(pv); pv.onclick=()=>{ haptic(); go('privacy',{_back:()=>go('account')}); };
+    // (v1.49.0) Battery swap and roadside charging, where the operator offers them.
+    for(const [path,id,label] of [['/v1/swap','swapbtn','Tukar baterai motor'],['/v1/roadside','rsabtn','Isi daya darurat']]){
+      api(path).then(r=>{ if(!r||!r.enabled||!pv.isConnected||$('#'+id)) return; const b=el(`<button class="cta ghost" id="${id}" style="margin-top:10px">${label}</button>`);
+        pv.before(b); b.onclick=()=>{ haptic(); go(id==='swapbtn'?'swap':'roadside',{_back:()=>go('account')}); }; }).catch(()=>{});
+    } }
   if(me.account||me.fleet){
     const out=el('<button class="cta ghost" id="signout" style="margin-top:16px;color:var(--danger)">Keluar</button>');
     body.appendChild(out); out.onclick=async()=>{ out.disabled=true;
@@ -3216,6 +3244,107 @@ VIEWS.privacy=async(v)=>{
   $('#pvsend').onclick=async()=>{ const b=$('#pvsend'); b.disabled=true;
     try{ const r=await api('/v1/privacy/requests',{method:'POST',body:JSON.stringify({kind,details:$('#pvd').value||null})});
       haptic(); alertBanner('Permintaan '+r.number+' terkirim.'); go('account'); }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+};
+
+//──────────── (v1.49.0) amenities and accessibility, battery swap, roadside charging
+const AMEN={toilet:'Toilet',prayer_room:'Musholla',food:'Makanan & minuman',shop:'Toko',wifi:'Wi-Fi',covered:'Teduh',lit:'Terang malam hari',security:'Keamanan',lounge:'Ruang tunggu',free_parking:'Parkir gratis'};
+const AMF=[['accessible','Ramah difabel'],['toilet','Toilet'],['prayer_room','Musholla'],['food','Makanan & minuman'],['covered','Teduh']];
+function amenLine(s){
+  const a=s.amenities||[]; if(!s.accessible&&!a.length) return '';
+  const items=[...(s.accessible?['Ramah difabel']:[]),...a.slice(0,3).map(x=>AMEN[x]||x)];
+  return `<div class="small muted" style="margin-top:3px">${items.map(x=>`<span>${esc(x)}</span>`).join('<span> · </span>')}${a.length>3?`<span> · +${a.length-3}</span>`:''}</div>`;
+}
+function amenFilterHtml(){
+  return `<div style="display:flex;gap:6px;overflow-x:auto;margin:0 0 10px">${AMF.map(([k,l])=>`<button class="chip${(state.amf||[]).includes(k)?' sel':''}" data-amf="${k}" style="padding:7px 12px;white-space:nowrap;flex:none">${l}</button>`).join('')}</div>`;
+}
+function amenCardHtml(s){
+  const a=s.amenities||[]; if(!s.accessible&&!a.length) return '';
+  return `<div class="seclabel">Fasilitas</div><div class="card soft small" style="display:flex;flex-wrap:wrap;gap:6px 14px">${s.accessible?`<span><b>Ramah difabel</b></span>`:''}${a.map(x=>`<span>${esc(AMEN[x]||x)}</span>`).join('')}</div>`;
+}
+const ACC_KINDS=[['blocked_bay','Tempat parkir terhalang'],['no_step_free','Tidak ada jalur tanpa tangga'],['cable_short','Kabel terlalu pendek'],['screen_high','Layar terlalu tinggi'],['amenity_wrong','Fasilitas tidak sesuai'],['other','Lainnya']];
+function accessReport(box,siteId){
+  let kind='blocked_bay';
+  box.innerHTML=`<div class="card soft" style="margin-top:10px;padding:14px"><div class="seg" id="acck" style="flex-wrap:wrap">${ACC_KINDS.map(([k,l],i)=>`<button data-k="${k}"${i===0?' class="on"':''}>${l}</button>`).join('')}</div>
+    <textarea id="accd" rows="3" maxlength="1000" style="width:100%;margin-top:10px" placeholder="Ceritakan lebih lanjut (opsional)"></textarea>
+    <button class="cta" id="accsend" style="margin-top:10px">Kirim laporan</button></div>`;
+  box.querySelectorAll('#acck button').forEach(b=>b.onclick=()=>{ kind=b.dataset.k; box.querySelectorAll('#acck button').forEach(x=>x.classList.toggle('on',x===b)); });
+  $('#accsend').onclick=async()=>{ const b=$('#accsend'); b.disabled=true;
+    try{ await api('/v1/sites/'+encodeURIComponent(siteId)+'/accessibility-reports',{method:'POST',body:JSON.stringify({kind,details:$('#accd').value||null})}); haptic(); box.innerHTML=''; alertBanner('Terima kasih. Laporan Anda kami terima.'); }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+}
+
+VIEWS.swap=async(v)=>{
+  v.className='view';
+  v.innerHTML=topbar('Tukar baterai motor','',{back:1})+`<div class="pad"><div class="skel" style="height:180px"></div></div>`;
+  let d; try{ d=await api('/v1/swap'); }catch(e){ alertBanner(e.message); return go('account'); }
+  if(!d.enabled){ alertBanner('Tukar baterai tidak tersedia.'); return go('account'); }
+  const cur=d.currency, sub=d.subscription;
+  v.innerHTML=topbar('Tukar baterai motor','',{back:1})+`<div class="pad">
+    ${sub?`<div class="card" style="text-align:center;padding:18px"><div class="small muted">Kode pengendara</div>
+      <div style="font:700 26px/1.2 var(--f-mono,monospace);letter-spacing:2px;margin:6px 0">${esc(sub.riderCode)}</div>
+      <div class="small muted">Tunjukkan atau ketik kode ini di kabinet penukaran.</div></div>
+      <div class="card soft small" style="margin-top:10px"><div><b>${esc(sub.plan)}</b></div>
+        <div>${sub.swapsIncluded==null?'<span>Penukaran tanpa batas</span>':`<span>${sub.swapsUsed} dari ${sub.swapsIncluded} penukaran bulan ini</span>`}</div>
+        <div class="muted"><span>Berlaku sampai</span> ${esc(sub.periodEnd)}</div>
+        ${d.pricePerSwapMinor?`<div class="muted"><span>Di luar paket:</span> ${rp(d.pricePerSwapMinor,cur)} <span>per penukaran, dari kredit</span></div>`:''}</div>
+      ${d.pack?`<div class="card soft small" style="margin-top:10px"><span>Baterai Anda:</span> <b>${esc(d.pack.serial)}</b>${d.pack.soc!=null?` · ${d.pack.soc}%`:''}</div>`:''}`
+    :`<div class="banner b-info">${svg(I.bolt)}<div>Pilih paket untuk mulai menukar baterai. Biaya bulanan dibayar dari kredit Anda.</div></div>
+      <div class="small muted" style="margin:8px 0"><span>Saldo kredit:</span> ${rp(d.balanceMinor,cur)}</div>
+      ${d.plans.map(p=>`<button class="station" data-plan="${esc(p.id)}"><div style="flex:1;min-width:0"><div class="nm">${esc(p.name)}</div>
+        <div class="meta">${p.swapsIncluded==null?'<span>Penukaran tanpa batas</span>':p.swapsIncluded===0?'<span>Bayar per penukaran</span>':`<span>${p.swapsIncluded} penukaran per bulan</span>`}</div></div>
+        <div class="pricetag"><div class="p">${rp(p.monthlyMinor,cur)}</div><div class="u">/bulan</div></div></button>`).join('')||'<div class="center-empty"><div>Belum ada paket.</div></div>'}`}
+    <div class="seclabel" style="margin-top:18px">Kabinet</div>
+    ${d.cabinets.map(c=>`<div class="station" style="cursor:default"><div class="stnicon">${svg(I.bolt)}</div><div style="flex:1;min-width:0"><div class="nm">${esc(c.name)}</div>
+      <div class="meta"><span class="avail ${c.online&&c.ready>0?'av-yes':'av-no'}"><span class="ind"></span>${c.online?`${c.ready} siap`:'Luring'}</span><span class="dot"></span>${esc(c.site||'')}</div></div></div>`).join('')||'<div class="small muted">Belum ada kabinet.</div>'}
+    ${d.recent.length?`<div class="seclabel" style="margin-top:18px">Riwayat penukaran</div><div class="card soft small">${d.recent.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${esc(new Date(r.at).toLocaleString())} · ${esc(r.cabinet)}</span><span>${r.outcome==='refused'?'<span>Ditolak</span>':r.amountMinor?rp(r.amountMinor,cur):'<span>Termasuk paket</span>'}</span></div>`).join('')}</div>`:''}
+    ${sub?'<button class="cta ghost" id="swcancel" style="margin-top:18px">Berhenti berlangganan</button>':''}</div>`;
+  v.querySelectorAll('[data-plan]').forEach(b=>b.onclick=async()=>{ haptic(); b.disabled=true;
+    try{ await api('/v1/swap/subscription',{method:'POST',body:JSON.stringify({planId:b.dataset.plan})}); alertBanner('Paket aktif.'); VIEWS.swap(v); }catch(e){ alertBanner(e.message); b.disabled=false; } });
+  const c=$('#swcancel'); if(c) c.onclick=async()=>{ if(!confirm('Berhenti berlangganan? Penukaran berhenti sekarang.')) return;
+    try{ await api('/v1/swap/subscription',{method:'POST',body:JSON.stringify({cancel:true})}); VIEWS.swap(v); }catch(e){ alertBanner(e.message); } };
+};
+
+const RSA_ST={requested:'Mencari kendaraan terdekat…',assigned:'Kendaraan ditugaskan',en_route:'Dalam perjalanan ke Anda',charging:'Sedang mengisi',done:'Selesai',cancelled:'Dibatalkan'};
+VIEWS.roadside=async(v)=>{
+  v.className='view';
+  v.innerHTML=topbar('Isi daya darurat','',{back:1})+`<div class="pad"><div class="skel" style="height:180px"></div></div>`;
+  let d; try{ d=await api('/v1/roadside'); }catch(e){ alertBanner(e.message); return go('account'); }
+  if(!d.enabled){ alertBanner('Layanan isi daya darurat tidak tersedia.'); return go('account'); }
+  const cur=d.currency, r=d.request;
+  if(r&&['requested','assigned','en_route','charging'].includes(r.status)||r&&r.status==='done'){
+    v.innerHTML=topbar('Isi daya darurat','',{back:1})+`<div class="pad"><div class="card" style="padding:18px">
+      <div class="small muted">${esc(r.number)}</div><div style="font-weight:700;font-size:18px;margin:4px 0">${RSA_ST[r.status]}</div>
+      ${r.van?`<div class="small"><span>Kendaraan:</span> <b>${esc(r.van)}</b> ${esc(r.vanPlate||'')}</div>`:''}
+      ${r.etaAt&&['assigned','en_route'].includes(r.status)?`<div class="small"><span>Perkiraan tiba</span> ${esc(new Date(r.etaAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))}</div>`:''}
+      ${r.vanDistanceKm!=null?`<div class="small muted">${r.vanDistanceKm} km</div>`:''}
+      ${r.status==='done'?`<div class="small" style="margin-top:8px">${r.kwhDelivered} kWh · <b>${rp(r.amountMinor,cur)}</b></div>${r.collectMinor?`<div class="small muted"><span>Dibayar di tempat:</span> ${rp(r.collectMinor,cur)}</div>`:''}`
+        :`<div class="small muted" style="margin-top:8px"><span>Perkiraan biaya</span> ${rp(r.quoteMinor,cur)}</div>`}</div>
+      ${d.phone?`<a class="cta ghost" href="tel:${esc(d.phone)}" style="margin-top:12px;display:block;text-align:center">Hubungi petugas</a>`:''}
+      ${['requested','assigned','en_route'].includes(r.status)?'<button class="cta ghost" id="rsacancel" style="margin-top:10px;color:var(--danger)">Batalkan permintaan</button>':''}</div>`;
+    const c=$('#rsacancel'); if(c) c.onclick=async()=>{ if(!confirm('Batalkan permintaan ini?')) return; try{ await api('/v1/roadside/cancel',{method:'POST',body:'{}'}); VIEWS.roadside(v); }catch(e){ alertBanner(e.message); } };
+    if(r.status!=='done'){ if(state.poll) clearInterval(state.poll); state.poll=setInterval(()=>{ if(!v.isConnected){ clearInterval(state.poll); state.poll=null; return; } VIEWS.roadside(v); },15000); }
+    return;
+  }
+  v.innerHTML=topbar('Isi daya darurat','',{back:1})+`<div class="pad">
+    <div class="banner b-info">${svg(I.bolt)}<div>Mobil kehabisan baterai? Kendaraan pengisi daya kami datang ke lokasi Anda.</div></div>
+    <div class="small muted" style="margin:8px 0"><span>Biaya panggilan</span> ${rp(d.calloutMinor,cur)} · ${rp(d.perKwhMinor,cur)} <span>per kWh</span></div>
+    <label class="small">Energi yang dibutuhkan (kWh)<input id="rsakwh" type="number" min="1" max="${d.maxKwh}" value="${Math.min(10,d.maxKwh)}" style="width:100%"></label>
+    <label class="small" style="display:block;margin-top:8px">Konektor mobil<select id="rsaconn" style="width:100%"><option value="">Tidak tahu</option>${d.connectors.map(c=>`<option>${esc(c)}</option>`).join('')}</select></label>
+    <label class="small" style="display:block;margin-top:8px">Baterai sekarang (%)<input id="rsasoc" type="number" min="0" max="100" style="width:100%"></label>
+    <label class="small" style="display:block;margin-top:8px">Mobil dan pelat nomor<input id="rsaveh" maxlength="80" style="width:100%"></label>
+    <label class="small" style="display:block;margin-top:8px">Patokan lokasi<input id="rsaaddr" maxlength="200" style="width:100%" placeholder="Contoh: depan minimarket, jalur kiri"></label>
+    <div class="small muted" id="rsaest" style="margin-top:8px"></div>
+    <button class="cta" id="rsasend" style="margin-top:12px">Minta bantuan di lokasi saya</button>
+    <div class="small muted" style="margin-top:8px"><span>Saldo kredit:</span> ${rp(d.balanceMinor,cur)}<span>. Sisanya dibayar di tempat.</span></div></div>`;
+  const est=()=>{ const k=Number($('#rsakwh').value)||0; $('#rsaest').innerHTML=`<span>Perkiraan biaya</span> ${rp(d.calloutMinor+Math.round(d.perKwhMinor*k),cur)}`; };
+  $('#rsakwh').oninput=est; est();
+  $('#rsasend').onclick=async()=>{ const b=$('#rsasend'); b.disabled=true;
+    const loc=await new Promise(res=>{ if(!navigator.geolocation) return res(null); navigator.geolocation.getCurrentPosition(p=>res({lat:p.coords.latitude,lon:p.coords.longitude}),()=>res(null),{timeout:8000,enableHighAccuracy:true}); });
+    if(!loc){ alertBanner('Izinkan akses lokasi agar petugas bisa menemukan Anda.'); b.disabled=false; return; }
+    const veh=$('#rsaveh').value.trim();
+    try{ await api('/v1/roadside/requests',{method:'POST',body:JSON.stringify({lat:loc.lat,lon:loc.lon,kwh:Number($('#rsakwh').value),connector:$('#rsaconn').value||null,soc:$('#rsasoc').value===''?null:Number($('#rsasoc').value),vehicle:veh||null,address:$('#rsaaddr').value.trim()||null})});
+      haptic(); VIEWS.roadside(v); }
     catch(e){ alertBanner(e.message); b.disabled=false; } };
 };
 

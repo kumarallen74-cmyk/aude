@@ -371,21 +371,28 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
   app.get('/d/v1/stations', async (req, reply) => {
     const q = (req.query ?? {}) as Record<string, string>;
     const loc = nearOf(q);
-    if (q.bbox === undefined && q.limit === undefined && q.cursor === undefined) return { stations: await listStations(loc, brandOrg(req)) };
+    // (v1.49.0) Each station's amenities and accessibility; amenities=toilet,prayer_room,accessible keeps the stations with all of them.
+    const want = String(q.amenities ?? '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 12);
+    const withAmenities = async <T extends { siteId: string }>(list: T[]) => {
+      const am = await (await import('../services/amenities.js')).forSites(list.map((x) => x.siteId)).catch(() => new Map());
+      const { matches } = await import('../services/amenities.js');
+      return list.filter((x) => matches(am.get(x.siteId), want)).map((x) => ({ ...x, amenities: am.get(x.siteId)?.amenities ?? [], accessible: am.get(x.siteId)?.accessible ?? false }));
+    };
+    if (q.bbox === undefined && q.limit === undefined && q.cursor === undefined) return { stations: await withAmenities(await listStations(loc, brandOrg(req))) };
     const bbox = q.bbox === undefined ? null : parseBbox(q.bbox);
     if (q.bbox !== undefined && !bbox) return reply.status(400).send({ error: 'bbox harus berupa barat,selatan,timur,utara.', code: 'bad_bbox' });
     const limit = q.limit === undefined ? 50 : Math.floor(Number(q.limit));
     if (!Number.isFinite(limit) || limit < 1 || limit > 200) return reply.status(400).send({ error: 'limit harus antara 1 dan 200.', code: 'bad_limit' });
-    const tag = `st:${q.bbox ?? ''}:${loc ? `${loc.lat},${loc.lon}` : ''}`;
+    const tag = `st:${q.bbox ?? ''}:${loc ? `${loc.lat},${loc.lon}` : ''}:${want.join(',')}`;
     const offset = decodeCursor(q.cursor, tag);
     if (offset == null) return reply.status(400).send({ error: 'cursor tidak valid.', code: 'bad_cursor' });
     // Priced per page (v1.9.0): pricing every station in the box on each page was the expensive part, as on /d/v1/map.
-    const listed = await listStations(loc, brandOrg(req), { bbox, prices: false });
+    const listed = want.length ? await withAmenities(await listStations(loc, brandOrg(req), { bbox, prices: false })) : await listStations(loc, brandOrg(req), { bbox, prices: false });
     // Paged and near a point: stations without coordinates last (the full list keeps its v1.8 order).
     const all = loc ? [...listed.filter((s) => s.distanceKm != null), ...listed.filter((s) => s.distanceKm == null)] : listed;
     const page = all.slice(offset, offset + limit);
     await priceStations(page);
-    return { stations: page, total: all.length, nextCursor: offset + limit < all.length ? encodeCursor(offset + limit, tag) : null };
+    return { stations: want.length ? page : await withAmenities(page), total: all.length, nextCursor: offset + limit < all.length ? encodeCursor(offset + limit, tag) : null };
   });
 
   // The map (G7): hosted and partner stations in a viewport, clustered by zoom, filtered, paged, with an ETag.
@@ -873,6 +880,38 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk mengatur persetujuan.' });
     try { return await (await import('../services/privacy.js')).setDriverConsent(p.appDriverId, brandOrg(req), (req.body ?? {}) as Record<string, unknown>); } catch (e) { return creditFail(reply, e); }
   }));
+
+  // ───────────────────────────────────────────────────────── (v1.49.0) battery swap, roadside charging, accessibility reports
+
+  app.get('/d/v1/swap', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk tukar baterai.' });
+    return (await import('../services/battery-swap.js')).driverSwap(p.appDriverId, brandOrg(req));
+  });
+  app.post('/d/v1/swap/subscription', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk tukar baterai.' });
+    try { return await (await import('../services/battery-swap.js')).subscribe(p.appDriverId, brandOrg(req), (req.body ?? {}) as Record<string, unknown>); } catch (e) { return creditFail(reply, e); }
+  }));
+  app.get('/d/v1/roadside', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk meminta isi daya darurat.' });
+    return (await import('../services/roadside.js')).driverInfo(p.appDriverId, brandOrg(req));
+  });
+  app.post('/d/v1/roadside/requests', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk meminta isi daya darurat.' });
+    try { return reply.status(201).send(await (await import('../services/roadside.js')).driverRequest(p.appDriverId, brandOrg(req), (req.body ?? {}) as Record<string, unknown>)); } catch (e) { return creditFail(reply, e); }
+  }));
+  app.post('/d/v1/roadside/cancel', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk meminta isi daya darurat.' });
+    try { return await (await import('../services/roadside.js')).driverCancel(p.appDriverId, brandOrg(req)); } catch (e) { return creditFail(reply, e); }
+  }));
+  app.post('/d/v1/sites/:siteId/accessibility-reports', async (req, reply) => {
+    const { siteId } = req.params as { siteId: string };
+    try { return reply.status(201).send(await (await import('../services/amenities.js')).driverReport(req.driver?.appDriverId ?? null, siteId, brandOrg(req), (req.body ?? {}) as Record<string, unknown>)); } catch (e) { return creditFail(reply, e); }
+  });
 
   // ───────────────────────────────────────────────────────── (v1.47.0) surveys after a charge
 

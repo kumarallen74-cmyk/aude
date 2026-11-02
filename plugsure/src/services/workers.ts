@@ -255,6 +255,10 @@ export function startWorkers(): () => void {
   const batteryHealth = once('battery-health', async () => { await (await import('./battery-health.js')).estimatePending(); });
   const privacySweep = once('privacy', async () => { await (await import('./privacy.js')).sweep(); });
   const installOverdue = once('installations', async () => { await (await import('./installations.js')).overdueSweep(); });
+  // (v1.49.0) Battery swap (plan renewals, cabinets offline), roadside requests waiting for a van, warranties and RMA.
+  const swapSweep = once('battery-swap', async () => { await (await import('./battery-swap.js')).sweep(); });
+  const roadsideSweep = once('roadside', async () => { await (await import('./roadside.js')).sweep(); });
+  const warrantySweep = once('warranty', async () => { await (await import('./warranty.js')).sweep(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -408,6 +412,9 @@ export function startWorkers(): () => void {
     every(batteryHealth, 15 * 60_000, 'battery-health'),
     every(privacySweep, 60 * 60_000, 'privacy'),
     every(installOverdue, 6 * 60 * 60_000, 'installations'),
+    every(swapSweep, 5 * 60_000, 'battery-swap'),
+    every(roadsideSweep, 60_000, 'roadside'),
+    every(warrantySweep, 6 * 60 * 60_000, 'warranty'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

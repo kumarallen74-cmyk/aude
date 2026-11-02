@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.48.0";
+export const API_VERSION = "1.49.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11965,6 +11965,19 @@ export class Operations {
   }
 
   /**
+   * Add a roadside van
+   *
+   * (v1.49.0) name, plate, kwhCapacity, kwOutput, baseLat, baseLon, technicianId. Audited.
+   *
+   * `POST /v1/roadside/vans` · needs `session:write`
+   */
+  addRoadsideVan(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/roadside/vans", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a solar array or battery
    *
    * (v1.42.0) siteId, kind (solar | battery), name, capacityKw (the inverter's AC kW, or the battery's kW), peakKwp (solar), energyKwh, minSocPct, maxSocPct (battery), commissionedOn, costMinor, note. Audited.
@@ -12040,6 +12053,32 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/support/macros", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a swap cabinet
+   *
+   * (v1.49.0) siteId, code, name, slots. The key its controller posts with is shown once. Audited.
+   *
+   * `POST /v1/battery-swap/cabinets` · needs `site:write`
+   */
+  addSwapCabinet(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/battery-swap/cabinets", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a swap plan
+   *
+   * (v1.49.0) name, monthlyMinor, swapsIncluded (null: unlimited; a plan of 0 with 0 included is pay per swap). Audited.
+   *
+   * `POST /v1/battery-swap/plans` · needs `site:write`
+   */
+  addSwapPlan(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/battery-swap/plans", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12824,6 +12863,30 @@ export class Operations {
   }
 
   /**
+   * Battery swap overview
+   *
+   * (v1.49.0) The settings, each cabinet (online, packs ready and charging, swaps in 24 hours) and the figures: swaps, refusals, credit paid, energy, riders, monthly fees, packs by status.
+   *
+   * `GET /v1/battery-swap` · needs `site:read`
+   */
+  batterySwapOverview(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-swap", accept: "json" }, options);
+  }
+
+  /**
+   * Battery swap settings
+   *
+   * (v1.49.0) enabled, pricePerSwapMinor (without a plan, or beyond it; paid from the rider's credit), minSocOut (a pack is ready at this charge, 50–100), retireSoh (below it a pack is flagged, 40–95). Audited.
+   *
+   * `PUT /v1/battery-swap/settings` · needs `site:write`
+   */
+  batterySwapSettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/battery-swap/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Bind the client certificate
    *
    * Binds the charger’s client-certificate SHA-256 fingerprint for Security Profile 3 (mutual TLS). Send the certificate PEM or a fingerprint; an empty fingerprint clears the binding. Only the fingerprint is stored. Audited.
@@ -13339,6 +13402,21 @@ export class Operations {
   }
 
   /**
+   * Change a battery pack
+   *
+   * (v1.49.0) model, capacityWh, fault; status maintenance or retired (or back from maintenance into a cabinet). Audited.
+   *
+   * `PUT /v1/battery-swap/packs/{id}` · needs `site:write`
+   */
+  changeBatteryPack(params: {
+    /** The pack. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/battery-swap/packs/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a capex project
    *
    * (v1.33.0) As adding (not once completed or cancelled). Audited.
@@ -13811,6 +13889,21 @@ export class Operations {
   }
 
   /**
+   * Change or archive a swap plan
+   *
+   * (v1.49.0) The fields above, or archive: true (no new subscribers; current ones lapse at their renewal). Audited.
+   *
+   * `PUT /v1/battery-swap/plans/{id}` · needs `site:write`
+   */
+  changeOrArchiveSwapPlan(params: {
+    /** The plan. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/battery-swap/plans/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change or archive a unit
    *
    * (v1.46.0) The fields above, or archive: true.
@@ -13842,6 +13935,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/private-groups/{id}/members/{memberId}", pathParams: { id: params.id, memberId: params.memberId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or remove a warranty
+   *
+   * (v1.49.0) The fields above, or remove: true. Audited.
+   *
+   * `PUT /v1/warranties/{id}` · needs `charge_point:write`
+   */
+  changeOrRemoveWarranty(params: {
+    /** The warranty. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/warranties/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13930,6 +14038,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/hotels/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, re-key or archive a swap cabinet
+   *
+   * (v1.49.0) The fields above, status (active, maintenance), rotateKey: true (a new key, shown once) or archive: true. Audited.
+   *
+   * `PUT /v1/battery-swap/cabinets/{id}` · needs `site:write`
+   */
+  changeReKeyOrArchiveSwapCabinet(params: {
+    /** The cabinet. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/battery-swap/cabinets/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -14081,6 +14204,21 @@ export class Operations {
   }
 
   /**
+   * Change a van, or report its position
+   *
+   * (v1.49.0) The fields above and status (available, off_duty), archive: true; or only {lat, lon, kwhLeft}: a position report from the technician's phone or the van's tracker.
+   *
+   * `PUT /v1/roadside/vans/{id}` · needs `session:write`
+   */
+  changeVanOrReportItsPosition(params: {
+    /** The van. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/roadside/vans/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change a work order
    *
    * (v1.34.0) As opening; status done (doneOn) or cancelled. Audited.
@@ -14200,6 +14338,35 @@ export class Operations {
    */
   chargersClientCertificates(options?: RequestOptions): Promise<ChargersClientCertificatesResponse> {
     return this.transport.request<ChargersClientCertificatesResponse>({ method: "GET", path: "/v1/station-certificates", accept: "json" }, options);
+  }
+
+  /**
+   * Chargers' warranties
+   *
+   * (v1.49.0) Every charger with its warranty now (the one ending last): covered, expiring (60 days or less), expired or none; the supplier, what it covers and open RMA cases. state filters.
+   *
+   * `GET /v1/warranty/chargers` · needs `charge_point:read`
+   */
+  chargersWarranties(params?: {
+    query?: {
+      state?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/warranty/chargers", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A charger's warranties and RMA cases
+   *
+   * (v1.49.0) Every warranty (and extension) and every RMA case of the charger.
+   *
+   * `GET /v1/warranty/chargers/{id}` · needs `charge_point:read`
+   */
+  chargerWarrantiesAndRmaCases(params: {
+    /** The charger. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/warranty/chargers/{id}", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -15675,6 +15842,21 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<DriverFundsResponse> {
     return this.transport.request<DriverFundsResponse>({ method: "GET", path: "/v1/finance/driver-funds", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Drivers' accessibility reports
+   *
+   * (v1.49.0) Open reports from the app (status=all: every one): the site, what is wrong (blocked_bay, no_step_free, cable_short, screen_high, amenity_wrong, other) and the details.
+   *
+   * `GET /v1/accessibility-reports` · needs `site:read`
+   */
+  driversAccessibilityReports(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/accessibility-reports", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -18966,6 +19148,21 @@ export class Operations {
   }
 
   /**
+   * Move a roadside request on
+   *
+   * (v1.49.0) status: assigned (vanId; sets the ETA), requested (unassign), en_route, charging, done (kwhDelivered; paid from the driver's credit as far as it goes, the rest collectedBy cash, qris, card_terminal or invoice), cancelled (reason). Audited.
+   *
+   * `POST /v1/roadside/requests/{id}/status` · needs `session:write`
+   */
+  moveRoadsideRequestOn(params: {
+    /** The request. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/roadside/requests/{id}/status", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * My commission terms per currency
    *
    * Only on a platform with PlugSure Hub enabled (`HUB_ENABLED=true`); otherwise 404.
@@ -19410,6 +19607,19 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/status-page/incidents", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Open an RMA case
+   *
+   * (v1.49.0) chargePointId, part, partSerial, fault, supplierId (default: the warranty's), workOrderId. In warranty or not is worked out from the charger's warranty today. Audited.
+   *
+   * `POST /v1/rma` · needs `charge_point:write`
+   */
+  openRmaCase(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/rma", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -20485,6 +20695,19 @@ export class Operations {
   }
 
   /**
+   * Record a charger warranty
+   *
+   * (v1.49.0) chargePointId, supplierId, startsOn, endsOn, covers (parts, labour, shipping, on_site), terms, reference, extended. Audited.
+   *
+   * `POST /v1/warranties` · needs `charge_point:write`
+   */
+  recordChargerWarranty(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/warranties", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Record a clawback
    *
    * (v1.36.0) amount (at most what was received), onDate, note, conditionId. From the deferred balance first; the rest an expense; owed until repaid. Audited.
@@ -21090,6 +21313,19 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<RefundTransfersThroughDuitkuDisbursementResponse> {
     return this.transport.request<RefundTransfersThroughDuitkuDisbursementResponse>({ method: "GET", path: "/v1/refund-transfers", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Register a battery pack
+   *
+   * (v1.49.0) serial, model, capacityWh. It starts in maintenance until a cabinet reports it. Audited.
+   *
+   * `POST /v1/battery-swap/packs` · needs `site:write`
+   */
+  registerBatteryPack(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/battery-swap/packs", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -21847,6 +22083,21 @@ export class Operations {
   }
 
   /**
+   * Resolve an accessibility report
+   *
+   * (v1.49.0) status (resolved, dismissed) and resolution (what was done). Audited.
+   *
+   * `POST /v1/accessibility-reports/{id}/resolve` · needs `site:write`
+   */
+  resolveAccessibilityReport(params: {
+    /** The report. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/accessibility-reports/{id}/resolve", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Resolve an alert
    *
    * Closes an open alert. Contacts who were notified get a "resolved" notice if their rule asks for one. Audited.
@@ -22062,6 +22313,89 @@ export class Operations {
     serial: string;
   }, options?: RequestOptions): Promise<RevokeTestContractCertificateResponse> {
     return this.transport.request<RevokeTestContractCertificateResponse>({ method: "POST", path: "/v1/pnc/test-contracts/{serial}/revoke", pathParams: { serial: params.serial }, accept: "json" }, options);
+  }
+
+  /**
+   * An RMA case
+   *
+   * (v1.49.0) The case with its history.
+   *
+   * `GET /v1/rma/{id}` · needs `charge_point:read`
+   */
+  rmaCase(params: {
+    /** The case. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/rma/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * RMA cases
+   *
+   * (v1.49.0) Open cases and those closed in the last 60 days (status=all: every one), with the figures: open, waiting on the manufacturer, the median turnaround, rejected and out-of-warranty cost (12 months).
+   *
+   * `GET /v1/rma` · needs `charge_point:read`
+   */
+  rmaCases(params?: {
+    query?: {
+      status?: string;
+      chargePointId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/rma", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Roadside charging
+   *
+   * (v1.49.0) The settings, the open requests (status=all: also the last day's), the vans, and the last 30 days: done, revenue, kWh, cancelled, the median time to arrive.
+   *
+   * `GET /v1/roadside` · needs `session:read`
+   */
+  roadsideCharging(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/roadside", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A roadside request
+   *
+   * (v1.49.0) The request and, while open, the vans that can take it, nearest first (distance, ETA, energy left).
+   *
+   * `GET /v1/roadside/requests/{id}` · needs `session:read`
+   */
+  roadsideRequest(params: {
+    /** The request. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/roadside/requests/{id}", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Roadside settings
+   *
+   * (v1.49.0) enabled, calloutMinor, perKwhMinor, radiusKm (from each van's base), maxKwh (the most a request asks for), phone (the dispatch desk, shown in the app). Audited.
+   *
+   * `PUT /v1/roadside/settings` · needs `session:write`
+   */
+  roadsideSettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/roadside/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Roadside vans
+   *
+   * (v1.49.0) Each van: its battery and charger, energy left, base and last position, technician, status.
+   *
+   * `GET /v1/roadside/vans` · needs `session:read`
+   */
+  roadsideVans(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/roadside/vans", accept: "json" }, options);
   }
 
   /**
@@ -23369,6 +23703,21 @@ export class Operations {
   }
 
   /**
+   * Set a site's amenities and accessibility
+   *
+   * (v1.49.0) amenities (toilet, prayer_room, food, shop, wifi, covered, lit, security, lounge, free_parking), accessibleBays, stepFree, bayWidthM, cableReachM, maxScreenHeightCm, open24h, hours, notes, verified: true (checked today). Shown in the driver app. Audited.
+   *
+   * `PUT /v1/sites/{id}/amenities` · needs `site:write`
+   */
+  setSiteAmenitiesAndAccessibility(params: {
+    /** The site. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/sites/{id}/amenities", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Set a site's electricity cost per kWh
    *
    * (v1.20.0) What the site pays per kWh, taxes included (its PLN tariff): the energy cost of months without a recorded bill. Audited as finance.energy_rate_saved.
@@ -23769,6 +24118,20 @@ export class Operations {
   }
 
   /**
+   * A site's amenities and accessibility
+   *
+   * (v1.49.0) As above, for one site.
+   *
+   * `GET /v1/sites/{id}/amenities` · needs `site:read`
+   */
+  siteAmenitiesAndAccessibility(params: {
+    /** The site. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/sites/{id}/amenities", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * The site's driver queue
    *
    * The queue policy (queueEnabled and friends on the site), then every driver waiting or holding an offer, in order, and the places that ended in the last 24 hours (served, missed, left, expired, removed). Drivers are shown as a masked phone number or their fleet card. waiting drivers have a position: 1 + the drivers ahead of them who could take a connector they could. stats.medianWaitMinutes is the median time from joining to the offer for drivers served in the last 24 hours.
@@ -23955,6 +24318,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/sites/{siteId}/queue/analytics", pathParams: { siteId: params.siteId }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * Sites' amenities and accessibility
+   *
+   * (v1.49.0) Every site: its amenities, accessibility (bays, step-free, bay width, cable reach, screen height; the score of 5 and accessible or not), hours and open reports.
+   *
+   * `GET /v1/site-amenities` · needs `site:read`
+   */
+  sitesAmenitiesAndAccessibility(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/site-amenities", accept: "json" }, options);
   }
 
   /**
@@ -24498,6 +24872,73 @@ export class Operations {
   }
 
   /**
+   * Swap battery packs
+   *
+   * (v1.49.0) Every pack: where it is (a cabinet and slot, a rider, maintenance), its charge, health, temperature, cycles and fault; status filters (retired: the retired ones).
+   *
+   * `GET /v1/battery-swap/packs` · needs `site:read`
+   */
+  swapBatteryPacks(params?: {
+    query?: {
+      status?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-swap/packs", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A swap cabinet reports (the cabinet's API)
+   *
+   * (v1.49.0) type status {slots: [{slot, serial, soc, soh, tempC, fault}]}: the packs in its slots; type authorize {riderCode}: may this rider swap (allowed, outcome, amountMinor, reason)?; type swap {reference, riderCode, batteryIn: {serial, soc, slot}, batteryOut: {serial, soc}}: a swap done, idempotent by reference — 402 when refused (no active plan, not enough credit). Authenticated by the cabinet's key in the path.
+   *
+   * `POST /v1/swap/cabinets/{key}`
+   */
+  swapCabinetReportsCabinetApi(params: {
+    /** The cabinet's key. */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/swap/cabinets/{key}", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * The swap log
+   *
+   * (v1.49.0) The last 500 swaps (cabinetId filters): the packs in and out, their charge, the energy, included, paid or refused (and why).
+   *
+   * `GET /v1/battery-swap/swaps` · needs `site:read`
+   */
+  swapLog(params?: {
+    query?: {
+      cabinetId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-swap/swaps", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Swap plans
+   *
+   * (v1.49.0) Each plan: the monthly fee, the swaps included (null: unlimited) and its subscribers.
+   *
+   * `GET /v1/battery-swap/plans` · needs `site:read`
+   */
+  swapPlans(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-swap/plans", accept: "json" }, options);
+  }
+
+  /**
+   * Swap riders
+   *
+   * (v1.49.0) Subscriptions: the rider (last digits of the phone), plan, period, swaps used and the pack they hold.
+   *
+   * `GET /v1/battery-swap/riders` · needs `site:read`
+   */
+  swapRiders(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/battery-swap/riders", accept: "json" }, options);
+  }
+
+  /**
    * Switch depot scheduling on or off at a site
    *
    * (v1.44.0) enabled. On: the load manager plans each session with a departure so it is ready in time, using off-peak hours when there is time. Audited.
@@ -24568,6 +25009,19 @@ export class Operations {
     month: string;
   }, options?: RequestOptions): Promise<SyncMonthIntoLedgerResponse> {
     return this.transport.request<SyncMonthIntoLedgerResponse>({ method: "POST", path: "/v1/finance/ledger/sync/{month}", pathParams: { month: params.month }, accept: "json" }, options);
+  }
+
+  /**
+   * Take a roadside request
+   *
+   * (v1.49.0) lat, lon, address, name, phone, vehicle, plate, connector (CCS2, Type 2, CHAdeMO, GB/T), soc, kwh, note. Quoted at the call-out fee plus the kWh at the price; refused outside every van's radius. Audited.
+   *
+   * `POST /v1/roadside/requests` · needs `session:write`
+   */
+  takeRoadsideRequest(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/roadside/requests", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -24907,6 +25361,21 @@ export class Operations {
     body: SubscriptionPlanInput;
   }, options?: RequestOptions): Promise<SubscriptionPlan> {
     return this.transport.request<SubscriptionPlan>({ method: "PUT", path: "/v1/subscription-plans/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Update or move an RMA case
+   *
+   * (v1.49.0) vendorRef, trackingOut, trackingBack, replacementSerial, costMinor, outcome, note; status: requested, approved (needs vendorRef), shipped (trackingOut), replaced (replacementSerial; updateChargerSerial: true for a whole charger), closed, rejected (outcome). Audited.
+   *
+   * `PUT /v1/rma/{id}` · needs `charge_point:write`
+   */
+  updateOrMoveRmaCase(params: {
+    /** The case. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/rma/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
