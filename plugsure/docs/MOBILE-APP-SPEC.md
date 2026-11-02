@@ -3,7 +3,7 @@
 **Status:** draft for review. Branch `mobile` (from `hub`, v1.8.0).
 **Date:** 4 October 2026
 **Owner:** mobile product lead
-**Stack:** React Native (New Architecture) + Expo SDK 55 (RN 0.83, React 19.2), TypeScript, expo-router, EAS Build / Submit / Update.
+**Stack:** React Native (New Architecture) + Expo SDK 58 (RN 0.88, React 19.3), TypeScript, expo-router, EAS Build / Submit / Update.
 **Scope:** the PlugSure-branded consumer app for EV drivers in Indonesia (ID), Malaysia (MY) and Singapore (SG): find,
 start, pay for and track charging at any charger reachable through PlugSure — chargers hosted on the PlugSure CSMS and
 chargers of every CPO connected to the PlugSure Hub. The same code base later produces white-label builds for operators

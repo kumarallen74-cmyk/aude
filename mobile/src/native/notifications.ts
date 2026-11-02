@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { AndroidImportance, AndroidNotificationVisibility } from 'expo-notifications';
 import { Platform } from 'react-native';
 import { api, runtime } from '@/api/client';
 import { kv, KEYS } from '@/lib/storage';
@@ -8,12 +9,12 @@ import { kv, KEYS } from '@/lib/storage';
  * owns delivery; each white-label build uses its operator's Firebase project / APNs key).
  */
 export const CHANNELS = {
-  charging: { name: 'Charging', importance: Notifications.AndroidImportance.HIGH },
-  payments: { name: 'Payments', importance: Notifications.AndroidImportance.DEFAULT },
-  reservations: { name: 'Reservations & queue', importance: Notifications.AndroidImportance.HIGH },
-  account: { name: 'Account', importance: Notifications.AndroidImportance.LOW },
-  promotions: { name: 'Promotions', importance: Notifications.AndroidImportance.LOW },
-  'live-session': { name: 'Live charging session', importance: Notifications.AndroidImportance.LOW },
+  charging: { name: 'Charging', importance: AndroidImportance.HIGH },
+  payments: { name: 'Payments', importance: AndroidImportance.DEFAULT },
+  reservations: { name: 'Reservations & queue', importance: AndroidImportance.HIGH },
+  account: { name: 'Account', importance: AndroidImportance.LOW },
+  promotions: { name: 'Promotions', importance: AndroidImportance.LOW },
+  'live-session': { name: 'Live charging session', importance: AndroidImportance.LOW },
 } as const;
 
 export async function setupNotificationChannels(): Promise<void> {
@@ -23,7 +24,7 @@ export async function setupNotificationChannels(): Promise<void> {
       Notifications.setNotificationChannelAsync(id, {
         name: ch.name,
         importance: ch.importance,
-        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        lockscreenVisibility: AndroidNotificationVisibility.PUBLIC,
         showBadge: id !== 'live-session',
         enableVibrate: id !== 'live-session' && id !== 'promotions',
       }),

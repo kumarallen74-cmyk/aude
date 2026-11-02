@@ -17,7 +17,7 @@ const TABS: Record<string, { icon: IconName; label: string }> = {
 };
 
 /** Bottom bar: Map · [Scan] · Activity · Account — Scan is a centre action, not a destination (spec §5). */
-export function TabBar({ state, navigation }: BottomTabBarProps) {
+export function TabBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
   const { c, shadow } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -42,8 +42,9 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
         accessibilityLabel={t(meta.label)}
         onPress={() => {
           haptic('selection');
-          const e = navigation.emit({ type: 'tabPress', target: r.key, canPreventDefault: true });
-          if (!focused && !e.defaultPrevented) navigation.navigate(r.name, r.params);
+          // (SDK 58) The tab bar gets the emitter and navigateToTab, as React Navigation's own bar does.
+          const e = emitter.emit({ type: 'tabPress', target: r.key, canPreventDefault: true });
+          if (!focused && !e.defaultPrevented) navigateToTab(r.key);
         }}
         style={styles.tab}
       >
