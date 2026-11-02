@@ -42,5 +42,5 @@ Docs: https://docs.expo.dev/eas/index.md
 
 ## Native config in this repo
 
-- Native behaviour lives in `app.config.ts`, `plugins/*.js` (config plugins) and the local modules `modules/live-activity` (Swift) / `modules/live-update` (Kotlin). iOS minimum is **16.4** (Expo SDK 57); keep `app.config.ts`, `plugins/withLiveActivity.js` and `modules/live-activity/ios/*.podspec` in step.
+- Native behaviour lives in `app.config.ts`, `plugins/*.js` (config plugins) and the local modules `modules/live-activity` (Swift) / `modules/live-update` (Kotlin). iOS minimum is **16.4** (Expo SDK 58); keep `app.config.ts`, `plugins/withLiveActivity.js` and `modules/live-activity/ios/*.podspec` in step.
 - No Xcode / Android SDK in this environment: check a native change by prebuilding a **copy** of `mobile/` (`npx expo prebuild --no-install --clean`, production env + dummy secrets) and running `npm run verify:prebuild -- <copy>`; never prebuild inside the repo. Swift / Kotlin compile only on EAS Build — check API levels / availability by hand.

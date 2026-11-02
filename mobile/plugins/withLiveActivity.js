@@ -22,7 +22,7 @@ const { withDangerousMod, withInfoPlist, withXcodeProject } = require('expo/conf
 
 const TARGET = 'ChargingWidgets';
 const SOURCES = ['ChargingAttributes.swift', 'ChargingLiveActivity.swift'];
-/** Expo SDK 57 minimum (ExpoModulesCore.podspec); app.config.ts ios.deploymentTarget overrides it when higher. */
+/** Expo SDK 58 minimum (ExpoModulesCore.podspec); app.config.ts ios.deploymentTarget overrides it when higher. */
 const MIN_DEPLOYMENT_TARGET = '16.4';
 
 const unquote = (v) => (typeof v === 'string' ? v.replace(/^"(.*)"$/, '$1') : v);

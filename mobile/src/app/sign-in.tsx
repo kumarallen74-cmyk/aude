@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { getLocales } from 'expo-localization';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View, type TextInputInstance } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
 import { Banner } from '@/components/Banner';
@@ -29,7 +29,7 @@ export default function SignIn() {
   const [step, setStep] = useState<'phone' | 'code'>('phone');
   const [resendIn, setResendIn] = useState(0);
   const [devCode, setDevCode] = useState<string | null>(null);
-  const codeRef = useRef<TextInput>(null);
+  const codeRef = useRef<TextInputInstance>(null);
   const e164 = toE164(country, phone);
 
   useEffect(() => {

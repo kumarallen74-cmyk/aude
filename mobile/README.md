@@ -3,7 +3,7 @@
 The PlugSure-branded EV-charging app for Indonesia, Malaysia and Singapore, and the code base for operators'
 white-label apps. Product spec: [`../plugsure/docs/MOBILE-APP-SPEC.md`](../plugsure/docs/MOBILE-APP-SPEC.md).
 
-**Stack:** Expo SDK 57 (React Native 0.86, React 19.2, New Architecture, Hermes), Expo Router (typed routes),
+**Stack:** Expo SDK 58 (React Native 0.88, React 19.3, New Architecture, Hermes), Expo Router (typed routes),
 TypeScript strict, TanStack Query 5, i18next, react-native-maps, expo-camera / -notifications / -secure-store /
 -web-browser / -location / -print / -sharing, supercluster, Jest + React Native Testing Library.
 
@@ -153,7 +153,7 @@ APP_VARIANT=nusantara npx eas-cli build --profile production-nusantara --platfor
 APP_VARIANT=nusantara npx eas-cli submit --profile production-nusantara --platform all
 ```
 
-Targets: iOS 16.4+ (Expo SDK 57's minimum; Live Activities need 16.2), **iPhone only** (`supportsTablet: false` for
+Targets: iOS 16.4+ (Expo SDK 58's minimum, as SDK 57's; Live Activities need 16.2), **iPhone only** (`supportsTablet: false` for
 the first release), Android 8.0+ (minSdk 26), compile / target SDK 36 (Play requirement from 31 Aug 2026),
 edge-to-edge and predictive back on. iOS privacy manifest (`PrivacyInfo.xcprivacy`) is generated from
 `ios.privacyManifests` in `app.config.ts`. iOS declares **no `UIBackgroundModes`** (`plugins/withIosBackgroundModes.js`

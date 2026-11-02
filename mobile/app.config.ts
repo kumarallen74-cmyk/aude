@@ -104,7 +104,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     appleTeamId,
     // iPhone-only for the first release (no tablet layouts yet).
     supportsTablet: false,
-    // Expo SDK 57 pods require iOS 16.4 (ExpoModulesCore.podspec); keep plugins/withLiveActivity and the
+    // Expo SDK 58 pods require iOS 16.4 (ExpoModulesCore.podspec); keep plugins/withLiveActivity and the
     // modules/live-activity podspec in step.
     deploymentTarget: '16.4',
     associatedDomains: brand.linkHosts.map((h) => `applinks:${h}`),
