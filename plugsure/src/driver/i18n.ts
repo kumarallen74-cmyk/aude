@@ -178,6 +178,8 @@ export const EN: Readonly<Record<string, string>> = Object.freeze({
   'Survei tidak aktif.': 'Surveys are not active.',
   'Nilai 0 sampai 10.': 'A rating from 0 to 10.',
   'Anda sudah menilai pengisian ini.': 'You have already rated this charge.',
+  // (v1.50.0) a car dealer's welcome code
+  'Kode ini hanya untuk nomor HP pembeli mobil.': 'This code is only for the car buyer\'s phone number.',
   // (v1.49.0) battery swap, roadside charging, accessibility reports
   'Masuk dengan nomor HP untuk tukar baterai.': 'Sign in with your phone number to swap batteries.',
   'Tukar baterai tidak tersedia.': 'Battery swap is not available.',

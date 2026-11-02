@@ -259,6 +259,8 @@ export function startWorkers(): () => void {
   const swapSweep = once('battery-swap', async () => { await (await import('./battery-swap.js')).sweep(); });
   const roadsideSweep = once('roadside', async () => { await (await import('./roadside.js')).sweep(); });
   const warrantySweep = once('warranty', async () => { await (await import('./warranty.js')).sweep(); });
+  // (v1.50.0) Car dealers: last month's statements drafted (refreshed until issued).
+  const dealerSweep = once('dealers', async () => { await (await import('./dealers.js')).sweep(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -415,6 +417,7 @@ export function startWorkers(): () => void {
     every(swapSweep, 5 * 60_000, 'battery-swap'),
     every(roadsideSweep, 60_000, 'roadside'),
     every(warrantySweep, 6 * 60 * 60_000, 'warranty'),
+    every(dealerSweep, 6 * 60 * 60_000, 'dealers'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

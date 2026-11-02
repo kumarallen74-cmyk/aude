@@ -719,6 +719,10 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      sites' amenities and accessibility (Assets & energy → Amenities &
      access; route access.report, [AMENITIES.md](AMENITIES.md)). Workers
      added: battery swap (5 min), roadside (1 min), warranty (6 h).
+  43. (v1.50.0) Optional, per operator: car dealer partners (Commercial →
+     Dealers: terms, a portal link for each dealer's sales staff; issue and
+     settle the monthly statements, [DEALERS.md](DEALERS.md)). Worker added:
+     dealers (6 h, drafts last month's statements).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

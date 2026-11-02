@@ -33,6 +33,7 @@ import './views/battery-swap.js';
 import './views/roadside.js';
 import './views/warranty.js';
 import './views/amenities.js';
+import './views/dealers.js';
 import './views/support.js';
 import './views/driver-credit.js';
 import './views/status-page.js';

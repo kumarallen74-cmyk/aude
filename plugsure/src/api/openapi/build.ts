@@ -25,6 +25,7 @@ import * as phase34Cat from './catalogue/phase34.js';
 import * as phase35Cat from './catalogue/phase35.js';
 import * as phase36Cat from './catalogue/phase36.js';
 import * as phase37Cat from './catalogue/phase37.js';
+import * as phase38Cat from './catalogue/phase38.js';
 
 /**
  * Builds the published OpenAPI 3.1 document from the catalogue.
@@ -33,7 +34,7 @@ import * as phase37Cat from './catalogue/phase37.js';
  * when the committed file, the catalogue and the registered routes disagree.
  */
 
-const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat, financeCat, phase30Cat, phase31Cat, phase32Cat, phase33Cat, phase34Cat, phase35Cat, phase36Cat, phase37Cat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
+const CATALOGUES = [core, roaming, consoleA, consoleB, sandbox, fleet, pricing, pncCat, onboardingCat, integrationsCat, driverAppCat, consoleBrandCat, microsoftCat, hubCat, hubClearingCat, whatsappCat, financeCat, phase30Cat, phase31Cat, phase32Cat, phase33Cat, phase34Cat, phase35Cat, phase36Cat, phase37Cat, phase38Cat] as Array<{ ops: Op[]; schemas: Record<string, Schema> }>;
 
 export function allOps(): Op[] {
   return CATALOGUES.flatMap((c) => c.ops);

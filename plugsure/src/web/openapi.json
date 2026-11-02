@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.49.0",
+    "version": "1.50.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Governance → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Governance → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Governance → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Governance → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -81568,6 +81568,748 @@
         "x-permissions": [
           "site:write"
         ]
+      }
+    },
+    "/v1/dealers": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Car dealers",
+        "operationId": "carDealers",
+        "description": "(v1.50.0) Each dealer: the welcome credit its buyers get and who pays for it, the commission on their charging, its portal link, cars sold (30 days, all), codes redeemed and pending. archived=true: also the archived ones.",
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{dealers}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Add a car dealer",
+        "operationId": "addCarDealer",
+        "description": "(v1.50.0) name, make, branch, contactName, email, phone, welcomeMinor, codeDays (7–365), funding (dealer: billed for redeemed credit; operator), commissionBps (0–5000), commissionMonths (1–60). Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The dealer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealers/{id}": {
+      "put": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Change or archive a car dealer",
+        "operationId": "changeOrArchiveCarDealer",
+        "description": "(v1.50.0) The fields above (new sales take the new terms), or archive: true (its portal link stops). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dealer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The dealer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealers/{id}/portal": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "A new dealer portal link",
+        "operationId": "newDealerPortalLink",
+        "description": "(v1.50.0) The dealer's page at /dealer/{token}, shown once; the old link stops working. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dealer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{token, path}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-sales": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Cars sold by dealers",
+        "operationId": "carsSoldByDealers",
+        "description": "(v1.50.0) Each sale: the buyer (phone by its last digits), the car, the welcome code's last four, pending, redeemed, expired or void. dealerId and month (YYYY-MM) filter.",
+        "parameters": [
+          {
+            "name": "dealerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{sales}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealers/{id}/sales": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Register a car sold",
+        "operationId": "registerCarSold",
+        "description": "(v1.50.0) buyerName, buyerPhone (only that number can redeem the code), vehicle, vin (one sale per VIN), plate, soldOn. The welcome code is in the answer this once. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dealer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The sale, with its code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-sales/{id}/void": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Void a sale",
+        "operationId": "voidSale",
+        "description": "(v1.50.0) Only while its code is not redeemed; the code stops working. Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The sale.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{id, voided}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealers/{id}/preview": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "A dealer's month so far",
+        "operationId": "dealerMonthSoFar",
+        "description": "(v1.50.0) month (default this month): cars sold, codes redeemed and their credit, billed to the dealer, its buyers' charging before tax, the commission and the net.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dealer.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The figures.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-statements": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Dealer statements",
+        "operationId": "dealerStatements",
+        "description": "(v1.50.0) Drafted, issued and settled statements; dealerId filters.",
+        "parameters": [
+          {
+            "name": "dealerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{statements}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealers/{id}/statements": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Draft a dealer statement",
+        "operationId": "draftDealerStatement",
+        "description": "(v1.50.0) month: drafted, or its draft refreshed (an issued one is not changed). Last month is drafted automatically.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dealer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The statement.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-statements/{id}": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "Issue or settle a dealer statement",
+        "operationId": "issueOrSettleDealerStatement",
+        "description": "(v1.50.0) action: refresh (a draft), issue (a draft for a month that is over; refreshed first), settle (an issued one; reference required). Audited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The statement.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The statement.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-statements/{id}/statement.xlsx": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "A dealer statement as a spreadsheet",
+        "operationId": "dealerStatementAsSpreadsheet",
+        "description": "(v1.50.0) The figures and the month's sales.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The statement.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An .xlsx file.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-portal/{token}": {
+      "get": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "The dealer's portal",
+        "operationId": "dealerPortal",
+        "description": "(v1.50.0) The dealer's terms, this month so far, its sales and its issued statements. Authenticated by the link's token.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The portal link token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The portal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/dealer-portal/{token}/sales": {
+      "post": {
+        "tags": [
+          "Statements and billing"
+        ],
+        "summary": "The dealer registers a car sold",
+        "operationId": "dealerRegistersCarSold",
+        "description": "(v1.50.0) As POST /v1/dealers/{id}/sales, from the dealer's portal. The welcome code is in the answer this once. Authenticated by the link's token.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The portal link token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The sale, with its code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
       }
     }
   },
