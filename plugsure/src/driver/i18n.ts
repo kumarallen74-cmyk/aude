@@ -178,6 +178,13 @@ export const EN: Readonly<Record<string, string>> = Object.freeze({
   'Survei tidak aktif.': 'Surveys are not active.',
   'Nilai 0 sampai 10.': 'A rating from 0 to 10.',
   'Anda sudah menilai pengisian ini.': 'You have already rated this charge.',
+  // (v1.48.0) privacy requests and consents
+  'Masuk dengan nomor HP untuk mengajukan permintaan data.': 'Sign in with your phone number to make a data request.',
+  'Masuk dengan nomor HP untuk mengatur persetujuan.': 'Sign in with your phone number to manage your consents.',
+  'Belum ada operator yang menyimpan data Anda.': 'No operator holds your data yet.',
+  'Pilih jenis permintaan.': 'Choose the kind of request.',
+  'Masih ada permintaan Anda yang sedang diproses.': 'You already have requests being processed.',
+  'Pilih jenis persetujuan.': 'Choose the kind of consent.',
   // (v1.46.0) residential and workplace chargers, the trip planner
   'Charger ini khusus untuk penghuni atau karyawan.': 'This charger is for residents or staff only.',
   'Jarak tempuh mobil dengan baterai penuh harus 50 sampai 1500 km.': 'The car\'s range on a full battery must be 50 to 1500 km.',

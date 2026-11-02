@@ -14,7 +14,7 @@ import { config } from '../config.js';
  * persistent volume in production (see deploy/README.md).
  */
 
-export type Bucket = 'firmware' | 'diagnostics' | 'field';
+export type Bucket = 'firmware' | 'diagnostics' | 'field' | 'install';
 
 export function bucketDir(bucket: Bucket): string {
   return resolve(config.storage.dir, bucket);

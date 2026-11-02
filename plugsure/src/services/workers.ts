@@ -249,6 +249,12 @@ export function startWorkers(): () => void {
   // (v1.47.0) Card terminal payments (sessions found, captures and voids sent) and energy market prices (fetched).
   const terminalSettle = once('terminals', async () => { await (await import('./terminals.js')).settle(); });
   const energyPrices = once('energy-prices', async () => { await (await import('./energy-prices.js')).fetchAll(); });
+  // (v1.48.0) Hotel charges (posted to folios or put on the statement), battery health estimates, privacy (retention,
+  // requests due) and installation projects past their target.
+  const hotelSettle = once('hotels', async () => { await (await import('./hotel.js')).settle(); });
+  const batteryHealth = once('battery-health', async () => { await (await import('./battery-health.js')).estimatePending(); });
+  const privacySweep = once('privacy', async () => { await (await import('./privacy.js')).sweep(); });
+  const installOverdue = once('installations', async () => { await (await import('./installations.js')).overdueSweep(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -398,6 +404,10 @@ export function startWorkers(): () => void {
     every(parkingSweep, 5 * 60_000, 'parking'),
     every(terminalSettle, 60_000, 'terminals'),
     every(energyPrices, 60 * 60_000, 'energy-prices'),
+    every(hotelSettle, 60_000, 'hotels'),
+    every(batteryHealth, 15 * 60_000, 'battery-health'),
+    every(privacySweep, 60 * 60_000, 'privacy'),
+    every(installOverdue, 6 * 60 * 60_000, 'installations'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

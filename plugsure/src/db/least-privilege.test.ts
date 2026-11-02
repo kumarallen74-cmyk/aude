@@ -54,7 +54,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'fleet_vehicle', 'session_departure', 'diagnostic_run',
       'support_settings', 'support_case', 'support_message', 'support_macro', 'site_candidate', 'credit_settings', 'gift_card_batch', 'gift_card', 'referral_code', 'referral', 'driver_credit_entry', 'telematics_connection', 'vehicle_telemetry',
       'field_template', 'work_order_photo', 'field_op', 'private_group', 'private_group_charger', 'private_unit', 'private_member', 'private_statement', 'anpr_camera', 'parking_visit', 'plate_event',
-      'home_charger', 'home_meter_reading', 'home_reimbursement', 'payment_terminal', 'terminal_txn', 'terminal_settlement_line', 'energy_price_zone', 'energy_price', 'survey_settings', 'survey_response']]);
+      'home_charger', 'home_meter_reading', 'home_reimbursement', 'payment_terminal', 'terminal_txn', 'terminal_settlement_line', 'energy_price_zone', 'energy_price', 'survey_settings', 'survey_response',
+      'hotel_property', 'hotel_stay', 'hotel_charge', 'install_project', 'install_task', 'install_document', 'install_stage_event', 'privacy_settings', 'privacy_request', 'privacy_consent', 'vehicle_battery_estimate']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -173,5 +174,9 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     home_charger: 'INSERT,SELECT,UPDATE', home_meter_reading: 'INSERT,SELECT,UPDATE', home_reimbursement: 'INSERT,SELECT,UPDATE', payment_terminal: 'INSERT,SELECT,UPDATE',
     terminal_txn: 'INSERT,SELECT,UPDATE', terminal_settlement_line: 'INSERT,SELECT,UPDATE', energy_price_zone: 'INSERT,SELECT,UPDATE', energy_price: 'DELETE,INSERT,SELECT,UPDATE',
     survey_settings: 'INSERT,SELECT,UPDATE', survey_response: 'INSERT,SELECT,UPDATE',
+    // (v1.48.0, 115) nothing deleted: stays check out, tasks and documents are removed by a mark, consent records are kept.
+    hotel_property: 'INSERT,SELECT,UPDATE', hotel_stay: 'INSERT,SELECT,UPDATE', hotel_charge: 'INSERT,SELECT,UPDATE', install_project: 'INSERT,SELECT,UPDATE', install_task: 'INSERT,SELECT,UPDATE',
+    install_document: 'INSERT,SELECT,UPDATE', install_stage_event: 'INSERT,SELECT,UPDATE', privacy_settings: 'INSERT,SELECT,UPDATE', privacy_request: 'INSERT,SELECT,UPDATE', privacy_consent: 'INSERT,SELECT,UPDATE',
+    vehicle_battery_estimate: 'INSERT,SELECT,UPDATE',
   });
 });

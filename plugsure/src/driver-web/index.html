@@ -689,6 +689,12 @@ input{font-family:inherit}
     'Baterai sekarang (%)':'Battery now (%)','Jarak tempuh penuh (km)':'Range when full (km)','Konektor mobil':'Car connector','Cadangan saat tiba (%)':'Reserve on arrival (%)','Rencanakan':'Plan',
     'Tanpa berhenti mengisi':'No charging stop needed','Tidak ada stasiun dalam jangkauan':'No station within reach','Perkiraan jarak lewat jalan; berhenti di stasiun nyata.':'The road distance is an estimate; the stops are real stations.',
     'Pilih tujuan dengan benar.':'Choose a valid destination.','Stasiun tidak ditemukan.':'Station not found.','Semua jenis':'Any type',
+    // (v1.48.0) personal data
+    'Data pribadi':'Personal data','Persetujuan':'Consents','Promosi dan penawaran':'Promotions and offers','Kabar promo lewat aplikasi, WhatsApp atau e-mail':'Promotions in the app, on WhatsApp or by e-mail',
+    'Analitik':'Analytics','Membantu memperbaiki aplikasi dari cara Anda memakainya':'Helps improve the app from how you use it','Menampilkan stasiun terdekat dan rencana perjalanan':'Shows nearby stations and trip plans',
+    'Permintaan data':'Data requests','Minta salinan data':'Ask for a copy','Perbaiki data':'Correct my data','Keberatan':'Object','Jelaskan permintaan Anda (opsional)':'Describe your request (optional)',
+    'Kirim permintaan':'Send the request','Operator menjawab dalam batas waktu yang diatur UU PDP. Untuk menghapus akun, pakai Akun → Hapus akun.':'The operator answers within the time the data protection law (UU PDP) sets. To delete your account, use Account → Delete account.',
+    'Persetujuan disimpan.':'Consent saved.',
     // (v1.47.0) the survey after a charge
     'Nilai pengisian ini':'Rate this charge','Seberapa besar kemungkinan Anda merekomendasikan kami kepada teman?':'How likely are you to recommend us to a friend?','Tidak mungkin':'Not likely','Sangat mungkin':'Very likely',
     'Kecepatan':'Speed','Harga':'Price','Ketersediaan':'Availability','Aplikasi':'The app','Lokasi':'Location','Kebersihan':'Cleanliness','Ada yang rusak':'Something broken',
@@ -770,6 +776,8 @@ input{font-family:inherit}
     // Bidirectional charging. Before the generic word patterns below.
     [/^Kredit (Rp [\d.]+) per kWh\. Baterai tidak turun di bawah (\d+)%, dan tidak dalam satu jam sebelum Anda pergi\.$/g,'Credit $1 per kWh. The battery never goes below $2%, nor in the hour before you leave.'],
     [/^Sedang mengembalikan ([\d.,]+) kW$/g,'Giving back $1 kW'],[/^Dikembalikan ([\d.,]+) kWh · kredit (Rp [\d.]+)$/g,'Given back $1 kWh · credit $2'],[/^Baterai sudah di batas (\d+)%$/g,'The battery is at its $1% floor'],
+    // (v1.48.0) Personal data requests.
+    [/^Permintaan (PDP-\d+) terkirim\.$/g,'Request $1 sent.'],
     // (v1.47.0) The survey. Before the generic word patterns below.
     [/^Terima kasih\. Laporan (PS-\d+) dibuat; tim kami akan menghubungi Anda\.$/g,'Thank you. Report $1 was opened; our team will contact you.'],
     // (v1.46.0) The trip planner. Before the generic word patterns below.
@@ -1497,6 +1505,7 @@ function handleHash(){
   if(h.startsWith('s/')&&UUIDISH.test(h.slice(2))){ clear(); go('session',{chargeId:h.slice(2),_back:()=>go('home')}); return true; }
   if(h.startsWith('rr/')&&UUIDISH.test(h.slice(3))){ clear(); go('rreceipt',{cdrId:h.slice(3),_back:()=>go('history')}); return true; }
   if(h==='home'||h==='history'||h==='account'){ clear(); go(h); return true; }
+  if(h==='privacy'){ clear(); go('privacy',{_back:()=>go('account')}); return true; }
   if(h==='trip'){ clear(); go('trip',{_back:()=>go('stations')}); return true; }
   if(h.startsWith('help/')&&/^\d{1,12}$/.test(h.slice(5))){ clear(); go('case',{id:h.slice(5),_back:()=>go('account')}); return true; }
   // Back from an e-wallet app or the card page (paid.html): the payment screen it left.
@@ -2949,6 +2958,8 @@ VIEWS.account=async(v)=>{
         <button class="cta ghost" id="seeroam" style="margin-top:10px">Lihat charger mitra</button>`;
       $('#seeroam').onclick=()=>go(isWide()?'home':'stations'); }).catch(()=>{});
   }
+  if(me.account){ const pv=el('<button class="cta ghost" id="privacy" style="margin-top:16px">Data pribadi</button>');
+    body.appendChild(pv); pv.onclick=()=>{ haptic(); go('privacy',{_back:()=>go('account')}); }; }
   if(me.account||me.fleet){
     const out=el('<button class="cta ghost" id="signout" style="margin-top:16px;color:var(--danger)">Keluar</button>');
     body.appendChild(out); out.onclick=async()=>{ out.disabled=true;
@@ -3183,6 +3194,31 @@ async function paintReports(row){
 }
 
 /** Paying a reservation fee: QRIS here, or the e-wallet / card page; the connector is held once it is paid. */
+/** (v1.48.0) Personal data (UU PDP): the driver's consents, and requests to the operator (a copy, a correction, an objection). */
+VIEWS.privacy=async(v)=>{
+  v.className='view';
+  v.innerHTML=topbar('Data pribadi','',{back:1})+`<div class="pad"><div class="skel" style="height:180px"></div></div>`;
+  let c; try{ c=await api('/v1/privacy/consents'); }catch(e){ alertBanner(e.message); return go('account'); }
+  const P={marketing:['Promosi dan penawaran','Kabar promo lewat aplikasi, WhatsApp atau e-mail'],analytics:['Analitik','Membantu memperbaiki aplikasi dari cara Anda memakainya'],location:['Lokasi','Menampilkan stasiun terdekat dan rencana perjalanan']};
+  v.innerHTML=topbar('Data pribadi','',{back:1})+`<div class="pad">
+    <div class="seclabel">Persetujuan</div>
+    <div class="card soft">${c.consents.map(x=>`<label class="rc-line" style="cursor:pointer;align-items:center"><span class="d">${P[x.purpose][0]}<br><span class="small muted">${P[x.purpose][1]}</span></span><input type="checkbox" data-cons="${x.purpose}" ${x.granted?'checked':''} style="width:22px;height:22px"></label>`).join('')}</div>
+    <div class="seclabel" style="margin-top:18px">Permintaan data</div>
+    <div class="seg" id="pvk" style="flex-wrap:wrap"><button data-k="export" class="on">Minta salinan data</button><button data-k="correction">Perbaiki data</button><button data-k="objection">Keberatan</button></div>
+    <textarea id="pvd" rows="4" maxlength="2000" style="width:100%;margin-top:10px" placeholder="Jelaskan permintaan Anda (opsional)"></textarea>
+    <button class="cta" id="pvsend" style="margin-top:10px">Kirim permintaan</button>
+    <p class="small muted" style="margin-top:10px">Operator menjawab dalam batas waktu yang diatur UU PDP. Untuk menghapus akun, pakai Akun → Hapus akun.</p></div>`;
+  let kind='export';
+  v.querySelectorAll('#pvk button').forEach(b=>b.onclick=()=>{ kind=b.dataset.k; v.querySelectorAll('#pvk button').forEach(x=>x.classList.toggle('on',x===b)); });
+  v.querySelectorAll('[data-cons]').forEach(i=>i.onchange=async()=>{ haptic();
+    try{ await api('/v1/privacy/consents',{method:'PUT',body:JSON.stringify({purpose:i.dataset.cons,granted:i.checked,textVersion:'app-1.48'})}); alertBanner('Persetujuan disimpan.'); }
+    catch(e){ i.checked=!i.checked; alertBanner(e.message); } });
+  $('#pvsend').onclick=async()=>{ const b=$('#pvsend'); b.disabled=true;
+    try{ const r=await api('/v1/privacy/requests',{method:'POST',body:JSON.stringify({kind,details:$('#pvd').value||null})});
+      haptic(); alertBanner('Permintaan '+r.number+' terkirim.'); go('account'); }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+};
+
 /** (v1.47.0) The operator's survey after a charge: 0–10, optional tags and a comment; asked once per charge, when the operator asks. */
 const SURVEY_TAGS=[['speed','Kecepatan'],['price','Harga'],['availability','Ketersediaan'],['payment','Pembayaran'],['app','Aplikasi'],['location','Lokasi'],['cleanliness','Kebersihan'],['broken','Ada yang rusak']];
 async function surveyCard(box,chargeId){

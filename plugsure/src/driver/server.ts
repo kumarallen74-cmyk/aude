@@ -856,6 +856,24 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     try { return await (await import('../services/driver-credit.js')).applyReferral(p.appDriverId, p.deviceId ?? null, (req.body as any)?.code); } catch (e) { return creditFail(reply, e); }
   }));
 
+  // ───────────────────────────────────────────────────────── (v1.48.0) privacy: requests and consents
+
+  app.post('/d/v1/privacy/requests', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk mengajukan permintaan data.' });
+    try { return reply.status(201).send(await (await import('../services/privacy.js')).driverRequest(p.appDriverId, brandOrg(req), (req.body ?? {}) as Record<string, unknown>)); } catch (e) { return creditFail(reply, e); }
+  }));
+  app.get('/d/v1/privacy/consents', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk mengatur persetujuan.' });
+    return (await import('../services/privacy.js')).driverConsents(p.appDriverId, brandOrg(req));
+  });
+  app.put('/d/v1/privacy/consents', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk mengatur persetujuan.' });
+    try { return await (await import('../services/privacy.js')).setDriverConsent(p.appDriverId, brandOrg(req), (req.body ?? {}) as Record<string, unknown>); } catch (e) { return creditFail(reply, e); }
+  }));
+
   // ───────────────────────────────────────────────────────── (v1.47.0) surveys after a charge
 
   app.get('/d/v1/surveys/pending', async (req, reply) => {
