@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.46.0";
+export const API_VERSION = "1.47.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11509,6 +11509,19 @@ export class Operations {
   }
 
   /**
+   * Add a card payment terminal
+   *
+   * (v1.47.0) siteId, chargePointId (none: a kiosk for the site), name, serial, provider, maxPreauthMinor, callbackUrl (capture and void instructions are POSTed there, signed; none: the terminal polls), callbackSecret (kept sealed). The terminal's key is shown once. Audited.
+   *
+   * `POST /v1/terminals` · needs `payment:write`
+   */
+  addCardPaymentTerminal(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/terminals", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a card transaction
    *
    * (v1.39.0) txnOn, merchant, amount (minor units; a refund negative), category (fuel, travel, meals, parking, tools, supplies, phone, software, other), reference. Audited.
@@ -11612,6 +11625,19 @@ export class Operations {
     body: AddEmployeeBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/payroll/employees", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add an employee's home charger
+   *
+   * (v1.47.0) employeeName, employeeEmail, employeeRef (payroll number), address, mode (ocpp, readings), chargePointId and tokenId (ocpp), rateMinorPerKwh, monthlyCapMinor, currency. An OCPP home charger leaves the public map. Audited.
+   *
+   * `POST /v1/home-chargers` · needs `payment:write`
+   */
+  addEmployeeHomeCharger(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/home-chargers", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -11767,6 +11793,21 @@ export class Operations {
   }
 
   /**
+   * Add a meter reading
+   *
+   * (v1.47.0) readOn (YYYY-MM-DD), kwhTotal (the meter's counter; never below an earlier reading), note. One per day; a second replaces it.
+   *
+   * `POST /v1/home-chargers/{id}/readings` · needs `payment:write`
+   */
+  addMeterReading(params: {
+    /** The home charger. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/home-chargers/{id}/readings", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a note or a promise to pay
    *
    * (v1.20.0) A promise to pay in the future pauses the reminders until that date. Audited as finance.collection_note_added.
@@ -11867,6 +11908,19 @@ export class Operations {
     body: AddPolicyBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/insurance/policies", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Add a price zone
+   *
+   * (v1.47.0) name, currency, source (manual, url), url (fetched every hour), authorization (an Authorization header, kept sealed). Audited.
+   *
+   * `POST /v1/energy-prices/zones` · needs `smartcharging:write`
+   */
+  addPriceZone(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy-prices/zones", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -12209,6 +12263,22 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<ApproveJournalEntryResponse> {
     return this.transport.request<ApproveJournalEntryResponse>({ method: "POST", path: "/v1/finance/ledger/entries/{id}/approve", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Approve, mark paid or void a reimbursement
+   *
+   * (v1.47.0) action: approve (needs finance:approve), paid, void. Audited.
+   *
+   * `POST /v1/home-reimbursements/{id}/{action}` · needs `finance:approve`, `payment:write`
+   */
+  approveMarkPaidOrVoidReimbursement(params: {
+    /** The reimbursement. */
+    id: string;
+    /** approve, paid or void. */
+    action: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/home-reimbursements/{id}/{action}", pathParams: { id: params.id, action: params.action }, accept: "json" }, options);
   }
 
   /**
@@ -12955,6 +13025,17 @@ export class Operations {
   }
 
   /**
+   * Captures not settled yet
+   *
+   * (v1.47.0) Captures older than 3 days that no settlement report has listed.
+   *
+   * `GET /v1/terminal-settlements/unsettled` · needs `payment:read`
+   */
+  capturesNotSettledYet(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/terminal-settlements/unsettled", accept: "json" }, options);
+  }
+
+  /**
    * Carbon and green energy
    *
    * (v1.35.0) Six months of MWh charged, the green share from RECs retired and the emissions avoided; the RECs, those held, the carbon credits with what is sold and available, the sales. format=xlsx with from and to (YYYY-MM) for the report.
@@ -13013,6 +13094,17 @@ export class Operations {
   }
 
   /**
+   * Card payment terminals
+   *
+   * (v1.47.0) Each terminal (site, charger or kiosk, largest pre-authorisation, callback, last seen) and the last 30 days per day: pre-authorised, captured, voided, failed, open.
+   *
+   * `GET /v1/terminals` · needs `payment:read`
+   */
+  cardPaymentTerminals(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/terminals", accept: "json" }, options);
+  }
+
+  /**
    * A card receipt
    *
    * (v1.39.0) The file.
@@ -13024,6 +13116,51 @@ export class Operations {
     tid: string;
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/cards/transactions/{tid}/receipt", pathParams: { tid: params.tid }, accept: "binary" }, options);
+  }
+
+  /**
+   * A card terminal's event (the terminal)
+   *
+   * (v1.47.0) type: preauth {reference, amountMinor, cardBrand, cardLast4, connectorId, and for a kiosk chargePointId or ocppIdentity} — the connector starts with a single-use guest card limited to the amount; answered {accepted, txnId, receiptUrl} (not accepted: void it); cancel {reference}; poll — the instructions waiting [{reference, action: capture | void, amountMinor}]; captured / voided / failed {reference, amountMinor?, error?}. Authenticated by the terminal's key in the path.
+   *
+   * `POST /v1/terminals/events/{key}`
+   */
+  cardTerminalEventTerminal(params: {
+    /** The terminal's key. */
+    key: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/terminals/events/{key}", pathParams: { key: params.key }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Card terminal payments
+   *
+   * (v1.47.0) status (preauth, charging, capture_due, void_due, captured, voided, failed), terminalId: each payment — card, pre-authorised and captured amounts, the session's kWh, settlement. Newest first; at most 500.
+   *
+   * `GET /v1/terminal-payments` · needs `payment:read`
+   */
+  cardTerminalPayments(params?: {
+    query?: {
+      status?: string;
+      terminalId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/terminal-payments", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A card terminal receipt (data)
+   *
+   * (v1.47.0) The site, charger, card (last four), start and end, kWh, the amount paid or that the hold was released. Behind /terminal-receipt/{token}, the link the terminal shows.
+   *
+   * `GET /v1/terminal-receipts/{token}`
+   */
+  cardTerminalReceiptData(params: {
+    /** The receipt's token. */
+    token: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/terminal-receipts/{token}", pathParams: { token: params.token }, accept: "json" }, options);
   }
 
   /**
@@ -13307,6 +13444,19 @@ export class Operations {
   }
 
   /**
+   * Change the driver survey settings
+   *
+   * (v1.47.0) The fields above. Audited.
+   *
+   * `PUT /v1/surveys/settings` · needs `org:write`
+   */
+  changeDriverSurveySettings(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/surveys/settings", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Change an employee
    *
    * (v1.33.0) As adding; endOn for a leaver (the last month is computed on the year). Audited.
@@ -13480,6 +13630,36 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/private-groups/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a home charger
+   *
+   * (v1.47.0) The fields above, or archive: true. Audited.
+   *
+   * `PUT /v1/home-chargers/{id}` · needs `payment:write`
+   */
+  changeOrArchiveHomeCharger(params: {
+    /** The home charger. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/home-chargers/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a price zone
+   *
+   * (v1.47.0) The fields above, or archive: true (its sites stop shifting). Audited.
+   *
+   * `PUT /v1/energy-prices/zones/{id}` · needs `smartcharging:write`
+   */
+  changeOrArchivePriceZone(params: {
+    /** The zone. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/energy-prices/zones/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -13679,6 +13859,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/telematics/connections/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change, re-key or archive a terminal
+   *
+   * (v1.47.0) The fields above, enabled, rotateKey: true (a new key, shown once), or archive: true. Audited.
+   *
+   * `PUT /v1/terminals/{id}` · needs `payment:write`
+   */
+  changeReKeyOrArchiveTerminal(params: {
+    /** The terminal. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/terminals/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15138,6 +15333,19 @@ export class Operations {
   }
 
   /**
+   * Draft a month's reimbursements
+   *
+   * (v1.47.0) month: for each active home charger, its kWh (sessions started in the month, or the month's last reading minus the one before it) × its rate, under the cap. Drafts are recalculated; approved and paid ones stay. Home chargers without the readings needed are listed. Audited.
+   *
+   * `POST /v1/home-reimbursements` · needs `payment:write`
+   */
+  draftMonthReimbursements(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/home-reimbursements", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Draft a month's statements
    *
    * (v1.46.0) month (YYYY-MM, a past or the current month): a statement per unit from its members' sessions on the group's chargers; drafts are recalculated, issued ones are kept. Audited.
@@ -15260,6 +15468,17 @@ export class Operations {
   }
 
   /**
+   * Driver survey settings
+   *
+   * (v1.47.0) enabled, question, samplePct (the share of charges asked), minGapDays (per driver), caseOnLow (a detractor's comment opens a support case).
+   *
+   * `GET /v1/surveys/settings` · needs `session:read`
+   */
+  driverSurveySettings(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/surveys/settings", accept: "json" }, options);
+  }
+
+  /**
    * Dynamic pricing on/off and its band
    *
    * (v1.43.0) enabled; floorPct (50–100, default 80) and capPct (100–200, default 130): every price stays inside; includeTime: the per-minute time fee moves too. Energy only otherwise; session, admin and idle fees and the PLN formula rate never move; an increase is held at the regulated energy ceiling. Audited.
@@ -15354,6 +15573,46 @@ export class Operations {
   }
 
   /**
+   * The employee: add a meter reading
+   *
+   * (v1.47.0) readOn, kwhTotal, note. Authenticated by the link's token; at most 10 an hour.
+   *
+   * `POST /v1/home-charging/{token}`
+   */
+  employeeAddMeterReading(params: {
+    /** The employee's link token. */
+    token: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/home-charging/{token}", pathParams: { token: params.token }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * The employee's page (data)
+   *
+   * (v1.47.0) The employee's rate, this month's kWh so far, their readings and reimbursements. Authenticated by the link's token.
+   *
+   * `GET /v1/home-charging/{token}`
+   */
+  employeePageData(params: {
+    /** The employee's link token. */
+    token: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/home-charging/{token}", pathParams: { token: params.token }, accept: "json" }, options);
+  }
+
+  /**
+   * Employees' home chargers
+   *
+   * (v1.47.0) Each employee's home charger: OCPP (a charger PlugSure manages; its sessions, or only the employee's card's, count) or meter readings, the home electricity rate per kWh, the monthly cap, the last reading.
+   *
+   * `GET /v1/home-chargers` · needs `payment:read`
+   */
+  employeesHomeChargers(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/home-chargers", accept: "json" }, options);
+  }
+
+  /**
    * End a lease early
    *
    * (v1.30.0) month (the first month it no longer runs, within its term), note. The liability left and the asset's net book value are derecognised with the gain or loss. Audited.
@@ -15413,6 +15672,17 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<EnergyCostAndMarginForMonthResponse> {
     return this.transport.request<EnergyCostAndMarginForMonthResponse>({ method: "GET", path: "/v1/finance/energy", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Energy price zones and sites
+   *
+   * (v1.47.0) Each zone (source: imported or fetched from an address; periods held, last fetch and error) and each site's zone and price shifting.
+   *
+   * `GET /v1/energy-prices/zones` · needs `smartcharging:read`
+   */
+  energyPriceZonesAndSites(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/energy-prices/zones", accept: "json" }, options);
   }
 
   /**
@@ -15685,6 +15955,20 @@ export class Operations {
    */
   fetchPkiRootCertificates(options?: RequestOptions): Promise<FetchPkiRootCertificatesResponse> {
     return this.transport.request<FetchPkiRootCertificatesResponse>({ method: "POST", path: "/v1/pnc/trust-anchors/sync", accept: "json" }, options);
+  }
+
+  /**
+   * Fetch a zone's prices now
+   *
+   * (v1.47.0) From its address.
+   *
+   * `POST /v1/energy-prices/zones/{id}/fetch` · needs `smartcharging:write`
+   */
+  fetchZonePricesNow(params: {
+    /** The zone. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy-prices/zones/{id}/fetch", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -16759,6 +17043,36 @@ export class Operations {
   }
 
   /**
+   * Home charging reimbursements
+   *
+   * (v1.47.0) month (YYYY-MM), homeChargerId: each month's kWh, rate, amount (capped or not) and status (draft, approved, paid, void).
+   *
+   * `GET /v1/home-reimbursements` · needs `payment:read`
+   */
+  homeChargingReimbursements(params?: {
+    query?: {
+      month?: string;
+      homeChargerId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/home-reimbursements", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A home meter's readings
+   *
+   * (v1.47.0) The latest 60.
+   *
+   * `GET /v1/home-chargers/{id}/readings` · needs `payment:read`
+   */
+  homeMeterReadings(params: {
+    /** The home charger. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/home-chargers/{id}/readings", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Hour-by-hour demand forecast
    *
    * (v1.45.0) siteId (default: every site together), days (1–14, default 7): the hour-of-week heatmap (occupancy, sessions, kWh) and the forecast for each coming hour (the profile × the trend).
@@ -16801,6 +17115,34 @@ export class Operations {
     id: string;
   }, options?: RequestOptions): Promise<ImportPartnerNetworkResponse> {
     return this.transport.request<ImportPartnerNetworkResponse>({ method: "POST", path: "/v1/roaming/partners/{id}/import", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
+   * Import prices
+   *
+   * (v1.47.0) prices [{start, price (per kWh, minor units), minutes (15, 30, 60)}] or csv "start,price[,minutes]" lines; a period already held is replaced. Prices per MWh: per: "MWh". Audited.
+   *
+   * `POST /v1/energy-prices/zones/{id}/prices` · needs `smartcharging:write`
+   */
+  importPrices(params: {
+    /** The zone. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/energy-prices/zones/{id}/prices", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Import the provider's settlement report
+   *
+   * (v1.47.0) csv (lines "reference,amount[,date]", amounts in minor units; a header is skipped), batch. Each line is matched to a capture: matched, mismatch or unknown. Audited.
+   *
+   * `POST /v1/terminal-settlements` · needs `payment:write`
+   */
+  importProviderSettlementReport(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/terminal-settlements", body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -18237,6 +18579,21 @@ export class Operations {
   }
 
   /**
+   * A month's reimbursements as a spreadsheet
+   *
+   * (v1.47.0) month (default this month).
+   *
+   * `GET /v1/home-reimbursements.xlsx` · needs `payment:read`
+   */
+  monthReimbursementsAsSpreadsheet(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/home-reimbursements.xlsx", query: params?.query, accept: "text" }, options);
+  }
+
+  /**
    * A month's statements as a spreadsheet
    *
    * (v1.46.0) month (default this month): one row per unit, and every session.
@@ -18526,6 +18883,20 @@ export class Operations {
   }
 
   /**
+   * A new link for the employee
+   *
+   * (v1.47.0) The employee's page at /home-charging/{token}, shown once; the old link stops working. Audited.
+   *
+   * `POST /v1/home-chargers/{id}/portal` · needs `payment:write`
+   */
+  newLinkForEmployee(params: {
+    /** The home charger. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/home-chargers/{id}/portal", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * A new SCIM token
    *
    * (v1.43.0) Returns the token once (pscim_…) and the endpoint; only its hash is kept and the previous token stops working at once. Audited.
@@ -18534,6 +18905,21 @@ export class Operations {
    */
   newScimToken(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/scim/token", accept: "json" }, options);
+  }
+
+  /**
+   * NPS
+   *
+   * (v1.47.0) days (default 90): NPS (% promoters 9–10 − % detractors 0–6), responses, overall, per site, per charger and per week; the tags drivers chose; the scores' distribution.
+   *
+   * `GET /v1/surveys/nps` · needs `session:read`
+   */
+  nps(params?: {
+    query?: {
+      days?: number;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/surveys/nps", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -18965,6 +19351,21 @@ export class Operations {
    */
   payroll(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/payroll", accept: "json" }, options);
+  }
+
+  /**
+   * The payroll export
+   *
+   * (v1.47.0) month (default this month): the approved and paid reimbursements — payroll number, name, month, kWh, amount, currency, status.
+   *
+   * `GET /v1/home-reimbursements/payroll.csv` · needs `payment:read`
+   */
+  payrollExport(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/home-reimbursements/payroll.csv", query: params?.query, accept: "text" }, options);
   }
 
   /**
@@ -21685,6 +22086,20 @@ export class Operations {
   }
 
   /**
+   * Send a failed capture or void again
+   *
+   * (v1.47.0) A failed payment's instruction is due again (the callback, or the terminal's next poll). Audited.
+   *
+   * `POST /v1/terminal-payments/{id}/retry` · needs `payment:write`
+   */
+  sendFailedCaptureOrVoidAgain(params: {
+    /** The payment. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/terminal-payments/{id}/retry", pathParams: { id: params.id }, accept: "json" }, options);
+  }
+
+  /**
    * Send a month's close e-mail now
    *
    * (v1.17.0) The finance export (Excel and PDF) and the journal (Excel) for month (YYYY-MM, default last month) to the saved recipients, through the e-mail channel. 409 without an e-mail channel; 422 without recipients; 502 when the e-mail server refuses. Audited as finance.close_email_sent.
@@ -23064,6 +23479,21 @@ export class Operations {
   }
 
   /**
+   * A site's price zone and shifting
+   *
+   * (v1.47.0) zoneId, shift (in an expensive period the load manager gives the site only capPct % of its grid budget; departures still get what they need), capPct (0–100, default 50), thresholdMinor (expensive at or above this price; empty: the day's most expensive quarter). Audited.
+   *
+   * `PUT /v1/sites/{siteId}/energy-prices` · needs `smartcharging:write`
+   */
+  sitePriceZoneAndShifting(params: {
+    /** The site. */
+    siteId: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/sites/{siteId}/energy-prices", pathParams: { siteId: params.siteId }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * A site's queue over time
    *
    * (v1.44.0) Over the last days (default 30): joins, charged from the queue, no-shows (missed / (served + missed)), abandonment (left or waited too long), median and 90th-percentile wait, the priority lane's share and wait, places by day and joins by hour.
@@ -23573,6 +24003,23 @@ export class Operations {
    */
   supportMacros(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/support/macros", accept: "json" }, options);
+  }
+
+  /**
+   * Survey responses
+   *
+   * (v1.47.0) band (detractor, passive, promoter), withComment, siteId: the latest 300, with the support case a comment opened.
+   *
+   * `GET /v1/surveys/responses` · needs `session:read`
+   */
+  surveyResponses(params?: {
+    query?: {
+      band?: string;
+      withComment?: string;
+      siteId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/surveys/responses", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -24696,6 +25143,21 @@ export class Operations {
   }
 
   /**
+   * What charging at the hourly prices cost
+   *
+   * (v1.47.0) month (default this month): per site on a zone, the energy each hour × that hour's price, against the same energy at the month's average price — the saving from when cars charged.
+   *
+   * `GET /v1/energy-prices/savings` · needs `smartcharging:read`
+   */
+  whatChargingAtHourlyPricesCost(params?: {
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/energy-prices/savings", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * What customers owe, by age
    *
    * (v1.20.0) Fleet invoices not paid (and, for platform administrators, operators' statements to PlugSure, due 14 days after finalisation) with what is outstanding, days past due and the bucket (current, 1-30, 31-60, 61-90, 90+), the last note or promise, the last reminder, a write-off; aging totals per currency; the dunning settings; write-offs waiting for approval.
@@ -24980,5 +25442,22 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<YearEndSummaryResponse> {
     return this.transport.request<YearEndSummaryResponse>({ method: "GET", path: "/v1/finance/year-end", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * A zone's prices for a day
+   *
+   * (v1.47.0) date (default today, local): each period's price, whether it is expensive (the day's most expensive quarter), min, max, average.
+   *
+   * `GET /v1/energy-prices/zones/{id}/day` · needs `smartcharging:read`
+   */
+  zonePricesForDay(params: {
+    /** The zone. */
+    id: string;
+    query?: {
+      date?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/energy-prices/zones/{id}/day", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
   }
 }

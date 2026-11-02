@@ -689,6 +689,15 @@ environment variables. Secrets are stored sealed with `SECRETS_KEY`.
      Plates & parking, [PLATES-PARKING.md](PLATES-PARKING.md)). The trip
      planner needs nothing ([TRIP-PLANNER.md](TRIP-PLANNER.md)). Worker added:
      parking (5 min).
+  40. (v1.47.0) Optional, per operator: add employees' home chargers and
+     send them their link (Finance → Home charging,
+     [HOME-CHARGING.md](HOME-CHARGING.md)); add card terminals, give each its
+     address and route payment.terminal_failed (Commercial → Card terminals,
+     [CARD-TERMINALS.md](CARD-TERMINALS.md)); add a price zone and switch
+     shifting on per site (Assets & energy → Energy prices,
+     [ENERGY-PRICES.md](ENERGY-PRICES.md)); switch surveys on (Operate →
+     Surveys, [SURVEYS.md](SURVEYS.md)). Workers added: card terminals (1 min),
+     energy prices (hourly).
 
   **E-wallets and cards** are pre-purchases like QRIS. Cards are paid on the
   acquirer's hosted 3-D Secure page, so card data never touches PlugSure. The

@@ -211,6 +211,12 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .card.pad { padding: 16px; }
 .card > header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .card > header h3 { font-size: 13.5px; }
+/* (v1.47.0) On a phone, a card header's controls wrap under its title instead of widening the page. */
+@media (max-width: 640px) {
+  .card > header { flex-wrap: wrap; }
+  .card > header > .right { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+  .card > header .btn, .card > header select, .card > header input { white-space: nowrap; max-width: 100%; }
+}
 .card > .body { padding: 14px 16px; }
 /* A whole card that is a link (Integrations → "Managed on their own pages"). */
 a.card.link { display: block; color: inherit; text-decoration: none; }

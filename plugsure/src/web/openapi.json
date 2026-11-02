@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PlugSure CSMS API",
-    "version": "1.46.0",
+    "version": "1.47.0",
     "description": "The PlugSure CSMS operator API: everything the operator console does, for your own systems.\n\n## Authentication\nSend an API key as a bearer token: `Authorization: Bearer psk_<prefix>_<secret>`.\nCreate keys in the console under **Governance → API keys** (or `POST /v1/api-keys`), each with the permissions it needs;\na key only ever sees its own organisation. Each operation lists the permissions its handler checks (`x-permissions`).\nThe console's own session cookie also works, but machines should use keys.\n\n## Sandbox\nBuild and test against a **sandbox**: a separate tenant with virtual chargers that speak real OCPP inside the gateway.\nCreate one under **Governance → Developers** (or `POST /v1/sandboxes`) and use the key it returns.\nEverything behaves as in production — commands reach the (virtual) charger, sessions are metered, rated and receipted,\nalerts and webhooks fire — and `POST /v1/sandbox/chargers/{identity}/simulate` acts out a card tap, a fault or a dropped\n4G link. Sandboxes never appear in the driver app or to roaming partners, and cannot command real hardware.\n\n## Conventions\n- Timestamps are ISO 8601 in UTC. Energy is in Wh unless a field says kWh. Money: see below.\n- Field names follow the resource they come from: database rows are `snake_case`, computed views are `camelCase`.\n  New fields may be added to any response; ignore what you do not know.\n- Errors are JSON: `{ \"error\": \"human-readable reason\" }`, sometimes with a `code` or details. Validation problems are 400 or 422.\n- Rate limits: each API key has its own limit (default 600 requests a minute, `API_KEY_RATE_LIMIT_PER_MIN`; set per key under **Governance → API keys**).\n  It is a token bucket: a key may send its whole minute's allowance at once, then refills steadily. Every answer to a key carries\n  `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (seconds until the bucket is full) and `RateLimit-Policy`; over the limit you get\n  429 with `Retry-After` and `code: rate_limited`. Wait that long and retry (the SDK does). Requests without a key are limited per client IP.\n- SDK: a generated TypeScript client (`@plugsure/csms-sdk`, no dependencies) is published with this document at `/sdk/plugsure-csms-sdk.tgz`.\n- Writes are audited with the key or user that made them.\n\n## Money\nEvery amount is an integer in the **PlugSure minor unit of its currency**, named `…Minor` / `…_minor`, with the\ncurrency next to it (`currency`, ISO 4217) on the object or an enclosing one; no currency stated means IDR.\nPlugSure's unit is whole rupiah for IDR (exponent 0) and sen / cents for MYR and SGD (exponent 2): `total_minor: 1234`\nwith `currency: \"SGD\"` is S$ 12.34. Rates per kWh or per minute are decimals in major units.\nTax fields are named neutrally: `taxMinor` (PPN in Indonesia, GST in Singapore, service tax in Malaysia),\n`localTaxMinor` (Indonesian PBJT-TL), `taxBaseMinor` (the tax base, DPP in Indonesia).\n\n**Deprecated names.** Until v1.7 amounts were named `…Idr` / `…_idr` (and `ppnIdr`, `pbjtIdr`, `dppIdr`, …).\nWhile an amount is in IDR every response and webhook still carries the old name next to the new one, with the same\nvalue (and the response has a `Deprecation: true` header); request bodies accept the old names. Amounts in other\ncurrencies have no `…Idr` name. The old names are marked `deprecated` in this document and go away in `/v2`.\n\n## Webhooks\nSubscribe under **Governance → Webhooks** (`POST /v1/webhooks`). Each delivery is a POST with the envelope\n`{ id, type, created_at, api_version, data }`, headers `PlugSure-Event`, `PlugSure-Delivery` and\n`PlugSure-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>`. Verify the signature and reject old\ntimestamps; deliveries are retried with back-off and may arrive more than once (deduplicate on `id`).\nThe event payloads are described under `webhooks` below.",
     "contact": {
       "name": "PlugSure",
@@ -75884,6 +75884,1857 @@
             "$ref": "#/components/responses/E500"
           }
         }
+      }
+    },
+    "/v1/home-chargers": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Employees' home chargers",
+        "operationId": "employeesHomeChargers",
+        "description": "(v1.47.0) Each employee's home charger: OCPP (a charger PlugSure manages; its sessions, or only the employee's card's, count) or meter readings, the home electricity rate per kWh, the monthly cap, the last reading.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "{chargers}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add an employee's home charger",
+        "operationId": "addEmployeeHomeCharger",
+        "description": "(v1.47.0) employeeName, employeeEmail, employeeRef (payroll number), address, mode (ocpp, readings), chargePointId and tokenId (ocpp), rateMinorPerKwh, monthlyCapMinor, currency. An OCPP home charger leaves the public map. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The home charger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/home-chargers/{id}": {
+      "put": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Change or archive a home charger",
+        "operationId": "changeOrArchiveHomeCharger",
+        "description": "(v1.47.0) The fields above, or archive: true. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The home charger.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The home charger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/home-chargers/{id}/readings": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A home meter's readings",
+        "operationId": "homeMeterReadings",
+        "description": "(v1.47.0) The latest 60.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The home charger.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{readings}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Add a meter reading",
+        "operationId": "addMeterReading",
+        "description": "(v1.47.0) readOn (YYYY-MM-DD), kwhTotal (the meter's counter; never below an earlier reading), note. One per day; a second replaces it.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The home charger.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "{readings}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/home-chargers/{id}/portal": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A new link for the employee",
+        "operationId": "newLinkForEmployee",
+        "description": "(v1.47.0) The employee's page at /home-charging/{token}, shown once; the old link stops working. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The home charger.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{token, path}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/home-reimbursements": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Home charging reimbursements",
+        "operationId": "homeChargingReimbursements",
+        "description": "(v1.47.0) month (YYYY-MM), homeChargerId: each month's kWh, rate, amount (capped or not) and status (draft, approved, paid, void).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "homeChargerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{reimbursements}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Draft a month's reimbursements",
+        "operationId": "draftMonthReimbursements",
+        "description": "(v1.47.0) month: for each active home charger, its kWh (sessions started in the month, or the month's last reading minus the one before it) × its rate, under the cap. Drafts are recalculated; approved and paid ones stay. Home chargers without the readings needed are listed. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{month, drafted, missing, reimbursements}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/home-reimbursements/{id}/{action}": {
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "Approve, mark paid or void a reimbursement",
+        "operationId": "approveMarkPaidOrVoidReimbursement",
+        "description": "(v1.47.0) action: approve (needs finance:approve), paid, void. Audited.\n\n**Permissions checked:** `finance:approve`, `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The reimbursement.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "description": "approve, paid or void.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reimbursement.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "finance:approve",
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/home-reimbursements/payroll.csv": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "The payroll export",
+        "operationId": "payrollExport",
+        "description": "(v1.47.0) month (default this month): the approved and paid reimbursements — payroll number, name, month, kWh, amount, currency, status.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/home-reimbursements.xlsx": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "A month's reimbursements as a spreadsheet",
+        "operationId": "monthReimbursementsAsSpreadsheet",
+        "description": "(v1.47.0) month (default this month).\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An .xlsx file.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/home-charging/{token}": {
+      "get": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "The employee's page (data)",
+        "operationId": "employeePageData",
+        "description": "(v1.47.0) The employee's rate, this month's kWh so far, their readings and reimbursements. Authenticated by the link's token.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The employee's link token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Finance"
+        ],
+        "summary": "The employee: add a meter reading",
+        "operationId": "employeeAddMeterReading",
+        "description": "(v1.47.0) readOn, kwhTotal, note. Authenticated by the link's token; at most 10 an hour.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The employee's link token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/terminals": {
+      "get": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Card payment terminals",
+        "operationId": "cardPaymentTerminals",
+        "description": "(v1.47.0) Each terminal (site, charger or kiosk, largest pre-authorisation, callback, last seen) and the last 30 days per day: pre-authorised, captured, voided, failed, open.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "{terminals, days}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Add a card payment terminal",
+        "operationId": "addCardPaymentTerminal",
+        "description": "(v1.47.0) siteId, chargePointId (none: a kiosk for the site), name, serial, provider, maxPreauthMinor, callbackUrl (capture and void instructions are POSTed there, signed; none: the terminal polls), callbackSecret (kept sealed). The terminal's key is shown once. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The terminal, with its key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/terminals/{id}": {
+      "put": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Change, re-key or archive a terminal",
+        "operationId": "changeReKeyOrArchiveTerminal",
+        "description": "(v1.47.0) The fields above, enabled, rotateKey: true (a new key, shown once), or archive: true. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The terminal.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The terminal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/terminal-payments": {
+      "get": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Card terminal payments",
+        "operationId": "cardTerminalPayments",
+        "description": "(v1.47.0) status (preauth, charging, capture_due, void_due, captured, voided, failed), terminalId: each payment — card, pre-authorised and captured amounts, the session's kWh, settlement. Newest first; at most 500.\n\n**Permissions checked:** `payment:read`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "terminalId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{payments}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/terminal-payments/{id}/retry": {
+      "post": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Send a failed capture or void again",
+        "operationId": "sendFailedCaptureOrVoidAgain",
+        "description": "(v1.47.0) A failed payment's instruction is due again (the callback, or the terminal's next poll). Audited.\n\n**Permissions checked:** `payment:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payment.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/terminal-settlements": {
+      "post": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Import the provider's settlement report",
+        "operationId": "importProviderSettlementReport",
+        "description": "(v1.47.0) csv (lines \"reference,amount[,date]\", amounts in minor units; a header is skipped), batch. Each line is matched to a capture: matched, mismatch or unknown. Audited.\n\n**Permissions checked:** `payment:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{batch, matched, mismatch, unknown, lines}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:write"
+        ]
+      }
+    },
+    "/v1/terminal-settlements/unsettled": {
+      "get": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "Captures not settled yet",
+        "operationId": "capturesNotSettledYet",
+        "description": "(v1.47.0) Captures older than 3 days that no settlement report has listed.\n\n**Permissions checked:** `payment:read`.",
+        "responses": {
+          "200": {
+            "description": "{payments}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "payment:read"
+        ]
+      }
+    },
+    "/v1/terminals/events/{key}": {
+      "post": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "A card terminal's event (the terminal)",
+        "operationId": "cardTerminalEventTerminal",
+        "description": "(v1.47.0) type: preauth {reference, amountMinor, cardBrand, cardLast4, connectorId, and for a kiosk chargePointId or ocppIdentity} — the connector starts with a single-use guest card limited to the amount; answered {accepted, txnId, receiptUrl} (not accepted: void it); cancel {reference}; poll — the instructions waiting [{reference, action: capture | void, amountMinor}]; captured / voided / failed {reference, amountMinor?, error?}. Authenticated by the terminal's key in the path.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "The terminal's key.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Depends on the type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/terminal-receipts/{token}": {
+      "get": {
+        "tags": [
+          "Payments and refunds"
+        ],
+        "summary": "A card terminal receipt (data)",
+        "operationId": "cardTerminalReceiptData",
+        "description": "(v1.47.0) The site, charger, card (last four), start and end, kWh, the amount paid or that the hold was released. Behind /terminal-receipt/{token}, the link the terminal shows.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The receipt's token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        }
+      }
+    },
+    "/v1/energy-prices/zones": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Energy price zones and sites",
+        "operationId": "energyPriceZonesAndSites",
+        "description": "(v1.47.0) Each zone (source: imported or fetched from an address; periods held, last fetch and error) and each site's zone and price shifting.\n\n**Permissions checked:** `smartcharging:read`.",
+        "responses": {
+          "200": {
+            "description": "{zones, sites}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:read"
+        ]
+      },
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Add a price zone",
+        "operationId": "addPriceZone",
+        "description": "(v1.47.0) name, currency, source (manual, url), url (fetched every hour), authorization (an Authorization header, kept sealed). Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The zone.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/energy-prices/zones/{id}": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Change or archive a price zone",
+        "operationId": "changeOrArchivePriceZone",
+        "description": "(v1.47.0) The fields above, or archive: true (its sites stop shifting). Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The zone.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The zone.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/energy-prices/zones/{id}/prices": {
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Import prices",
+        "operationId": "importPrices",
+        "description": "(v1.47.0) prices [{start, price (per kWh, minor units), minutes (15, 30, 60)}] or csv \"start,price[,minutes]\" lines; a period already held is replaced. Prices per MWh: per: \"MWh\". Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The zone.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{stored, skipped}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/energy-prices/zones/{id}/fetch": {
+      "post": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "Fetch a zone's prices now",
+        "operationId": "fetchZonePricesNow",
+        "description": "(v1.47.0) From its address.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The zone.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{stored, skipped}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/energy-prices/zones/{id}/day": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "A zone's prices for a day",
+        "operationId": "zonePricesForDay",
+        "description": "(v1.47.0) date (default today, local): each period's price, whether it is expensive (the day's most expensive quarter), min, max, average.\n\n**Permissions checked:** `smartcharging:read`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The zone.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The day.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:read"
+        ]
+      }
+    },
+    "/v1/sites/{siteId}/energy-prices": {
+      "put": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "A site's price zone and shifting",
+        "operationId": "sitePriceZoneAndShifting",
+        "description": "(v1.47.0) zoneId, shift (in an expensive period the load manager gives the site only capPct % of its grid budget; departures still get what they need), capPct (0–100, default 50), thresholdMinor (expensive at or above this price; empty: the day's most expensive quarter). Audited.\n\n**Permissions checked:** `smartcharging:write`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "The site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:write"
+        ]
+      }
+    },
+    "/v1/energy-prices/savings": {
+      "get": {
+        "tags": [
+          "Load management"
+        ],
+        "summary": "What charging at the hourly prices cost",
+        "operationId": "whatChargingAtHourlyPricesCost",
+        "description": "(v1.47.0) month (default this month): per site on a zone, the energy each hour × that hour's price, against the same energy at the month's average price — the saving from when cars charged.\n\n**Permissions checked:** `smartcharging:read`.",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{month, sites}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "smartcharging:read"
+        ]
+      }
+    },
+    "/v1/surveys/settings": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Driver survey settings",
+        "operationId": "driverSurveySettings",
+        "description": "(v1.47.0) enabled, question, samplePct (the share of charges asked), minGapDays (per driver), caseOnLow (a detractor's comment opens a support case).\n\n**Permissions checked:** `session:read`.",
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      },
+      "put": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Change the driver survey settings",
+        "operationId": "changeDriverSurveySettings",
+        "description": "(v1.47.0) The fields above. Audited.\n\n**Permissions checked:** `org:write`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "422": {
+            "$ref": "#/components/responses/E422"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "org:write"
+        ]
+      }
+    },
+    "/v1/surveys/nps": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "NPS",
+        "operationId": "nps",
+        "description": "(v1.47.0) days (default 90): NPS (% promoters 9–10 − % detractors 0–6), responses, overall, per site, per charger and per week; the tags drivers chose; the scores' distribution.\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The figures.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
+      }
+    },
+    "/v1/surveys/responses": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "summary": "Survey responses",
+        "operationId": "surveyResponses",
+        "description": "(v1.47.0) band (detractor, passive, promoter), withComment, siteId: the latest 300, with the support case a comment opened.\n\n**Permissions checked:** `session:read`.",
+        "parameters": [
+          {
+            "name": "band",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "withComment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "siteId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{responses}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "x-permissions": [
+          "session:read"
+        ]
       }
     }
   },

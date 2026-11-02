@@ -689,6 +689,10 @@ input{font-family:inherit}
     'Baterai sekarang (%)':'Battery now (%)','Jarak tempuh penuh (km)':'Range when full (km)','Konektor mobil':'Car connector','Cadangan saat tiba (%)':'Reserve on arrival (%)','Rencanakan':'Plan',
     'Tanpa berhenti mengisi':'No charging stop needed','Tidak ada stasiun dalam jangkauan':'No station within reach','Perkiraan jarak lewat jalan; berhenti di stasiun nyata.':'The road distance is an estimate; the stops are real stations.',
     'Pilih tujuan dengan benar.':'Choose a valid destination.','Stasiun tidak ditemukan.':'Station not found.','Semua jenis':'Any type',
+    // (v1.47.0) the survey after a charge
+    'Nilai pengisian ini':'Rate this charge','Seberapa besar kemungkinan Anda merekomendasikan kami kepada teman?':'How likely are you to recommend us to a friend?','Tidak mungkin':'Not likely','Sangat mungkin':'Very likely',
+    'Kecepatan':'Speed','Harga':'Price','Ketersediaan':'Availability','Aplikasi':'The app','Lokasi':'Location','Kebersihan':'Cleanliness','Ada yang rusak':'Something broken',
+    'Ceritakan lebih lanjut (opsional)':'Tell us more (optional)','Kirim nilai':'Send rating','Terima kasih atas penilaian Anda.':'Thank you for your rating.',
     // (v1.45.0) credit, referrals, reporting a problem
     'Laporkan masalah':'Report a problem','Masalahnya tentang':'What is it about','Pengembalian dana':'Refund','Charger rusak':'Charger broken','Ceritakan':'Tell us what happened','Apa yang terjadi?':'What happened?','Kirim laporan':'Send the report','Laporan terhubung dengan sesi ini. Balasan muncul di Akun → Laporan saya.':'The report is linked to this session. Replies appear in Account → My reports.','Baru':'New','Diproses':'In progress','Menunggu balasan Anda':'Waiting for your reply','Ditutup':'Closed','Seberapa puas Anda?':'How satisfied are you?','Tulis pesan':'Write a message','Kirim':'Send','Layanan pelanggan':'Customer service','Kredit':'Credit','Punya kode kartu hadiah atau voucher?':'Have a gift card or voucher code?','Tukarkan':'Redeem','Bagikan kode':'Share the code','Punya kode referal dari teman?':'Have a referral code from a friend?','Kode referal':'Referral code','Pakai kode':'Use the code','Riwayat kredit':'Credit history','Kartu hadiah':'Gift card','Referal':'Referral','Dipakai mengisi':'Used for charging','Kembali dari sesi':'Back from a session','Laporan saya':'My reports','Dibayar dengan kredit':'Paid with credit','Kode disalin.':'Code copied.','Pembayaran':'Payment','Penyesuaian':'Adjustment','Voucher':'Voucher',    'Meter bertanda tangan':'Signed meter data','Terverifikasi':'Verified','Cocok':'Matches','Tidak cocok':'Does not match','Tidak sah':'Not valid','Tidak lengkap':'Incomplete','Tidak ada':'None',
     'Batas baterai':'Battery floor','Izinkan':'Allow','Diizinkan':'Allowed','Diatur oleh armada Anda.':'Set by your fleet.','Kredit energi dikembalikan':'Credit for energy given back',
@@ -766,6 +770,8 @@ input{font-family:inherit}
     // Bidirectional charging. Before the generic word patterns below.
     [/^Kredit (Rp [\d.]+) per kWh\. Baterai tidak turun di bawah (\d+)%, dan tidak dalam satu jam sebelum Anda pergi\.$/g,'Credit $1 per kWh. The battery never goes below $2%, nor in the hour before you leave.'],
     [/^Sedang mengembalikan ([\d.,]+) kW$/g,'Giving back $1 kW'],[/^Dikembalikan ([\d.,]+) kWh · kredit (Rp [\d.]+)$/g,'Given back $1 kWh · credit $2'],[/^Baterai sudah di batas (\d+)%$/g,'The battery is at its $1% floor'],
+    // (v1.47.0) The survey. Before the generic word patterns below.
+    [/^Terima kasih\. Laporan (PS-\d+) dibuat; tim kami akan menghubungi Anda\.$/g,'Thank you. Report $1 was opened; our team will contact you.'],
     // (v1.46.0) The trip planner. Before the generic word patterns below.
     [/^±(\d+) km · (\d+) kali isi daya$/g,'±$1 km · $2 charging stops'],[/^Tiba dengan baterai (\d+)%$/g,'Arrive with $1% battery'],[/^Biaya isi sekitar (.+)$/g,'Charging costs about $1'],
     [/^Km (\d+) dari awal$/g,'Km $1 from the start'],[/^Tiba (\d+)% · isi sampai (\d+)%$/g,'Arrive at $1% · charge to $2%'],[/^(\d+) menit mengisi · ([\d,]+) kWh$/g,'$1 min charging · $2 kWh'],
@@ -2742,12 +2748,14 @@ VIEWS.receipt=async(v)=>{
       ${set&&set.refundMinor>0?`<div class="refund">${svg(I.gift)}<div><div class="t">Pengembalian ${rp(set.refundMinor)}</div><div class="s">Dari ${rp(set.paidMinor)} dibayar, ${rp(set.usedMinor)} terpakai. ${set.refund&&set.refund.state==='refunded'?'Sudah dikembalikan.':'Sedang diproses.'}</div></div></div>`:''}
     </div>
     ${t?`<button class="cta ghost" id="taxdoc" style="margin-top:16px">Unduh struk pajak</button>`:''}
+    ${state.me&&state.me.account?'<div id="survey"></div>':''}
     ${r.mode!=='fleet'?'<div id="rfbox" style="margin-top:10px"></div>':''}
     ${state.me&&state.me.account?'<button class="cta ghost" id="report" style="margin-top:10px">Laporkan masalah</button>':''}
     <button class="cta ghost" id="done" style="margin-top:10px">Selesai</button>`;
   $('.rc-head svg')&&($('.rc-head .chk svg').style.cssText='width:28px;height:28px');
   $('#done').onclick=()=>go('home');
   if($('#report')) $('#report').onclick=()=>go('report',{chargeId:id,_back:()=>go('receipt',{chargeId:id})});
+  if($('#survey')) surveyCard($('#survey'),id);
   if($('#paynow')) $('#paynow').onclick=async()=>{ const b=$('#paynow'); b.disabled=true; b.innerHTML='<span class="spinner"></span>';
     if(set.postpay.checkoutUrl){ location.href=set.postpay.checkoutUrl; return; }
     try{ const r=await moneyPost('/v1/charge/'+id+'/pay-now',{});
@@ -3175,6 +3183,27 @@ async function paintReports(row){
 }
 
 /** Paying a reservation fee: QRIS here, or the e-wallet / card page; the connector is held once it is paid. */
+/** (v1.47.0) The operator's survey after a charge: 0–10, optional tags and a comment; asked once per charge, when the operator asks. */
+const SURVEY_TAGS=[['speed','Kecepatan'],['price','Harga'],['availability','Ketersediaan'],['payment','Pembayaran'],['app','Aplikasi'],['location','Lokasi'],['cleanliness','Kebersihan'],['broken','Ada yang rusak']];
+async function surveyCard(box,chargeId){
+  let q; try{ q=await api('/v1/surveys/pending?chargeId='+encodeURIComponent(chargeId)); }catch(e){ return; }
+  if(!q||!q.ask||!box.isConnected) return;
+  let score=null; const tags=new Set();
+  box.innerHTML=`<div class="card soft" style="margin-top:16px;padding:14px"><div class="seclabel" style="margin-top:0">Nilai pengisian ini</div>
+    <div class="small" style="margin-bottom:10px">${esc(q.question)}</div>
+    <div style="display:grid;grid-template-columns:repeat(11,1fr);gap:4px" id="svs">${Array.from({length:11},(_,i)=>`<button class="chip" data-s="${i}" style="padding:10px 0">${i}</button>`).join('')}</div>
+    <div class="small muted" style="display:flex;justify-content:space-between;margin-top:4px"><span>Tidak mungkin</span><span>Sangat mungkin</span></div>
+    <div id="svmore" hidden><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px">${SURVEY_TAGS.filter(([k])=>(q.tags||[]).includes(k)).map(([k,l])=>`<button class="chip" data-t="${k}" style="padding:8px 12px">${l}</button>`).join('')}</div>
+      <textarea id="svc" rows="3" maxlength="2000" style="width:100%;margin-top:10px" placeholder="Ceritakan lebih lanjut (opsional)"></textarea>
+      <button class="cta" id="svsend" style="margin-top:10px">Kirim nilai</button></div></div>`;
+  box.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{ haptic(); score=Number(b.dataset.s); box.querySelectorAll('[data-s]').forEach(x=>x.classList.toggle('sel',x===b)); $('#svmore').hidden=false; });
+  box.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{ const k=b.dataset.t; if(tags.has(k)) tags.delete(k); else tags.add(k); b.classList.toggle('sel',tags.has(k)); });
+  $('#svsend').onclick=async()=>{ const b=$('#svsend'); b.disabled=true;
+    try{ const r=await api('/v1/surveys',{method:'POST',body:JSON.stringify({chargeId,score,tags:[...tags],comment:$('#svc').value||null})});
+      haptic(); box.innerHTML=`<div class="card soft small" style="margin-top:16px;padding:14px">${r.caseRef?'Terima kasih. Laporan '+esc(r.caseRef)+' dibuat; tim kami akan menghubungi Anda.':'Terima kasih atas penilaian Anda.'}</div>`; }
+    catch(e){ alertBanner(e.message); b.disabled=false; } };
+}
+
 /** (v1.46.0) Trip planner: from here (or a station) to a destination, where to stop and charge with the car's range. */
 VIEWS.trip=async(v)=>{
   v.className='view';
