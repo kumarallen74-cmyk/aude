@@ -24,6 +24,7 @@ export const ALERT_KINDS: Record<string, string> = {
   'support.sla_breach': 'Support case past its SLA',
   // (v1.46.0) Plates & parking (services/anpr.ts): a car past the site's longest stay.
   'parking.overstay': 'Car parked past the longest stay',
+  'payment.terminal_failed': 'Card terminal payment not settled',
   'charge_point.device_event': 'Hardware monitor alarm',
   'session.stuck': 'Session stuck',
   'session.orphaned': 'Orphaned session',

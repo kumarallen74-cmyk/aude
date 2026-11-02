@@ -125,7 +125,9 @@ const CONNECTOR_COLUMNS = `
 const PUBLICLY_LISTED = `cp.status NOT IN ('pending_adoption', 'decommissioned') AND s.archived_at IS NULL`
   + ` AND NOT EXISTS (SELECT 1 FROM organisation so WHERE so.id = s.org_id AND so.sandbox_of_org_id IS NOT NULL)`
   // (v1.46.0) Residential and workplace chargers are for their members only: never on the public map.
-  + ` AND NOT EXISTS (SELECT 1 FROM private_group_charger pg WHERE pg.charge_point_id = cp.id)`;
+  + ` AND NOT EXISTS (SELECT 1 FROM private_group_charger pg WHERE pg.charge_point_id = cp.id)`
+  // (v1.47.0) An employee's home charger is theirs.
+  + ` AND NOT EXISTS (SELECT 1 FROM home_charger hc WHERE hc.charge_point_id = cp.id AND hc.archived_at IS NULL)`;
 
 function toConnectorView(r: ConnectorRow): ConnectorView {
   const online = registry.isOnline(r.ocpp_identity);

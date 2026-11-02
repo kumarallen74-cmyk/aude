@@ -53,7 +53,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'dr_program', 'dr_event', 'dr_event_site', 'status_page', 'status_incident', 'status_subscriber',
       'fleet_vehicle', 'session_departure', 'diagnostic_run',
       'support_settings', 'support_case', 'support_message', 'support_macro', 'site_candidate', 'credit_settings', 'gift_card_batch', 'gift_card', 'referral_code', 'referral', 'driver_credit_entry', 'telematics_connection', 'vehicle_telemetry',
-      'field_template', 'work_order_photo', 'field_op', 'private_group', 'private_group_charger', 'private_unit', 'private_member', 'private_statement', 'anpr_camera', 'parking_visit', 'plate_event']]);
+      'field_template', 'work_order_photo', 'field_op', 'private_group', 'private_group_charger', 'private_unit', 'private_member', 'private_statement', 'anpr_camera', 'parking_visit', 'plate_event',
+      'home_charger', 'home_meter_reading', 'home_reimbursement', 'payment_terminal', 'terminal_txn', 'terminal_settlement_line', 'energy_price_zone', 'energy_price', 'survey_settings', 'survey_response']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -168,5 +169,9 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     // (v1.46.0, 113) a private group's chargers are replaced as a set.
     field_template: 'INSERT,SELECT,UPDATE', work_order_photo: 'INSERT,SELECT,UPDATE', field_op: 'INSERT,SELECT,UPDATE', private_group: 'INSERT,SELECT,UPDATE', private_group_charger: 'DELETE,INSERT,SELECT,UPDATE',
     private_unit: 'INSERT,SELECT,UPDATE', private_member: 'INSERT,SELECT,UPDATE', private_statement: 'INSERT,SELECT,UPDATE', anpr_camera: 'INSERT,SELECT,UPDATE', parking_visit: 'INSERT,SELECT,UPDATE', plate_event: 'INSERT,SELECT,UPDATE',
+    // (v1.47.0, 114) a zone's prices are replaced when imported again.
+    home_charger: 'INSERT,SELECT,UPDATE', home_meter_reading: 'INSERT,SELECT,UPDATE', home_reimbursement: 'INSERT,SELECT,UPDATE', payment_terminal: 'INSERT,SELECT,UPDATE',
+    terminal_txn: 'INSERT,SELECT,UPDATE', terminal_settlement_line: 'INSERT,SELECT,UPDATE', energy_price_zone: 'INSERT,SELECT,UPDATE', energy_price: 'DELETE,INSERT,SELECT,UPDATE',
+    survey_settings: 'INSERT,SELECT,UPDATE', survey_response: 'INSERT,SELECT,UPDATE',
   });
 });

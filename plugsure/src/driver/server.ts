@@ -856,6 +856,19 @@ export async function registerDriverApi(app: FastifyInstance): Promise<void> {
     try { return await (await import('../services/driver-credit.js')).applyReferral(p.appDriverId, p.deviceId ?? null, (req.body as any)?.code); } catch (e) { return creditFail(reply, e); }
   }));
 
+  // ───────────────────────────────────────────────────────── (v1.47.0) surveys after a charge
+
+  app.get('/d/v1/surveys/pending', async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return { ask: false };
+    try { return await (await import('../services/surveys.js')).pending(p.appDriverId, String((req.query as any)?.chargeId ?? '')); } catch (e) { return creditFail(reply, e); }
+  });
+  app.post('/d/v1/surveys', locked(async (req, reply) => {
+    const p = driver(req);
+    if (!p.appDriverId) return reply.status(401).send({ error: 'Masuk dengan nomor HP untuk menilai.' });
+    try { return await (await import('../services/surveys.js')).respond(p.appDriverId, (req.body ?? {}) as Record<string, unknown>); } catch (e) { return creditFail(reply, e); }
+  }));
+
   // ───────────────────────────────────────────────────────── (v1.46.0) the trip planner
 
   app.post('/d/v1/trips/plan', async (req, reply) => {

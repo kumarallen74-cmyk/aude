@@ -173,6 +173,11 @@ export const EN: Readonly<Record<string, string>> = Object.freeze({
   'Nilai 1 sampai 5.': 'A rating from 1 to 5.',
   'Nilai diberikan setelah laporan selesai.': 'You can rate it once the report is resolved.',
   'Tulis pesan.': 'Write a message.',
+  // (v1.47.0) surveys after a charge
+  'Masuk dengan nomor HP untuk menilai.': 'Sign in with your phone number to rate.',
+  'Survei tidak aktif.': 'Surveys are not active.',
+  'Nilai 0 sampai 10.': 'A rating from 0 to 10.',
+  'Anda sudah menilai pengisian ini.': 'You have already rated this charge.',
   // (v1.46.0) residential and workplace chargers, the trip planner
   'Charger ini khusus untuk penghuni atau karyawan.': 'This charger is for residents or staff only.',
   'Jarak tempuh mobil dengan baterai penuh harus 50 sampai 1500 km.': 'The car\'s range on a full battery must be 50 to 1500 km.',

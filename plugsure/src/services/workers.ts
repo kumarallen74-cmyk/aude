@@ -246,6 +246,9 @@ export function startWorkers(): () => void {
   const telematicsPoll = once('telematics-poll', async () => { await (await import('./telematics.js')).pollDue(); });
   // (v1.46.0) Parking overstays (and linking plate-started sessions to their visits).
   const parkingSweep = once('parking', async () => { await (await import('./anpr.js')).sweep(); });
+  // (v1.47.0) Card terminal payments (sessions found, captures and voids sent) and energy market prices (fetched).
+  const terminalSettle = once('terminals', async () => { await (await import('./terminals.js')).settle(); });
+  const energyPrices = once('energy-prices', async () => { await (await import('./energy-prices.js')).fetchAll(); });
   const closeAutomation = once('close-automation', async () => { await (await import('./close-automation.js')).sweep(); });
   // Offline-too-long alerts, outages the gateway could not see (restart), self-heal.
   const outages = once('outages', () => sweepOutages());
@@ -393,6 +396,8 @@ export function startWorkers(): () => void {
     every(creditSweep, 15 * 60_000, 'driver-credit'),
     every(telematicsPoll, 5 * 60_000, 'telematics-poll'),
     every(parkingSweep, 5 * 60_000, 'parking'),
+    every(terminalSettle, 60_000, 'terminals'),
+    every(energyPrices, 60 * 60_000, 'energy-prices'),
     every(retention, 60 * 60_000, 'retention'),
   ];
   // PlugSure Hub (docs/HUB-DESIGN.md §5.11): only when HUB_ENABLED; otherwise no hub worker exists.

@@ -376,6 +376,11 @@ export async function runControlLoop(siteId: string): Promise<Allocation[]> {
     if (lm?.active) { usableW = lm.gridW; extraW = lm.extra.extraW; }
     withoutDrW = usableW + extraW;
     usableW = drCapW(usableW, dr) + extraW;
+    // (v1.47.0) Energy market prices (energy-prices.ts): at a site that shifts to cheap hours, an expensive period
+    // gives the grid part only the site's share; depot departures below still get what they need. A failure: as usual.
+    const price = await (await import('./energy-prices.js')).capNow(siteId)
+      .catch((e) => { logger.warn({ siteId, err: (e as Error).message }, 'energy prices unavailable — usual budget'); return null; });
+    if (price?.expensive) usableW = (await import('./energy-prices.js')).applyPriceCap(usableW, extraW, price);
   }
   // Bidirectional charging (v2x.ts): which cars give energy back this pass. Without an export
   // agreement the pool is the site's own auxiliary load (the reserve), so nothing reaches PLN.

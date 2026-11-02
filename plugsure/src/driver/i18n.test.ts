@@ -15,7 +15,7 @@ const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const SOURCES = [
   './charge.ts', './roaming.ts', './roaming-pay.ts', './reservations.ts', './membership.ts', './queue.ts', './identity.ts',
   './wallets.ts', './trips.ts', './favourites.ts', './stations.ts', './server.ts', './map.ts', './links.ts', './account-deletion.ts', './idempotency.ts',
-  '../services/payments/registry.ts', '../services/payments/cards.ts', '../services/payments/provider.ts', '../services/loyalty.ts', '../services/benefits.ts', '../services/driver-refunds.ts',
+  '../services/payments/registry.ts', '../services/payments/cards.ts', '../services/payments/provider.ts', '../services/loyalty.ts', '../services/benefits.ts', '../services/driver-refunds.ts', '../services/surveys.ts',
 ];
 
 /** Single-quoted sentences in code (not comments) that read as Indonesian: the driver modules' plain messages. */
