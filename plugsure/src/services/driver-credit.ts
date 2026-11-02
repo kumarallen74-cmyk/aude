@@ -182,7 +182,13 @@ export async function redeem(appDriverId: string, codeRaw: unknown) {
     const g = (await c.query(
       `SELECT g.*, b.kind, b.currency, b.value_minor, b.expires_on, b.voided_at AS batch_voided FROM gift_card g JOIN gift_card_batch b ON b.id = g.batch_id
         WHERE g.code_hash = $1 FOR UPDATE OF g`, [hashCode(code)])).rows[0];
-    if (!g || g.voided_at || g.batch_voided || g.redeemed_at) throw miss();
+    if (!g) {
+      // (v1.50.0) Not a gift card: a car dealer's welcome code (services/dealers.ts)?
+      const w = await (await import('./dealers.js')).redeemWelcome(c, appDriverId, hashCode(code));
+      if (w) return w;
+      throw miss();
+    }
+    if (g.voided_at || g.batch_voided || g.redeemed_at) throw miss();
     const s = await settings(g.org_id);
     if (!s.enabled) throw new CreditError(409, 'Operator ini belum menerima kredit.');
     if (g.expires_on && endOfDay(String(g.expires_on instanceof Date ? g.expires_on.toISOString().slice(0, 10) : g.expires_on).slice(0, 10)) < new Date()) throw new CreditError(410, 'Kode ini sudah kedaluwarsa.');

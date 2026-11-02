@@ -4,7 +4,7 @@
 import type { Transport, RequestOptions, BinaryBody } from './client.js';
 
 /** The API version this SDK was generated from. */
-export const API_VERSION = "1.49.0";
+export const API_VERSION = "1.50.0";
 
 // ─────────────────────────────────────────────── schemas
 
@@ -11509,6 +11509,19 @@ export class Operations {
   }
 
   /**
+   * Add a car dealer
+   *
+   * (v1.50.0) name, make, branch, contactName, email, phone, welcomeMinor, codeDays (7–365), funding (dealer: billed for redeemed credit; operator), commissionBps (0–5000), commissionMonths (1–60). Audited.
+   *
+   * `POST /v1/dealers`
+   */
+  addCarDealer(params: {
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealers", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Add a card payment terminal
    *
    * (v1.47.0) siteId, chargePointId (none: a kiosk for the site), name, serial, provider, maxPreauthMinor, callbackUrl (capture and void instructions are POSTed there, signed; none: the terminal polls), callbackSecret (kept sealed). The terminal's key is shown once. Audited.
@@ -13189,6 +13202,21 @@ export class Operations {
   }
 
   /**
+   * Car dealers
+   *
+   * (v1.50.0) Each dealer: the welcome credit its buyers get and who pays for it, the commission on their charging, its portal link, cars sold (30 days, all), codes redeemed and pending. archived=true: also the archived ones.
+   *
+   * `GET /v1/dealers`
+   */
+  carDealers(params?: {
+    query?: {
+      archived?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dealers", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Card holds and post-pay e-wallet charges
    *
    * Card payments taken as holds (Integrations → Payments → "hold, then charge only what is used"): held while charging, captured for the rated total when the session ends (the rest released at once), or released when unused. Post-pay sessions with linked e-wallets are listed too (kind postpay): nothing held at the start, the rated total charged to the e-wallet at the end, the same retries. Failed captures and releases come first, with the acquirer's error and the next automatic retry; captured and released holds of the last 14 days follow. At most 200 rows.
@@ -13286,6 +13314,22 @@ export class Operations {
     };
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/finance/cards/transactions", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
+   * Cars sold by dealers
+   *
+   * (v1.50.0) Each sale: the buyer (phone by its last digits), the car, the welcome code's last four, pending, redeemed, expired or void. dealerId and month (YYYY-MM) filter.
+   *
+   * `GET /v1/dealer-sales`
+   */
+  carsSoldByDealers(params?: {
+    query?: {
+      dealerId?: string;
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dealer-sales", query: params?.query, accept: "json" }, options);
   }
 
   /**
@@ -13706,6 +13750,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/demand/candidates/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Change or archive a car dealer
+   *
+   * (v1.50.0) The fields above (new sales take the new terms), or archive: true (its portal link stops). Audited.
+   *
+   * `PUT /v1/dealers/{id}`
+   */
+  changeOrArchiveCarDealer(params: {
+    /** The dealer. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "PUT", path: "/v1/dealers/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -15195,6 +15254,81 @@ export class Operations {
   }
 
   /**
+   * A dealer's month so far
+   *
+   * (v1.50.0) month (default this month): cars sold, codes redeemed and their credit, billed to the dealer, its buyers' charging before tax, the commission and the net.
+   *
+   * `GET /v1/dealers/{id}/preview`
+   */
+  dealerMonthSoFar(params: {
+    /** The dealer. */
+    id: string;
+    query?: {
+      month?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dealers/{id}/preview", pathParams: { id: params.id }, query: params.query, accept: "json" }, options);
+  }
+
+  /**
+   * The dealer's portal
+   *
+   * (v1.50.0) The dealer's terms, this month so far, its sales and its issued statements. Authenticated by the link's token.
+   *
+   * `GET /v1/dealer-portal/{token}`
+   */
+  dealerPortal(params: {
+    /** The portal link token. */
+    token: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dealer-portal/{token}", pathParams: { token: params.token }, accept: "json" }, options);
+  }
+
+  /**
+   * The dealer registers a car sold
+   *
+   * (v1.50.0) As POST /v1/dealers/{id}/sales, from the dealer's portal. The welcome code is in the answer this once. Authenticated by the link's token.
+   *
+   * `POST /v1/dealer-portal/{token}/sales`
+   */
+  dealerRegistersCarSold(params: {
+    /** The portal link token. */
+    token: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealer-portal/{token}/sales", pathParams: { token: params.token }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * A dealer statement as a spreadsheet
+   *
+   * (v1.50.0) The figures and the month's sales.
+   *
+   * `GET /v1/dealer-statements/{id}/statement.xlsx`
+   */
+  dealerStatementAsSpreadsheet(params: {
+    /** The statement. */
+    id: string;
+  }, options?: RequestOptions): Promise<string> {
+    return this.transport.request<string>({ method: "GET", path: "/v1/dealer-statements/{id}/statement.xlsx", pathParams: { id: params.id }, accept: "text" }, options);
+  }
+
+  /**
+   * Dealer statements
+   *
+   * (v1.50.0) Drafted, issued and settled statements; dealerId filters.
+   *
+   * `GET /v1/dealer-statements`
+   */
+  dealerStatements(params?: {
+    query?: {
+      dealerId?: string;
+    };
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "GET", path: "/v1/dealer-statements", query: params?.query, accept: "json" }, options);
+  }
+
+  /**
    * Decide a credit review
    *
    * (v1.33.0) decision approve (newLimit, default the suggestion; hold true or false; nextReviewOn) or reject (note). finance:approve. Audited.
@@ -15703,6 +15837,21 @@ export class Operations {
     year: string;
   }, options?: RequestOptions): Promise<ArrayBuffer> {
     return this.transport.request<ArrayBuffer>({ method: "GET", path: "/v1/finance/year-end/{year}/pack", pathParams: { year: params.year }, accept: "binary" }, options);
+  }
+
+  /**
+   * Draft a dealer statement
+   *
+   * (v1.50.0) month: drafted, or its draft refreshed (an issued one is not changed). Last month is drafted automatically.
+   *
+   * `POST /v1/dealers/{id}/statements`
+   */
+  draftDealerStatement(params: {
+    /** The dealer. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealers/{id}/statements", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -17924,6 +18073,21 @@ export class Operations {
   }
 
   /**
+   * Issue or settle a dealer statement
+   *
+   * (v1.50.0) action: refresh (a draft), issue (a draft for a month that is over; refreshed first), settle (an issued one; reference required). Audited.
+   *
+   * `POST /v1/dealer-statements/{id}`
+   */
+  issueOrSettleDealerStatement(params: {
+    /** The statement. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealer-statements/{id}", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
    * Issue a recharge
    *
    * (v1.31.0) A draft recharge, by the entity that charges. Audited.
@@ -19379,6 +19543,20 @@ export class Operations {
    */
   nativeAppsVersionGateAndRemoteConfiguration(options?: RequestOptions): Promise<NativeAppsVersionGateAndRemoteConfigurationResponse> {
     return this.transport.request<NativeAppsVersionGateAndRemoteConfigurationResponse>({ method: "GET", path: "/v1/driver-app/app-config", accept: "json" }, options);
+  }
+
+  /**
+   * A new dealer portal link
+   *
+   * (v1.50.0) The dealer's page at /dealer/{token}, shown once; the old link stops working. Audited.
+   *
+   * `POST /v1/dealers/{id}/portal`
+   */
+  newDealerPortalLink(params: {
+    /** The dealer. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealers/{id}/portal", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**
@@ -21326,6 +21504,21 @@ export class Operations {
     body: Record<string, unknown>;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/battery-swap/packs", body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Register a car sold
+   *
+   * (v1.50.0) buyerName, buyerPhone (only that number can redeem the code), vehicle, vin (one sale per VIN), plate, soldOn. The welcome code is in the answer this once. Audited.
+   *
+   * `POST /v1/dealers/{id}/sales`
+   */
+  registerCarSold(params: {
+    /** The dealer. */
+    id: string;
+    body: Record<string, unknown>;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealers/{id}/sales", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
   }
 
   /**
@@ -25954,6 +26147,20 @@ export class Operations {
     body: VoidRoamingSettlementPaymentBody;
   }, options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/finance/roaming/payments/{id}/void", pathParams: { id: params.id }, body: params.body, bodyType: "json", accept: "json" }, options);
+  }
+
+  /**
+   * Void a sale
+   *
+   * (v1.50.0) Only while its code is not redeemed; the code stops working. Audited.
+   *
+   * `POST /v1/dealer-sales/{id}/void`
+   */
+  voidSale(params: {
+    /** The sale. */
+    id: string;
+  }, options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.transport.request<Record<string, unknown>>({ method: "POST", path: "/v1/dealer-sales/{id}/void", pathParams: { id: params.id }, accept: "json" }, options);
   }
 
   /**

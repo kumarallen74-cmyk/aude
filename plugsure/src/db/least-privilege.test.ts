@@ -56,7 +56,7 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
       'field_template', 'work_order_photo', 'field_op', 'private_group', 'private_group_charger', 'private_unit', 'private_member', 'private_statement', 'anpr_camera', 'parking_visit', 'plate_event',
       'home_charger', 'home_meter_reading', 'home_reimbursement', 'payment_terminal', 'terminal_txn', 'terminal_settlement_line', 'energy_price_zone', 'energy_price', 'survey_settings', 'survey_response',
       'hotel_property', 'hotel_stay', 'hotel_charge', 'install_project', 'install_task', 'install_document', 'install_stage_event', 'privacy_settings', 'privacy_request', 'privacy_consent', 'vehicle_battery_estimate',
-      'swap_settings', 'swap_cabinet', 'swap_battery', 'swap_plan', 'swap_subscription', 'swap_event', 'roadside_settings', 'roadside_van', 'roadside_request', 'charger_warranty', 'rma_case', 'site_amenity', 'accessibility_report']]);
+      'swap_settings', 'swap_cabinet', 'swap_battery', 'swap_plan', 'swap_subscription', 'swap_event', 'roadside_settings', 'roadside_van', 'roadside_request', 'charger_warranty', 'rma_case', 'site_amenity', 'accessibility_report', 'dealer', 'dealer_sale', 'dealer_statement']]);
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.t, r.p])), {
     app_driver_deletion: 'INSERT,SELECT',
     audit_head: 'INSERT,SELECT,UPDATE',
@@ -192,5 +192,8 @@ test('the runtime role has exactly the privileges the code uses on restricted ta
     rma_case: 'INSERT,SELECT,UPDATE',
     site_amenity: 'INSERT,SELECT,UPDATE',
     accessibility_report: 'INSERT,SELECT,UPDATE',
+    dealer: 'INSERT,SELECT,UPDATE',
+    dealer_sale: 'INSERT,SELECT,UPDATE',
+    dealer_statement: 'INSERT,SELECT,UPDATE',
   });
 });
