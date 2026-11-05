@@ -1,5 +1,11 @@
 # PlugSure — deployment runbook
 
+> ## Upgrading the live pilot from v1.9.1 to v1.51.0
+>
+> Follow **`docs/UPGRADE-v1.9-to-v1.51.md`**: one runbook for v1.9.2 to v1.51.0 (the `app.plugsure.co.id`
+> Caddy change, migrations 078 → 118 in one window, what the new background jobs do while their features are
+> off, and the rollback to v1.9.1). Every new feature stays off until it is configured.
+
 > ## Upgrading the live pilot from v1.5.0 to v1.9.0
 >
 > Follow **`docs/UPGRADE-v1.5-to-v1.9.md`**: one runbook for every step from v1.5.1 to v1.9.0 (the `NODE_ENV`
