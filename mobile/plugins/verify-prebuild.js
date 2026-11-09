@@ -9,7 +9,7 @@
  *             target ≥ 16.4 everywhere; iPhone only; no UIBackgroundModes; no Face ID string; an accurate motion
  *             string; no App Group; privacy manifest data types.
  *   Android — WRITE_EXTERNAL_STORAGE capped at API 29 (+ requestLegacyExternalStorage); expo-location's
- *             LocationTaskService removed; App Links (autoVerify) with exact /paid and /app/ prefix; compile SDK 36.
+ *             LocationTaskService removed; App Links (autoVerify) with exact /paid and /app/ prefix; compile SDK 37, target SDK 36.
  * Real compilation still needs macOS / Android SDK runners (EAS Build).
  */
 const fs = require('fs');
@@ -107,7 +107,8 @@ function verifyAndroid() {
   for (const p of ['android:pathPrefix="/c/"', 'android:pathPrefix="/s/"', 'android:pathPrefix="/r/"', 'android:path="/paid"', 'android:pathPrefix="/app/"']) check(filter.includes(p), `android: App Links lacks ${p}`);
   check(!/android:pathPrefix="\/(paid|app)"/.test(filter), 'android: App Links must not use the loose /paid or /app prefixes');
   const props = read('android/gradle.properties');
-  check(/^android\.compileSdkVersion=36$/m.test(props), 'android: compileSdkVersion must be 36 (modules/live-update targets API 36.0)');
+  check(/^android\.compileSdkVersion=37$/m.test(props), 'android: compileSdkVersion must be 37 (Expo SDK 58 modules require it)');
+  check(/^android\.targetSdkVersion=36$/m.test(props), 'android: targetSdkVersion must be 36');
 }
 
 if (only !== 'android') verifyIos();

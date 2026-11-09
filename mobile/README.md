@@ -173,7 +173,7 @@ APP_VARIANT=nusantara npx eas-cli submit --profile production-nusantara --platfo
 ```
 
 Targets: iOS 16.4+ (Expo SDK 58's minimum, as SDK 57's; Live Activities need 16.2), **iPhone only** (`supportsTablet: false` for
-the first release), Android 8.0+ (minSdk 26), compile / target SDK 36 (Play requirement from 31 Aug 2026),
+the first release), Android 8.0+ (minSdk 26), compile SDK 37 (Expo SDK 58) and target SDK 36 (Play requirement from 31 Aug 2026),
 edge-to-edge and predictive back on. iOS privacy manifest (`PrivacyInfo.xcprivacy`) is generated from
 `ios.privacyManifests` in `app.config.ts`. iOS declares **no `UIBackgroundModes`** (`plugins/withIosBackgroundModes.js`
 removes the `fetch` / `remote-notification` that expo-task-manager / expo-notifications add): iOS gets visible APNs

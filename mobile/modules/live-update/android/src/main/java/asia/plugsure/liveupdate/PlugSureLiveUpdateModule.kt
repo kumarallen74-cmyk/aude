@@ -38,7 +38,7 @@ class LiveUpdatePayload : Record {
  *
  * API levels: everything inside `SDK_INT >= 36` is API 36.0 (Notification.ProgressStyle and its Segment /
  * setStyledByProgress / setProgressSegments / setProgress / setProgressIndeterminate, Builder.setShortCriticalText).
- * Builder.setRequestPromotedOngoing() only exists from API 36.1 (and compileSdk is 36), so the request is made with
+ * Builder.setRequestPromotedOngoing() only exists from API 36.1 (the app compiles against 37 but targets 36), so the request is made with
  * its extra ("android.requestPromotedOngoing", = Notification.EXTRA_REQUEST_PROMOTED_ONGOING) — the same thing the
  * setter does, and harmless where the system ignores it. The final state (`ongoing = false`) is shown dismissible
  * and removed after `timeoutAfterMs` (Builder.setTimeoutAfter, API 26).
