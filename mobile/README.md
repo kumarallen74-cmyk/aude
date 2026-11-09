@@ -110,6 +110,25 @@ cache keeps the old value.
    `APP_VARIANT=<variant>` (see `production-nusantara`).
 4. `APP_VARIANT=<variant> npx expo config --type public` validates the brand file (`brands/validate.js`).
 
+## Test APKs from GitHub Actions (no Expo account)
+
+The **android apk** workflow (`.github/workflows/android-apk.yml`) builds installable test APKs on GitHub's runner
+with `expo prebuild` and Gradle. In GitHub, open **Actions → android apk → Run workflow** and choose:
+- the brand: `both`, `plugsure` or `nusantara`;
+- the backend: `live` (the brand's own host) or `staging` (`staging.plugsure.co.id`).
+
+After about 20–30 minutes, each APK is under **Artifacts** on the run's page. Unzip it, copy the `.apk` to an
+Android phone and open it, allowing installs from that source.
+
+- **Preview builds:** they use package `<brand package>.preview` and the name "<brand> (Preview)", so they install
+  next to a store build. Each run's `versionCode` is the run number, so a newer APK installs over an older one.
+- **Signing:** the APKs are signed with the generated debug key, so they are for testing, not for the Play Store.
+  Store builds use EAS below.
+- **Optional repository secrets:**
+  - `GOOGLE_MAPS_ANDROID_KEY`: without it, the station map can't load;
+  - `GOOGLE_SERVICES_JSON_PLUGSURE` and `GOOGLE_SERVICES_JSON_NUSANTARA`: Firebase `google-services.json` for the
+    `.preview` package; without it there are no push notifications.
+
 ## Build & submit with EAS
 
 What the owner needs:
