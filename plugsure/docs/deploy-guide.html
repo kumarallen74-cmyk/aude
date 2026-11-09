@@ -183,7 +183,7 @@ hr{border:0;border-top:1px solid var(--line);margin:44px 0}
 <tbody>
 <tr><td class="k">VM</td><td>Ubuntu 24.04 LTS, 2 vCPU / 4&nbsp;GB, 20&nbsp;GB disk. AWS <code>ap-southeast-3</code> (Jakarta) if you are on AWS.</td><td>Postgres and both processes on one box is fine for one charger. The OCPP frame log is chatty &mdash; plan for disk growth.</td></tr>
 <tr><td class="k">Static IP</td><td>Elastic IP or equivalent</td><td>The charger's Central System URL is flashed into the hardware. If the address moves, that is a site visit per unit.</td></tr>
-<tr><td class="k">Domain</td><td>A name you control, e.g. <code>ocpp.plugsure.id</code></td><td>Let's Encrypt needs a real hostname. A charger will not accept a self-signed certificate.</td></tr>
+<tr><td class="k">Domain</td><td>A name you control, e.g. <code>ocpp.plugsure.co.id</code></td><td>Let's Encrypt needs a real hostname. A charger will not accept a self-signed certificate.</td></tr>
 <tr><td class="k">Ports open</td><td><code>443</code> and <code>80</code> from anywhere; <code>22</code> from your office only</td><td>443 for chargers, 80 for the ACME challenge, 22 for you. <strong>Not</strong> 9200 and <strong>not</strong> 5432.</td></tr>
 </tbody>
 </table></div>
@@ -224,9 +224,9 @@ $ caddy version            →  v2.x</pre></div>
   <div>
     <h3>Point DNS at the VM, and prove it</h3>
     <p>One <code>A</code> record, TTL 300:</p>
-    <div class="term"><div class="bar">dns zone</div><pre>ocpp.plugsure.id.     A     &lt;YOUR_ELASTIC_IP&gt;     300</pre></div>
-    <div class="term"><div class="bar">verify before touching acme</div><pre><span class="p">$</span> dig +short ocpp.plugsure.id
-<span class="p">$</span> curl -sI http://ocpp.plugsure.id/ | head -1</pre></div>
+    <div class="term"><div class="bar">dns zone</div><pre>ocpp.plugsure.co.id.     A     &lt;YOUR_ELASTIC_IP&gt;     300</pre></div>
+    <div class="term"><div class="bar">verify before touching acme</div><pre><span class="p">$</span> dig +short ocpp.plugsure.co.id
+<span class="p">$</span> curl -sI http://ocpp.plugsure.co.id/ | head -1</pre></div>
     <div class="expect"><span class="lbl">Expected</span>
       <p><code>dig</code> prints your Elastic IP and nothing else. If it prints an old address or
       nothing, wait &mdash; do not continue.</p></div>
@@ -298,7 +298,7 @@ API_BIND=127.0.0.1</pre></div>
   <div>
     <h3>Configure Caddy and get the certificate</h3>
     <div class="term"><div class="bar">on the VM</div><pre><span class="p">$</span> sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
-<span class="p">$</span> sudo sed -i 's/ocpp\.example\.id/ocpp.plugsure.id/g; s/ops@example\.id/ops@plugsure.id/' \
+<span class="p">$</span> sudo sed -i 's/ocpp\.example\.id/ocpp.plugsure.co.id/g; s/ops@example\.id/hello@railsure.co.id/' \
     /etc/caddy/Caddyfile
 <span class="p">$</span> sudo caddy validate --config /etc/caddy/Caddyfile
 <span class="p">$</span> sudo systemctl reload caddy
@@ -420,7 +420,7 @@ api        healthy</pre></div>
     session, so integration day is not the first time anything has connected.</p>
     <div class="term"><div class="bar">on the VM, or anywhere with node 22</div><pre><span class="p">$</span> export PLUGSURE_KEY=psk_...
 <span class="p">$</span> npx tsx tools/simulator/autel-sim.ts \
-    --url wss://ocpp.plugsure.id/ocpp \
+    --url wss://ocpp.plugsure.co.id/ocpp \
     --id $ID --auth-key &lt;the AuthorizationKey&gt; \
     --scenario happy</pre></div>
     <div class="expect"><span class="lbl">Expected</span>

@@ -11,7 +11,7 @@ Replace every `<…>` placeholder before sending. Nothing else in this document 
 | Setting | Value |
 |---|---|
 | **Central System URL** | `wss://<ocpp.your-domain.id>/ocpp/{chargePointIdentity}` |
-| Example | `wss://ocpp.plugsure.id/ocpp/AUTEL-DC60-JKT-001` |
+| Example | `wss://ocpp.plugsure.co.id/ocpp/AUTEL-DC60-JKT-001` |
 | Transport | WebSocket over TLS 1.2+, port 443 |
 | **WebSocket subprotocol** | `ocpp1.6` — **only** |
 | OCPP security profile | **2** (TLS + HTTP Basic) |

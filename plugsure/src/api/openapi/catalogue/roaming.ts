@@ -357,7 +357,7 @@ export const ops: Op[] = [
         },
         required: ['countryCode', 'partyId', 'businessName'],
       },
-      example: { countryCode: 'ID', partyId: 'PLS', businessName: 'PT PlugSure Energi Indonesia', website: 'https://plugsure.id' },
+      example: { countryCode: 'ID', partyId: 'PLS', businessName: 'PT PlugSure Energi Indonesia', website: 'https://plugsure.com' },
     },
     responses: { 200: { description: 'The identity now in force.', schema: obj({ party: ref('RoamingParty') }, ['party']) } },
     errors: [400, 409],

@@ -183,7 +183,7 @@ services:
       # Driver app: push notifications are sent and reservations swept from here.
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@plugsure.id}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:hello@railsure.co.id}
       PUSH_ALLOWED_HOSTS: ${PUSH_ALLOWED_HOSTS:-fcm.googleapis.com,push.services.mozilla.com,web.push.apple.com,notify.windows.com}
       DRIVER_RESERVATIONS: ${DRIVER_RESERVATIONS:-true}
       DRIVER_RESERVATION_MINUTES: ${DRIVER_RESERVATION_MINUTES:-15}
@@ -250,7 +250,7 @@ services:
       MAP_ATTRIBUTION: ${MAP_ATTRIBUTION:-© OpenStreetMap contributors}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@plugsure.id}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:hello@railsure.co.id}
       PUSH_ALLOWED_HOSTS: ${PUSH_ALLOWED_HOSTS:-fcm.googleapis.com,push.services.mozilla.com,web.push.apple.com,notify.windows.com}
       DRIVER_RESERVATIONS: ${DRIVER_RESERVATIONS:-true}
       DRIVER_RESERVATION_MINUTES: ${DRIVER_RESERVATION_MINUTES:-15}
