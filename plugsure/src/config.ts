@@ -540,7 +540,7 @@ export const config = {
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
     /** Contact the push services can reach about this sender (mailto: or https:). */
-    vapidSubject: process.env.VAPID_SUBJECT ?? 'mailto:ops@plugsure.id',
+    vapidSubject: process.env.VAPID_SUBJECT ?? 'mailto:hello@railsure.co.id',
     /**
      * Push service hosts notifications may be sent to, in production (the
      * browser supplies the endpoint, so this is an SSRF allow-list). Suffix match.

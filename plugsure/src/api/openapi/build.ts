@@ -323,7 +323,7 @@ export function buildSpec(opts: BuildOptions): Record<string, any> {
       title: 'PlugSure CSMS API',
       version: opts.version,
       description: DESCRIPTION,
-      contact: { name: 'PlugSure', url: 'https://plugsure.id' },
+      contact: { name: 'PlugSure', url: 'https://plugsure.com' },
     },
     servers: [
       { url: '/', description: 'This installation' },

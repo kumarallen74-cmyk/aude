@@ -6,7 +6,7 @@ organisation's administrator under **Users & Roles → Single sign-on (SAML)**. 
 
 ## What the platform needs
 
-- `CONSOLE_PUBLIC_URL` should be set to the shared console's address (for example `https://console.plugsure.id`).
+- `CONSOLE_PUBLIC_URL` should be set to the shared console's address (for example `https://dashboard.plugsure.co.id`).
   PlugSure's entity ID is built from it. Without it, `PUBLIC_BASE_URL` is used, but the deployment guide keeps
   `PUBLIC_BASE_URL` on the chargers' OCPP hostname, so set `CONSOLE_PUBLIC_URL`. With neither set, the SAML page says
   single sign-on is not available.

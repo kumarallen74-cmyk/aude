@@ -100,7 +100,7 @@ export class DuitkuProvider implements PaymentProvider {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         merchantCode: this.cfg.merchantCode, paymentAmount: amount, paymentMethod: method, merchantOrderId: orderId,
-        productDetails: (a.description || 'PlugSure charging').slice(0, 255), email: 'payments@plugsure.com', customerVaName: 'PlugSure',
+        productDetails: (a.description || 'PlugSure charging').slice(0, 255), email: 'hello@railsure.co.id', customerVaName: 'PlugSure',
         ...(a.phone ? { phoneNumber: a.phone.replace(/^\+/, '') } : {}),
         callbackUrl: this.cfg.callbackUrl, returnUrl: a.returnUrl ?? this.cfg.callbackUrl, expiryPeriod: expiryMin,
         signature: this.sign(`${this.cfg.merchantCode}${orderId}${amount}`),

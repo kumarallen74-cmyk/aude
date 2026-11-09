@@ -284,7 +284,7 @@ webhook_endpoint  id, org_id, url, secret, events[], state
 
 - Subprotocol negotiated from `Sec-WebSocket-Protocol`, preferring `ocpp2.1` > `ocpp2.0.1` > `ocpp1.6`. Echo exactly one.
 - Also accept a version-in-path form (`/ocpp/1.6/{id}`) as a fallback for chargers with broken negotiation, but **header negotiation is authoritative**. Record the negotiated version on the connection.
-- URL shape: `wss://ocpp.plugsure.com:443/ocpp/{chargePointId}`. **The charge point ID is the last path segment and PlugSure does not get to choose it** — Autel's config app defaults to the unit's serial number when `Chargebox Identity` is left blank, and installers routinely leave it blank. Accept long alphanumeric identities.
+- URL shape: `wss://ocpp.plugsure.co.id:443/ocpp/{chargePointId}`. **The charge point ID is the last path segment and PlugSure does not get to choose it** — Autel's config app defaults to the unit's serial number when `Chargebox Identity` is left blank, and installers routinely leave it blank. Accept long alphanumeric identities.
 - **One outstanding CALL per direction.** This is the single most common implementation error. Queue outbound CALLs per connection; do not pipeline.
 - `Heartbeat.conf` must return `currentTime`. Chargers set their clock from it, and skipping it silently corrupts billing timestamps.
 
