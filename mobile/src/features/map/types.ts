@@ -9,6 +9,8 @@ export interface StationMapProps {
   onClusterPress: (id: number | string, lat: number, lon: number) => void;
   user: { lat: number; lon: number } | null;
   tileUrl?: string | null;
+  /** Credit line for the tiles (e.g. "© OpenStreetMap contributors"), shown on the tile map. */
+  attribution?: string | null;
   scheme: 'light' | 'dark';
   /** Bottom inset (sheet) so centring keeps the pin visible. */
   bottomInset?: number;
@@ -22,4 +24,6 @@ export interface StationMapProps {
 
 export interface StationMapHandle {
   animateTo(r: Region): void;
+  /** Zoom in (+1) or out (-1) one step: the tile map's zoom buttons (it has no pinch gesture). */
+  zoomBy?(delta: number): void;
 }

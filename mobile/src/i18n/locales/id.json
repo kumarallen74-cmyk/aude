@@ -40,6 +40,8 @@
     "searchPlaceholder": "Cari stasiun atau kode",
     "filters": "Filter",
     "locate": "Tampilkan lokasi saya",
+    "zoomIn": "Perbesar",
+    "zoomOut": "Perkecil",
     "nearby": "Terdekat",
     "count_other": "{{count}} stasiun di peta",
     "showList": "Daftar",

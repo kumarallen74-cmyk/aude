@@ -1,9 +1,11 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react';
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import MapView, { Marker, PROVIDER_DEFAULT, type Region as MapRegion } from 'react-native-maps';
 import { ClusterPin, StationPin, UserDot } from './Marker';
 import type { StationMapHandle, StationMapProps } from './types';
 import { useTracksViewChanges } from './useTracksViewChanges';
+import { TileStationMap } from './TileStationMap';
+import { androidMapsKey } from '@/config';
 import type { MapStation } from '@/lib/stationModel';
 
 function StationMarker({ s, lat, lon, selected, stale, scheme, label, onPress }: { s: MapStation; lat: number; lon: number; selected: boolean; stale?: boolean; scheme: string; label: string; onPress: () => void }) {
@@ -43,7 +45,7 @@ const DARK_STYLE = [
  * MapLibre with the operator-chosen vector tiles ([OWNER] tile provider, spec §6.2) can replace this component
  * behind the same props.
  */
-export const StationMap = forwardRef<StationMapHandle, StationMapProps>(function StationMap(p, ref) {
+const NativeStationMap = forwardRef<StationMapHandle, StationMapProps>(function NativeStationMap(p, ref) {
   const map = useRef<MapView>(null);
   useImperativeHandle(ref, () => ({ animateTo: (r) => map.current?.animateToRegion(r, 350) }), []);
 
@@ -99,3 +101,11 @@ export const StationMap = forwardRef<StationMapHandle, StationMapProps>(function
     </MapView>
   );
 });
+
+/**
+ * Google Maps on Android needs an API key in the build (GOOGLE_MAPS_ANDROID_KEY): without one its map view throws
+ * when it mounts. A build without the key (a test APK) gets the key-free tile map instead. iOS uses Apple Maps,
+ * which needs no key. Store builds always carry the key (app.config.ts refuses a production EAS build without it).
+ */
+export const usesTileMap = Platform.OS === 'android' && !androidMapsKey;
+export const StationMap = usesTileMap ? TileStationMap : NativeStationMap;

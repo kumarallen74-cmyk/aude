@@ -254,6 +254,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     variant,
     appEnv,
     apiBase,
+    // Android without a Maps key gets the key-free tile map (src/features/map/StationMap.tsx).
+    androidMapsKey: !!googleMapsAndroidKey,
     brand: { ...brand, apiBase },
     router: {},
     eas: easProjectId ? { projectId: easProjectId } : undefined,

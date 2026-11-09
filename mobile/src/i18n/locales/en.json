@@ -40,6 +40,8 @@
     "searchPlaceholder": "Search stations or codes",
     "filters": "Filters",
     "locate": "Show my location",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
     "nearby": "Nearby",
     "count_one": "{{count}} station in view",
     "count_other": "{{count}} stations in view",

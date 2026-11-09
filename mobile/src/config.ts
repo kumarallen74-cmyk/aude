@@ -13,6 +13,8 @@ interface Extra {
   appEnv?: 'development' | 'preview' | 'production';
   apiBase?: string;
   brand?: Brand;
+  /** Whether the Android build carries a Google Maps key (app.config.ts). Absent in tests and older builds. */
+  androidMapsKey?: boolean;
 }
 
 const extra: Extra = (Constants.expoConfig?.extra as Extra | undefined) ?? {};
@@ -21,6 +23,9 @@ const defaultBrand = defaultBrandJson as unknown as Brand;
 export const brand: Brand = { ...defaultBrand, ...(extra.brand ?? {}) };
 
 export const appEnv = extra.appEnv ?? 'development';
+
+/** False only when the build says it has no Google Maps key for Android: the station map then uses map tiles. */
+export const androidMapsKey = extra.androidMapsKey !== false;
 
 /**
  * The API base. `mock` = the built-in demo backend (src/api/mock), used for web screenshots, store review demos and

@@ -11,7 +11,8 @@ name: android apk
 #     "production") with the real upload key.
 #
 # Repository secrets (Settings → Secrets and variables → Actions), all optional:
-#   GOOGLE_MAPS_ANDROID_KEY              Maps SDK for Android key. Without it the station map cannot load.
+#   GOOGLE_MAPS_ANDROID_KEY              Maps SDK for Android key. Without it the station map uses map tiles
+#                                        (the server's meta.map.tileUrl, OpenStreetMap by default) with zoom buttons.
 #   GOOGLE_SERVICES_JSON_PLUGSURE        contents of Firebase google-services.json for package asia.plugsure.hub.preview
 #   GOOGLE_SERVICES_JSON_NUSANTARA       the same for id.nusantaracharge.app.preview. Without it, no push notifications.
 
@@ -79,7 +80,7 @@ jobs:
         run: |
           if [ "$SERVER" = "staging" ]; then echo "API_BASE_URL=https://staging.plugsure.co.id" >> "$GITHUB_ENV"; fi
           if [ -z "$GOOGLE_MAPS_ANDROID_KEY" ]; then
-            echo "::warning title=No Maps key::Secret GOOGLE_MAPS_ANDROID_KEY is not set: the station map will not load in this APK."
+            echo "::notice title=No Maps key::Secret GOOGLE_MAPS_ANDROID_KEY is not set: this APK shows the station map with map tiles instead of Google Maps."
           fi
           if [ -n "$GOOGLE_SERVICES_JSON_CONTENT" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON_CONTENT" > "brands/$APP_VARIANT/google-services.json"
