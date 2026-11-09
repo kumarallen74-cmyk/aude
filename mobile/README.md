@@ -110,6 +110,25 @@ cache keeps the old value.
    `APP_VARIANT=<variant>` (see `production-nusantara`).
 4. `APP_VARIANT=<variant> npx expo config --type public` validates the brand file (`brands/validate.js`).
 
+## Test APKs from GitHub Actions (no Expo account)
+
+The **android apk** workflow (`.github/workflows/android-apk.yml`) builds installable test APKs on GitHub's runner
+with `expo prebuild` and Gradle. In GitHub, open **Actions → android apk → Run workflow** and choose:
+- the brand: `both`, `plugsure` or `nusantara`;
+- the backend: `live` (the brand's own host) or `staging` (`staging.plugsure.co.id`).
+
+After about 20–30 minutes, each APK is under **Artifacts** on the run's page. Unzip it, copy the `.apk` to an
+Android phone and open it, allowing installs from that source.
+
+- **Preview builds:** they use package `<brand package>.preview` and the name "<brand> (Preview)", so they install
+  next to a store build. Each run's `versionCode` is the run number, so a newer APK installs over an older one.
+- **Signing:** the APKs are signed with the generated debug key, so they are for testing, not for the Play Store.
+  Store builds use EAS below.
+- **Optional repository secrets:**
+  - `GOOGLE_MAPS_ANDROID_KEY`: without it, the station map can't load;
+  - `GOOGLE_SERVICES_JSON_PLUGSURE` and `GOOGLE_SERVICES_JSON_NUSANTARA`: Firebase `google-services.json` for the
+    `.preview` package; without it there are no push notifications.
+
 ## Build & submit with EAS
 
 What the owner needs:
@@ -154,7 +173,7 @@ APP_VARIANT=nusantara npx eas-cli submit --profile production-nusantara --platfo
 ```
 
 Targets: iOS 16.4+ (Expo SDK 58's minimum, as SDK 57's; Live Activities need 16.2), **iPhone only** (`supportsTablet: false` for
-the first release), Android 8.0+ (minSdk 26), compile / target SDK 36 (Play requirement from 31 Aug 2026),
+the first release), Android 8.0+ (minSdk 26), compile SDK 37 (Expo SDK 58) and target SDK 36 (Play requirement from 31 Aug 2026),
 edge-to-edge and predictive back on. iOS privacy manifest (`PrivacyInfo.xcprivacy`) is generated from
 `ios.privacyManifests` in `app.config.ts`. iOS declares **no `UIBackgroundModes`** (`plugins/withIosBackgroundModes.js`
 removes the `fetch` / `remote-notification` that expo-task-manager / expo-notifications add): iOS gets visible APNs

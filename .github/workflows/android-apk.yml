@@ -1,0 +1,124 @@
+name: android apk
+
+# Builds installable Android test APKs of the PlugSure Hub mobile app on GitHub's own runner: `expo prebuild`, then
+# Gradle `assembleRelease`. No Expo account or EAS is needed. Run it from Actions → "android apk" → Run workflow;
+# the APKs are attached to the run as artifacts (kept 30 days).
+#
+# The APKs are for testing and sideloading, not for the Play Store:
+#   - preview build (APP_ENV=preview): package <brand package>.preview, name "<brand> (Preview)", so it installs
+#     next to a store build;
+#   - signed with the Android debug key that `expo prebuild` generates. Store builds go through EAS (eas.json
+#     "production") with the real upload key.
+#
+# Repository secrets (Settings → Secrets and variables → Actions), all optional:
+#   GOOGLE_MAPS_ANDROID_KEY              Maps SDK for Android key. Without it the station map cannot load.
+#   GOOGLE_SERVICES_JSON_PLUGSURE        contents of Firebase google-services.json for package asia.plugsure.hub.preview
+#   GOOGLE_SERVICES_JSON_NUSANTARA       the same for id.nusantaracharge.app.preview. Without it, no push notifications.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Brand to build
+        type: choice
+        options: [both, plugsure, nusantara]
+        default: both
+      server:
+        description: "Backend the app talks to: live = the brand's own host (app.plugsure.co.id / app.nusantaracharge.id); staging = staging.plugsure.co.id"
+        type: choice
+        options: [live, staging]
+        default: live
+  # A change to this file builds one APK on its pull request, so the workflow is proven before it is used.
+  pull_request:
+    paths: [".github/workflows/android-apk.yml"]
+
+concurrency:
+  group: android-apk-${{ github.ref }}-${{ github.event.inputs.variant || 'pr' }}-${{ github.event.inputs.server || 'pr' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  CI: "1"
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  apk:
+    name: apk (${{ matrix.variant }}, ${{ github.event.inputs.server || 'staging' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(github.event.inputs.variant == 'both' && '["plugsure","nusantara"]' || format('["{0}"]', github.event.inputs.variant || 'plugsure')) }}
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      APP_VARIANT: ${{ matrix.variant }}
+      APP_ENV: preview
+      SERVER: ${{ github.event.inputs.server || 'staging' }}
+      GOOGLE_MAPS_ANDROID_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_KEY }}
+      GOOGLE_SERVICES_JSON_CONTENT: ${{ matrix.variant == 'nusantara' && secrets.GOOGLE_SERVICES_JSON_NUSANTARA || secrets.GOOGLE_SERVICES_JSON_PLUGSURE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: npm ci
+
+      - name: Backend and optional secrets
+        run: |
+          if [ "$SERVER" = "staging" ]; then echo "API_BASE_URL=https://staging.plugsure.co.id" >> "$GITHUB_ENV"; fi
+          if [ -z "$GOOGLE_MAPS_ANDROID_KEY" ]; then
+            echo "::warning title=No Maps key::Secret GOOGLE_MAPS_ANDROID_KEY is not set: the station map will not load in this APK."
+          fi
+          if [ -n "$GOOGLE_SERVICES_JSON_CONTENT" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON_CONTENT" > "brands/$APP_VARIANT/google-services.json"
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "brands/$APP_VARIANT/google-services.json"
+          else
+            echo "::warning title=No Firebase config::Secret GOOGLE_SERVICES_JSON_${APP_VARIANT^^} is not set: push notifications are off in this APK."
+          fi
+
+      - name: Resolve the app config
+        run: npx expo config --type public | grep -E "^\s*(name|version|package):" || true
+
+      - name: expo prebuild (android)
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Gradle assembleRelease
+        working-directory: mobile/android
+        run: |
+          # A rising versionCode per run, so a newer APK installs over an older one.
+          sed -i -E "s/versionCode [0-9]+/versionCode ${GITHUB_RUN_NUMBER}/" app/build.gradle
+          ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      - name: Name the APK
+        id: apk
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          name="PlugSure-Hub-${APP_VARIANT}-${SERVER}-v${version}-build${GITHUB_RUN_NUMBER}"
+          mv android/app/build/outputs/apk/release/app-release.apk "$name.apk"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          ls -la "$name.apk"
+          {
+            echo "### ${name}.apk"
+            echo "- Brand: ${APP_VARIANT}, backend: ${SERVER}${API_BASE_URL:+ (${API_BASE_URL})}"
+            echo "- Size: $(du -h "$name.apk" | cut -f1)"
+            echo "- Download it from **Artifacts** at the bottom of this run's page, unzip, and open the .apk on the phone (allow installing from this source)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: mobile/${{ steps.apk.outputs.name }}.apk
+          retention-days: 30
+          if-no-files-found: error

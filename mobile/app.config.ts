@@ -227,7 +227,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
     // No biometric unlock in the app (no requireAuthentication / LocalAuthentication): no NSFaceIDUsageDescription.
     ['expo-secure-store', { faceIDPermission: false, configureAndroidBackup: false }],
-    ['expo-build-properties', { android: { compileSdkVersion: 36, targetSdkVersion: 36, minSdkVersion: 26 } }],
+    // compileSdk 37: Expo SDK 58's modules (and React Native 0.88) compile against API 37. targetSdk stays 36.
+    ['expo-build-properties', { android: { compileSdkVersion: 37, targetSdkVersion: 36, minSdkVersion: 26 } }],
     ['react-native-maps', { androidGoogleMapsApiKey: googleMapsAndroidKey }],
     'expo-localization',
     'expo-web-browser',
