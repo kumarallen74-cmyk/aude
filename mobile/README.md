@@ -125,7 +125,8 @@ Android phone and open it, allowing installs from that source.
 - **Signing:** the APKs are signed with the generated debug key, so they are for testing, not for the Play Store.
   Store builds use EAS below.
 - **Optional repository secrets:**
-  - `GOOGLE_MAPS_ANDROID_KEY`: without it, the station map can't load;
+  - `GOOGLE_MAPS_ANDROID_KEY`: with it, the station map is Google Maps; without it, the app draws the map from
+    tiles (the server's `meta.map.tileUrl`, OpenStreetMap by default) with zoom buttons, so the APK works either way;
   - `GOOGLE_SERVICES_JSON_PLUGSURE` and `GOOGLE_SERVICES_JSON_NUSANTARA`: Firebase `google-services.json` for the
     `.preview` package; without it there are no push notifications.
 

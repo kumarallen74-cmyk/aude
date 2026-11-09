@@ -16,7 +16,7 @@ import { availabilityText, StationRow } from '@/components/StationRow';
 import { Text } from '@/components/Text';
 import { brand } from '@/config';
 import { MapLegend } from '@/features/map/Marker';
-import { StationMap } from '@/features/map/StationMap';
+import { StationMap, usesTileMap } from '@/features/map/StationMap';
 import type { StationMapHandle } from '@/features/map/types';
 import { useMapViewport } from '@/features/mapViewport';
 import { activeFilterCount } from '@/lib/filters';
@@ -211,6 +211,7 @@ export default function MapScreen() {
         }}
         user={user}
         tileUrl={meta.data?.map.tileUrl}
+        attribution={meta.data?.map.attribution}
         scheme={scheme}
         bottomInset={height * PEEK}
         stale={data.fromCache}
@@ -258,6 +259,13 @@ export default function MapScreen() {
 
       {/* Locate */}
       <Animated.View style={[styles.fabs, { bottom: Animated.add(sheetH, space.md) }]} pointerEvents="box-none">
+        {/* The tile map (web, or Android without a Maps key) has no pinch zoom: zoom buttons instead. */}
+        {usesTileMap ? (
+          <>
+            <IconButton name="plus" label={t('map.zoomIn')} onPress={() => mapRef.current?.zoomBy?.(1)} tone="glass" size={48} testID="zoom-in" />
+            <IconButton name="minus" label={t('map.zoomOut')} onPress={() => mapRef.current?.zoomBy?.(-1)} tone="glass" size={48} testID="zoom-out" />
+          </>
+        ) : null}
         <IconButton name="locate" label={t('map.locate')} onPress={() => void locate(true)} tone="glass" size={48} testID="locate" />
       </Animated.View>
 
