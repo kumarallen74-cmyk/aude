@@ -1,0 +1,1350 @@
+{
+  "generated_on": "2026-11-14",
+  "overview": {
+    "project": {
+      "name": "Northgate Depot EV Charging Hub",
+      "client": "Northgate Transit Authority",
+      "location": "Northgate Bus Depot, Riverside Industrial Estate",
+      "description": "Design, supply, installation and commissioning of depot and rapid DC charging, an 11 kV substation, BESS and a charge management system for a 40-bus electric fleet, delivered in a live depot.",
+      "objectives": [
+        "Charge 40 battery-electric buses overnight from Q4 2027",
+        "Phase 1 (20 bays) operational by 30 Sep 2027",
+        "Full completion by 15 Dec 2027",
+        "Reduce peak grid demand with a 1 MWh BESS",
+        "Integrate charging with NTA fleet management via OCPP 2.0.1"
+      ],
+      "in_scope": [
+        "20 x 150 kW dual-outlet DC depot chargers (40 bays)",
+        "2 x 350 kW rapid DC chargers",
+        "11/0.4 kV substation with 2 x 2.5 MVA transformers and LV switchboards",
+        "Containment, ducting, civils and bay marking",
+        "Charge management system with OCPP 2.0.1 integration",
+        "1 MWh BESS for peak shaving",
+        "DNO connection application and coordination",
+        "Training for 30 depot staff",
+        "5-year maintenance with 4-hour critical response"
+      ],
+      "out_of_scope": [
+        "Bus procurement",
+        "Fleet telematics",
+        "Depot building alterations",
+        "DNO non-contestable works (by DNO, coordinated only)"
+      ],
+      "key_deliverables": [
+        "Detailed design and BS 7671 certification",
+        "Installed and commissioned chargers, substation and BESS",
+        "CMS integrated with fleet management",
+        "O&M manuals and training records",
+        "Maintenance contract"
+      ],
+      "stakeholders": [
+        "NTA Fleet Director",
+        "NTA Depot Manager",
+        "Distribution Network Operator (DNO)",
+        "Charger OEM",
+        "Local planning authority",
+        "Bus drivers and unions"
+      ]
+    },
+    "documents": [
+      {
+        "name": "Scope_of_Work.md",
+        "document_type": "Scope of Work",
+        "summary": "Defines charging, substation, BESS and CMS scope, programme dates, technical standards and NEC4 Option A commercial terms."
+      }
+    ],
+    "review_findings": [
+      {
+        "area": "Grid connection",
+        "issue": "No confirmed DNO capacity offer; 5 MVA import assumed from transformer sizing.",
+        "impact": "Connection cost and date could move the Phase 1 milestone.",
+        "recommendation": "Request DNO budget estimate and capacity before price is fixed.",
+        "severity": "High"
+      },
+      {
+        "area": "Programme",
+        "issue": "Phase 1 by 30 Sep 2027 leaves ~8 months from award including DNO works, which typically take 9-12 months.",
+        "impact": "Delay damages of 15,000/day exposure.",
+        "recommendation": "Qualify Phase 1 date against DNO energisation, or seek earlier award.",
+        "severity": "High"
+      },
+      {
+        "area": "Civils",
+        "issue": "No ground investigation or utility survey supplied.",
+        "impact": "Unknown buried services and contamination risk.",
+        "recommendation": "Carry a provisional sum and request existing surveys.",
+        "severity": "Medium"
+      },
+      {
+        "area": "Commercial",
+        "issue": "Unlimited liability for data breach conflicts with 100% cap.",
+        "impact": "Uninsurable exposure.",
+        "recommendation": "Propose cap for data breach aligned to cyber insurance.",
+        "severity": "High"
+      },
+      {
+        "area": "CMS",
+        "issue": "Fleet management system vendor and API are not identified.",
+        "impact": "Integration effort cannot be sized.",
+        "recommendation": "Request interface specification.",
+        "severity": "Medium"
+      },
+      {
+        "area": "Maintenance",
+        "issue": "Maintenance pricing basis (fixed or per call-out) not stated.",
+        "impact": "Five-year price may be misread.",
+        "recommendation": "Clarify pricing structure and indexation.",
+        "severity": "Low"
+      }
+    ],
+    "clarifications": [
+      {
+        "id": "CQ-001",
+        "question": "Has NTA obtained a DNO capacity offer for 5 MVA? Please share it.",
+        "document_ref": "NTA-SOW-2026-014 2.2",
+        "priority": "High"
+      },
+      {
+        "id": "CQ-002",
+        "question": "Will NTA accept Phase 1 completion linked to DNO energisation date?",
+        "document_ref": "NTA-SOW-2026-014 3.2",
+        "priority": "High"
+      },
+      {
+        "id": "CQ-003",
+        "question": "Please provide existing ground investigation and utility survey data.",
+        "document_ref": "NTA-SOW-2026-014 2.1d",
+        "priority": "Medium"
+      },
+      {
+        "id": "CQ-004",
+        "question": "Which fleet management system is in use, and is an API specification available?",
+        "document_ref": "NTA-SOW-2026-014 2.1e",
+        "priority": "Medium"
+      },
+      {
+        "id": "CQ-005",
+        "question": "Will NTA accept a capped liability for data breach?",
+        "document_ref": "NTA-SOW-2026-014 5.6",
+        "priority": "High"
+      }
+    ],
+    "organisation": [
+      {
+        "id": "R01",
+        "title": "Project Sponsor",
+        "person": "NTA Fleet Director",
+        "organisation": "Client",
+        "reports_to": "",
+        "responsibilities": [
+          "Owns business case",
+          "Approves gates"
+        ],
+        "allocation_pct": 10
+      },
+      {
+        "id": "R02",
+        "title": "Project Director",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R01",
+        "responsibilities": [
+          "Accountable for delivery",
+          "Client relationship"
+        ],
+        "allocation_pct": 40
+      },
+      {
+        "id": "R03",
+        "title": "Project Manager",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R02",
+        "responsibilities": [
+          "Day-to-day delivery",
+          "Programme and reporting"
+        ],
+        "allocation_pct": 100
+      },
+      {
+        "id": "R04",
+        "title": "Commercial Manager",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R02",
+        "responsibilities": [
+          "Contract administration",
+          "Change control",
+          "Cost reporting"
+        ],
+        "allocation_pct": 60
+      },
+      {
+        "id": "R05",
+        "title": "HSQE Manager",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R02",
+        "responsibilities": [
+          "Safety in live depot",
+          "ISO compliance"
+        ],
+        "allocation_pct": 50
+      },
+      {
+        "id": "R06",
+        "title": "Lead Electrical Engineer",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R03",
+        "responsibilities": [
+          "HV/LV design",
+          "BS 7671 compliance"
+        ],
+        "allocation_pct": 100
+      },
+      {
+        "id": "R07",
+        "title": "Planner",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R03",
+        "responsibilities": [
+          "Schedule",
+          "Critical path"
+        ],
+        "allocation_pct": 50
+      },
+      {
+        "id": "R08",
+        "title": "Construction Manager",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R03",
+        "responsibilities": [
+          "Site works",
+          "Night possessions"
+        ],
+        "allocation_pct": 100
+      },
+      {
+        "id": "R09",
+        "title": "CMS / Controls Engineer",
+        "person": "TBC",
+        "organisation": "Delivery Team",
+        "reports_to": "R06",
+        "responsibilities": [
+          "OCPP integration",
+          "Cyber security"
+        ],
+        "allocation_pct": 80
+      },
+      {
+        "id": "R10",
+        "title": "Civils Subcontractor",
+        "person": "TBC",
+        "organisation": "Subcontractor",
+        "reports_to": "R08",
+        "responsibilities": [
+          "Ducting",
+          "Bay construction"
+        ],
+        "allocation_pct": 100
+      },
+      {
+        "id": "R11",
+        "title": "Charger OEM",
+        "person": "TBC",
+        "organisation": "Subcontractor",
+        "reports_to": "R08",
+        "responsibilities": [
+          "Charger supply",
+          "Commissioning"
+        ],
+        "allocation_pct": 50
+      },
+      {
+        "id": "R12",
+        "title": "DNO Liaison",
+        "person": "TBC",
+        "organisation": "Third Party",
+        "reports_to": "R03",
+        "responsibilities": [
+          "Connection application",
+          "Energisation"
+        ],
+        "allocation_pct": 20
+      }
+    ]
+  },
+  "estimate_schedule": {
+    "estimate": {
+      "currency": "GBP",
+      "estimate_class": "AACE Class 3 (-20% / +30%)",
+      "basis_of_estimate": "Bottom-up from scope quantities in NTA-SOW-2026-014 with budget quotations for chargers and transformers and 2026 market labour rates; civils based on typical depot ducting rates.",
+      "lines": [
+        {
+          "wbs_code": "1.1",
+          "phase": "Project Management",
+          "description": "Project management team (11 months)",
+          "cost_type": "Labour",
+          "unit": "month",
+          "quantity": 11.0,
+          "unit_rate": 38000.0,
+          "basis": "PM, PD, planner and commercial at blended rate",
+          "confidence": "High",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "1.2",
+          "phase": "Project Management",
+          "description": "HSQE and site supervision for night working",
+          "cost_type": "Labour",
+          "unit": "month",
+          "quantity": 9.0,
+          "unit_rate": 14000.0,
+          "basis": "Night supervision 4 nights/week",
+          "confidence": "Medium",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "2.1",
+          "phase": "Design",
+          "description": "HV/LV and charger detailed design",
+          "cost_type": "Labour",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 145000.0,
+          "basis": "Engineering hours estimate 1,450 h",
+          "confidence": "Medium",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "2.2",
+          "phase": "Design",
+          "description": "CMS integration design and cyber assessment",
+          "cost_type": "Labour",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 60000.0,
+          "basis": "IEC 62443 SL2 assessment",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 4.6"
+        },
+        {
+          "wbs_code": "3.1",
+          "phase": "Procurement",
+          "description": "150 kW dual-outlet DC chargers",
+          "cost_type": "Equipment",
+          "unit": "each",
+          "quantity": 20.0,
+          "unit_rate": 62000.0,
+          "basis": "OEM budget quote",
+          "confidence": "High",
+          "source_ref": "NTA-SOW-2026-014 2.1a"
+        },
+        {
+          "wbs_code": "3.2",
+          "phase": "Procurement",
+          "description": "350 kW rapid DC chargers",
+          "cost_type": "Equipment",
+          "unit": "each",
+          "quantity": 2.0,
+          "unit_rate": 145000.0,
+          "basis": "OEM budget quote",
+          "confidence": "High",
+          "source_ref": "NTA-SOW-2026-014 2.1b"
+        },
+        {
+          "wbs_code": "3.3",
+          "phase": "Procurement",
+          "description": "2.5 MVA transformers and HV switchgear",
+          "cost_type": "Equipment",
+          "unit": "each",
+          "quantity": 2.0,
+          "unit_rate": 165000.0,
+          "basis": "Budget quote, 40-week lead time",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 2.1c"
+        },
+        {
+          "wbs_code": "3.4",
+          "phase": "Procurement",
+          "description": "LV switchboards",
+          "cost_type": "Equipment",
+          "unit": "each",
+          "quantity": 2.0,
+          "unit_rate": 85000.0,
+          "basis": "Budget quote",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 2.1c"
+        },
+        {
+          "wbs_code": "3.5",
+          "phase": "Procurement",
+          "description": "1 MWh BESS",
+          "cost_type": "Equipment",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 420000.0,
+          "basis": "Market rate 420/kWh installed",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 2.1f"
+        },
+        {
+          "wbs_code": "3.6",
+          "phase": "Procurement",
+          "description": "CMS licences (5 years)",
+          "cost_type": "Other",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 95000.0,
+          "basis": "Vendor pricing",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 2.1e"
+        },
+        {
+          "wbs_code": "4.1",
+          "phase": "Construction",
+          "description": "Substation civils and enclosure",
+          "cost_type": "Subcontract",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 210000.0,
+          "basis": "Typical package price",
+          "confidence": "Low",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "4.2",
+          "phase": "Construction",
+          "description": "Ducting and containment",
+          "cost_type": "Subcontract",
+          "unit": "m",
+          "quantity": 2400.0,
+          "unit_rate": 145.0,
+          "basis": "Night-rate trenching in live depot",
+          "confidence": "Low",
+          "source_ref": "NTA-SOW-2026-014 2.3"
+        },
+        {
+          "wbs_code": "4.3",
+          "phase": "Construction",
+          "description": "Charger plinths, bay marking and protection",
+          "cost_type": "Subcontract",
+          "unit": "bay",
+          "quantity": 42.0,
+          "unit_rate": 4200.0,
+          "basis": "Rate per bay",
+          "confidence": "Medium",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "4.4",
+          "phase": "Construction",
+          "description": "HV/LV cabling and terminations",
+          "cost_type": "Materials",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 310000.0,
+          "basis": "Cable schedule estimate",
+          "confidence": "Medium",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "4.5",
+          "phase": "Construction",
+          "description": "Electrical installation labour",
+          "cost_type": "Labour",
+          "unit": "day",
+          "quantity": 520.0,
+          "unit_rate": 520.0,
+          "basis": "Two crews of four on nights",
+          "confidence": "Medium",
+          "source_ref": "Assumption"
+        },
+        {
+          "wbs_code": "5.1",
+          "phase": "Testing & Commissioning",
+          "description": "Testing, commissioning and BS 7671 certification",
+          "cost_type": "Labour",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 85000.0,
+          "basis": "Includes OEM attendance",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 4.4"
+        },
+        {
+          "wbs_code": "5.2",
+          "phase": "Testing & Commissioning",
+          "description": "Training for 30 depot staff",
+          "cost_type": "Labour",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 18000.0,
+          "basis": "3 sessions",
+          "confidence": "High",
+          "source_ref": "NTA-SOW-2026-014 4.7"
+        },
+        {
+          "wbs_code": "6.1",
+          "phase": "DNO Connection",
+          "description": "DNO connection charges (provisional)",
+          "cost_type": "Other",
+          "unit": "lump sum",
+          "quantity": 1.0,
+          "unit_rate": 380000.0,
+          "basis": "Provisional sum pending DNO offer",
+          "confidence": "Low",
+          "source_ref": "NTA-SOW-2026-014 2.2"
+        },
+        {
+          "wbs_code": "7.1",
+          "phase": "Maintenance",
+          "description": "5-year maintenance, 4-hour response",
+          "cost_type": "Subcontract",
+          "unit": "year",
+          "quantity": 5.0,
+          "unit_rate": 96000.0,
+          "basis": "OEM service agreement",
+          "confidence": "Medium",
+          "source_ref": "NTA-SOW-2026-014 4.5"
+        }
+      ],
+      "contingency_pct": 10.0,
+      "escalation_pct": 4.0,
+      "management_reserve_pct": 5.0
+    },
+    "schedule": {
+      "start_date": "2027-02-02",
+      "tasks": [
+        {
+          "id": "T010",
+          "wbs_code": "1",
+          "name": "Contract award",
+          "phase": "Project Management",
+          "duration_days": 0,
+          "predecessors": [],
+          "is_milestone": true,
+          "owner_role": "Project Director"
+        },
+        {
+          "id": "T020",
+          "wbs_code": "6.1",
+          "name": "DNO connection application and offer",
+          "phase": "DNO Connection",
+          "duration_days": 40,
+          "predecessors": [
+            "T010"
+          ],
+          "is_milestone": false,
+          "owner_role": "DNO Liaison"
+        },
+        {
+          "id": "T030",
+          "wbs_code": "2.1",
+          "name": "Detailed design",
+          "phase": "Design",
+          "duration_days": 35,
+          "predecessors": [
+            "T010"
+          ],
+          "is_milestone": false,
+          "owner_role": "Lead Electrical Engineer"
+        },
+        {
+          "id": "T040",
+          "wbs_code": "2.2",
+          "name": "CMS integration design",
+          "phase": "Design",
+          "duration_days": 25,
+          "predecessors": [
+            "T010"
+          ],
+          "is_milestone": false,
+          "owner_role": "CMS / Controls Engineer"
+        },
+        {
+          "id": "T050",
+          "wbs_code": "2",
+          "name": "Design approval",
+          "phase": "Design",
+          "duration_days": 0,
+          "predecessors": [
+            "T030",
+            "T040"
+          ],
+          "is_milestone": true,
+          "owner_role": "Project Manager"
+        },
+        {
+          "id": "T060",
+          "wbs_code": "3.3",
+          "name": "Transformer and switchgear manufacture",
+          "phase": "Procurement",
+          "duration_days": 100,
+          "predecessors": [
+            "T050"
+          ],
+          "is_milestone": false,
+          "owner_role": "Commercial Manager"
+        },
+        {
+          "id": "T070",
+          "wbs_code": "3.1",
+          "name": "Charger manufacture and delivery",
+          "phase": "Procurement",
+          "duration_days": 60,
+          "predecessors": [
+            "T050"
+          ],
+          "is_milestone": false,
+          "owner_role": "Charger OEM"
+        },
+        {
+          "id": "T080",
+          "wbs_code": "3.5",
+          "name": "BESS manufacture and delivery",
+          "phase": "Procurement",
+          "duration_days": 80,
+          "predecessors": [
+            "T050"
+          ],
+          "is_milestone": false,
+          "owner_role": "Commercial Manager"
+        },
+        {
+          "id": "T090",
+          "wbs_code": "4.1",
+          "name": "Substation civils",
+          "phase": "Construction",
+          "duration_days": 40,
+          "predecessors": [
+            "T050"
+          ],
+          "is_milestone": false,
+          "owner_role": "Civils Subcontractor"
+        },
+        {
+          "id": "T100",
+          "wbs_code": "4.2",
+          "name": "Ducting Phase 1 bays",
+          "phase": "Construction",
+          "duration_days": 30,
+          "predecessors": [
+            "T050"
+          ],
+          "is_milestone": false,
+          "owner_role": "Civils Subcontractor"
+        },
+        {
+          "id": "T110",
+          "wbs_code": "6.1",
+          "name": "DNO works and energisation",
+          "phase": "DNO Connection",
+          "duration_days": 90,
+          "predecessors": [
+            "T020"
+          ],
+          "is_milestone": false,
+          "owner_role": "DNO Liaison"
+        },
+        {
+          "id": "T120",
+          "wbs_code": "4.4",
+          "name": "Substation installation",
+          "phase": "Construction",
+          "duration_days": 20,
+          "predecessors": [
+            "T060",
+            "T090"
+          ],
+          "is_milestone": false,
+          "owner_role": "Construction Manager"
+        },
+        {
+          "id": "T130",
+          "wbs_code": "4.5",
+          "name": "Phase 1 charger installation",
+          "phase": "Construction",
+          "duration_days": 25,
+          "predecessors": [
+            "T070",
+            "T100"
+          ],
+          "is_milestone": false,
+          "owner_role": "Construction Manager"
+        },
+        {
+          "id": "T140",
+          "wbs_code": "5.1",
+          "name": "Phase 1 testing and commissioning",
+          "phase": "Testing & Commissioning",
+          "duration_days": 10,
+          "predecessors": [
+            "T120",
+            "T130",
+            "T110"
+          ],
+          "is_milestone": false,
+          "owner_role": "Lead Electrical Engineer"
+        },
+        {
+          "id": "T150",
+          "wbs_code": "5",
+          "name": "Phase 1 operational (20 bays)",
+          "phase": "Testing & Commissioning",
+          "duration_days": 0,
+          "predecessors": [
+            "T140"
+          ],
+          "is_milestone": true,
+          "owner_role": "Project Manager"
+        },
+        {
+          "id": "T160",
+          "wbs_code": "4.2",
+          "name": "Ducting and installation Phase 2",
+          "phase": "Construction",
+          "duration_days": 40,
+          "predecessors": [
+            "T150"
+          ],
+          "is_milestone": false,
+          "owner_role": "Construction Manager"
+        },
+        {
+          "id": "T170",
+          "wbs_code": "3.5",
+          "name": "BESS installation",
+          "phase": "Construction",
+          "duration_days": 15,
+          "predecessors": [
+            "T080",
+            "T120"
+          ],
+          "is_milestone": false,
+          "owner_role": "Construction Manager"
+        },
+        {
+          "id": "T180",
+          "wbs_code": "5.1",
+          "name": "Phase 2 and BESS commissioning",
+          "phase": "Testing & Commissioning",
+          "duration_days": 10,
+          "predecessors": [
+            "T160",
+            "T170"
+          ],
+          "is_milestone": false,
+          "owner_role": "Lead Electrical Engineer"
+        },
+        {
+          "id": "T190",
+          "wbs_code": "5.2",
+          "name": "Training",
+          "phase": "Testing & Commissioning",
+          "duration_days": 5,
+          "predecessors": [
+            "T180"
+          ],
+          "is_milestone": false,
+          "owner_role": "Project Manager"
+        },
+        {
+          "id": "T200",
+          "wbs_code": "5",
+          "name": "Completion and handover",
+          "phase": "Testing & Commissioning",
+          "duration_days": 0,
+          "predecessors": [
+            "T190"
+          ],
+          "is_milestone": true,
+          "owner_role": "Project Director"
+        }
+      ]
+    }
+  },
+  "risks": {
+    "risks": [
+      {
+        "id": "R-001",
+        "title": "DNO energisation late",
+        "description": "DNO works take longer than 90 days, so Phase 1 cannot be energised, leading to delay damages.",
+        "category": "Schedule",
+        "owner_role": "DNO Liaison",
+        "probability": 4,
+        "impact": 5,
+        "cost_impact": 450000.0,
+        "schedule_impact_days": 40,
+        "response": "Mitigate",
+        "mitigation": "Submit application at award; temporary generator option; qualify date.",
+        "residual_probability": 3,
+        "residual_impact": 4,
+        "source_ref": "NTA-SOW-2026-014 3.2"
+      },
+      {
+        "id": "R-002",
+        "title": "Transformer lead time",
+        "description": "Global transformer shortage extends lead time beyond 40 weeks.",
+        "category": "Supply Chain",
+        "owner_role": "Commercial Manager",
+        "probability": 3,
+        "impact": 4,
+        "cost_impact": 180000.0,
+        "schedule_impact_days": 30,
+        "response": "Mitigate",
+        "mitigation": "Place early order on letter of intent.",
+        "residual_probability": 2,
+        "residual_impact": 3,
+        "source_ref": "NTA-SOW-2026-014 2.1c"
+      },
+      {
+        "id": "R-003",
+        "title": "Unknown buried services",
+        "description": "No utility survey; services found during trenching cause rework.",
+        "category": "Technical",
+        "owner_role": "Construction Manager",
+        "probability": 3,
+        "impact": 3,
+        "cost_impact": 90000.0,
+        "schedule_impact_days": 10,
+        "response": "Mitigate",
+        "mitigation": "GPR survey before ducting; provisional sum.",
+        "residual_probability": 2,
+        "residual_impact": 2,
+        "source_ref": "Assumption"
+      },
+      {
+        "id": "R-004",
+        "title": "Night-work productivity",
+        "description": "22:00-05:00 window lowers productivity below estimate.",
+        "category": "Resource",
+        "owner_role": "Construction Manager",
+        "probability": 3,
+        "impact": 3,
+        "cost_impact": 120000.0,
+        "schedule_impact_days": 15,
+        "response": "Mitigate",
+        "mitigation": "Phase work by bay blocks; agree weekend possessions.",
+        "residual_probability": 2,
+        "residual_impact": 3,
+        "source_ref": "NTA-SOW-2026-014 2.3"
+      },
+      {
+        "id": "R-005",
+        "title": "Unlimited data breach liability",
+        "description": "Uncapped liability creates uninsurable exposure.",
+        "category": "Commercial",
+        "owner_role": "Commercial Manager",
+        "probability": 2,
+        "impact": 5,
+        "cost_impact": 0.0,
+        "schedule_impact_days": 0,
+        "response": "Avoid",
+        "mitigation": "Negotiate cap; take cyber cover.",
+        "residual_probability": 1,
+        "residual_impact": 4,
+        "source_ref": "NTA-SOW-2026-014 5.6"
+      },
+      {
+        "id": "R-006",
+        "title": "FMS integration scope",
+        "description": "Unknown fleet system API increases integration effort.",
+        "category": "Technical",
+        "owner_role": "CMS / Controls Engineer",
+        "probability": 3,
+        "impact": 2,
+        "cost_impact": 45000.0,
+        "schedule_impact_days": 10,
+        "response": "Mitigate",
+        "mitigation": "Obtain API spec; fixed integration scope.",
+        "residual_probability": 2,
+        "residual_impact": 2,
+        "source_ref": "NTA-SOW-2026-014 2.1e"
+      },
+      {
+        "id": "R-007",
+        "title": "Live depot safety incident",
+        "description": "Vehicle-pedestrian interface during works causes injury.",
+        "category": "Safety",
+        "owner_role": "HSQE Manager",
+        "probability": 2,
+        "impact": 5,
+        "cost_impact": 150000.0,
+        "schedule_impact_days": 10,
+        "response": "Mitigate",
+        "mitigation": "Segregation plan; banksmen; night lighting.",
+        "residual_probability": 1,
+        "residual_impact": 5,
+        "source_ref": "NTA-SOW-2026-014 2.3"
+      },
+      {
+        "id": "R-008",
+        "title": "CMS availability penalty",
+        "description": "Availability falls below 99.5%.",
+        "category": "Technical",
+        "owner_role": "CMS / Controls Engineer",
+        "probability": 2,
+        "impact": 3,
+        "cost_impact": 40000.0,
+        "schedule_impact_days": 0,
+        "response": "Transfer",
+        "mitigation": "Back-to-back SLA with CMS vendor.",
+        "residual_probability": 1,
+        "residual_impact": 3,
+        "source_ref": "NTA-SOW-2026-014 4.2"
+      },
+      {
+        "id": "R-009",
+        "title": "Ground contamination",
+        "description": "Contaminated ground requires disposal.",
+        "category": "Environmental",
+        "owner_role": "Construction Manager",
+        "probability": 2,
+        "impact": 3,
+        "cost_impact": 70000.0,
+        "schedule_impact_days": 10,
+        "response": "Accept",
+        "mitigation": "Provisional sum; waste classification testing.",
+        "residual_probability": 2,
+        "residual_impact": 3,
+        "source_ref": "Assumption"
+      },
+      {
+        "id": "R-010",
+        "title": "BESS planning consent",
+        "description": "BESS needs planning permission or fire authority approval.",
+        "category": "Regulatory",
+        "owner_role": "Project Manager",
+        "probability": 2,
+        "impact": 3,
+        "cost_impact": 30000.0,
+        "schedule_impact_days": 20,
+        "response": "Mitigate",
+        "mitigation": "Early engagement with planning and fire service.",
+        "residual_probability": 1,
+        "residual_impact": 3,
+        "source_ref": "NTA-SOW-2026-014 2.1f"
+      },
+      {
+        "id": "R-011",
+        "title": "Charger price reduction",
+        "description": "OEM price falls with volume orders.",
+        "category": "Commercial",
+        "owner_role": "Commercial Manager",
+        "probability": 2,
+        "impact": 2,
+        "cost_impact": -60000.0,
+        "schedule_impact_days": 0,
+        "response": "Exploit",
+        "mitigation": "Frame agreement with volume pricing.",
+        "residual_probability": 2,
+        "residual_impact": 2,
+        "source_ref": "NTA-SOW-2026-014 2.1a"
+      }
+    ],
+    "assumptions": [
+      {
+        "id": "A-001",
+        "area": "Grid",
+        "statement": "DNO can supply 5 MVA without upstream reinforcement.",
+        "rationale": "Sized from transformer specification.",
+        "impact_if_false": "Reinforcement costs and 6-12 month delay.",
+        "validation_action": "Obtain DNO offer.",
+        "owner_role": "DNO Liaison",
+        "source_ref": "NTA-SOW-2026-014 2.1c"
+      },
+      {
+        "id": "A-002",
+        "area": "Site",
+        "statement": "Work areas are available in blocks of 5 bays for night working.",
+        "rationale": "Depot must remain operational.",
+        "impact_if_false": "Lower productivity.",
+        "validation_action": "Agree phasing plan with Depot Manager.",
+        "owner_role": "Construction Manager",
+        "source_ref": "NTA-SOW-2026-014 2.3"
+      },
+      {
+        "id": "A-003",
+        "area": "Ground",
+        "statement": "No significant contamination or obstructions.",
+        "rationale": "No survey supplied.",
+        "impact_if_false": "Additional civils cost.",
+        "validation_action": "GPR and trial pits.",
+        "owner_role": "Construction Manager",
+        "source_ref": "Assumption"
+      },
+      {
+        "id": "A-004",
+        "area": "CMS",
+        "statement": "Fleet system supports OCPP 2.0.1 or a documented REST API.",
+        "rationale": "Required by SOW.",
+        "impact_if_false": "Custom middleware needed.",
+        "validation_action": "CQ-004.",
+        "owner_role": "CMS / Controls Engineer",
+        "source_ref": "NTA-SOW-2026-014 2.1e"
+      },
+      {
+        "id": "A-005",
+        "area": "Commercial",
+        "statement": "Prices are fixed until 31 Mar 2027.",
+        "rationale": "Supplier quote validity.",
+        "impact_if_false": "Re-pricing needed.",
+        "validation_action": "Confirm award date.",
+        "owner_role": "Commercial Manager",
+        "source_ref": "Assumption"
+      }
+    ],
+    "exclusions": [
+      {
+        "id": "E-001",
+        "area": "Scope",
+        "statement": "Bus procurement and fleet telematics.",
+        "rationale": "Excluded by client.",
+        "source_ref": "NTA-SOW-2026-014 6"
+      },
+      {
+        "id": "E-002",
+        "area": "Scope",
+        "statement": "Depot building alterations.",
+        "rationale": "Excluded by client.",
+        "source_ref": "NTA-SOW-2026-014 6"
+      },
+      {
+        "id": "E-003",
+        "area": "Grid",
+        "statement": "DNO reinforcement beyond the connection point.",
+        "rationale": "Unknown until DNO offer.",
+        "source_ref": "Assumption"
+      },
+      {
+        "id": "E-004",
+        "area": "Civils",
+        "statement": "Removal of contaminated ground beyond the provisional sum.",
+        "rationale": "No survey available.",
+        "source_ref": "Assumption"
+      },
+      {
+        "id": "E-005",
+        "area": "Commercial",
+        "statement": "VAT.",
+        "rationale": "Prices shown exclude VAT.",
+        "source_ref": "Assumption"
+      }
+    ]
+  },
+  "registers": {
+    "commercial": [
+      {
+        "id": "C-001",
+        "category": "Contract Form",
+        "topic": "NEC4 ECC Option A",
+        "client_requirement": "NEC4 ECC Option A with activity schedule.",
+        "our_position": "Accept; propose X5 sectional completion for Phase 1.",
+        "status": "Qualified",
+        "risk_rating": "Medium",
+        "owner_role": "Commercial Manager",
+        "source_ref": "NTA-SOW-2026-014 5.1"
+      },
+      {
+        "id": "C-002",
+        "category": "Liquidated Damages",
+        "topic": "Delay damages",
+        "client_requirement": "15,000/day capped at 10%.",
+        "our_position": "Accept cap; Phase 1 damages to start from DNO energisation + 15 days.",
+        "status": "Qualified",
+        "risk_rating": "High",
+        "owner_role": "Commercial Manager",
+        "source_ref": "NTA-SOW-2026-014 5.2"
+      },
+      {
+        "id": "C-003",
+        "category": "Securities",
+        "topic": "Retention",
+        "client_requirement": "5% retention.",
+        "our_position": "Offer retention bond instead.",
+        "status": "Open",
+        "risk_rating": "Low",
+        "owner_role": "Commercial Manager",
+        "source_ref": "NTA-SOW-2026-014 5.3"
+      },
+      {
+        "id": "C-004",
+        "category": "Securities",
+        "topic": "Performance bond",
+        "client_requirement": "10% performance bond.",
+        "our_position": "Accept.",
+        "status": "Accepted",
+        "risk_rating": "Low",
+        "owner_role": "Commercial Manager",
+        "source_ref": "NTA-SOW-2026-014 5.4"
+      },
+      {
+        "id": "C-005",
+        "category": "Payment",
+        "topic": "Payment terms",
+        "client_requirement": "Monthly, 30 days.",
+        "our_position": "Accept; seek advance payment for long-lead equipment.",
+        "status": "Qualified",
+        "risk_rating": "Medium",
+        "owner_role": "Commercial Manager",
+        "source_ref": "NTA-SOW-2026-014 5.5"
+      },
+      {
+        "id": "C-006",
+        "category": "Liability",
+        "topic": "Liability cap",
+        "client_requirement": "100% cap; unlimited for data breach.",
+        "our_position": "Cap data breach at 2m aligned to cyber cover.",
+        "status": "Not Accepted",
+        "risk_rating": "High",
+        "owner_role": "Commercial Manager",
+        "source_ref": "NTA-SOW-2026-014 5.6"
+      }
+    ],
+    "technical": [
+      {
+        "id": "T-001",
+        "discipline": "Electrical",
+        "topic": "Charger standards",
+        "client_requirement": "IEC 61851 / IEC 62196.",
+        "our_response": "Selected OEM chargers are certified.",
+        "status": "Accepted",
+        "risk_rating": "Low",
+        "owner_role": "Lead Electrical Engineer",
+        "source_ref": "NTA-SOW-2026-014 4.1"
+      },
+      {
+        "id": "T-002",
+        "discipline": "Electrical",
+        "topic": "Substation",
+        "client_requirement": "2 x 2.5 MVA transformers.",
+        "our_response": "Accept; load study to confirm diversity.",
+        "status": "Accepted",
+        "risk_rating": "Medium",
+        "owner_role": "Lead Electrical Engineer",
+        "source_ref": "NTA-SOW-2026-014 2.1c"
+      },
+      {
+        "id": "T-003",
+        "discipline": "Controls",
+        "topic": "CMS availability",
+        "client_requirement": "99.5% monthly availability.",
+        "our_response": "Accept, excluding DNO outages and FMS faults.",
+        "status": "Qualified",
+        "risk_rating": "Medium",
+        "owner_role": "CMS / Controls Engineer",
+        "source_ref": "NTA-SOW-2026-014 4.2"
+      },
+      {
+        "id": "T-004",
+        "discipline": "Controls",
+        "topic": "Cyber security",
+        "client_requirement": "IEC 62443-3-3 SL2.",
+        "our_response": "Accept; third-party assessment included.",
+        "status": "Accepted",
+        "risk_rating": "Medium",
+        "owner_role": "CMS / Controls Engineer",
+        "source_ref": "NTA-SOW-2026-014 4.6"
+      },
+      {
+        "id": "T-005",
+        "discipline": "Controls",
+        "topic": "FMS integration",
+        "client_requirement": "Integration with fleet management system.",
+        "our_response": "Interface specification needed (CQ-004).",
+        "status": "Clarification Required",
+        "risk_rating": "Medium",
+        "owner_role": "CMS / Controls Engineer",
+        "source_ref": "NTA-SOW-2026-014 2.1e"
+      },
+      {
+        "id": "T-006",
+        "discipline": "Civils",
+        "topic": "Pantograph-ready mounting",
+        "client_requirement": "Pantograph-ready mounting.",
+        "our_response": "Foundations sized for future pantographs; pantographs not supplied.",
+        "status": "Qualified",
+        "risk_rating": "Low",
+        "owner_role": "Lead Electrical Engineer",
+        "source_ref": "NTA-SOW-2026-014 2.1a"
+      }
+    ],
+    "compliance": [
+      {
+        "id": "CM-001",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "2.1",
+        "requirement": "Design, supply, install, test and commission charging, substation, BESS and CMS.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "Full scope included.",
+        "evidence": "Estimate WBS 2-5",
+        "owner_role": "Project Manager"
+      },
+      {
+        "id": "CM-002",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "2.2",
+        "requirement": "Manage DNO connection application.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "Included; DNO charges as provisional sum.",
+        "evidence": "Estimate 6.1",
+        "owner_role": "DNO Liaison"
+      },
+      {
+        "id": "CM-003",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "2.3",
+        "requirement": "Works in live bus lanes 22:00-05:00 only.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "Night working priced.",
+        "evidence": "Estimate 4.2, 4.5",
+        "owner_role": "Construction Manager"
+      },
+      {
+        "id": "CM-004",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "3.2",
+        "requirement": "Phase 1 operational by 30 Sep 2027.",
+        "requirement_type": "Mandatory",
+        "compliance": "Partially Compliant",
+        "response": "Achievable subject to DNO energisation date.",
+        "evidence": "Schedule T150",
+        "owner_role": "Planner"
+      },
+      {
+        "id": "CM-005",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "3.3",
+        "requirement": "Full completion by 15 Dec 2027.",
+        "requirement_type": "Mandatory",
+        "compliance": "To Be Confirmed",
+        "response": "Dependent on Phase 1 date.",
+        "evidence": "Schedule T200",
+        "owner_role": "Planner"
+      },
+      {
+        "id": "CM-006",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.1",
+        "requirement": "IEC 61851 and IEC 62196.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "OEM certificates.",
+        "evidence": "Technical register T-001",
+        "owner_role": "Lead Electrical Engineer"
+      },
+      {
+        "id": "CM-007",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.2",
+        "requirement": "CMS 99.5% availability.",
+        "requirement_type": "Mandatory",
+        "compliance": "Partially Compliant",
+        "response": "Excluding external outages.",
+        "evidence": "Technical register T-003",
+        "owner_role": "CMS / Controls Engineer"
+      },
+      {
+        "id": "CM-008",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.3",
+        "requirement": "ISO 9001, 14001, 45001.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "Certificates held.",
+        "evidence": "Company certificates",
+        "owner_role": "HSQE Manager"
+      },
+      {
+        "id": "CM-009",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.4",
+        "requirement": "BS 7671 and IET Code of Practice.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "Design to comply.",
+        "evidence": "Design basis",
+        "owner_role": "Lead Electrical Engineer"
+      },
+      {
+        "id": "CM-010",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.5",
+        "requirement": "5-year maintenance, 4-hour response.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "OEM service agreement.",
+        "evidence": "Estimate 7.1",
+        "owner_role": "Commercial Manager"
+      },
+      {
+        "id": "CM-011",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.6",
+        "requirement": "IEC 62443-3-3 SL2.",
+        "requirement_type": "Mandatory",
+        "compliance": "Compliant",
+        "response": "Assessment included.",
+        "evidence": "Estimate 2.2",
+        "owner_role": "CMS / Controls Engineer"
+      },
+      {
+        "id": "CM-012",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "5.6",
+        "requirement": "Unlimited liability for data breach.",
+        "requirement_type": "Mandatory",
+        "compliance": "Non-Compliant",
+        "response": "Propose 2m cap.",
+        "evidence": "Commercial register C-006",
+        "owner_role": "Commercial Manager"
+      },
+      {
+        "id": "CM-013",
+        "source_document": "Scope_of_Work.md",
+        "clause_ref": "4.7",
+        "requirement": "Training for 30 staff.",
+        "requirement_type": "Desirable",
+        "compliance": "Compliant",
+        "response": "Three sessions.",
+        "evidence": "Estimate 5.2",
+        "owner_role": "Project Manager"
+      }
+    ]
+  },
+  "gate": {
+    "gate_name": "PG3",
+    "recommendation": "Approve with conditions",
+    "decision_requested": "Approve submission of a priced tender for the Northgate Depot EV Charging Hub at a funding level of GBP 6.67m (including management reserve), subject to the conditions below.",
+    "executive_summary": "NTA requires a turnkey depot charging hub for 40 electric buses. The bottom-up Class 3 estimate gives a budget at completion of GBP 6.35m, with risk register expected value (GBP 0.60m) close to contingency (GBP 0.56m). The critical path runs through DNO connection and energisation, which puts the 30 September 2027 Phase 1 date at risk; we recommend qualifying Phase 1 to the DNO energisation date. Two commercial terms need negotiation: unlimited data-breach liability and delay damages linked to third-party DNO works. With these qualifications, the risk profile is acceptable and the project fits our strategy for depot electrification.",
+    "strategic_fit": "Supports growth in transit electrification and creates a reference site for future depot conversions.",
+    "key_messages": [
+      "Critical path is DNO energisation, not our own works",
+      "Contingency is slightly below risk expected value; review at PG4",
+      "Data-breach liability must be capped before submission",
+      "Early transformer order protects Phase 1",
+      "Five-year maintenance gives recurring revenue"
+    ],
+    "conditions": [
+      "Qualify Phase 1 completion to DNO energisation date",
+      "Cap data-breach liability at GBP 2m",
+      "Hold DNO charges as a provisional sum",
+      "Obtain approval to place transformer order on letter of intent"
+    ],
+    "next_steps": [
+      "Issue clarification questions CQ-001 to CQ-005",
+      "Request DNO budget estimate",
+      "Obtain firm OEM quotes",
+      "Finalise tender qualifications",
+      "Return to PG4 with final price"
+    ]
+  },
+  "model": "sample (hand-written)"
+}
