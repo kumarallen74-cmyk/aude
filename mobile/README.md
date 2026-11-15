@@ -130,6 +130,39 @@ Android phone and open it, allowing installs from that source.
   - `GOOGLE_SERVICES_JSON_PLUGSURE` and `GOOGLE_SERVICES_JSON_NUSANTARA`: Firebase `google-services.json` for the
     `.preview` package; without it there are no push notifications.
 
+## TestFlight from GitHub Actions (no Expo account)
+
+The **ios testflight** workflow (`.github/workflows/ios-testflight.yml`) builds the iOS app with the production
+config, so it talks to the brand's live host (`app.plugsure.co.id` for PlugSure). It builds on GitHub's macOS runner
+with `expo prebuild`, CocoaPods and Xcode, and uploads the build to App Store Connect, where it appears in TestFlight.
+Signing is Xcode's automatic signing with an App Store Connect API key: Apple creates and keeps the distribution
+certificate (cloud-managed) and the profiles, and registers the bundle IDs. These are the app (`asia.plugsure.hub`)
+and its Live Activity widget (`asia.plugsure.hub.ChargingWidgets`).
+
+One-time setup:
+1. **Developer Program:** an active Apple Developer Program membership.
+2. **App record:** in App Store Connect, open **Apps → +** and create the app with bundle ID `asia.plugsure.hub`.
+   Register the bundle ID first under **Certificates, Identifiers & Profiles → Identifiers** if it isn't offered.
+   An API key can't create the app record, and the upload fails until it exists.
+3. **API key:** under **Users and Access → Integrations → App Store Connect API**, create a key with the **Admin**
+   role. Admin is needed for Apple's cloud-managed signing certificate. Download the `.p8` file; it can be
+   downloaded only once.
+4. **GitHub secrets:** under **Settings → Secrets and variables → Actions**, add:
+   - `ASC_ISSUER_ID`;
+   - `ASC_KEY_ID`;
+   - `ASC_KEY_P8`, the whole `.p8` file including the BEGIN and END lines;
+   - `APPLE_TEAM_ID`, the 10-character Team ID from **Membership details**.
+
+Then open **Actions → ios testflight → Run workflow** and choose the brand.
+- **Timing:** the build takes about 30–45 minutes. Apple then processes it for 10–30 minutes before it shows under
+  the app's **TestFlight** tab.
+- **Testers:** internal testers (your App Store Connect users) can install it at once. External testers need a Beta
+  App Review the first time.
+- **Build numbers:** each run's build number is the run number, so every upload is accepted.
+- **Push notifications:** on iPhone these also need an APNs key on the server. Everything else works without it.
+- **Pull requests:** a pull request that changes the workflow runs the same build unsigned (no secrets, no upload),
+  to prove the iOS project compiles.
+
 ## Build & submit with EAS
 
 What the owner needs:
