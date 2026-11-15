@@ -1,0 +1,187 @@
+name: ios testflight
+
+# Builds the PlugSure Hub iOS app (production config: talks to the brand's live host, app.plugsure.co.id)
+# on GitHub's macOS runner and uploads it to App Store Connect, where it appears in TestFlight.
+# No Expo account or EAS is needed. Run it from Actions → "ios testflight" → Run workflow.
+#
+# Signing is Xcode's automatic signing with an App Store Connect API key: Apple creates and keeps the
+# distribution certificate (cloud-managed) and the provisioning profiles, and registers the bundle IDs
+# (the app, asia.plugsure.hub, and its Live Activity widget, asia.plugsure.hub.ChargingWidgets).
+#
+# One-time setup in Apple's sites (see mobile/README.md, "TestFlight from GitHub Actions"):
+#   - the app record in App Store Connect (Apps → +) with bundle ID asia.plugsure.hub
+#     (an API key cannot create an app record; the upload fails until it exists);
+#   - an App Store Connect API key with the Admin role (Users and Access → Integrations).
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   ASC_ISSUER_ID   the API key's Issuer ID
+#   ASC_KEY_ID      the API key's Key ID
+#   ASC_KEY_P8      the contents of the AuthKey_<KEY_ID>.p8 file
+#   APPLE_TEAM_ID   the 10-character Team ID (Membership details)
+#
+# On a pull request that changes this file, the same build runs unsigned (no secrets, no upload), so the
+# iOS project is proven to compile before anyone runs the release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Brand to build
+        type: choice
+        options: [plugsure, nusantara]
+        default: plugsure
+  pull_request:
+    paths: [".github/workflows/ios-testflight.yml"]
+
+concurrency:
+  group: ios-testflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  CI: "1"
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  ios:
+    name: ios (${{ github.event_name == 'pull_request' && 'unsigned build check' || format('{0}, TestFlight', github.event.inputs.variant) }})
+    runs-on: macos-26
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      APP_VARIANT: ${{ github.event.inputs.variant || 'plugsure' }}
+      APP_ENV: production
+      UPLOAD: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # The build number App Store Connect sees: rises with every run, so each upload is accepted.
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - name: Check the secrets (TestFlight runs only)
+        if: env.UPLOAD == '1'
+        working-directory: .
+        run: |
+          missing=""
+          for v in ASC_ISSUER_ID ASC_KEY_ID ASC_KEY_P8 APPLE_TEAM_ID; do [ -n "${!v}" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then
+            echo "::error title=Missing secrets::Add these repository secrets first:$missing (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          if ! printf '%s' "$APPLE_TEAM_ID" | grep -Eq '^[A-Z0-9]{10}$'; then
+            echo "::error title=APPLE_TEAM_ID::It must be the 10-character Team ID from Membership details."; exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+
+      - name: API key file
+        if: env.UPLOAD == '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
+          grep -q 'BEGIN PRIVATE KEY' "$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8" || { echo "::error title=ASC_KEY_P8::Paste the whole .p8 file, including the BEGIN/END lines."; exit 1; }
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8" >> "$GITHUB_ENV"
+
+      - name: Resolve the app config
+        run: npx expo config --type public | grep -E '"?(name|version|bundleIdentifier)"?:' || true
+
+      - name: expo prebuild (ios) and pods
+        run: |
+          npx expo prebuild --platform ios --clean --no-install
+          cd ios && pod install
+
+      - name: Find the workspace and scheme
+        run: |
+          ws=$(ls -d ios/*.xcworkspace | head -1)
+          scheme=$(basename "$ws" .xcworkspace)
+          echo "WORKSPACE=$PWD/$ws" >> "$GITHUB_ENV"
+          echo "SCHEME=$scheme" >> "$GITHUB_ENV"
+          echo "workspace $ws, scheme $scheme"
+          xcodebuild -list -workspace "$ws" | sed -n '1,40p'
+
+      - name: Build number
+        working-directory: mobile/ios
+        run: |
+          # CURRENT_PROJECT_VERSION for every target (the app and the Live Activity widget must match).
+          sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" "$SCHEME.xcodeproj/project.pbxproj"
+          for p in $(grep -rl --include=Info.plist CFBundleVersion .); do
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "$p" 2>/dev/null || true
+          done
+          grep -c "CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};" "$SCHEME.xcodeproj/project.pbxproj"
+
+      - name: Unsigned build check (pull request)
+        if: env.UPLOAD != '1'
+        run: |
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tail -n 60
+
+      - name: Archive (signed)
+        if: env.UPLOAD == '1'
+        run: |
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/PlugSureHub.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            archive | tail -n 80
+
+      - name: Export and upload to App Store Connect
+        if: env.UPLOAD == '1'
+        run: |
+          set -o pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/PlugSureHub.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            | tail -n 60
+
+      - name: Summary
+        if: always()
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          {
+            if [ "$UPLOAD" = "1" ] && [ "${{ job.status }}" = "success" ]; then
+              echo "### Uploaded to App Store Connect: ${APP_VARIANT} ${version} (build ${BUILD_NUMBER})"
+              echo "- Apple processes the build for 10–30 minutes; it then appears in App Store Connect → your app → TestFlight."
+              echo "- Internal testers (your team) can install it at once. External testers need a Beta App Review the first time."
+            elif [ "$UPLOAD" = "1" ]; then
+              echo "### The TestFlight build failed"
+              echo "Open the failed step's log. The usual first-run causes: the app record for the bundle ID does not exist yet in App Store Connect, or the API key does not have the Admin role."
+            else
+              echo "### Unsigned iOS build check: ${{ job.status }}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the API key file
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
