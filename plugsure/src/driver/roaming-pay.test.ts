@@ -201,7 +201,18 @@ const cdr = (id: string, currency: string, incl: number, ref: string | null, ove
 const intentOf = async (chargeId: string) => (await one<any>(`SELECT * FROM payment_intent WHERE roaming_charge_id = $1`, [chargeId]))!;
 const chargeRow = async (chargeId: string) => (await one<any>(`SELECT * FROM driver_roaming_charge WHERE id = $1`, [chargeId]))!;
 /** Let the deferred capture / release run (settleHold defers it with setImmediate). */
-const settled = async (intentId: string) => { await new Promise((r) => setTimeout(r, 30)); await attemptHold(intentId); return (await one<any>(`SELECT * FROM payment_intent WHERE id = $1`, [intentId]))!; };
+// The CDR starts the capture in the background; on a busy runner it can still be 'capturing' / 'releasing' after a
+// fixed pause, so wait (up to ~3 s) until the hold has left those in-flight states.
+const settled = async (intentId: string) => {
+  let row: any;
+  for (let i = 0; i < 100; i++) {
+    await new Promise((r) => setTimeout(r, 30));
+    await attemptHold(intentId);
+    row = (await one<any>(`SELECT * FROM payment_intent WHERE id = $1`, [intentId]))!;
+    if (row.hold_state !== 'capturing' && row.hold_state !== 'releasing') return row;
+  }
+  return row;
+};
 
 dbDescribe('roaming for app drivers: stations and eligibility', () => {
   test('a signed-in driver sees partner stations in every currency, with the hold for each', async () => {

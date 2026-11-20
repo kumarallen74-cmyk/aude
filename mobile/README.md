@@ -120,6 +120,13 @@ with `expo prebuild` and Gradle. In GitHub, open **Actions → android apk → R
 After about 20–30 minutes, each APK is under **Artifacts** on the run's page. Unzip it, copy the `.apk` to an
 Android phone and open it, allowing installs from that source.
 
+Each manual run also publishes the APKs as a **GitHub Release** (`apk-build-<run number>`, under the repository's
+**Releases**), so testers can download them with a plain link and no GitHub sign-in while the repository is public.
+Every release has each APK twice: once with the build number in its name, and once under a stable name. The stable
+link always serves the newest build of that brand and backend:
+`https://github.com/kumarallen74-cmyk/aude/releases/latest/download/PlugSure-Hub-<brand>-<server>.apk`, for example
+`PlugSure-Hub-plugsure-live.apk`.
+
 - **Preview builds:** they use package `<brand package>.preview` and the name "<brand> (Preview)", so they install
   next to a store build. Each run's `versionCode` is the run number, so a newer APK installs over an older one.
 - **Signing:** the APKs are signed with the generated debug key, so they are for testing, not for the Play Store.
