@@ -123,3 +123,57 @@ jobs:
           path: mobile/${{ steps.apk.outputs.name }}.apk
           retention-days: 30
           if-no-files-found: error
+
+  # Manual runs also publish the APKs as a GitHub Release, so they can be downloaded with a plain link (no GitHub
+  # sign-in on a public repository) and shared with testers. Each release carries the APKs twice: with the build
+  # number in the name, and under a stable name, so
+  #   https://github.com/<owner>/<repo>/releases/latest/download/PlugSure-Hub-<brand>-<server>.apk
+  # always serves the newest build of that brand and backend.
+  release:
+    name: publish APKs (GitHub Release)
+    needs: apk
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      SERVER: ${{ github.event.inputs.server }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: apks
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la apks
+          mkdir -p upload
+          for f in apks/*.apk; do
+            base=$(basename "$f" .apk)
+            cp "$f" "upload/${base}.apk"
+            # Stable name: drop "-v<version>-build<n>".
+            cp "$f" "upload/$(printf '%s' "$base" | sed -E 's/-v[0-9.]+-build[0-9]+$//').apk"
+          done
+          ls -la upload
+          tag="apk-build-${GITHUB_RUN_NUMBER}"
+          notes=$(cat <<NOTES
+          Test APKs of the PlugSure Hub mobile app, built from ${GITHUB_SHA::7} (backend: ${SERVER}).
+
+          Install on an Android phone: download the .apk, open it and allow installing from that source.
+          Preview builds (package <brand package>.preview), signed with a test key: for testing, not the Play Store.
+          NOTES
+          )
+          gh release create "$tag" upload/*.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "PlugSure Hub test APKs, build ${GITHUB_RUN_NUMBER} (${SERVER})" --notes "$notes" --latest
+          {
+            echo "### Published: release ${tag}"
+            for f in upload/*.apk; do
+              n=$(basename "$f")
+              echo "- [${n}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${n})"
+            done
+            echo ""
+            echo "Newest build, always: https://github.com/${GITHUB_REPOSITORY}/releases/latest"
+          } >> "$GITHUB_STEP_SUMMARY"
