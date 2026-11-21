@@ -1,0 +1,189 @@
+name: android aab
+
+# Builds the Google Play release bundle (.aab) of the PlugSure app on GitHub's runner: `expo prebuild` with
+# APP_ENV=production (package com.plugsure.app, the brand's live server), then Gradle `bundleRelease`, signed with
+# the Play upload key. No Expo account or EAS is needed. Run it from Actions → "android aab" → Run workflow.
+#
+# The upload key: Google Play accepts only bundles signed with the app's upload key, and every later update must use
+# the same key. Keep the keystore file and its password safe outside GitHub as well (a password manager).
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   ANDROID_UPLOAD_KEYSTORE_BASE64     the keystore file, base64-encoded (one line)
+#   ANDROID_UPLOAD_KEYSTORE_PASSWORD   its password
+#   ANDROID_UPLOAD_KEY_ALIAS           the key alias inside it
+#   ANDROID_UPLOAD_KEY_PASSWORD        the key password (the same as the keystore password for a PKCS12 keystore)
+# Optional, as for the test APKs: GOOGLE_MAPS_ANDROID_KEY, GOOGLE_SERVICES_JSON_PLUGSURE (Firebase config for
+# com.plugsure.app; without it the store build has no push notifications).
+#
+# Each run's versionCode is the run number, so every bundle uploaded to Play is newer than the last. A manual run
+# attaches the bundle to a GitHub pre-release `aab-build-<n>` (never marked latest, so the APK links are unchanged).
+# On a pull request that changes this file the bundle is built with the debug key only, to prove it compiles.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/android-aab.yml"]
+
+concurrency:
+  group: android-aab-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  CI: "1"
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  aab:
+    name: aab (plugsure, production${{ github.event_name == 'pull_request' && ', build check' || '' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      APP_VARIANT: plugsure
+      APP_ENV: production
+      SIGN: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+      GOOGLE_MAPS_ANDROID_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_KEY }}
+      GOOGLE_SERVICES_JSON_CONTENT: ${{ secrets.GOOGLE_SERVICES_JSON_PLUGSURE }}
+      UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+      UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+      UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+      UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+    outputs:
+      name: ${{ steps.aab.outputs.name }}
+    steps:
+      - name: Check the upload key secrets (manual runs)
+        if: env.SIGN == '1'
+        working-directory: .
+        run: |
+          missing=""
+          for v in UPLOAD_KEYSTORE_BASE64 UPLOAD_KEYSTORE_PASSWORD UPLOAD_KEY_ALIAS UPLOAD_KEY_PASSWORD; do [ -n "${!v}" ] || missing="$missing ANDROID_${v}"; done
+          if [ -n "$missing" ]; then
+            echo "::error title=Missing secrets::Add these repository secrets first:$missing (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: npm ci
+
+      - name: Optional secrets
+        run: |
+          if [ -z "$GOOGLE_MAPS_ANDROID_KEY" ]; then
+            echo "::notice title=No Maps key::GOOGLE_MAPS_ANDROID_KEY is not set: the station map uses map tiles instead of Google Maps."
+          fi
+          if [ -n "$GOOGLE_SERVICES_JSON_CONTENT" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON_CONTENT" > brands/plugsure/google-services.json
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' brands/plugsure/google-services.json
+          else
+            echo "::warning title=No Firebase config::GOOGLE_SERVICES_JSON_PLUGSURE is not set: this store build has no push notifications."
+          fi
+
+      - name: Resolve the app config
+        run: npx expo config --type public | grep -E "^\s*(name|version|package):" || true
+
+      - name: expo prebuild (android)
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Upload key
+        if: env.SIGN == '1'
+        working-directory: mobile/android
+        run: |
+          printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.keystore"
+          keytool -list -keystore "$RUNNER_TEMP/upload.keystore" -storepass "$UPLOAD_KEYSTORE_PASSWORD" -alias "$UPLOAD_KEY_ALIAS" > /dev/null \
+            || { echo "::error title=Upload key::The keystore, its password or the alias does not match."; exit 1; }
+          echo "UPLOAD_KEYSTORE_PATH=$RUNNER_TEMP/upload.keystore" >> "$GITHUB_ENV"
+          # The release build type signs with the upload key (the generated project signs release with the debug key).
+          cat >> app/build.gradle <<'GRADLE'
+
+          android {
+              signingConfigs {
+                  upload {
+                      storeFile file(System.getenv("UPLOAD_KEYSTORE_PATH"))
+                      storePassword System.getenv("UPLOAD_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("UPLOAD_KEY_ALIAS")
+                      keyPassword System.getenv("UPLOAD_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.upload
+                  }
+              }
+          }
+          GRADLE
+
+      - name: Gradle bundleRelease
+        working-directory: mobile/android
+        run: |
+          # A rising versionCode per run: Play refuses a bundle whose versionCode is not higher than the last.
+          sed -i -E "s/versionCode [0-9]+/versionCode ${GITHUB_RUN_NUMBER}/" app/build.gradle
+          ./gradlew bundleRelease --no-daemon
+
+      - name: Name and check the bundle
+        id: aab
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          name="PlugSure-v${version}-versionCode${GITHUB_RUN_NUMBER}"
+          mv android/app/build/outputs/bundle/release/app-release.aab "$name.aab"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          signer=$(keytool -printcert -jarfile "$name.aab" 2>/dev/null | grep -m1 -E 'Owner:' || true)
+          sha=$(keytool -printcert -jarfile "$name.aab" 2>/dev/null | grep -m1 -E 'SHA256:' || true)
+          echo "signed by: $signer / $sha"
+          if [ "$SIGN" = "1" ] && printf '%s' "$signer" | grep -q 'Android Debug'; then
+            echo "::error title=Wrong key::The bundle is signed with the debug key."; exit 1
+          fi
+          {
+            echo "### ${name}.aab"
+            echo "- Package com.plugsure.app, version ${version}, versionCode ${GITHUB_RUN_NUMBER}, live server"
+            echo "- Size: $(du -h "$name.aab" | cut -f1)"
+            echo "- Signed by: ${signer#Owner: }"
+            echo "- Certificate ${sha}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.aab.outputs.name }}
+          path: mobile/${{ steps.aab.outputs.name }}.aab
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Remove the upload key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.keystore"
+
+  release:
+    name: publish the bundle (GitHub pre-release)
+    needs: aab
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: aab
+          merge-multiple: true
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="aab-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" aab/*.aab --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "PlugSure Google Play bundle, versionCode ${GITHUB_RUN_NUMBER}" \
+            --notes "Release bundle for Google Play (package com.plugsure.app), built from ${GITHUB_SHA::7}, signed with the upload key. Upload it in Play Console → Test and release."
+          for f in aab/*.aab; do n=$(basename "$f"); echo "- [${n}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${n})" >> "$GITHUB_STEP_SUMMARY"; done
