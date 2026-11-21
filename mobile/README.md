@@ -114,18 +114,18 @@ cache keeps the old value.
 
 The **android apk** workflow (`.github/workflows/android-apk.yml`) builds installable test APKs on GitHub's runner
 with `expo prebuild` and Gradle. In GitHub, open **Actions → android apk → Run workflow** and choose:
-- the brand: `both`, `plugsure` or `nusantara`;
+- the brand: `plugsure` (the default) or `nusantara` (the white-label example brand);
 - the backend: `live` (the brand's own host) or `staging` (`staging.plugsure.co.id`).
 
 After about 20–30 minutes, each APK is under **Artifacts** on the run's page. Unzip it, copy the `.apk` to an
 Android phone and open it, allowing installs from that source.
 
-Each manual run also publishes the APKs as a **GitHub Release** (`apk-build-<run number>`, under the repository's
-**Releases**), so testers can download them with a plain link and no GitHub sign-in while the repository is public.
-Every release has each APK twice: once with the build number in its name, and once under a stable name. The stable
-link always serves the newest build of that brand and backend:
-`https://github.com/kumarallen74-cmyk/aude/releases/latest/download/PlugSure-Hub-<brand>-<server>.apk`, for example
-`PlugSure-Hub-plugsure-live.apk`.
+Each manual **PlugSure** run also publishes the APK as a **GitHub Release** (`apk-build-<run number>`, under the
+repository's **Releases**), so testers can download it with a plain link and no GitHub sign-in while the repository is
+public. A `nusantara` build is never released: it stays a run artifact. Every release has the APK twice: once with the
+build number in its name, and once under a stable name. The stable link always serves the newest build for that
+backend: `https://github.com/kumarallen74-cmyk/aude/releases/latest/download/PlugSure-Hub-plugsure-<server>.apk`,
+for example `PlugSure-Hub-plugsure-live.apk`.
 
 - **Preview builds:** they use package `<brand package>.preview` and the name "<brand> (Preview)", so they install
   next to a store build. Each run's `versionCode` is the run number, so a newer APK installs over an older one.
