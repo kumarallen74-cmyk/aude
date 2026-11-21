@@ -22,8 +22,10 @@ on:
       variant:
         description: Brand to build
         type: choice
-        options: [both, plugsure, nusantara]
-        default: both
+        # PlugSure is the app drivers get. Nusantara is the white-label example brand: it can still be built by hand
+        # (as a run artifact), but it is never published as a GitHub Release.
+        options: [plugsure, nusantara]
+        default: plugsure
       server:
         description: "Backend the app talks to: live = the brand's own host (app.plugsure.co.id / app.nusantaracharge.id); staging = staging.plugsure.co.id"
         type: choice
@@ -53,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(github.event.inputs.variant == 'both' && '["plugsure","nusantara"]' || format('["{0}"]', github.event.inputs.variant || 'plugsure')) }}
+        variant: ${{ fromJSON(format('["{0}"]', github.event.inputs.variant || 'plugsure')) }}
     defaults:
       run:
         working-directory: mobile
@@ -124,7 +126,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # Manual runs also publish the APKs as a GitHub Release, so they can be downloaded with a plain link (no GitHub
+  # Manual PlugSure runs also publish the APK as a GitHub Release, so they can be downloaded with a plain link (no GitHub
   # sign-in on a public repository) and shared with testers. Each release carries the APKs twice: with the build
   # number in the name, and under a stable name, so
   #   https://github.com/<owner>/<repo>/releases/latest/download/PlugSure-Hub-<brand>-<server>.apk
@@ -132,7 +134,7 @@ jobs:
   release:
     name: publish APKs (GitHub Release)
     needs: apk
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.variant == 'plugsure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -177,3 +179,16 @@ jobs:
             echo ""
             echo "Newest build, always: https://github.com/${GITHUB_REPOSITORY}/releases/latest"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Earlier releases carried Nusantara (white-label example) APKs too; remove them so only PlugSure is offered.
+      - name: Remove Nusantara APKs from earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName | select(startswith("apk-build-"))'); do
+            for a in $(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name | select(contains("-nusantara-"))'); do
+              gh release delete-asset "$tag" "$a" --repo "$GITHUB_REPOSITORY" --yes
+              echo "removed $a from $tag"
+            done
+          done
