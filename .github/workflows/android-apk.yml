@@ -13,7 +13,7 @@ name: android apk
 # Repository secrets (Settings → Secrets and variables → Actions), all optional:
 #   GOOGLE_MAPS_ANDROID_KEY              Maps SDK for Android key. Without it the station map uses map tiles
 #                                        (the server's meta.map.tileUrl, OpenStreetMap by default) with zoom buttons.
-#   GOOGLE_SERVICES_JSON_PLUGSURE        contents of Firebase google-services.json for package asia.plugsure.hub.preview
+#   GOOGLE_SERVICES_JSON_PLUGSURE        contents of Firebase google-services.json for package com.plugsure.app.preview
 #   GOOGLE_SERVICES_JSON_NUSANTARA       the same for id.nusantaracharge.app.preview. Without it, no push notifications.
 
 on:

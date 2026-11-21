@@ -1,7 +1,7 @@
 name: android aab
 
 # Builds the Google Play release bundle (.aab) of the PlugSure app on GitHub's runner: `expo prebuild` with
-# APP_ENV=production (package asia.plugsure.hub, the brand's live server), then Gradle `bundleRelease`, signed with
+# APP_ENV=production (package com.plugsure.app, the brand's live server), then Gradle `bundleRelease`, signed with
 # the Play upload key. No Expo account or EAS is needed. Run it from Actions → "android aab" → Run workflow.
 #
 # The upload key: Google Play accepts only bundles signed with the app's upload key, and every later update must use
@@ -12,7 +12,7 @@ name: android aab
 #   ANDROID_UPLOAD_KEY_ALIAS           the key alias inside it
 #   ANDROID_UPLOAD_KEY_PASSWORD        the key password (the same as the keystore password for a PKCS12 keystore)
 # Optional, as for the test APKs: GOOGLE_MAPS_ANDROID_KEY, GOOGLE_SERVICES_JSON_PLUGSURE (Firebase config for
-# asia.plugsure.hub; without it the store build has no push notifications).
+# com.plugsure.app; without it the store build has no push notifications).
 #
 # Each run's versionCode is the run number, so every bundle uploaded to Play is newer than the last. A manual run
 # attaches the bundle to a GitHub pre-release `aab-build-<n>` (never marked latest, so the APK links are unchanged).
@@ -147,7 +147,7 @@ jobs:
           fi
           {
             echo "### ${name}.aab"
-            echo "- Package asia.plugsure.hub, version ${version}, versionCode ${GITHUB_RUN_NUMBER}, live server"
+            echo "- Package com.plugsure.app, version ${version}, versionCode ${GITHUB_RUN_NUMBER}, live server"
             echo "- Size: $(du -h "$name.aab" | cut -f1)"
             echo "- Signed by: ${signer#Owner: }"
             echo "- Certificate ${sha}"
@@ -185,5 +185,5 @@ jobs:
           tag="aab-build-${GITHUB_RUN_NUMBER}"
           gh release create "$tag" aab/*.aab --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
             --title "PlugSure Google Play bundle, versionCode ${GITHUB_RUN_NUMBER}" \
-            --notes "Release bundle for Google Play (package asia.plugsure.hub), built from ${GITHUB_SHA::7}, signed with the upload key. Upload it in Play Console → Test and release."
+            --notes "Release bundle for Google Play (package com.plugsure.app), built from ${GITHUB_SHA::7}, signed with the upload key. Upload it in Play Console → Test and release."
           for f in aab/*.aab; do n=$(basename "$f"); echo "- [${n}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${n})" >> "$GITHUB_STEP_SUMMARY"; done

@@ -140,7 +140,7 @@ for example `PlugSure-Hub-plugsure-live.apk`.
 ## Google Play bundle (.aab) from GitHub Actions (no Expo account)
 
 The **android aab** workflow (`.github/workflows/android-aab.yml`) builds the store bundle: `APP_ENV=production`,
-package `asia.plugsure.hub`, the brand's live server, versionCode = the run number, signed with the Play **upload
+package `com.plugsure.app`, the brand's live server, versionCode = the run number, signed with the Play **upload
 key**. Run it from **Actions → android aab → Run workflow**; the bundle is attached to a GitHub pre-release
 `aab-build-<n>` (never marked latest) and to the run as an artifact. Upload it in Play Console → Test and release.
 
@@ -148,7 +148,7 @@ Repository secrets: `ANDROID_UPLOAD_KEYSTORE_BASE64` (the keystore file, base64 
 `ANDROID_UPLOAD_KEYSTORE_PASSWORD`, `ANDROID_UPLOAD_KEY_ALIAS`, `ANDROID_UPLOAD_KEY_PASSWORD`. The first bundle
 uploaded to Play fixes the upload key: every later update must be signed with the same keystore, so keep the file and
 its password outside GitHub too. Optional, as for the APKs: `GOOGLE_MAPS_ANDROID_KEY`, `GOOGLE_SERVICES_JSON_PLUGSURE`
-(Firebase for `asia.plugsure.hub`; without it no push notifications). A pull request that changes the workflow builds
+(Firebase for `com.plugsure.app`; without it no push notifications). A pull request that changes the workflow builds
 the bundle with the debug key only, to prove it compiles.
 
 ## TestFlight from GitHub Actions (no Expo account)

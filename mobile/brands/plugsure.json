@@ -12,7 +12,7 @@
   "scope": "network",
   "scheme": "plugsure",
   "iosBundleId": "asia.plugsure.hub",
-  "androidPackage": "asia.plugsure.hub",
+  "androidPackage": "com.plugsure.app",
   "linkHosts": [
     "app.plugsure.co.id"
   ],
@@ -48,7 +48,7 @@
   },
   "store": {
     "appStoreId": "",
-    "playStoreUrl": "https://play.google.com/store/apps/details?id=asia.plugsure.hub",
+    "playStoreUrl": "https://play.google.com/store/apps/details?id=com.plugsure.app",
     "appStoreUrl": "https://apps.apple.com/app/plugsure"
   },
   "easProjectId": "",
